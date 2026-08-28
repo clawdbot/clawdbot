@@ -10,7 +10,11 @@ import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.
 import createApplicationPlacementStartupRuntime from "./session-placement-startup.runtime.ts";
 import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
 
-export function placement(state: string, generation: number, updatedAtMs = generation) {
+export function createStartupPlacement(
+  state: string,
+  generation: number,
+  updatedAtMs = generation,
+) {
   return {
     state,
     generation,
@@ -29,7 +33,7 @@ export function placement(state: string, generation: number, updatedAtMs = gener
   };
 }
 
-export function harness(
+export function createPlacementStartupHarness(
   request: ReturnType<typeof vi.fn>,
   options: {
     loadRuntime?: Parameters<typeof createApplicationPlacementStartup>[1];
@@ -47,7 +51,10 @@ export function harness(
     snapshot: { phase: "connected", client, hello: {} },
     subscribe: vi.fn(() => () => undefined),
   } as unknown as ApplicationGateway;
-  const row = { key: sessionKey, placement: placement("requested", 1) } as GatewaySessionRow;
+  const row = {
+    key: sessionKey,
+    placement: createStartupPlacement("requested", 1),
+  } as GatewaySessionRow;
   const state = { result: { sessions: [row] } as SessionsListResult };
   const sessions = {
     get state() {
@@ -90,7 +97,7 @@ export function harness(
   };
 }
 
-export async function flush() {
+export async function flushStartupMicrotasks() {
   for (let index = 0; index < 8; index += 1) {
     await Promise.resolve();
   }

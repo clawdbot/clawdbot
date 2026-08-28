@@ -5,7 +5,11 @@ import {
   readSessionPlacementRecovery,
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
-import { flush, harness, placement } from "./session-placement-startup.test-support.ts";
+import {
+  createPlacementStartupHarness,
+  createStartupPlacement,
+  flushStartupMicrotasks,
+} from "./session-placement-startup.test-support.ts";
 import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
 
 describe("application placement delivery recovery", () => {
@@ -26,7 +30,7 @@ describe("application placement delivery recovery", () => {
       });
       const request = vi.fn((method: string, payload?: Record<string, unknown>) => {
         if (method === "sessions.dispatch") {
-          return Promise.resolve({ placement: placement("active", 2) });
+          return Promise.resolve({ placement: createStartupPlacement("active", 2) });
         }
         if (method === "sessions.reclaim") {
           return Promise.resolve({ ok: true });
@@ -41,7 +45,7 @@ describe("application placement delivery recovery", () => {
         }
         throw new Error(`unexpected method ${method}`);
       });
-      const { startup, input, initialUserMessage, client } = harness(request);
+      const { startup, input, initialUserMessage, client } = createPlacementStartupHarness(request);
       input.recovery = {
         ...input.recovery,
         target: { kind: "profile", profileId: "aws", machineClass: "fast" },
@@ -108,11 +112,11 @@ describe("application placement delivery recovery", () => {
           return Promise.resolve({ messages: [] });
         }
         if (method === "sessions.describe") {
-          return Promise.resolve({ session: { placement: placement(state, 2) } });
+          return Promise.resolve({ session: { placement: createStartupPlacement(state, 2) } });
         }
         return Promise.resolve({ status: "started" });
       });
-      const { startup, input, dependencies } = harness(request);
+      const { startup, input, dependencies } = createPlacementStartupHarness(request);
       const attachments = [
         { type: "file", mimeType: "text/plain", fileName: "note.txt", content: "SGk=" },
       ];
@@ -192,11 +196,11 @@ describe("application placement delivery recovery", () => {
           });
         }
         if (method === "sessions.describe") {
-          return Promise.resolve({ session: { placement: placement("active", 1) } });
+          return Promise.resolve({ session: { placement: createStartupPlacement("active", 1) } });
         }
         return Promise.resolve({ status: "started" });
       });
-      const { startup, input, initialUserMessage, client } = harness(request);
+      const { startup, input, initialUserMessage, client } = createPlacementStartupHarness(request);
       input.recovery = { ...input.recovery, phase: "sending" };
       writeSessionPlacementRecovery(input.recovery);
       startup.resumeRecovery();
@@ -248,11 +252,11 @@ describe("application placement delivery recovery", () => {
           return history.promise;
         }
         if (method === "sessions.describe") {
-          return Promise.resolve({ session: { placement: placement("active", 1) } });
+          return Promise.resolve({ session: { placement: createStartupPlacement("active", 1) } });
         }
         return Promise.resolve({ status: "started" });
       });
-      const { startup, input, client, initialUserMessage } = harness(request);
+      const { startup, input, client, initialUserMessage } = createPlacementStartupHarness(request);
       input.recovery = { ...input.recovery, phase: "sending" };
       writeSessionPlacementRecovery(input.recovery);
       startup.resumeRecovery();
@@ -272,7 +276,7 @@ describe("application placement delivery recovery", () => {
         history.resolve({
           messages: [{ role: "user", __openclaw: { idempotencyKey: "message-stable:user" } }],
         });
-        await flush();
+        await flushStartupMicrotasks();
         expect(
           readSessionPlacementRecovery(
             input.recovery.gatewayUrl,

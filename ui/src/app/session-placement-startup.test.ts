@@ -8,7 +8,11 @@ import {
   type SessionPlacementRecovery,
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
-import { flush, harness, placement } from "./session-placement-startup.test-support.ts";
+import {
+  createPlacementStartupHarness,
+  createStartupPlacement,
+  flushStartupMicrotasks,
+} from "./session-placement-startup.test-support.ts";
 import {
   createApplicationPlacementStartup,
   type ApplicationPlacementStartupStatus,
@@ -65,7 +69,7 @@ describe("application session placement startup", () => {
     const moduleLoad = createDeferred<RuntimeModule>();
     const fake = createFakeRuntime();
     const factory = vi.fn(() => fake.runtime);
-    const { startup, input } = harness(vi.fn(), {
+    const { startup, input } = createPlacementStartupHarness(vi.fn(), {
       loadRuntime: () => moduleLoad.promise,
     });
     const listener = vi.fn();
@@ -75,7 +79,7 @@ describe("application session placement startup", () => {
     expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
     expect(listener).toHaveBeenCalledOnce();
     moduleLoad.resolve({ default: factory });
-    await flush();
+    await flushStartupMicrotasks();
 
     expect(factory).toHaveBeenCalledWith(expect.anything());
     expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
@@ -94,7 +98,7 @@ describe("application session placement startup", () => {
     const moduleLoad = createDeferred<RuntimeModule>();
     const fake = createFakeRuntime();
     const factory = vi.fn(() => fake.runtime);
-    const { startup, input } = harness(vi.fn(), {
+    const { startup, input } = createPlacementStartupHarness(vi.fn(), {
       loadRuntime: () => moduleLoad.promise,
     });
     const listener = vi.fn();
@@ -104,7 +108,7 @@ describe("application session placement startup", () => {
     expect(listener).toHaveBeenCalledOnce();
     startup.dispose();
     moduleLoad.resolve({ default: factory });
-    await flush();
+    await flushStartupMicrotasks();
 
     expect(factory).not.toHaveBeenCalled();
     expect(fake.runtime.start).not.toHaveBeenCalled();
@@ -116,7 +120,7 @@ describe("application session placement startup", () => {
     const moduleLoad = createDeferred<RuntimeModule>();
     const fake = createFakeRuntime();
     const loader = vi.fn(() => moduleLoad.promise);
-    const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
+    const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime: loader });
     const starts: PlacementStartupInput[] = [];
     for (let index = 0; index < 32; index += 1) {
       const next = {
@@ -140,7 +144,7 @@ describe("application session placement startup", () => {
     expect(loader).toHaveBeenCalledOnce();
     expect(startup.get(starts[0]!.recovery.sessionKey)).toBeNull();
     moduleLoad.resolve({ default: () => fake.runtime });
-    await flush();
+    await flushStartupMicrotasks();
 
     expect(fake.runtime.start).toHaveBeenCalledTimes(32);
     expect(fake.runtime.start).not.toHaveBeenCalledWith(replaced);
@@ -150,7 +154,9 @@ describe("application session placement startup", () => {
 
   it("keeps get and retry inert before any runtime load", async () => {
     const loader = vi.fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>();
-    const { startup, input, gateway } = harness(vi.fn(), { loadRuntime: loader });
+    const { startup, input, gateway } = createPlacementStartupHarness(vi.fn(), {
+      loadRuntime: loader,
+    });
 
     expect(startup.get(input.recovery.sessionKey)).toBeNull();
     startup.retry(input.recovery.sessionKey);
@@ -162,11 +168,11 @@ describe("application session placement startup", () => {
   it("prewarms the runtime on connection even when recovery storage is empty", async () => {
     const request = vi.fn();
     const loader = vi.fn(() => import("./session-placement-startup.runtime.ts"));
-    const { startup } = harness(request, { loadRuntime: loader });
+    const { startup } = createPlacementStartupHarness(request, { loadRuntime: loader });
     sessionStorage.clear();
 
     startup.resumeRecovery();
-    await flush();
+    await flushStartupMicrotasks();
 
     expect(loader).toHaveBeenCalledOnce();
     expect(request).not.toHaveBeenCalled();
@@ -178,12 +184,12 @@ describe("application session placement startup", () => {
     const fake = createFakeRuntime();
     const factory = vi.fn(() => fake.runtime);
     const loader = vi.fn(() => moduleLoad.promise);
-    const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
+    const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime: loader });
 
     startup.resumeRecovery();
     startup.start(input);
     moduleLoad.resolve({ default: factory });
-    await flush();
+    await flushStartupMicrotasks();
 
     expect(loader).toHaveBeenCalledOnce();
     expect(factory).toHaveBeenCalledWith(expect.anything());
@@ -198,14 +204,14 @@ describe("application session placement startup", () => {
       .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
       .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
       .mockResolvedValueOnce({ default: factory });
-    const { startup } = harness(vi.fn(), { loadRuntime: loader });
+    const { startup } = createPlacementStartupHarness(vi.fn(), { loadRuntime: loader });
 
     startup.resumeRecovery();
-    await flush();
+    await flushStartupMicrotasks();
     expect(loader).toHaveBeenCalledOnce();
 
     startup.resumeRecovery();
-    await flush();
+    await flushStartupMicrotasks();
     expect(loader).toHaveBeenCalledTimes(2);
     expect(factory).toHaveBeenCalledOnce();
     startup.dispose();
@@ -218,14 +224,14 @@ describe("application session placement startup", () => {
       .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
       .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
       .mockResolvedValueOnce({ default: factory });
-    const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
+    const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime: loader });
 
     startup.resumeRecovery();
-    await flush();
+    await flushStartupMicrotasks();
     expect(loader).toHaveBeenCalledOnce();
 
     startup.start(input);
-    await flush();
+    await flushStartupMicrotasks();
     expect(loader).toHaveBeenCalledTimes(2);
     expect(factory).toHaveBeenCalledWith(expect.anything());
     expect(fake.runtime.start).toHaveBeenCalledWith(input);
@@ -239,13 +245,13 @@ describe("application session placement startup", () => {
       .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
       .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
       .mockResolvedValueOnce({ default: factory });
-    const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
+    const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime: loader });
     const listener = vi.fn();
     startup.subscribe(listener);
 
     startup.start(input);
     expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
-    await flush();
+    await flushStartupMicrotasks();
     expect(startup.get(input.recovery.sessionKey)).toMatchObject({
       phase: "failed",
       error: "cloud startup chunk unavailable",
@@ -254,7 +260,7 @@ describe("application session placement startup", () => {
     expect(listener).toHaveBeenCalledTimes(2);
 
     startup.retry(input.recovery.sessionKey);
-    await flush();
+    await flushStartupMicrotasks();
     expect(loader).toHaveBeenCalledTimes(2);
     expect(factory).toHaveBeenCalledWith(expect.anything());
     expect(fake.runtime.start).toHaveBeenCalledWith(input);
@@ -264,7 +270,7 @@ describe("application session placement startup", () => {
   });
 
   it("loads and reconciles recovery when resumed on an existing connection", async () => {
-    const activePlacement = placement("active", 2);
+    const activePlacement = createStartupPlacement("active", 2);
     const request = vi.fn((method: string) => {
       if (method === "sessions.describe") {
         return Promise.resolve({ session: { placement: activePlacement } });
@@ -275,7 +281,7 @@ describe("application session placement startup", () => {
       throw new Error(`unexpected method ${method}`);
     });
     const loader = vi.fn(() => import("./session-placement-startup.runtime.ts"));
-    const { startup, input } = harness(request, {
+    const { startup, input } = createPlacementStartupHarness(request, {
       loadRuntime: loader,
       recoveryBeforeStartup: true,
     });
@@ -294,7 +300,7 @@ describe("application session placement startup", () => {
 
   it("resumes every persisted session once and clears them independently", async () => {
     const secondSend = createDeferred<{ messageSeq: number }>();
-    const activePlacement = placement("active", 2);
+    const activePlacement = createStartupPlacement("active", 2);
     const request = vi.fn((method: string, params?: unknown) => {
       const key = (params as { key?: string } | undefined)?.key;
       if (method === "sessions.describe") {
@@ -308,7 +314,7 @@ describe("application session placement startup", () => {
       throw new Error(`unexpected method ${method}`);
     });
     const loader = vi.fn(() => import("./session-placement-startup.runtime.ts"));
-    const { startup, input } = harness(request, {
+    const { startup, input } = createPlacementStartupHarness(request, {
       loadRuntime: loader,
       recoveryBeforeStartup: true,
     });
@@ -358,7 +364,7 @@ describe("application session placement startup", () => {
   });
 
   it("derives durable progress from canonical sessions and sends only after active", async () => {
-    const dispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
+    const dispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();
     const request = vi.fn((method: string, _params?: unknown) => {
       if (method === "sessions.dispatch") {
         return dispatch.promise;
@@ -368,7 +374,8 @@ describe("application session placement startup", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const { startup, input, client, sessions, state, initialUserMessage } = harness(request);
+    const { startup, input, client, sessions, state, initialUserMessage } =
+      createPlacementStartupHarness(request);
     const published = vi.fn();
     startup.subscribe(published);
     startup.start(input);
@@ -388,7 +395,7 @@ describe("application session placement startup", () => {
     ] as const) {
       state.result.sessions[0] = {
         ...state.result.sessions[0],
-        placement: placement(phase, generation),
+        placement: createStartupPlacement(phase, generation),
       } as GatewaySessionRow;
       expect(startup.get(input.recovery.sessionKey)?.phase).toBe(phase);
       expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
@@ -396,7 +403,7 @@ describe("application session placement startup", () => {
     expect(published).toHaveBeenCalledTimes(publishedBeforePlacementChanges);
     expect(request).not.toHaveBeenCalledWith("sessions.describe", expect.anything());
 
-    dispatch.resolve({ placement: placement("active", 5) });
+    dispatch.resolve({ placement: createStartupPlacement("active", 5) });
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith("sessions.send", {
         key: input.recovery.sessionKey,
@@ -419,8 +426,12 @@ describe("application session placement startup", () => {
   });
 
   it("advances two sessions in one recovery scope without replacing either owner", async () => {
-    const firstDispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
-    const secondDispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
+    const firstDispatch = createDeferred<{
+      placement: ReturnType<typeof createStartupPlacement>;
+    }>();
+    const secondDispatch = createDeferred<{
+      placement: ReturnType<typeof createStartupPlacement>;
+    }>();
     const request = vi.fn((method: string, params?: unknown) => {
       const key = (params as { key?: string } | undefined)?.key;
       if (method === "sessions.dispatch") {
@@ -431,7 +442,7 @@ describe("application session placement startup", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const { startup, input, client, initialUserMessage } = harness(request);
+    const { startup, input, client, initialUserMessage } = createPlacementStartupHarness(request);
     const secondInput = {
       ...input,
       recovery: {
@@ -457,7 +468,7 @@ describe("application session placement startup", () => {
       0,
     );
 
-    firstDispatch.resolve({ placement: placement("active", 2) });
+    firstDispatch.resolve({ placement: createStartupPlacement("active", 2) });
     await vi.waitFor(() => {
       expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
     });
@@ -474,7 +485,7 @@ describe("application session placement startup", () => {
     expect(initialUserMessage.read(input.recovery.sessionKey, client)).not.toBeNull();
     expect(startup.get(secondInput.recovery.sessionKey)).not.toBeNull();
 
-    secondDispatch.resolve({ placement: placement("active", 3) });
+    secondDispatch.resolve({ placement: createStartupPlacement("active", 3) });
     await vi.waitFor(() => {
       expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(2);
     });
@@ -512,7 +523,9 @@ describe("application session placement startup", () => {
   ])(
     "retains a rejected $target.kind submission across reload until explicit retry",
     async ({ target, message, wire }) => {
-      const retryDispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
+      const retryDispatch = createDeferred<{
+        placement: ReturnType<typeof createStartupPlacement>;
+      }>();
       let dispatches = 0;
       const request = vi.fn((method: string) => {
         if (method === "sessions.dispatch") {
@@ -533,7 +546,7 @@ describe("application session placement startup", () => {
         throw new Error(`unexpected method ${method}`);
       });
       const { startup, input, sessions, dependencies, initialUserMessage, client } =
-        harness(request);
+        createPlacementStartupHarness(request);
       const attachments = [
         { type: "file", mimeType: "text/plain", fileName: "note.txt", content: "SGk=" },
       ];
@@ -585,7 +598,7 @@ describe("application session placement startup", () => {
         ...wire,
       });
       expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
-      retryDispatch.resolve({ placement: placement("active", 2) });
+      retryDispatch.resolve({ placement: createStartupPlacement("active", 2) });
       await vi.waitFor(() => expect(reloaded.get(input.recovery.sessionKey)).toBeNull());
       expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
       expect(request).toHaveBeenLastCalledWith("sessions.send", {
@@ -608,7 +621,7 @@ describe("application session placement startup", () => {
   );
 
   it("checks incognito delivery in memory with the same message identity", async () => {
-    const activePlacement = placement("active", 2);
+    const activePlacement = createStartupPlacement("active", 2);
     const request = vi.fn((method: string, _params?: unknown) => {
       if (method === "sessions.dispatch") {
         return Promise.resolve({ placement: activePlacement });
@@ -626,7 +639,7 @@ describe("application session placement startup", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const { startup, input } = harness(request);
+    const { startup, input } = createPlacementStartupHarness(request);
     sessionStorage.clear();
     startup.start({ ...input, persistRecovery: false });
     await vi.waitFor(() => {
@@ -648,7 +661,7 @@ describe("application session placement startup", () => {
   });
 
   it("uses retained recovery identity and refuses retry after gateway identity changes", async () => {
-    const activePlacement = placement("active", 2);
+    const activePlacement = createStartupPlacement("active", 2);
     const request = vi.fn((method: string) => {
       if (method === "sessions.dispatch") {
         return Promise.resolve({ placement: activePlacement });
@@ -664,7 +677,7 @@ describe("application session placement startup", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const { startup, input, client, gateway } = harness(request);
+    const { startup, input, client, gateway } = createPlacementStartupHarness(request);
     startup.start(input);
     await vi.waitFor(() => {
       expect(startup.get(input.recovery.sessionKey)?.phase).toBe("failed");
@@ -694,20 +707,20 @@ describe("application session placement startup", () => {
     (gateway.connection as { gatewayUrl: string }).gatewayUrl = "ws://other.example";
     expect(startup.get(input.recovery.sessionKey)).toBeNull();
     startup.retry(input.recovery.sessionKey);
-    await flush();
+    await flushStartupMicrotasks();
     expect(request).toHaveBeenCalledTimes(requestCount);
 
     (gateway.connection as { gatewayUrl: string }).gatewayUrl = input.recovery.gatewayUrl;
     client.recoveryScope = "principal-b";
     expect(startup.get(input.recovery.sessionKey)).toBeNull();
     startup.retry(input.recovery.sessionKey);
-    await flush();
+    await flushStartupMicrotasks();
     expect(request).toHaveBeenCalledTimes(requestCount);
     startup.dispose();
   });
 
   it("refreshes after active placement failure without replacing the visible error", async () => {
-    const activePlacement = placement("active", 2);
+    const activePlacement = createStartupPlacement("active", 2);
     const request = vi.fn((method: string) => {
       if (method === "sessions.dispatch") {
         return Promise.resolve({ placement: activePlacement });
@@ -717,7 +730,7 @@ describe("application session placement startup", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const { startup, input, sessions, state } = harness(request);
+    const { startup, input, sessions, state } = createPlacementStartupHarness(request);
     state.result.sessions[0] = {
       ...state.result.sessions[0],
       placement: activePlacement,
@@ -737,14 +750,14 @@ describe("application session placement startup", () => {
   });
 
   it("does not start a duplicate operation for an equivalent session key", async () => {
-    const dispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
+    const dispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();
     const request = vi.fn((method: string) => {
       if (method === "sessions.dispatch") {
         return dispatch.promise;
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const { startup, input } = harness(request);
+    const { startup, input } = createPlacementStartupHarness(request);
     startup.start({
       ...input,
       recovery: { ...input.recovery, sessionKey: "agent:main:main" },
@@ -759,14 +772,15 @@ describe("application session placement startup", () => {
   });
 
   it("replaces a stale persistent operation without letting its settlement clean up", async () => {
-    const oldDispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
+    const oldDispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();
     const oldRequest = vi.fn((method: string) => {
       if (method === "sessions.dispatch") {
         return oldDispatch.promise;
       }
       throw new Error(`unexpected old-client method ${method}`);
     });
-    const { startup, input, gateway, initialUserMessage } = harness(oldRequest);
+    const { startup, input, gateway, initialUserMessage } =
+      createPlacementStartupHarness(oldRequest);
     startup.start(input);
     await vi.waitFor(() => {
       expect(oldRequest).toHaveBeenCalledWith("sessions.dispatch", expect.anything());
@@ -774,7 +788,7 @@ describe("application session placement startup", () => {
 
     const newRequest = vi.fn((method: string) => {
       if (method === "sessions.describe") {
-        return Promise.resolve({ session: { placement: placement("active", 3) } });
+        return Promise.resolve({ session: { placement: createStartupPlacement("active", 3) } });
       }
       if (method === "sessions.send") {
         return Promise.resolve({ messageSeq: 21 });
@@ -801,8 +815,8 @@ describe("application session placement startup", () => {
     expect(startup.get(input.recovery.sessionKey)).toBeNull();
     expect(initialUserMessage.read(input.recovery.sessionKey, newClient as never)).not.toBeNull();
 
-    oldDispatch.resolve({ placement: placement("active", 2) });
-    await flush();
+    oldDispatch.resolve({ placement: createStartupPlacement("active", 2) });
+    await flushStartupMicrotasks();
     for (const method of ["sessions.delete", "sessions.abort", "environments.destroy"]) {
       expect(oldRequest.mock.calls.filter(([candidate]) => candidate === method)).toHaveLength(0);
     }
@@ -812,14 +826,17 @@ describe("application session placement startup", () => {
   });
 
   it("reclaims the worker and deletes the session when incognito startup is interrupted", async () => {
-    const dispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
+    const dispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();
     const request = vi.fn((method: string) => {
       if (method === "sessions.dispatch") {
         return dispatch.promise;
       }
       if (method === "sessions.describe") {
         return Promise.resolve({
-          session: { sessionId: "session-cloud-startup", placement: placement("active", 2) },
+          session: {
+            sessionId: "session-cloud-startup",
+            placement: createStartupPlacement("active", 2),
+          },
         });
       }
       if (
@@ -831,7 +848,7 @@ describe("application session placement startup", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const { startup, input, gateway } = harness(request);
+    const { startup, input, gateway } = createPlacementStartupHarness(request);
     sessionStorage.clear();
     startup.start({ ...input, persistRecovery: false });
     await vi.waitFor(() => {
@@ -848,7 +865,7 @@ describe("application session placement startup", () => {
     };
     (gateway as unknown as { snapshot: typeof nextSnapshot }).snapshot = nextSnapshot;
     vi.mocked(gateway.subscribe).mock.calls[0]?.[0](nextSnapshot as never);
-    dispatch.resolve({ placement: placement("active", 2) });
+    dispatch.resolve({ placement: createStartupPlacement("active", 2) });
 
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith("sessions.reclaim", {
