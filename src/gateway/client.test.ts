@@ -18,9 +18,6 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { GatewayClientOptions } from "./client.js";
 
-const TLS_FINGERPRINT = "ab".repeat(32);
-const DIFFERENT_TLS_FINGERPRINT = "cd".repeat(32);
-
 function waitForFast<T>(
   callback: () => T | Promise<T>,
   options: { timeout?: number; interval?: number } = {},
@@ -99,7 +96,6 @@ class MockWebSocket {
   autoCloseOnClose = true;
   readyState = MockWebSocket.CONNECTING;
   readonly options: unknown;
-  _socket?: { getPeerCertificate: () => { fingerprint256?: string } };
 
   constructor(_url: string, options?: unknown) {
     this.options = options;
@@ -107,13 +103,6 @@ class MockWebSocket {
     for (const observer of wsConstructorObservers) {
       observer(_url, options);
     }
-  }
-
-  setPeerFingerprint(fingerprint256: string): void {
-    Object.defineProperty(this, "_socket", {
-      configurable: true,
-      value: { getPeerCertificate: () => ({ fingerprint256 }) },
-    });
   }
 
   on(event: "open", handler: WsEventHandlers["open"]): void;
@@ -794,35 +783,6 @@ describe("GatewayClient close handling", () => {
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid", {
       phase: "pre-hello",
       socketOpened: false,
-      transportValidated: false,
-      connectRequestSent: false,
-      transientPreHelloCleanClose: false,
-    });
-    client.stop();
-  });
-
-  it("marks an opened TLS transport unvalidated when fingerprint verification fails", () => {
-    const onClose = vi.fn();
-    const onConnectError = vi.fn();
-    const client = new GatewayClient({
-      url: "wss://127.0.0.1:18789",
-      tlsFingerprint: TLS_FINGERPRINT,
-      onClose,
-      onConnectError,
-    });
-
-    client.start();
-    const ws = getLatestWs();
-    ws.setPeerFingerprint(DIFFERENT_TLS_FINGERPRINT);
-    ws.emitOpen();
-
-    expect(onConnectError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "gateway tls fingerprint mismatch" }),
-    );
-    expect(onClose).toHaveBeenCalledWith(1008, "gateway tls fingerprint mismatch", {
-      connectError: expect.objectContaining({ message: "gateway tls fingerprint mismatch" }),
-      phase: "pre-hello",
-      socketOpened: true,
       transportValidated: false,
       connectRequestSent: false,
       transientPreHelloCleanClose: false,

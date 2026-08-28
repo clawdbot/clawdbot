@@ -1775,7 +1775,7 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.modelOverrideSource).toBe("user");
   });
 
-  it.each(["owed", "unresolved"] as const)(
+  it.each(["owed", "unresolved", "acknowledged"] as const)(
     "preserves %s delivery-notice debt across an implicit daily stale rollover",
     async (noticeState) => {
       const root = await makeCaseDir("openclaw-daily-rollover-notice-");

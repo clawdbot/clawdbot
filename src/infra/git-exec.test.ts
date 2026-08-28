@@ -39,6 +39,7 @@ describe.each([
       ...result,
       stdout: Buffer.from(result.stdout),
       stderr: Buffer.from(result.stderr),
+      code: result.termination === "exit" && !result.outputLimitExceeded ? result.code : null,
       termination: result.outputLimitExceeded
         ? "output-limit"
         : result.termination === "no-output-timeout"
@@ -112,7 +113,7 @@ describe.each([
     },
   );
 
-  it.each(["", " \t\r\n", `${String.fromCharCode(27)}[0m`])(
+  it.each(["", " \t\r\n", `${String.fromCharCode(27)}[0m`, "progress\r \t"])(
     "uses stdout when stderr has no visible diagnostic: %j",
     async (stderr) => {
       failWith({ stderr, stdout: "error: cannot read index\n" });

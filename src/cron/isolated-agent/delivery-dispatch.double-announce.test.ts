@@ -11,7 +11,7 @@
  */
 
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import * as deliveryQueueSqlite from "../../infra/delivery-queue-sqlite.js";
@@ -189,6 +189,9 @@ import {
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logError } from "../../logger.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { withTempCronHome } from "../isolated-agent.test-harness.js";
 import {
   dispatchCronDelivery,
   queueCronMessageToolDeliveryAwareness,
@@ -2406,25 +2409,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
-  it("retries proven-not-sent direct announce failures before succeeding", async () => {
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    vi.mocked(deliverOutboundPayloads)
-      .mockRejectedValueOnce(
-        new PlatformMessageNotDispatchedError("upload stopped before final dispatch", {
-          cause: new Error("gateway upload failed"),
-        }),
-      )
-      .mockResolvedValueOnce([{ ok: true } as never]);
-
-    const params = makeBaseParams({ synthesizedText: "Retry me once." });
-    const state = await dispatchCronDelivery(params);
-
-    expect(state.result).toBeUndefined();
-    expect(state.deliveryAttempted).toBe(true);
-    expect(state.delivered).toBe(true);
-    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
-  });
-
   it("does not retry permanent typed pre-dispatch rejections", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     const rejection = new PlatformMessageNotDispatchedError("payload rejected", {
@@ -2908,8 +2892,16 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   it("does not mark partial best-effort delivery as durably completed", async () => {
     vi.mocked(deliverOutboundPayloads).mockImplementation(async (params) => {
       const failedPayload = Array.isArray(params.payloads) ? params.payloads[0] : undefined;
-      params.onError?.(new Error("payload failed"), failedPayload as never);
-      return [{ ok: true } as never];
+      const error = new Error("payload failed");
+      params.onPayloadDeliveryOutcome?.({
+        index: 0,
+        status: "failed",
+        error,
+        sentBeforeError: true,
+        stage: "platform_send",
+      });
+      params.onError?.(error, failedPayload as never);
+      return [{ channel: "telegram", messageId: "partial-message" }];
     });
 
     const params = makeBaseParams({ synthesizedText: "Partial bestEffort replay." }) as Record<
@@ -3978,6 +3970,110 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectDeliveryCall(0, {
       payloads: [{ text: "Working on it..." }],
+    });
+  });
+
+  describe("real outbound retry outcomes", () => {
+    let harness: typeof import("./run.test-harness.js");
+    let runCronIsolatedAgentTurn: typeof import("./run.js").runCronIsolatedAgentTurn;
+    let realDeliver: typeof import("../../infra/outbound/deliver.js").deliverOutboundPayloadsInternal;
+
+    beforeAll(async () => {
+      harness = await import("./run.test-harness.js");
+      // Keep the runner's offline agent/session fixture, but exercise real
+      // payload classification, channel lookup, and outbound callbacks.
+      vi.doUnmock("./helpers.js");
+      vi.doUnmock("../../channels/plugins/index.js");
+      runCronIsolatedAgentTurn = await harness.loadRunCronIsolatedAgentTurn();
+      realDeliver = (
+        await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(
+          "../../infra/outbound/deliver.js",
+        )
+      ).deliverOutboundPayloadsInternal;
+    });
+
+    beforeEach(() => {
+      harness.resetRunCronIsolatedAgentTurnHarness();
+      harness.mockRunCronFallbackPassthrough();
+      harness.dispatchCronDeliveryMock.mockImplementation(dispatchCronDelivery);
+      harness.resolveCronDeliveryPlanMock.mockReturnValue({
+        requested: true,
+        mode: "announce",
+        channel: "telegram",
+        to: "123456",
+      });
+      harness.resolveDeliveryTargetMock.mockResolvedValue(makeResolvedDelivery());
+      vi.mocked(deliverOutboundPayloads).mockImplementation(realDeliver);
+      vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    });
+
+    afterEach(() => {
+      resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(createTestRegistry());
+      vi.mocked(deliverOutboundPayloads)
+        .mockReset()
+        .mockResolvedValue([{ ok: true } as never]);
+    });
+
+    it.each([
+      { name: "required retry", bestEffort: false, partialSend: false },
+      { name: "best-effort retry", bestEffort: true, partialSend: false },
+      { name: "required partial send without retry", bestEffort: false, partialSend: true },
+      { name: "best-effort partial send without retry", bestEffort: true, partialSend: true },
+    ])("reports $name from actual adapter outcomes", async ({ bestEffort, partialSend }) => {
+      await withTempCronHome(async () => {
+        const notDispatched = new PlatformMessageNotDispatchedError(
+          "payload stopped before final dispatch",
+          { cause: new Error("connect ECONNREFUSED") },
+        );
+        const receipt = { channel: "telegram", messageId: "cron-retry-message" };
+        const sendText = vi.fn();
+        if (partialSend) {
+          sendText.mockResolvedValueOnce(receipt).mockRejectedValueOnce(notDispatched);
+        } else {
+          sendText.mockRejectedValueOnce(notDispatched).mockResolvedValueOnce(receipt);
+        }
+        const registry = createTestRegistry([
+          {
+            pluginId: "telegram",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "telegram",
+              outbound: { deliveryMode: "direct", sendText },
+            }),
+          },
+        ]);
+        setActivePluginRegistry(registry);
+        harness.loadAgentRuntimePluginRegistryHandleMock.mockReturnValue(registry);
+        harness.runEmbeddedAgentMock.mockResolvedValue({
+          payloads: partialSend
+            ? [{ text: "First payload." }, { text: "Second payload." }]
+            : [{ text: "Retry me once." }],
+          meta: { agentMeta: {} },
+        });
+        const { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } =
+          await import("./job-fixtures.js");
+        const result = await runCronIsolatedAgentTurn(
+          makeIsolatedAgentParamsFixture({
+            job: makeIsolatedAgentJobFixture({
+              delivery: { mode: "announce", channel: "telegram", to: "123456", bestEffort },
+            }),
+          }),
+        );
+
+        expect(sendText).toHaveBeenCalledTimes(2);
+        expect(harness.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+        expect(deliverOutboundPayloads).toHaveBeenCalledTimes(partialSend ? 1 : 2);
+        expect(result.status).toBe("ok");
+        expect(result.error).toBeUndefined();
+        expect(result.deliveryAttempted).toBe(true);
+        expect.soft(result.delivered).toBe(!partialSend);
+        if (partialSend) {
+          expect(result.deliveryError).toContain(notDispatched.message);
+        } else {
+          expect.soft(result.deliveryError).toBeUndefined();
+        }
+      });
     });
   });
 });

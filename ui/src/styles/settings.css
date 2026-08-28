@@ -533,6 +533,17 @@
   padding-inline: 0;
 }
 
+.settings-section__actions .btn--xs.btn--icon {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+}
+
+.settings-section__actions .btn--xs.btn--icon svg {
+  width: 16px;
+  height: 16px;
+}
+
 .settings-toggle {
   display: inline-flex;
   align-items: center;

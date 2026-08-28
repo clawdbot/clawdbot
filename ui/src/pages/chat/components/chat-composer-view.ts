@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
@@ -378,11 +379,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                         .muted=${true}
                         playsinline
                         aria-label=${t("chat.composer.cameraPreview")}
-                        ${ref((element) => {
-                          if (element instanceof HTMLVideoElement) {
-                            element.srcObject = props.realtimeTalkVideoStream ?? null;
-                          }
-                        })}
+                        .srcObject=${live(props.realtimeTalkVideoStream)}
                       ></video>
                       ${props.realtimeTalkCameraDevices &&
                       props.realtimeTalkCameraDevices.length >= 2 &&

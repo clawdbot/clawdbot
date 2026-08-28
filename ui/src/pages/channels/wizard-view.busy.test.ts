@@ -102,7 +102,10 @@ describe("renderChannelWizard busy controls", () => {
       );
 
       expect(busyButton?.disabled).toBe(true);
+      expect(busyButton?.getAttribute("aria-label")).toBe("Continue");
+      expect(busyButton?.querySelector(".btn__label")?.textContent).toBe("Continue");
       expect(busyButton?.querySelector(".btn__spinner")).not.toBeNull();
+      expect(busyButton?.querySelector(".btn__label + .btn__spinner")).not.toBeNull();
       expect(busyButton?.querySelector(".sr-only")?.textContent).toBe("Working…");
       expect(rendered.container.querySelectorAll(".btn__spinner")).toHaveLength(1);
       expect(
@@ -140,7 +143,10 @@ describe("renderChannelWizard busy controls", () => {
     );
 
     expect(busyButton?.disabled).toBe(true);
+    expect(busyButton?.getAttribute("aria-label")).toBe("Continue");
+    expect(busyButton?.querySelector(".btn__label")?.textContent).toBe("Continue");
     expect(busyButton?.querySelector(".btn__spinner")).not.toBeNull();
+    expect(busyButton?.querySelector(".btn__label + .btn__spinner")).not.toBeNull();
     expect(busyButton?.querySelector(".sr-only")?.textContent).toBe(status);
     expect(rendered.container.querySelectorAll(".btn__spinner")).toHaveLength(1);
   });
@@ -191,6 +197,25 @@ describe("renderChannelWizard busy controls", () => {
     const group = select.container.querySelector("wa-select");
     expect(group?.hasAttribute("disabled")).toBe(true);
     expect(group?.querySelector('[slot="label"]')?.textContent).toBe("Pick one");
+  });
+
+  it("shows the channel prompt inside an unselected channel picker", () => {
+    const select = renderStep(
+      {
+        id: "channel",
+        type: "select",
+        message: "Select a channel",
+        options: [
+          { label: "Telegram", value: "telegram" },
+          { label: "Discord", value: "discord" },
+        ],
+      },
+      false,
+    );
+
+    expect(select.container.querySelector("wa-select")?.getAttribute("placeholder")).toBe(
+      "Select a channel",
+    );
   });
 
   it("disables multiselect choices and submission while a step is running", () => {

@@ -586,32 +586,32 @@ Notes:
 
 Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=modern` / `OPENCLAW_LIVE_GATEWAY_MODELS=modern` (and their `all` alias) run the curated priority list from `HIGH_SIGNAL_LIVE_MODEL_PRIORITY` in `src/agents/test-helpers/live-model-dynamic-candidates.ts`, in this priority order:
 
-| Provider/model                                | Notes      |
-| --------------------------------------------- | ---------- |
-| `anthropic/claude-opus-5`                     |            |
-| `anthropic/claude-opus-4-8`                   |            |
-| `anthropic/claude-sonnet-5`                   |            |
-| `anthropic/claude-sonnet-4-6`                 |            |
-| `anthropic/claude-opus-4-7`                   |            |
-| `google/gemini-3.1-pro-preview`               | Gemini API |
-| `google/gemini-3.5-flash`                     | Gemini API |
-| `cohere/command-a-plus-05-2026`               |            |
-| `moonshot/kimi-k3`                            |            |
-| `anthropic/claude-opus-4-6`                   |            |
-| `deepseek/deepseek-v4-flash`                  |            |
-| `deepseek/deepseek-v4-pro`                    |            |
-| `minimax/MiniMax-M3`                          |            |
-| `openai/gpt-5.6`                              |            |
-| `openrouter/openai/gpt-5.2-chat`              |            |
-| `openrouter/minimax/minimax-m2.7`             |            |
-| `opencode-go/glm-5`                           |            |
-| `openrouter/ai21/jamba-large-1.7`             |            |
-| `xai/grok-4.6`                                |            |
-| `xai/grok-4.5`                                |            |
-| `xai/grok-4.20-0309-reasoning`                |            |
-| `zai/glm-5.1`                                 |            |
-| `fireworks/accounts/fireworks/models/glm-5p1` |            |
-| `minimax-portal/minimax-m3`                   |            |
+| Provider/model                                      | Notes      |
+| --------------------------------------------------- | ---------- |
+| `anthropic/claude-opus-5`                           |            |
+| `anthropic/claude-opus-4-8`                         |            |
+| `anthropic/claude-sonnet-5`                         |            |
+| `anthropic/claude-sonnet-4-6`                       |            |
+| `anthropic/claude-opus-4-7`                         |            |
+| `google/gemini-3.1-pro-preview`                     | Gemini API |
+| `google/gemini-3.5-flash`                           | Gemini API |
+| `cohere/command-a-plus-05-2026`                     |            |
+| `moonshot/kimi-k3`                                  |            |
+| `anthropic/claude-opus-4-6`                         |            |
+| `deepseek/deepseek-v4-flash`                        |            |
+| `deepseek/deepseek-v4-pro`                          |            |
+| `minimax/MiniMax-M3`                                |            |
+| `openai/gpt-5.6`                                    |            |
+| `openrouter/openai/gpt-5.2-chat`                    |            |
+| `openrouter/minimax/minimax-m2.7`                   |            |
+| `opencode-go/glm-5`                                 |            |
+| `openrouter/ai21/jamba-large-1.7`                   |            |
+| `xai/grok-4.6`                                      |            |
+| `xai/grok-4.5`                                      |            |
+| `xai/grok-4.20-0309-reasoning`                      |            |
+| `zai/glm-5.1`                                       |            |
+| `fireworks/accounts/fireworks/routers/glm-5p2-fast` |            |
+| `minimax-portal/minimax-m3`                         |            |
 
 The curated **small-model** list (`OPENCLAW_LIVE_MODELS=small` / `OPENCLAW_LIVE_GATEWAY_MODELS=small`), from `SMALL_LIVE_MODEL_PRIORITY`:
 

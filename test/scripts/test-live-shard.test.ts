@@ -128,6 +128,7 @@ describe("scripts/test-live-shard", () => {
         "extensions/minimax/minimax.live.test.ts",
         "extensions/music-generation-providers.live.test.ts",
         "extensions/openai/openai-tts.live.test.ts",
+        "extensions/tts-local-cli/speech-provider.live.test.ts",
         "extensions/video-generation-providers.live.test.ts",
         "extensions/volcengine/tts.live.test.ts",
         "extensions/vydra/vydra.live.test.ts",
@@ -140,6 +141,9 @@ describe("scripts/test-live-shard", () => {
     for (const [shard, expectedFiles] of Object.entries(expectedByShard)) {
       expect(selectLiveShardFiles(shard, files), shard).toEqual(expectedFiles);
     }
+    expect(selectLiveShardFiles("native-live-extensions-media-audio", allFiles)).toContain(
+      "extensions/tts-local-cli/speech-provider.live.test.ts",
+    );
   });
 
   it("keeps the Codex CLI backend live smoke on a minimal tool profile", () => {

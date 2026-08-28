@@ -376,7 +376,25 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         return resyncRequired(0);
       }
       if (windows.size >= maxSessions) {
-        return capacityExceeded();
+        // Attached sessions keep windows for the gateway's lifetime, so at the cap
+        // evict the oldest registry-quiescent window (stale activeRuns look busy);
+        // it rebinds via resync. Reject only when every window has an active run.
+        let evicted = false;
+        for (const candidate of windows.values()) {
+          const busy = [...candidate.activeRuns.entries()].some(
+            ([runId, owned]) =>
+              getAgentRunContextOwnerStatus(runId, owned.claimId, owned.lifecycleGeneration) ===
+              "active",
+          );
+          if (!busy) {
+            clearWindow(candidate);
+            evicted = true;
+            break;
+          }
+        }
+        if (!evicted) {
+          return capacityExceeded();
+        }
       }
       window = {
         activeRuns: new Map(),

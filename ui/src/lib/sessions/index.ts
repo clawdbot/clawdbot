@@ -606,7 +606,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     recover: operations.recover,
     patch: mutations.patch,
     archiveVisibility: mutations.archiveVisibility,
-    setArchiveVisibility: mutations.setArchiveVisibility,
+    setArchivePending: mutations.setArchivePending,
     assignOwner: mutations.assignOwner,
     retireModelOverride: mutations.retireModelOverride,
     think: (key, agentId) => thinkingLevelClaims.get(thinkingClaimKey(key, agentId))?.[0],

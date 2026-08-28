@@ -40,7 +40,6 @@ import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
-import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import {
   renderSessionAttentionIcon,
   renderSessionRunSpinner,
@@ -313,21 +312,16 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
               users,
               (user) => user.id,
               (user) => {
-                const activity = personActivityLink(
-                  user.id,
-                  personActivityRouting({
-                    basePath: host.basePath,
-                    navigate: (route, options) => host.onNavigate?.(route, options),
-                  }),
-                )!;
                 return html`<div class="sidebar-online__row">
-                  <a
+                  <button
                     class="sidebar-online__person ${isPresenceViewerIdle(user)
                       ? "sidebar-online__person--away"
                       : ""}"
+                    type="button"
                     data-online-user-id=${user.id}
-                    href=${activity.href}
-                    @click=${activity.open}
+                    aria-haspopup="dialog"
+                    aria-expanded="false"
+                    aria-label=${t("presence.card.details", { name: presenceViewerLabel(user) })}
                   >
                     <openclaw-viewer-avatar
                       .user=${user}
@@ -335,17 +329,10 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                       variant="footer"
                       aria-hidden="true"
                     ></openclaw-viewer-avatar>
-                    <span class="sidebar-online__person-name"
-                      >${presenceViewerLabel(user)}</span
-                    > </a
-                  ><button
-                    class="sidebar-online__details"
-                    type="button"
-                    aria-haspopup="dialog"
-                    aria-expanded="false"
-                    aria-label=${t("presence.card.details", { name: presenceViewerLabel(user) })}
-                  >
-                    <span aria-hidden="true">${icons.chevronRight}</span>
+                    <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
+                    <span class="sidebar-online__person-action" aria-hidden="true"
+                      >${icons.chevronRight}</span
+                    >
                   </button>
                 </div>`;
               },

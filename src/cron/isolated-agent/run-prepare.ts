@@ -208,6 +208,9 @@ export async function prepareCronRunContext(params: {
     dir: modelOwner.workspaceDir,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap && !params.isFastTestEnv,
     skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+    provisioning: await (
+      await import("../../agents/acp-workspace-provisioning.js")
+    ).resolveAcpAgentWorkspaceProvisioningForTurn({ cfg: runtimeCfg, agentId }),
   });
   const workspaceDir = workspace.dir;
 
