@@ -1120,15 +1120,23 @@ openclaw-session-progress-hovercard-provider {
   overflow-wrap: normal;
 }
 
-.person-activity-card__session-copy > span {
+.person-activity-card__session-name {
   display: block;
   min-width: 0;
   overflow: hidden;
   font-weight: 500;
-  white-space: nowrap;
 }
 
-.person-activity-card__session-copy > .hover-marquee {
+.person-activity-card__session-name--multiline {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.person-activity-card__session-name.hover-marquee {
+  white-space: nowrap;
   color: var(--text);
   text-overflow: clip;
   -webkit-mask-image: linear-gradient(to right, black calc(100% - 18px), transparent 100%);

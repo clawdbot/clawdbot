@@ -177,12 +177,14 @@ function renderSessions(
                 >
                 <span class="person-activity-card__session-copy"
                   ><span
-                    class="hover-marquee"
-                    data-hover-marquee-delay="250"
-                    data-hover-marquee-extra-shift="18"
+                    class="person-activity-card__session-name ${recent
+                      ? "hover-marquee"
+                      : "person-activity-card__session-name--multiline"}"
+                    data-hover-marquee-delay=${recent ? "250" : nothing}
+                    data-hover-marquee-extra-shift=${recent ? "18" : nothing}
                     >${resolveSessionDisplayName(row.key, row)}</span
                   >
-                  ${recent && row.updatedAt != null
+                  ${row.updatedAt != null
                     ? html`<span class="person-activity-card__session-age"
                         >${elapsed(row.updatedAt, "single-unit")}</span
                       >`
