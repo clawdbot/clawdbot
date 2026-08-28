@@ -248,19 +248,7 @@ export class GatewayBrowserClient {
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => {
         this.maxPayloadBytes = undefined;
-        const socket = gatewaySocket.createBrowserGatewaySocket(this.opts.url, handlers);
-        return {
-          ...socket,
-          send: (data) => {
-            if (
-              this.maxPayloadBytes !== undefined &&
-              new TextEncoder().encode(data).byteLength > this.maxPayloadBytes
-            ) {
-              throw new GatewayPayloadLimitError();
-            }
-            socket.send(data);
-          },
-        };
+        return gatewaySocket.createBrowserGatewaySocket(this.opts.url, handlers);
       },
       createRequestId: generateUUID,
       validateRequestFrame: (frame, method) => {

@@ -933,9 +933,11 @@ describe("GatewayBrowserClient", () => {
     );
     expect(ws.sent).toHaveLength(0);
 
+    const encodeSpy = vi.spyOn(TextEncoder.prototype, "encode");
     const request = client.request("sessions.list", { includeGlobal: true });
     const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
     expect(frame.method).toBe("sessions.list");
+    expect(encodeSpy).toHaveBeenCalledOnce();
     ws.emitMessage({
       type: "res",
       id: frame.id,
