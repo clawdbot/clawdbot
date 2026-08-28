@@ -1091,12 +1091,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export OPENSHELL_VERSION=v0.0.109
+          export OPENSHELL_VERSION=v0.0.110
           installer_path="$(mktemp "${RUNNER_TEMP}/openshell-install.XXXXXX")"
           trap 'rm -f "$installer_path"' EXIT
           curl -LsSf --connect-timeout 10 --max-time 120 \
             -o "$installer_path" \
-            https://raw.githubusercontent.com/NVIDIA/OpenShell/8d67250a5d17348eb96c4fa46226b06d8041f2ba/install.sh
+            https://raw.githubusercontent.com/NVIDIA/OpenShell/7909fb5d0f54a06e26eb79e47885d7dd105aef24/install.sh
           sh "$installer_path"
           openshell --version
 

@@ -184,7 +184,7 @@ run_remote_bash() {
     /bin/bash "$tmp"
 }
 
-GUM_VERSION="${OPENCLAW_GUM_VERSION:-0.17.0}"
+GUM_VERSION="${OPENCLAW_GUM_VERSION:-2.0.0}"
 GUM=""
 GUM_STATUS="skipped"
 GUM_REASON=""

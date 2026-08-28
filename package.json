@@ -2034,8 +2034,8 @@
     "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.3.0",
-    "@anthropic-ai/claude-agent-sdk": "0.3.236",
+    "@agentclientprotocol/sdk": "1.4.0",
+    "@anthropic-ai/claude-agent-sdk": "0.3.238",
     "@anthropic-ai/sdk": "0.120.0",
     "@clack/core": "1.4.3",
     "@clack/prompts": "1.7.0",
@@ -2073,7 +2073,7 @@
     "jiti": "2.7.0",
     "json5": "2.2.3",
     "jszip": "3.10.1",
-    "koffi": "3.1.5",
+    "koffi": "3.1.6",
     "kysely": "0.29.5",
     "linkedom": "0.18.13",
     "minimatch": "10.2.6",
@@ -2086,7 +2086,7 @@
     "playwright-core": "1.62.1",
     "pretty-ms": "9.3.0",
     "qrcode": "1.5.4",
-    "quickjs-wasi": "3.4.0",
+    "quickjs-wasi": "3.5.0",
     "rastermill": "0.3.2",
     "semver": "7.8.5",
     "tar": "7.5.22",
@@ -2149,7 +2149,7 @@
     "tsdown": "0.22.14",
     "tsx": "4.23.12",
     "unrun": "0.3.1",
-    "vite": "8.2.1",
+    "vite": "8.2.2",
     "vitest": "4.1.11"
   },
   "optionalDependencies": {
