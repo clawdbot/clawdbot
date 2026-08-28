@@ -192,6 +192,7 @@ export async function readCodexPluginReadiness(params: {
 export function formatCodexPluginReadiness(
   readiness: CodexPluginReadiness,
   page = 1,
+  options: { rechecked?: boolean } = {},
 ): PluginCommandResult {
   const summary = readiness.summary;
   const available = summary
@@ -217,6 +218,12 @@ export function formatCodexPluginReadiness(
     lines.push(`Next: /codex plugins install ${readiness.commandId}, then /new or /reset.`);
   }
   const blocks: MessagePresentationBlock[] = [{ type: "text", text: lines.join("\n") }];
+  if (options.rechecked) {
+    blocks.unshift({
+      type: "text",
+      text: "App inventory recheck completed. Existing conversations keep their admitted app policy; use /new or /reset after connecting.",
+    });
+  }
   if (readiness.diagnostic) {
     blocks.push({ type: "text", text: readiness.diagnostic });
   }
@@ -288,7 +295,18 @@ export function formatCodexPluginReadiness(
       );
       blocks.push({
         type: "text",
-        text: "Snapshot freshness is unknown; this read does not refresh hosted tools or verify a live call. After connecting, recheck in Codex and use /new or /reset. Existing conversations keep their admitted app policy.",
+        text: options.rechecked
+          ? "Snapshot freshness is unknown; Codex may retain its snapshot and this does not verify a live call. No conversation policy was changed."
+          : `Snapshot freshness is unknown; this read does not refresh hosted tools or verify a live call. After connecting, run /codex plugins recheck ${readiness.commandId}, then /new or /reset. Existing conversations keep their admitted app policy.`,
+      });
+      blocks.push({
+        type: "buttons",
+        buttons: [
+          {
+            label: "Finished connecting / recheck",
+            action: { type: "command", command: `/codex plugins recheck ${readiness.commandId}` },
+          },
+        ],
       });
     }
   }

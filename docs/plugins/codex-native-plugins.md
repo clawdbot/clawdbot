@@ -163,6 +163,17 @@ link is available, run `/apps` in Codex CLI and select the app there. Responses
 show up to five app links and explicitly report additional apps to review in
 Codex CLI.
 
+After completing sign-in, choose **Finished connecting / recheck** or run:
+
+```text
+/codex plugins recheck security-review@company-tools
+```
+
+The owner-issued recheck requests an app inventory refresh for the selected
+runtime and reads the plugin status again. It does not change authorization
+or the current conversation's app policy. Use `/new` or `/reset` after
+connecting, then inspect status in the new conversation.
+
 After a `codexPlugins` change, new Codex conversations pick up the updated
 app set automatically. Run `/new` or `/reset` to refresh the current
 conversation. A gateway restart is not required for plugin enable/disable
@@ -206,6 +217,8 @@ same chat where you operate the Codex harness:
 /codex plugins list
 /codex plugins available
 /codex plugins install security-review@company-tools
+/codex plugins status security-review@company-tools
+/codex plugins recheck security-review@company-tools
 /codex plugins disable google-calendar
 /codex plugins enable google-calendar
 /codex plugins disable security-review@company-tools
@@ -233,9 +246,17 @@ changing configuration, or replacing a conversation. Only a read against the
 bound thread can report that an app is callable in that thread's runtime
 snapshot. An absent snapshot is unknown, not proof that an app is disconnected.
 Snapshot freshness and live connection status remain unknown; installation and
-metadata alone do not prove a successful tool call. After connecting, recheck
-in Codex, then use `/new` or `/reset` and inspect status again. Unsupported
-methods and failed reads show a recovery action instead of reporting readiness.
+metadata alone do not prove a successful tool call.
+
+`recheck <configured-plugin>` requires the same owner or `operator.admin`
+authority. It invalidates the selected runtime's app cache, requests a hosted
+app refresh, and returns the same status presentation. A completed request
+does not prove that Codex replaced its snapshot or that a live tool call will
+succeed. Disabled or blocked plugins remain blocked. Recheck never installs,
+enables, authenticates, or replaces a thread, and does not reload other
+conversations. After connecting, use `/new` or `/reset` and inspect status
+again. Unsupported methods, cancellation, and refresh failures provide a
+retry action without treating the previous inventory as confirmed.
 
 `install`, `enable`, and `disable` require the owner or a gateway client with
 the `operator.admin` scope. OpenClaw's reserved `/codex` command is dispatched
@@ -496,9 +517,9 @@ account-wide default can become callable after OpenClaw starts and verifies
 its explicitly configured thread. Revoked auth, missing metadata, disabled
 workspace plugins, and Codex managed or workspace restrictions still block
 access. Reauthorize or repair those upstream conditions before starting a new
-thread. If you changed that state after the gateway cached app inventory, wait
-for the one-hour cache refresh or restart the gateway, then use `/new` or
-`/reset`. OpenClaw does not authenticate plugin apps on the owner's behalf.
+thread. If you changed that state after the gateway cached app inventory, run
+`/codex plugins recheck <configured-plugin>`, then use `/new` or `/reset`.
+OpenClaw does not authenticate plugin apps on the owner's behalf.
 
 For `plugin_detail_unavailable`, verify that the exact installed marketplace
 and plugin identity select a matching `plugin/read` result. OpenClaw keeps

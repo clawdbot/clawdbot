@@ -46,13 +46,15 @@ const fakeCtx: PluginCommandContext = {
   getCurrentConversationBinding: async () => null,
 };
 
+function presentationButtons(result: PluginCommandResult) {
+  return (result.presentation?.blocks ?? []).flatMap((block) =>
+    block.type === "buttons" ? block.buttons : [],
+  );
+}
+
 function buttonCommands(result: PluginCommandResult): string[] {
-  const block = result.presentation?.blocks.find((candidate) => candidate.type === "buttons");
-  if (!block || block.type !== "buttons") {
-    throw new Error("expected button presentation");
-  }
-  return block.buttons.map((button) =>
-    button.action?.type === "command" ? button.action.command : "",
+  return presentationButtons(result).flatMap((button) =>
+    button.action?.type === "command" ? [button.action.command] : [],
   );
 }
 
@@ -163,6 +165,7 @@ describe("Codex /codex plugins subcommand", () => {
       "/codex plugins list",
       "/codex plugins available",
       "/codex plugins status",
+      "/codex plugins recheck",
       "/codex plugins enable",
       "/codex plugins disable",
       "/codex plugins help",
@@ -929,6 +932,9 @@ describe("Codex /codex plugins subcommand", () => {
       type: "buttons",
       buttons: [{ label: "Set up / manage GitHub", action: { type: "url", url: installUrl } }],
     });
+    expect(buttonCommands(result)).toEqual([
+      "/codex plugins recheck security-review@company-tools",
+    ]);
     expect(io.current()["security-review@company-tools"]?.enabled).toBe(true);
   });
 
@@ -993,7 +999,7 @@ describe("Codex /codex plugins subcommand", () => {
 
     expect(result.text).toContain("GitHub: setup/manage link unavailable");
     expect(result.text).toContain("In Codex CLI, run /apps and select this app");
-    expect(result.presentation?.blocks.some((block) => block.type === "buttons")).toBe(false);
+    expect(presentationButtons(result).some((button) => button.action?.type === "url")).toBe(false);
     if (installUrl) {
       expect(result.text).not.toContain(installUrl);
     }
@@ -1022,9 +1028,7 @@ describe("Codex /codex plugins subcommand", () => {
       runtime,
     );
 
-    const buttons = result.presentation?.blocks.flatMap((block) =>
-      block.type === "buttons" ? block.buttons : [],
-    );
+    const buttons = presentationButtons(result).filter((button) => button.action?.type === "url");
     expect(buttons).toHaveLength(5);
     expect(buttons?.map((button) => button.label)).toEqual([
       "Set up / manage App 0",

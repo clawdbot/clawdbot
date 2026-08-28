@@ -18,7 +18,9 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
 import { applyCodexAppServerAuthProfile } from "./app-server/auth-bridge.js";
+import { refreshCodexPluginAppRuntimeState } from "./app-server/plugin-activation.js";
 import { createCodexTestBindingStore } from "./app-server/session-binding.test-helpers.js";
 import * as sharedClients from "./app-server/shared-client.js";
 import { createClientHarness } from "./app-server/test-support.js";
@@ -277,9 +279,11 @@ describe("Codex plugin command context", () => {
   );
 
   it.each(["policy", "account", "session"] as const)(
-    "rejects a delayed response after %s changes and releases the client",
+    "does not publish a recheck response after %s changes and releases the client",
     async (change) => {
       const test = fixture();
+      const appCache = new CodexAppInventoryCache();
+      let appCacheKey = "";
       test.request.mockImplementation(async (method) => {
         if (method !== "app/installed") {
           return {};
@@ -303,10 +307,22 @@ describe("Codex plugin command context", () => {
         return { apps: [] };
       });
       await expect(
-        withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) =>
-          context.request("app/installed", { forceRefresh: false }),
-        ),
+        withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) => {
+          appCacheKey = context.appCacheKey;
+          await refreshCodexPluginAppRuntimeState({
+            request: context.request,
+            appCache,
+            appCacheKey,
+          });
+        }),
       ).rejects.toThrow("Codex account, conversation, or plugin policy changed");
+      expect(
+        appCache.read({
+          key: appCacheKey,
+          request: (method, params) => test.harness.client.request(method, params),
+          suppressRefresh: true,
+        }).snapshot,
+      ).toBeUndefined();
       expect(test.release).toHaveBeenCalledOnce();
     },
   );

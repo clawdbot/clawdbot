@@ -1,5 +1,7 @@
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { defaultCodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
+import type { CodexAppsInstalledParams } from "./app-server/protocol-control-plane.js";
 import type { v2 } from "./app-server/protocol.js";
 import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
 import {
@@ -20,6 +22,8 @@ const ctx: PluginCommandContext = {
   detachConversationBinding: async () => ({ removed: false }),
 };
 
+afterEach(() => defaultCodexAppInventoryCache.clear());
+
 function fixture(
   options: {
     threadId?: string | null;
@@ -29,6 +33,8 @@ function fixture(
     runtime?: v2.InstalledApp[];
     failMethod?: string;
     unsupported?: boolean;
+    refreshError?: Error;
+    refreshedRuntime?: v2.InstalledApp[];
     catalog?: { marketplace: string; kind: string };
   } = {},
 ) {
@@ -100,8 +106,14 @@ function fixture(
         response = { plugin: { summary, apps, mcpServers: [] } };
         break;
       case "app/installed":
+        if ((params as CodexAppsInstalledParams).forceRefresh && options.refreshError) {
+          throw options.refreshError;
+        }
         response = {
           apps:
+            ((params as CodexAppsInstalledParams).forceRefresh
+              ? options.refreshedRuntime
+              : undefined) ??
             options.runtime ??
             apps.map((app) => ({
               id: app.id,
@@ -313,6 +325,118 @@ describe("Codex plugin status command", () => {
     );
     expect(result.text).toContain("Only an owner or operator.admin");
     expect(test.io.readConfig).not.toHaveBeenCalled();
+    expect(test.request).not.toHaveBeenCalled();
+  });
+});
+
+describe("Codex plugin recheck command", () => {
+  it("refreshes account inventory once while retaining the current thread's restricted policy", async () => {
+    const test = fixture({
+      runtime: [{ id: "app-0", runtimeName: "App 0", enabled: false, callable: false }],
+      refreshedRuntime: [{ id: "app-0", runtimeName: "App 0", enabled: true, callable: true }],
+    });
+    const result = await handleCodexPluginsSubcommand(
+      ctx,
+      ["recheck", "notes"],
+      test.io,
+      test.runtime,
+    );
+    expect(result.text).toContain("App inventory recheck completed");
+    expect(result.text).toContain("disabled by effective Codex app policy");
+    expect(result.text).toContain("/new or /reset");
+    expect(result.text).toContain("Snapshot freshness is unknown");
+    expect(result.text).not.toContain("callable in this thread's runtime snapshot");
+    expect(test.request.mock.calls.filter(([method]) => method === "app/installed")).toEqual([
+      ["app/installed", { threadId: "thread-a", forceRefresh: false }],
+      ["app/installed", { forceRefresh: true }],
+      ["app/installed", { threadId: "thread-a", forceRefresh: false }],
+    ]);
+    expect(test.request).toHaveBeenCalledWith("app/read", { appIds: ["app-0"] });
+    expect(test.runtime.refresh).not.toHaveBeenCalled();
+    expect(test.runtime.install).not.toHaveBeenCalled();
+    expect(test.io.mutate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { options: { disabled: true }, expected: "disabled for new conversations" },
+    { options: { blocked: true }, expected: "blocked by marketplace policy" },
+    { options: { appCount: 0 }, expected: "No hosted apps declared" },
+  ])("does not refresh when $expected", async ({ options, expected }) => {
+    const test = fixture(options);
+    const result = await handleCodexPluginsSubcommand(
+      ctx,
+      ["recheck", "notes"],
+      test.io,
+      test.runtime,
+    );
+    expect(result.text).toContain(expected);
+    expect(result.text).not.toContain("recheck completed");
+    expect(test.request).not.toHaveBeenCalledWith("app/installed", { forceRefresh: true });
+    expect(test.io.mutate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      error: new Error("private upstream response"),
+      expected: "Hosted app tools could not be refreshed",
+    },
+    {
+      error: new CodexAppServerRpcError(
+        { code: -32601, message: "private upstream response" },
+        "app/installed",
+      ),
+      expected: "does not support the required app inventory methods",
+    },
+    {
+      error: Object.assign(new Error("private upstream response"), {
+        code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
+        reason: "aborted",
+        mayHaveWritten: true,
+      }),
+      expected: "The recheck was cancelled",
+    },
+  ])(
+    "reports $expected without claiming success or exposing provider data",
+    async ({ error, expected }) => {
+      const test = fixture({ refreshError: error });
+      const result = await handleCodexPluginsSubcommand(
+        ctx,
+        ["recheck", "notes"],
+        test.io,
+        test.runtime,
+      );
+      expect(result.text).toContain(expected);
+      expect(result.text).toContain("/codex plugins recheck notes@company-tools");
+      expect(result.text).toContain("Previous inventory was not confirmed");
+      expect(result.text).not.toContain("recheck completed");
+      expect(result.text).not.toContain("private upstream response");
+      expect(test.io.mutate).not.toHaveBeenCalled();
+    },
+  );
+
+  it("requires owner authority and a configured target before refreshing", async () => {
+    const test = fixture();
+    const denied = await handleCodexPluginsSubcommand(
+      { ...ctx, senderIsOwner: false },
+      ["recheck", "notes"],
+      test.io,
+      test.runtime,
+    );
+    const missing = await handleCodexPluginsSubcommand(
+      ctx,
+      ["recheck", "unconfigured"],
+      test.io,
+      test.runtime,
+    );
+    const extra = await handleCodexPluginsSubcommand(
+      ctx,
+      ["recheck", "notes", "2"],
+      test.io,
+      test.runtime,
+    );
+    expect(denied.text).toContain("Only an owner or operator.admin");
+    expect(missing.text).toContain("not explicitly configured");
+    expect(extra.text).toContain("Usage: /codex plugins recheck <configured-plugin>");
     expect(test.request).not.toHaveBeenCalled();
   });
 });
