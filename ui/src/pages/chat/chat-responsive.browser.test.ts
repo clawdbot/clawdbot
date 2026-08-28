@@ -2354,9 +2354,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const textBox = text.getBoundingClientRect();
         return {
           background: getComputedStyle(bubble).backgroundColor,
-          firstRow: boxes.filter(
-            (box) => Math.round(box.top) === Math.round(boxes[0]!.top),
-          ).length,
+          firstRow: boxes.filter((box) => Math.round(box.top) === Math.round(boxes[0]!.top)).length,
           fourthAlignedWithSecond: Math.abs(boxes[3]!.left - boxes[1]!.left) <= 1,
           lastRowRightAligned: Math.abs(boxes[4]!.right - galleryBox.right) <= 1,
           textBelow: textBox.top >= galleryBox.bottom + 7,

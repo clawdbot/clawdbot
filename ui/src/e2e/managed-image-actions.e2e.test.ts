@@ -97,9 +97,7 @@ suite.define(() => {
       await expect.poll(() => imageActions.getByRole("button").count()).toBe(2);
       await expect
         .poll(() =>
-          imageActions
-            .getByRole("button", { name: "Open image Ticketed generated image" })
-            .count(),
+          imageActions.getByRole("button", { name: "Open image Ticketed generated image" }).count(),
         )
         .toBe(0);
       const downloadButton = imageActions.getByRole("button", { name: "Download image" });

@@ -1005,15 +1005,10 @@ describe("grouped chat rendering", () => {
       .mockImplementationOnce(renderMarkdownHtml)
       .mockImplementationOnce(renderMarkdownHtml);
 
-    renderGroupedMessage(
-      container,
-      message,
-      "user",
-      {
-        isUserMessageExpanded: () => false,
-        onToggleUserMessageExpanded,
-      },
-    );
+    renderGroupedMessage(container, message, "user", {
+      isUserMessageExpanded: () => false,
+      onToggleUserMessageExpanded,
+    });
 
     const disclosure = expectElement(container, ".chat-message-disclosure", HTMLDivElement);
     expect(
@@ -1039,15 +1034,10 @@ describe("grouped chat rendering", () => {
     toggle.click();
     expect(onToggleUserMessageExpanded).toHaveBeenCalledWith("user-message:user-message");
 
-    renderGroupedMessage(
-      container,
-      message,
-      "user",
-      {
-        isUserMessageExpanded: () => true,
-        onToggleUserMessageExpanded,
-      },
-    );
+    renderGroupedMessage(container, message, "user", {
+      isUserMessageExpanded: () => true,
+      onToggleUserMessageExpanded,
+    });
 
     const expandedDisclosure = expectElement(container, ".chat-message-disclosure", HTMLDivElement);
     const collapseToggle = expectElement(

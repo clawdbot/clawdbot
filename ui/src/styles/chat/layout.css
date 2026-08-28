@@ -1321,7 +1321,8 @@ openclaw-chat-page {
   grid-template-columns: repeat(2, var(--chat-user-image-grid-size));
 }
 
-.chat-group.user:not(.chat-group--peer) .chat-message-images--five
+.chat-group.user:not(.chat-group--peer)
+  .chat-message-images--five
   > .chat-image-frame:nth-child(4) {
   grid-column: 2;
 }
