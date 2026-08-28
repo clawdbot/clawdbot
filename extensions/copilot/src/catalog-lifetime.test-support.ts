@@ -15,26 +15,29 @@ export async function createCopilotFaultPeer() {
   const sockets = new Set<Socket>();
   let socket: Socket;
   let sessionId: string;
+  let previousEventId: string | null = null;
   const send = (value: unknown) => {
     const bytes = Buffer.from(JSON.stringify(value));
     socket.write(`Content-Length: ${bytes.length}\r\n\r\n`);
     socket.write(bytes);
   };
   const emit = (type: string, data: Record<string, unknown>) => {
+    const id = randomUUID();
     send({
       jsonrpc: "2.0",
       method: "session.event",
       params: {
         sessionId,
         event: {
-          id: randomUUID(),
-          parentId: null,
+          id,
+          parentId: previousEventId,
           timestamp: new Date().toISOString(),
           type,
           data,
         },
       },
     });
+    previousEventId = id;
   };
   const handle = async (request: Request) => {
     methods.push(request.method);

@@ -183,6 +183,8 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     host.hostCapabilities.assertActive();
     expect(callController.signal.aborted).toBe(false);
     expect(contextSignal?.aborted).toBe(false);
+    const abortsBeforeGateRelease = aborts;
+    const nestedAbortedBeforeGateRelease = nestedSignal?.aborted;
     gate.resolve();
     await waitReply;
     const waitResult = observed.find((event) => event.toolName === "wait")?.result;
@@ -194,6 +196,8 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       callAborted: callController.signal.aborted,
       admissionRunId: host.admittedRunContext.operationalRunInstance.runId,
       hostActiveAtCleanup: true,
+      abortsBeforeGateRelease,
+      nestedAbortedBeforeGateRelease,
       nestedAborted: nestedSignal?.aborted,
       aborts,
       waitResult,
@@ -216,6 +220,8 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
         rpcMethods: peer.methods,
       }),
     );
+    expect(abortsBeforeGateRelease).toBe(1);
+    expect(nestedAbortedBeforeGateRelease).toBe(true);
     expect(aborts).toBe(1);
     expect(waitResult).toMatchObject({ details: { status: "failed", code: "aborted" } });
     expect(JSON.stringify(waitResult)).not.toContain("STALE AFTER CLOSE");
