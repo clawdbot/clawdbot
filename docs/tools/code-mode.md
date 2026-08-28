@@ -527,6 +527,24 @@ forcing one model tool call per await.
 `exec` returns `completed` only when the guest VM has no pending work and the
 final value is JSON-compatible after OpenClaw's output adapter runs.
 
+### Source in session history
+
+In the built-in OpenClaw runtime, the JSON Code Mode tool executes the original
+input. Session history preserves computations such as `const API_TOKEN = computeToken();`
+and boolean or null initializers in the outer call's JavaScript or TypeScript
+`code` and `command` fields, while masking credential literals, recognizable
+tokens, registered secrets, and configured redaction patterns. Credential
+assignments use full masks so repeated storage redaction stays stable.
+
+This treatment does not extend to shell commands, nested tool calls, unrelated
+argument strings, or assistant prose. Large or unrecognized source syntax
+remains subject to diagnostic masking. Stored source is a redacted record, not
+a place to recover credentials; no additional setting is required.
+This applies to new calls; already-redacted source cannot be reconstructed.
+The Copilot runtime's separate transcript journal does not yet preserve this
+source structure. Native Codex uses a separate freeform source path; this
+behavior does not describe its storage.
+
 ## `wait`
 
 `wait` continues a suspended code-mode VM.
