@@ -376,6 +376,18 @@ describe("createApplicationGateway connection phase", () => {
     expect(loadSettings().selectedAgentId).toBeUndefined();
   });
 
+  it("clears inherited credentials when selecting another Gateway", () => {
+    const settings = { ...loadSettings(), token: "old-token" };
+    const { gateway, current } = createStore({ settings });
+    gateway.connect({ password: "old-password", bootstrapToken: "old-bootstrap" });
+
+    gateway.connect({ gatewayUrl: "wss://other-gateway.example.test" });
+
+    expect(current().opts.token).toBeUndefined();
+    expect(current().opts.password).toBeUndefined();
+    expect(current().opts.bootstrapToken).toBeUndefined();
+  });
+
   it("advances the connection revision only when credentials change", () => {
     const { gateway, current } = createStore();
     gateway.start();
