@@ -37,10 +37,6 @@ export function captureSessionRecipientAuthority(
   scope: SessionAccessScope,
 ): SessionRecipientAuthority {
   const resolved = resolveSqliteScope(scope);
-  const readOnlyEntry = loadSessionEntryReadOnly(scope);
-  if (!readOnlyEntry) {
-    return { state: "absent" };
-  }
   return runOpenClawAgentWriteTransaction((database) => {
     const selected = readSessionEntryRow(database, resolved.sessionKey);
     if (!selected) {
