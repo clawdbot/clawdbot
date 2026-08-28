@@ -6,6 +6,7 @@ public enum OpenClawNodeErrorCode: String, Codable, Sendable {
     case backgroundUnavailable = "NODE_BACKGROUND_UNAVAILABLE"
     case invalidRequest = "INVALID_REQUEST"
     case unavailable = "UNAVAILABLE"
+    case systemRunDenied = "SYSTEM_RUN_DENIED"
 }
 
 public struct OpenClawNodeError: Error, Codable, Sendable, Equatable {

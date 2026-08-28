@@ -473,7 +473,9 @@ async function runSelectedAgentHarnessAttempt(
           harness,
           effectiveAttemptParams.pluginHarnessToolPolicyRestricted === true,
         );
-        return runAgentHarnessLifecycleAttempt(harness, effectiveAttemptParams);
+        return pluginAttempt.runWithHostScope(() =>
+          runAgentHarnessLifecycleAttempt(harness, effectiveAttemptParams),
+        );
       }),
     );
   } finally {
@@ -592,6 +594,7 @@ function withoutInternalHarnessAuthority(
 ): {
   params: import("./types.js").AgentHarnessAttemptParamsV2;
   closeHostCapabilities: () => void;
+  runWithHostScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   if (builtIn) {
     return {
@@ -602,6 +605,7 @@ function withoutInternalHarnessAuthority(
         operationalRunInstance: params.admittedRunContext.operationalRunInstance,
       } as import("./types.js").AgentHarnessAttemptParamsV2,
       closeHostCapabilities: () => {},
+      runWithHostScope: (run) => run(),
     };
   }
   const pluginParams = withoutPluginHarnessPrivateState(params);
@@ -616,6 +620,7 @@ function withoutInternalHarnessAuthority(
   return {
     params: { ...pluginParams, hostCapabilities: host.capabilities },
     closeHostCapabilities: host.close,
+    runWithHostScope: host.runWithScope,
   };
 }
 

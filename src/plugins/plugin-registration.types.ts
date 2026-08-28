@@ -15,6 +15,7 @@ import type { DiagnosticTracePropagationBridge as DiagnosticTracePropagationBrid
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { PluginLogger } from "./logger-types.js";
+import type { OpenClawPluginNodeWorkspace } from "./types.node-host.js";
 
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 type DiagnosticTracePropagationBridge = DiagnosticTracePropagationBridgeContract<
@@ -261,8 +262,16 @@ export type OpenClawPluginNodeInvokePolicyContext = {
     family: string;
   };
   approvals?: OpenClawPluginNodeInvokePolicyApprovalRuntime;
+  /** Invoke only under the exact admitted Full owner; undefined requires a human decision. */
+  invokeNodeWithSessionFull?: (input: {
+    workspace: OpenClawPluginNodeWorkspace;
+    /** Called only after the host authorizes this exact admitted Full launch. */
+    createParams: () => unknown;
+  }) => Promise<OpenClawPluginNodeInvokeTransportResult | undefined>;
   invokeNode: (input?: {
     params?: unknown;
+    /** Bind an approved launch to its admitted managed workspace, when present. */
+    workspace?: OpenClawPluginNodeWorkspace;
     timeoutMs?: number;
     idempotencyKey?: string;
   }) => Promise<OpenClawPluginNodeInvokeTransportResult>;

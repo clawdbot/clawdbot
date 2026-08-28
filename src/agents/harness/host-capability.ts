@@ -2,6 +2,10 @@ import path from "node:path";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -31,6 +35,7 @@ import {
 } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import { createSessionNodeInvocation } from "./node-execution-authority.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
   Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "runId">;
@@ -157,7 +162,11 @@ function createBoundCallerIdentity(params: AgentHarnessHostAttempt, receiptAutho
 export function createAgentHarnessHostCapabilities(params: {
   attempt: AgentHarnessHostAttempt;
   pluginId: string;
-}): { capabilities: AgentHarnessHostCapabilities; close: () => void } {
+}): {
+  capabilities: AgentHarnessHostCapabilities;
+  close: () => void;
+  runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
+} {
   const attempt = params.attempt;
   const operationalRunInstance = attempt.admittedRunContext.operationalRunInstance;
   const delegatedAuthority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
@@ -426,6 +435,22 @@ export function createAgentHarnessHostCapabilities(params: {
   });
   return {
     capabilities,
+    runWithScope: (run) =>
+      withPluginRuntimeGatewayRequestScope(
+        {
+          isWebchatConnect: () => false,
+          ...getPluginRuntimeGatewayRequestScope(),
+          invokeWithSessionNodeAuthority: createSessionNodeInvocation(
+            attempt,
+            params.pluginId,
+            assertActive,
+            attempt.abortSignal
+              ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
+              : capabilityAbortController.signal,
+          ),
+        },
+        run,
+      ),
     close: () => {
       if (!active) {
         return;
