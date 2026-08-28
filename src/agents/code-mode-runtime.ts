@@ -121,12 +121,10 @@ function readCodeModeRawConfig(config?: OpenClawConfig, agentId?: string): Recor
   return agentRaw ? { ...globalRaw, ...agentRaw } : globalRaw;
 }
 
-function readEnabled(raw: Record<string, unknown>): boolean | "auto" {
-  const value = raw.enabled;
-  if (typeof value === "boolean" || value === "auto") {
-    return value;
-  }
-  return Object.keys(raw).some((key) => key !== "enabled") ? "auto" : false;
+function readEnabled(value: unknown): boolean | "auto" {
+  // Stable option-bearing objects made `enabled` optional and defaulted it off.
+  // Automatic activation therefore requires an explicit `"auto"` selection.
+  return typeof value === "boolean" || value === "auto" ? value : false;
 }
 
 export function readPositiveInteger(value: unknown, fallback: number): number {
@@ -152,7 +150,7 @@ export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string)
     DEFAULT_MAX_SEARCH_LIMIT,
   );
   return {
-    enabled: readEnabled(raw),
+    enabled: readEnabled(raw.enabled),
     runtime: "quickjs-wasi",
     mode: "only",
     languages: readLanguages(raw.languages),

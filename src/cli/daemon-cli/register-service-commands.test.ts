@@ -26,8 +26,8 @@ vi.mock("./lifecycle.runtime.js", () => ({
   runDaemonUninstall: (opts: unknown) => runDaemonUninstall(opts),
 }));
 
-function createGatewayParentLikeCommand() {
-  const gateway = new Command().name("gateway");
+function createGatewayParentLikeCommand(program?: Command) {
+  const gateway = program ? program.command("gateway") : new Command().name("gateway");
   // Mirror overlapping root gateway options that conflict with service subcommand options.
   gateway.option("--port <port>", "Port for the gateway WebSocket");
   gateway.option("--token <token>", "Gateway token");
@@ -122,6 +122,34 @@ describe("addGatewayServiceCommands", () => {
     const gateway = createGatewayParentLikeCommand();
     await gateway.parseAsync(argv, { from: "user" });
     assert();
+  });
+
+  it.each(["gateway", "daemon"])("parses preservation only on %s restart", async (name) => {
+    const program = new Command()
+      .enablePositionalOptions()
+      .exitOverride()
+      .configureOutput({ writeErr: () => {} });
+    if (name === "daemon") {
+      registerDaemonCli(program);
+    } else {
+      createGatewayParentLikeCommand(program);
+    }
+    await program.parseAsync([name, "restart", "--preserve-definition", "--json"], {
+      from: "user",
+    });
+    expect(expectSingleDaemonCall(runDaemonRestart)).toMatchObject({
+      preserveDefinition: true,
+      json: true,
+    });
+    for (const verb of ["install", "start", "stop", "uninstall"]) {
+      await expect(
+        program.parseAsync([name, verb, "--preserve-definition"], { from: "user" }),
+      ).rejects.toMatchObject({ code: "commander.unknownOption" });
+    }
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+    expect(runDaemonStart).not.toHaveBeenCalled();
+    expect(runDaemonStop).not.toHaveBeenCalled();
+    expect(runDaemonUninstall).not.toHaveBeenCalled();
   });
 
   it.each(

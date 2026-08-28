@@ -302,7 +302,21 @@ jobs:
             direct_recovery=true
             echo "Direct Plugin ClawHub Release recovery with release_publish_run_id; relying on this workflow's clawhub-plugin-release environment approval."
           fi
-          RUN_JSON="$(gh run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
+          RUN_JSON="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}" |
+              jq '{
+                repository: .repository.full_name,
+                workflowName: .name,
+                headBranch: .head_branch,
+                headSha: .head_sha,
+                event,
+                status,
+                conclusion,
+                path,
+                url: .html_url,
+                runAttempt: .run_attempt
+              }'
+          )"
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
 
   pack_plugins_clawhub_artifacts:

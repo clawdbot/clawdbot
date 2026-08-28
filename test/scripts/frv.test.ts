@@ -6,6 +6,7 @@ import {
   loadPlan,
   preflightContinuation,
 } from "../../scripts/frv.mjs";
+import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
 import {
   buildReleaseExecutionPlan,
   buildReleaseExecutionPlanArtifact,
@@ -88,19 +89,35 @@ function executionPlanArtifact() {
     dockerPreflightResult: "success",
     parentRunAttempt: 1,
     parentRunId: "77",
-    prepareCandidateResult: "success",
+    candidateBindingResult: "success",
     rerunGroup: "all",
     resolveTargetResult: "success",
     workflowRef: SOURCE_REF,
     workflowSha: SHA,
   });
+  const candidateRequest = buildFullReleaseCandidateRequest({
+    repository: REPOSITORY,
+    targetSha: TARGET_SHA,
+    toolingSha: SHA,
+    releaseProfile: "beta",
+    releaseSoak: false,
+    upgradeSurvivorBaseline: "openclaw@latest",
+    upgradeSurvivorBaselines: "",
+    upgradeSurvivorScenarios: "",
+    allowFrozenTargetScenarioOmissions: false,
+    allowUnreleasedChangelog: false,
+    sharedImagePolicy: "no-push-artifact",
+  });
   return buildReleaseExecutionPlanArtifact({
-    attemptEvidenceVersion: 1,
+    attemptEvidenceVersion: 2,
+    candidate: null,
     children: built.children,
     evidenceReuse: { requested: false },
     expected: {
+      candidateRequest,
       parentRunAttempt: 1,
       parentRunId: "77",
+      repository: REPOSITORY,
       targetSha: TARGET_SHA,
       workflowRef: SOURCE_REF,
       workflowSha: SHA,
@@ -115,6 +132,9 @@ function executionPlanArtifact() {
 function historicalExecutionPlanArtifact() {
   const artifact = structuredClone(executionPlanArtifact());
   delete artifact.attemptEvidenceVersion;
+  delete artifact.candidate;
+  delete artifact.candidateRequest;
+  delete artifact.repository;
   for (const entry of artifact.children) {
     delete entry.sourceParentAttempt;
   }
@@ -231,11 +251,11 @@ function controllerClient(
 }
 
 describe("FRV immutable plan eligibility", () => {
-  it("accepts attempt-aware all-group plans", async () => {
+  it("accepts current v2 all-group plans", async () => {
     await expect(
       loadPlan({ repository: REPOSITORY, runId: "77" }, async () => executionPlanArtifact()),
     ).resolves.toMatchObject({
-      attemptEvidenceVersion: 1,
+      attemptEvidenceVersion: 2,
       parentRunId: "77",
       rerunGroup: "all",
     });

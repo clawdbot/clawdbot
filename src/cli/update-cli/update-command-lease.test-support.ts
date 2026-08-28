@@ -1,0 +1,109 @@
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
+
+export type LeaseScenario = {
+  lane: "resume" | "current-process" | "repair";
+  preDoctorChannel?: string;
+  invalidConfig?: boolean;
+  failDoctor?: "pre" | "post";
+  hostVersion?: string;
+  doctorWrites?: boolean;
+  writerConfig?: OpenClawConfig;
+  writerRecords?: Record<string, PluginInstallRecord>;
+};
+
+// A narrow child substitutes for the CLI, not for its cross-process lease.
+export async function runUpdateLeaseChild(): Promise<void> {
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  assert.ok(stateDir && configPath);
+  const scenario = JSON.parse(
+    await fs.readFile(path.join(stateDir, "scenario.json"), "utf8"),
+  ) as LeaseScenario;
+  const record = async (event: string) =>
+    fs.appendFile(
+      path.join(stateDir, "events.jsonl"),
+      `${JSON.stringify({ event, pid: process.pid })}\n`,
+    );
+  const publish = async () => {
+    assert.ok(scenario.writerConfig && scenario.writerRecords);
+    const { writePersistedInstalledPluginIndexInstallRecords } =
+      await import("../../plugins/installed-plugin-index-records.js");
+    await fs.writeFile(configPath, JSON.stringify(scenario.writerConfig));
+    await writePersistedInstalledPluginIndexInstallRecords(scenario.writerRecords, {
+      config: scenario.writerConfig,
+    });
+    await record("writer-committed");
+  };
+  const command = process.argv[2];
+  if (command === "config") {
+    assert.deepEqual(process.argv.slice(2), ["config", "validate", "--json"]);
+    assert.equal(process.env.OPENCLAW_UPDATE_IN_PROGRESS, "0");
+    await record("validate");
+    process.exitCode = scenario.invalidConfig ? 1 : 0;
+    return;
+  }
+  const { withPluginLifecycleLease } = await import("../../plugins/plugin-lifecycle-lease.js");
+  if (command === "doctor") {
+    const phase = process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE === "1" ? "post" : "pre";
+    assert.deepEqual(process.argv.slice(3), [
+      "--repair",
+      "--non-interactive",
+      ...(scenario.lane === "repair" && phase === "pre" ? [] : ["--no-workspace-suggestions"]),
+      "--yes",
+    ]);
+    assert.equal(process.env.OPENCLAW_UPDATE_IN_PROGRESS, "1");
+    assert.equal(process.env.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR, "1");
+    assert.equal(process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE, "1");
+    if (scenario.hostVersion) {
+      assert.equal(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION, scenario.hostVersion);
+    }
+    await record(`${phase}-attempt`);
+    // One real acquisition attempt makes the regression fail promptly, without changing parent budgets.
+    await withPluginLifecycleLease({ waitMs: 0 }, async () => {
+      await record(`${phase}-acquired`);
+      if (phase === "pre" && scenario.preDoctorChannel !== undefined) {
+        const { readConfigFileSnapshot } = await import("../../config/config.js");
+        assert.equal(
+          (await readConfigFileSnapshot()).config.update?.channel,
+          scenario.preDoctorChannel,
+        );
+      }
+      if (phase === "pre" && scenario.doctorWrites) {
+        await publish();
+      }
+    });
+    process.stdout.write("doctor fixture output\n");
+    process.stderr.write("doctor fixture diagnostic\n");
+    if (scenario.failDoctor === phase) {
+      throw new Error("doctor fixture failure");
+    }
+    return;
+  }
+  if (command === "probe") {
+    try {
+      await withPluginLifecycleLease({ waitMs: 0 }, async () => record("probe-acquired"));
+      process.stdout.write("acquired");
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error)) {
+        throw error;
+      }
+      assert.equal(error.code, "OPENCLAW_STATE_LEASE_TIMEOUT");
+      process.stdout.write("excluded");
+    }
+    return;
+  }
+  assert.equal(command, "writer");
+  assert.ok(process.connected, "writer requires an IPC channel");
+  await withPluginLifecycleLease({}, async () => {
+    const release = once(process, "message");
+    process.send?.("acquired");
+    await release;
+    await publish();
+  });
+  process.disconnect?.();
+}

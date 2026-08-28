@@ -1701,8 +1701,8 @@ if (commandArgs[0] === "list") {
     expect(combined).toContain("MinGit-");
     expect(combined).toContain("portable-git");
     expect(combined).toContain("where.exe git.exe");
-    expect(windowsGit.indexOf('"MinGit-2.55.0.4-64-bit.zip"')).toBeLessThan(
-      windowsGit.indexOf('"MinGit-2.55.0.4-arm64.zip"'),
+    expect(windowsGit.indexOf('"MinGit-2.55.0.5-64-bit.zip"')).toBeLessThan(
+      windowsGit.indexOf('"MinGit-2.55.0.5-arm64.zip"'),
     );
     expect(
       combined.match(/curl\.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2/g),

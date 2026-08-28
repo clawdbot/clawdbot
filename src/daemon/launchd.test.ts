@@ -3105,8 +3105,13 @@ describe("launchd install", () => {
       ["enable", serviceId],
       ["kickstart", serviceId],
       ["bootstrap", domain, resolveLaunchAgentPlistPath(env)],
+      ["kickstart", serviceId],
     ]);
-    expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "bootstrap" }]]);
+    expect(onMutation.mock.calls).toEqual([
+      [{ mode: "enable" }],
+      [{ mode: "bootstrap" }],
+      [{ mode: "kickstart" }],
+    ]);
   });
 
   it("fails an already-loaded bootstrap immediately instead of waiting out the teardown deadline", async () => {
