@@ -142,7 +142,8 @@ extension NodeAppModel {
                 if snapshot.isComplete {
                     await self.storeCachedChatSessions(snapshot.sessions)
                     if let sourceGatewayID,
-                       !GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
+                       !GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID) ||
+                       self.chatDeliveryAgentId != sourceAgentID
                     {
                         throw CancellationError()
                     }
@@ -464,7 +465,8 @@ final class RootSidebarModel {
         case let .sessionObserver(digest):
             self.sessions = ChatSessionSidebarModel.applying(
                 observerDigest: digest,
-                to: self.sessions)
+                to: self.sessions,
+                activeAgentId: appModel.chatDeliveryAgentId)
         case .seqGap:
             await self.refreshSessions(appModel: appModel)
             return true

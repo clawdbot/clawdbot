@@ -103,6 +103,39 @@ struct RootTabsSourceGuardTests {
         #expect(refreshID.contains("self.scenePhase == .active"))
     }
 
+    @Test func `session roster lifecycle stays on one gateway and agent owner`() throws {
+        let sidebarSource = try String(contentsOf: Self.rootSidebarModelSourceURL(), encoding: .utf8)
+        let appModelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
+        let rosterLoad = try Self.extract(
+            sidebarSource,
+            from: "func loadChatSessionRoster(",
+            to: "@MainActor\n@Observable")
+        let observerApply = try Self.extract(
+            sidebarSource,
+            from: "private func handleSessionEvent(",
+            to: "func reportSessionError(")
+        let refreshIdentity = try Self.extract(
+            appModelSource,
+            from: "var chatViewModelIdentityID: String",
+            to: "var chatViewModelOwnerID: String")
+        let shareRoute = try Self.extract(
+            appModelSource,
+            from: "private func refreshShareRouteFromGateway(",
+            to: "func runSharePipelineSelfTest()")
+
+        #expect(rosterLoad.contains("let sourceAgentID = self.chatDeliveryAgentId"))
+        #expect(rosterLoad.contains("agentID: sourceAgentID"))
+        #expect(rosterLoad.contains("self.chatDeliveryAgentId == sourceAgentID"))
+        #expect(rosterLoad.contains("self.chatDeliveryAgentId != sourceAgentID"))
+        #expect(observerApply.contains("activeAgentId: appModel.chatDeliveryAgentId"))
+        #expect(refreshIdentity.contains("self.chatDeliveryAgentId"))
+        #expect(shareRoute.contains("let sourceAgentID = self.chatDeliveryAgentId"))
+        #expect(shareRoute.contains("let sourceMainSessionKey = self.mainSessionKey"))
+        #expect(shareRoute.contains("ifCurrentRoute: sourceRoute"))
+        #expect(shareRoute.contains("self.chatDeliveryAgentId == sourceAgentID"))
+        #expect(shareRoute.contains("self.mainSessionKey == sourceMainSessionKey"))
+    }
+
     @Test func `sidebar dashboard keeps per field last known good values and drains cron pages`() throws {
         let source = try String(contentsOf: Self.rootSidebarModelSourceURL(), encoding: .utf8)
         let dashboardCommit = try Self.extract(

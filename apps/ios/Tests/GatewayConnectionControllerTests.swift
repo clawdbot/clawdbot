@@ -2620,7 +2620,7 @@ private func waitUntil(
             useTLS: false,
             lastConnectedAtMs: nil))
         let appModel = NodeAppModel()
-        let session = OpenClawChatSessionEntry(
+        var session = OpenClawChatSessionEntry(
             key: "agent:main:a",
             kind: nil,
             displayName: "Gateway A session",
@@ -2640,12 +2640,22 @@ private func waitUntil(
             modelProvider: nil,
             model: nil,
             contextTokens: nil)
+        session.agentId = "main"
+        var matchingBare = session
+        matchingBare.key = "shared-tool"
+        var foreignGlobal = session
+        foreignGlobal.key = "global"
+        foreignGlobal.agentId = "work"
+        var ownerlessPrefixed = session
+        ownerlessPrefixed.key = "agent:main:legacy"
+        ownerlessPrefixed.agentId = nil
+        appModel.gatewayDefaultAgentId = "main"
 
-        await appModel.storeCachedChatSessions([session])
+        await appModel.storeCachedChatSessions([session, matchingBare, foreignGlobal, ownerlessPrefixed])
         _ = GatewaySettingsStore.setActiveGateway(stableID: gatewayB)
         #expect(await appModel.loadCachedChatSessions().isEmpty)
         _ = GatewaySettingsStore.setActiveGateway(stableID: gatewayA)
-        #expect(await appModel.loadCachedChatSessions() == [session])
+        #expect(await appModel.loadCachedChatSessions() == [session, matchingBare, ownerlessPrefixed])
     }
 
     private static func makeNodeOptions(

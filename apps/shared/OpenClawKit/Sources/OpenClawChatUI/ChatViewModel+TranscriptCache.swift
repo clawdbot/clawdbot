@@ -119,6 +119,7 @@ extension OpenClawChatViewModel {
                 let agentScoped = organized.filter {
                     ChatSessionSidebarModel.isSessionInActiveAgentScope(
                         key: $0.key,
+                        agentID: $0.agentId,
                         activeAgentID: self.activeAgentId)
                 }
                 let scoped = ChatSessionSidebarModel.clearingForeignGlobalObserverDigest(

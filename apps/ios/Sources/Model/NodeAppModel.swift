@@ -650,13 +650,12 @@ final class NodeAppModel {
         return stableID
     }
 
-    /// Recreation key for the chat view model. Includes the cache gateway
-    /// identity: switching paired gateways while the transport mode stays
-    /// "operator" must rebuild the view model so transcripts are never read
-    /// from or written under another gateway's cache scope.
+    /// Session-list refresh identity. Gateway and agent changes must restart
+    /// requests so no roster or cached projection crosses either owner.
     var chatViewModelIdentityID: String {
         let gatewayID = self.chatTranscriptCacheGatewayIdentityComponent
-        return "\(self.chatTransportModeID)|\(gatewayID)|\(self.chatTranscriptCacheGeneration)"
+        let agentID = self.chatDeliveryAgentId ?? ""
+        return "\(self.chatTransportModeID)|\(gatewayID)|\(agentID)|\(self.chatTranscriptCacheGeneration)"
     }
 
     /// Stable owner key for the long-lived chat view model. Connectivity still
@@ -734,7 +733,13 @@ final class NodeAppModel {
 
     func loadCachedChatSessions() async -> [OpenClawChatSessionEntry] {
         guard let cache = self.makeChatOfflineStore() else { return [] }
-        return await cache.loadSessions()
+        let sessions = await cache.loadSessions()
+        return sessions.filter {
+            ChatSessionSidebarModel.isSessionInActiveAgentScope(
+                key: $0.key,
+                agentID: $0.agentId,
+                activeAgentID: self.chatDeliveryAgentId)
+        }
     }
 
     func storeCachedChatSessions(_ sessions: [OpenClawChatSessionEntry]) async {
@@ -1691,6 +1696,8 @@ final class NodeAppModel {
         }
         if selectedAgentChanged {
             self.focusedChatSessionKey = nil
+            self.shareDeliveryChannel = nil
+            self.shareDeliveryTo = nil
         }
         self.synchronizeTalkSessionKey()
         if let relay = ShareGatewayRelaySettings.loadConfig() {
@@ -1703,6 +1710,13 @@ final class NodeAppModel {
                     sessionKey: mainSessionKey,
                     deliveryChannel: self.shareDeliveryChannel,
                     deliveryTo: self.shareDeliveryTo))
+        }
+        if selectedAgentChanged {
+            // Delivery metadata belongs to the selected agent. Rehydrate it
+            // after the selection commit; request-time identity fences stale replies.
+            Task { [weak self] in
+                await self?.refreshShareRouteFromGateway()
+            }
         }
     }
 
@@ -5193,24 +5207,32 @@ extension NodeAppModel {
         }
 
         do {
+            guard let sourceGatewayID = self.chatTranscriptCacheGatewayID,
+                  let sourceRoute = await operatorGateway.currentRoute(ifGatewayID: sourceGatewayID)
+            else { return }
+            let sourceAgentID = self.chatDeliveryAgentId
+            let sourceMainSessionKey = self.mainSessionKey
             let request = OpenClawChatGatewayRequests.sessionsList(
                 limit: 80,
                 search: nil,
                 archived: false,
-                agentID: self.chatDeliveryAgentId,
+                agentID: sourceAgentID,
                 timeoutMs: 10000)
-            let response = try await operatorGateway.request(request)
+            let response = try await operatorGateway.request(request, ifCurrentRoute: sourceRoute)
             let decoded = try JSONDecoder().decode(SessionsListResult.self, from: response)
-            let currentKey = self.mainSessionKey
             let sorted = decoded.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
             let exactMatch = sorted.first { row in
-                row.key == currentKey && normalize(row.lastChannel) != nil && normalize(row.lastTo) != nil
+                row.key == sourceMainSessionKey && normalize(row.lastChannel) != nil && normalize(row.lastTo) != nil
             }
             let selected = exactMatch
             let channel = normalize(selected?.lastChannel)
             let to = normalize(selected?.lastTo)
 
-            guard shouldApply() else { return }
+            guard shouldApply(),
+                  GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID),
+                  self.chatDeliveryAgentId == sourceAgentID,
+                  self.mainSessionKey == sourceMainSessionKey
+            else { return }
             await MainActor.run {
                 self.shareDeliveryChannel = channel
                 self.shareDeliveryTo = to
