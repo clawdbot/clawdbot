@@ -365,43 +365,63 @@ suite.define(() => {
 
       const cells = page.locator(".chat-split-view__cell");
       const actionRows = headers.locator(".chat-pane__actions");
-      await expect.poll(() => actionRows.first().isVisible()).toBe(false);
+      const browserPanelToggles = headers.locator(".chat-browser-panel-toggle");
+      const closeButtons = headers.locator(".chat-pane__close-pane");
+      await expect.poll(() => actionRows.first().isVisible()).toBe(true);
       await expect.poll(() => actionRows.last().isVisible()).toBe(true);
+      await expect.poll(() => closeButtons.first().isVisible()).toBe(true);
+      await expect.poll(() => browserPanelToggles.first().isVisible()).toBe(false);
       expect(
-        await headers
-          .first()
-          .locator(".chat-pane__close-pane")
-          .evaluate((button) => {
-            (button as HTMLElement).focus();
-            return document.activeElement === button;
-          }),
-      ).toBe(false);
+        await closeButtons.first().evaluate((button) => {
+          (button as HTMLElement).focus();
+          return document.activeElement === button;
+        }),
+      ).toBe(true);
+      await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
 
       await panes.first().click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
       await expect.poll(() => actionRows.first().isVisible()).toBe(true);
-      await expect.poll(() => actionRows.last().isVisible()).toBe(false);
+      await expect.poll(() => actionRows.last().isVisible()).toBe(true);
+      await expect.poll(() => browserPanelToggles.last().isVisible()).toBe(false);
       const paneEmphasis = await cells.evaluateAll((nodes) =>
         nodes.map((cell) => {
           const style = getComputedStyle(cell);
+          const overlay = getComputedStyle(cell, "::after");
           return {
             active: cell.classList.contains("chat-split-view__cell--active"),
             boxShadow: style.boxShadow,
             filter: style.filter,
             opacity: style.opacity,
+            overlayBackground: overlay.backgroundColor,
+            overlayContent: overlay.content,
+            overlayPointerEvents: overlay.pointerEvents,
           };
         }),
       );
-      expect(paneEmphasis).toEqual([
-        { active: true, boxShadow: "none", filter: "none", opacity: "1" },
-        { active: false, boxShadow: "none", filter: "saturate(0.45)", opacity: "1" },
-      ]);
+      expect(paneEmphasis[0]).toMatchObject({
+        active: true,
+        boxShadow: "none",
+        filter: "none",
+        opacity: "1",
+        overlayContent: "none",
+      });
+      expect(paneEmphasis[1]).toMatchObject({
+        active: false,
+        boxShadow: "none",
+        filter: "none",
+        opacity: "1",
+        overlayContent: '""',
+        overlayPointerEvents: "none",
+      });
+      expect(paneEmphasis[1]?.overlayBackground).not.toBe("rgba(0, 0, 0, 0)");
 
       const lastPane = page.locator(".chat-split-view__pane").last();
       await lastPane.click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
-      await expect.poll(() => actionRows.first().isVisible()).toBe(false);
+      await expect.poll(() => actionRows.first().isVisible()).toBe(true);
       await expect.poll(() => actionRows.last().isVisible()).toBe(true);
+      await expect.poll(() => browserPanelToggles.first().isVisible()).toBe(false);
       const targetHeader = headers.first();
       const headerGeometry = await headers.evaluateAll((nodes) =>
         nodes.map((header) => {
@@ -476,6 +496,14 @@ suite.define(() => {
       await expect
         .poll(() => new URL(page.url()).pathname)
         .toBe(controlUiSessionPath("agent:main:session-b"));
+
+      const inactiveClose = page
+        .locator(".chat-split-view__cell:not(.chat-split-view__cell--active)")
+        .first()
+        .getByRole("button", { name: "Close pane" });
+      await expect.poll(() => inactiveClose.isVisible()).toBe(true);
+      await inactiveClose.click();
+      await expect.poll(() => panes.count()).toBe(2);
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -37,17 +37,34 @@ openclaw-chat-pane {
 .chat-split-view__cell {
   --chat-surface: var(--bg-content, var(--bg));
 
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 200px;
   overflow: hidden;
+  isolation: isolate;
 }
 
 .chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
   > .chat-split-view__column
-  > .chat-split-view__cell:not(.chat-split-view__cell--active) {
-  filter: saturate(0.45);
+  > .chat-split-view__cell:not(.chat-split-view__cell--active)::after {
+  /* A flat foreground tint separates neutral transcripts in either theme
+     without filtering the subtree or reducing the close control's contrast. */
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  pointer-events: none;
+}
+
+.chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
+  > .chat-split-view__column
+  > .chat-split-view__cell:not(.chat-split-view__cell--active)
+  .chat-pane__header {
+  position: relative;
+  z-index: 2;
 }
 
 .chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
@@ -64,7 +81,8 @@ openclaw-chat-pane {
     .chat-pane__draft-indicator,
     .chat-pane__branches-menu,
     .chat-pane__gateway-menu,
-    .chat-pane__actions
+    .chat-pane__actions .chat-icon-btn:not(.chat-pane__close-pane),
+    .chat-pane__actions > openclaw-chat-header-session-menu
   ) {
   display: none;
 }
