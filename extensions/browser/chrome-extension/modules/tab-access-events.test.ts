@@ -39,6 +39,10 @@ function createHarness(
     invalidateTab: vi.fn(() => {
       revision += 1;
     }),
+    renewTabAccess: vi.fn(() => {
+      revision += 1;
+      return undefined;
+    }),
     invalidateAll: vi.fn(() => {
       revision += 1;
     }),

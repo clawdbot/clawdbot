@@ -22,10 +22,16 @@ import { getFreePort } from "../src/browser/test-port.js";
 import { getBrowserControlState, stopBrowserControlService } from "../src/control-service.js";
 import { createBootstrapDiagnostic } from "./bootstrap-diagnostics.test-support.js";
 import chromeExtensionManifest from "./manifest.json" with { type: "json" };
+import { holdNavigationAccessCheck } from "./navigation-race.test-support.js";
 import { relayTestKey } from "./relay-key.test-support.js";
 
 declare const chrome: {
   runtime: { sendMessage: (message: unknown) => Promise<Record<string, unknown>> };
+  tabs: {
+    query(query: Record<string, unknown>): Promise<Array<{ id: number; url?: string }>>;
+    group(options: { tabIds: number[] }): Promise<number>;
+  };
+  tabGroups: { update(groupId: number, options: { title: string }): Promise<unknown> };
 };
 
 const runE2E =
@@ -147,7 +153,7 @@ function decodeSingleNativeResponse(frame: Buffer): Record<string, unknown> {
 }
 
 describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
-  it("pre-registers before the first native call, auto-pairs, and revokes a paused tab", async () => {
+  async function testBootstrap(navigationMode: "all" | "selected") {
     const diagnostic = createBootstrapDiagnostic();
     cleanups.push(async () => {
       diagnostic.dispose();
@@ -318,7 +324,11 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         if (process.platform === "linux") {
           // Linux CDP loads are transient and omit the protected record written by Load unpacked.
           // Seed that exact record only after Chromium confirms the path-derived extension ID.
-          await seedLinuxSecurePreferences({ userDataDir, extensionId, extensionPath: installed });
+          await seedLinuxSecurePreferences({
+            userDataDir,
+            extensionId,
+            extensionPath: installed,
+          });
         }
 
         const status = await installPromise;
@@ -528,6 +538,20 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         await expect
           .poll(() => relay.bridge.accessibleTabs().some((tab) => tab.url === distractingUrl))
           .toBe(true);
+        if (navigationMode === "selected") {
+          await extensionPage.evaluate(
+            async (urls) => {
+              const tabs = await chrome.tabs.query({});
+              const tabIds = tabs
+                .filter((tab) => urls.includes(tab.url ?? ""))
+                .map((tab) => tab.id);
+              const groupId = await chrome.tabs.group({ tabIds });
+              await chrome.tabGroups.update(groupId, { title: "OpenClaw" });
+              await chrome.runtime.sendMessage({ type: "setAccessMode", accessMode: "selected" });
+            },
+            [controlled.url(), distractingUrl],
+          );
+        }
         const liveTabsResponse = await dispatcher.dispatch({
           method: "GET",
           path: "/tabs",
@@ -563,6 +587,16 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           diagnostic.mark("injection.used", true);
           return Promise.reject(new Error("page.goto: Frame has been detached"));
         });
+        const worker = context
+          .serviceWorkers()
+          .find((entry) => entry.url().startsWith(`chrome-extension://${extensionId}/`));
+        if (!worker) {
+          throw new Error("Extension service worker missing");
+        }
+        const finishNavigationProbe = await holdNavigationAccessCheck(
+          worker,
+          `http://127.0.0.1:${gatewayPort}/browser-owner-proof`,
+        );
         try {
           const navigationResponse = await dispatcher.dispatch({
             method: "POST",
@@ -603,7 +637,15 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           diagnostic.flush();
           detachedNavigation.mockRestore();
           browserState.resolved.ssrfPolicy = previousSsrfPolicy;
+          const probe = await finishNavigationProbe();
+          expect(probe.heldReads).toBeGreaterThan(0);
+          expect(probe.sawLoad).toBe(true);
         }
+
+        await extensionPage.evaluate(
+          async () =>
+            await chrome.runtime.sendMessage({ type: "setAccessMode", accessMode: "all" }),
+        );
 
         const registration = status.registrations.find(
           (entry) => relevantManifestPaths.includes(entry.manifestPath) && entry.state === "owned",
@@ -748,5 +790,11 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         expect(context.pages()).toHaveLength(pageCountBeforeUnavailableSelection);
       },
     );
-  }, 120_000);
+  }
+
+  it.each(["all", "selected"] as const)(
+    "pre-registers, auto-pairs, navigates in %s mode, and revokes a paused tab",
+    testBootstrap,
+    120_000,
+  );
 });
