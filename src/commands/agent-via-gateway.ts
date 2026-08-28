@@ -94,6 +94,35 @@ type GatewayAgentResponse = {
 const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
 const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000] as const;
 
+/**
+ * Transport error that occurs after the Gateway has already accepted a run.
+ *
+ * Carries the accepted run identity so callers can surface the in-flight
+ * Gateway-owned run ID after post-acceptance transport loss
+ * (timeout or connection close).  Without this, a long-running accepted
+ * turn that hits the CLI deadline would silently discard the run ID,
+ * leaving the operator unable to check whether the Gateway finished
+ * the turn.
+ */
+class GatewayAcceptedRunTransportError extends Error {
+  readonly acceptedRunId: string;
+  readonly fallbackReason: "gateway_timeout" | "gateway_closed";
+
+  constructor(params: {
+    acceptedRunId: string;
+    fallbackReason: "gateway_timeout" | "gateway_closed";
+    cause: unknown;
+  }) {
+    super(
+      `Gateway agent ${params.fallbackReason === "gateway_timeout" ? "timed out" : "connection closed"} after accepting run ${params.acceptedRunId}`,
+      { cause: params.cause instanceof Error ? params.cause : undefined },
+    );
+    this.name = "GatewayAcceptedRunTransportError";
+    this.acceptedRunId = params.acceptedRunId;
+    this.fallbackReason = params.fallbackReason;
+  }
+}
+
 type AgentCliOpts = {
   message?: string;
   messageFile?: string;
@@ -510,6 +539,13 @@ function shouldRetryGatewayDispatchWithShellEnvFallback(err: unknown): boolean {
     isGatewayExplicitAuthRequiredError(err) ||
     isGatewaySecretRefUnavailableError(err)
   );
+}
+
+function isGatewayAgentTimeoutError(err: unknown): boolean {
+  if (isGatewayTransportError(err)) {
+    return err.kind === "timeout";
+  }
+  return err instanceof Error && err.message.includes("gateway request timeout for agent");
 }
 
 function resolveGatewayAgentFailureHint(
@@ -1164,6 +1200,16 @@ async function agentViaGatewayCommand(
           config: cfg,
         });
       }
+      // If the Gateway already accepted the run, surface the run identity so
+      // callers can retain the accepted run ID after ambiguous transport loss
+      // instead of silently dropping it.
+      if (acceptedGatewayRun && isGatewayTransportError(err) && acceptedRunId) {
+        throw new GatewayAcceptedRunTransportError({
+          acceptedRunId,
+          fallbackReason: isGatewayAgentTimeoutError(err) ? "gateway_timeout" : "gateway_closed",
+          cause: err,
+        });
+      }
       throw err;
     }
   }
@@ -1300,6 +1346,30 @@ export async function agentCliCommand(
           return undefined;
         }
         throw err;
+      }
+      // Gateway accepted the run before the transport error — surface the
+      // accepted run ID so the operator can check Gateway status and the
+      // session transcript instead of losing track of the in-flight
+      // request.
+      if (err instanceof GatewayAcceptedRunTransportError) {
+        const reasonText =
+          err.fallbackReason === "gateway_timeout" ? "timed out" : "connection closed";
+        const result = { status: "accepted_timeout", runId: err.acceptedRunId };
+        if (opts.json) {
+          writeRuntimeJson(runtime, result);
+        } else {
+          runtime.error?.(
+            `Gateway agent ${reasonText} after accepting run ${err.acceptedRunId}. ` +
+              `The Gateway may have finished the turn; check \`openclaw gateway status\` ` +
+              `and the session transcript before retrying. ` +
+              `To extend the CLI deadline: --timeout <seconds>.`,
+          );
+        }
+        // This is an unresolved transport failure — the CLI did not receive
+        // a terminal outcome.  Preserve the existing nonzero failure contract
+        // so scripts do not treat a missing result as success.
+        signalBridge.setExitCode(1);
+        return result;
       }
       const failureHint = resolveGatewayAgentFailureHint(err);
       if (failureHint) {
