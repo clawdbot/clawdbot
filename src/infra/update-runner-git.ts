@@ -420,25 +420,34 @@ export async function updateGitCheckout(params: {
     if (!releaseRemote) {
       return buildError("fetch-failed");
     }
-    const remoteTagsResult = await runCommand(
-      [
-        "git",
-        "-C",
+    let remoteTagsOutput = "";
+    const remoteTagsStep = await runStep({
+      ...step(
+        `git ls-remote ${releaseRemote} tags`,
+        [
+          "git",
+          "-C",
+          gitRoot,
+          "ls-remote",
+          "--tags",
+          "--refs",
+          "--sort=-v:refname",
+          "--",
+          releaseRemote,
+          "v*",
+        ],
         gitRoot,
-        "ls-remote",
-        "--tags",
-        "--refs",
-        "--sort=-v:refname",
-        "--",
-        releaseRemote,
-        "v*",
-      ],
-      { cwd: gitRoot, timeoutMs },
-    );
-    if (remoteTagsResult.code !== 0) {
+      ),
+      runCommand: async (argv, options) => {
+        const result = await runCommand(argv, options);
+        remoteTagsOutput = result.stdout;
+        return result;
+      },
+    });
+    if (remoteTagsStep.exitCode !== 0) {
       return buildError("fetch-failed");
     }
-    const tag = resolveChannelTag(parseRemoteTagNames(remoteTagsResult.stdout), channel);
+    const tag = resolveChannelTag(parseRemoteTagNames(remoteTagsOutput), channel);
     if (!tag) {
       return buildError("no-release-tag");
     }

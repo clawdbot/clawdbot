@@ -665,6 +665,46 @@ describe("runGatewayUpdate", () => {
     await expect(runRealGit(localRoot, "rev-parse", localTag)).resolves.toBe(baseSha);
   });
 
+  it("records remote release discovery failures in steps and progress", async () => {
+    await setupGitCheckout();
+    const onStepStart = vi.fn();
+    const onStepComplete = vi.fn();
+    const { runner } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
+      [`git -C ${tempDir} config --get branch.main.remote`]: { stdout: "origin\n" },
+      [`git -C ${tempDir} ls-remote --tags --refs --sort=-v:refname -- origin v*`]: {
+        code: 128,
+        stderr: "fatal: authentication failed",
+      },
+    });
+
+    const result = await runWithRunner(runner, {
+      channel: "stable",
+      progress: { onStepStart, onStepComplete },
+    });
+
+    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({
+        name: "git ls-remote origin tags",
+        exitCode: 128,
+        stderrTail: "fatal: authentication failed",
+      }),
+    );
+    expect(onStepStart).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "git ls-remote origin tags" }),
+    );
+    expect(onStepComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "git ls-remote origin tags",
+        exitCode: 128,
+        stderrTail: "fatal: authentication failed",
+      }),
+    );
+  });
+
   it("keeps release tags scoped to the main remote when another remote disagrees", async () => {
     const { sourceRoot, localRoot, releaseSha, releaseTag } =
       await createRecreatedReleaseTagFixture();
