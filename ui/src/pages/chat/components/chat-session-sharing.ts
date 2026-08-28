@@ -104,7 +104,7 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
             ?disabled=${Boolean(props.visibilityDisabledReason)}
             title=${props.visibilityDisabledReason ?? nothing}
           >
-            <span>${t("chat.sessionSharing.publishDraft")}</span>
+            <span class="session-menu__text">${t("chat.sessionSharing.publishDraft")}</span>
             <span slot="details" aria-hidden="true">${icons.users}</span>
           </wa-dropdown-item>
           <div class="session-menu__separator" role="separator"></div>`
