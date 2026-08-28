@@ -32,6 +32,23 @@ const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => voi
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
 
+// Checkpoint provenance comes from dist/build-info.json, which unit-test environments
+// (CI shards, unbuilt checkouts) legitimately lack; without it the checkpoint layer
+// deliberately fails open and never records. Pin a deterministic build identity while
+// keeping the real record/read/lease logic so checkpoint assertions stay meaningful.
+vi.mock("../infra/startup-migration-checkpoint.js", async (importActual) => {
+  const actual = await importActual<typeof import("../infra/startup-migration-checkpoint.js")>();
+  const pin = <P extends { buildIdentity?: string | null }, R>(fn: (params?: P) => R) =>
+    ((params?: P) => fn({ buildIdentity: "test-build", ...params } as P)) as typeof fn;
+  return {
+    ...actual,
+    needsStartupMigrationCheckpoint: pin(actual.needsStartupMigrationCheckpoint),
+    needsStateMigrationCheckpoint: pin(actual.needsStateMigrationCheckpoint),
+    recordSuccessfulStartupMigrations: pin(actual.recordSuccessfulStartupMigrations),
+    recordSuccessfulStateMigrations: pin(actual.recordSuccessfulStateMigrations),
+  };
+});
+
 async function withStdoutIsTTY<T>(isTTY: boolean, run: () => Promise<T>): Promise<T> {
   const original = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
   Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: isTTY });
