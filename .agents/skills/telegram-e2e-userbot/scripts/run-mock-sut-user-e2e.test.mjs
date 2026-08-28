@@ -17,6 +17,7 @@ import {
   removeRunnerScratch,
   runCommand,
   sanitizeChildEnvironment,
+  summarizeScenarioCommand,
   waitForGatewayLeaseReady,
 } from "./run-mock-sut-user-e2e.mjs";
 
@@ -76,6 +77,26 @@ test("scenario commands receive the leased test harness without broker authority
     TELEGRAM_USER_DRIVER_STATE_DIR: "/tmp/user-driver",
     TELEGRAM_E2E_TEST_API_ROOT: "http://127.0.0.1:19881",
   });
+});
+
+test("scenario command evidence retains no argv or process output", () => {
+  const credential = "123456789:leased-test-token";
+  const summary = summarizeScenarioCommand({
+    action: { type: "command", cwd: "repo", argv: ["echo", credential] },
+    result: { status: 0, timedOut: false, stdout: credential, stderr: credential },
+    elapsedMs: 10,
+    durationMs: 20,
+  });
+  assert.deepEqual(summary, {
+    type: "command",
+    cwd: "repo",
+    status: "completed",
+    exitCode: 0,
+    timedOut: false,
+    elapsedMs: 10,
+    durationMs: 20,
+  });
+  assert.doesNotMatch(JSON.stringify(summary), new RegExp(credential, "u"));
 });
 
 test("successful probe cleanup removes private runner scratch without an output directory", () => {

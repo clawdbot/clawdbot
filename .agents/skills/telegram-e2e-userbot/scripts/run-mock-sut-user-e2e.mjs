@@ -73,6 +73,18 @@ export function createScenarioCommandEnvironment({ gatewayEnv, driverEnv, telegr
   };
 }
 
+export function summarizeScenarioCommand({ action, result, elapsedMs, durationMs }) {
+  return {
+    type: action.type,
+    elapsedMs,
+    durationMs,
+    status: result.status === 0 && !result.timedOut ? "completed" : "failed",
+    cwd: action.cwd,
+    exitCode: result.status,
+    timedOut: result.timedOut,
+  };
+}
+
 export function createGatewayEnvironment({
   baseEnv = process.env,
   configPath,
@@ -1300,18 +1312,14 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
               leaseFailure,
               timeoutMs: action.timeoutMs,
             });
-            gatewayActions.push({
-              type: action.type,
-              elapsedMs: beganAt - scenarioStartedAt,
-              durationMs: Date.now() - beganAt,
-              status: result.status === 0 && !result.timedOut ? "completed" : "failed",
-              cwd: action.cwd,
-              argv: action.argv,
-              exitCode: result.status,
-              timedOut: result.timedOut,
-              stdout: result.stdout.slice(-16_384),
-              stderr: result.stderr.slice(-16_384),
-            });
+            gatewayActions.push(
+              summarizeScenarioCommand({
+                action,
+                result,
+                elapsedMs: beganAt - scenarioStartedAt,
+                durationMs: Date.now() - beganAt,
+              }),
+            );
             continue;
           } else if (action.type === "telegramApiHold") {
             creds.telegramProxy.holdNextResponse({ method: action.method, skip: action.skip });

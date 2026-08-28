@@ -48,8 +48,9 @@ The whole point of an audit lane is exercising config the default path never use
 Scenario action `command` runs argv without an implicit shell in the leased
 test environment. It receives the leased TDLib state, SUT bot token,
 `TELEGRAM_E2E_TEST_API_ROOT`, Gateway config, and Gateway state. Set `cwd` to
-`repo`, `workspace`, `state`, or `root`. The summary keeps bounded stdout and
-stderr. Invoke a shell explicitly when the test needs shell syntax.
+`repo`, `workspace`, `state`, or `root`. The summary keeps only status, timing,
+exit code, and timeout. The command writes any deliberately sanitized artifact
+it needs. Invoke a shell explicitly when the test needs shell syntax.
 
 Call any Test Bot API method at
 `$TELEGRAM_E2E_TEST_API_ROOT/bot$TELEGRAM_E2E_SUT_BOT_TOKEN/<method>`.
