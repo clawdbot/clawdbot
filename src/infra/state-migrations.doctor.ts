@@ -260,11 +260,19 @@ async function collectPluginDoctorStateMigrationPlans(params: {
           config,
           repairAuthority: params.repairAuthority,
           // Detection runs before exclusive state ownership, so it is handed
-          // inspection-only ingress access and no mutation gate.
-          channelIngress: {
-            channelIds: entry.channelIds ?? [],
-            stateDir: params.stateDir,
-          },
+          // inspection-only ingress access and no mutation gate. Untrusted owners get
+          // no ingress lane at all: Doctor must not widen the runtime's durable-store
+          // trust gate.
+          // `?? true` keeps older or hand-built hosts working; a real registry record
+          // always carries the decision explicitly.
+          ...((entry.trustedForDurableStores ?? true)
+            ? {
+                channelIngress: {
+                  channelIds: entry.channelIds ?? [],
+                  stateDir: params.stateDir,
+                },
+              }
+            : {}),
         }),
       });
     } catch (err) {
@@ -275,6 +283,7 @@ async function collectPluginDoctorStateMigrationPlans(params: {
       plans.push({
         pluginId: entry.pluginId,
         channelIds: entry.channelIds,
+        trustedForDurableStores: entry.trustedForDurableStores,
         migration: entry.migration,
         preview: detected.preview,
       });
@@ -986,11 +995,15 @@ async function migratePluginDoctorStatePlans(params: {
             env: params.env,
             config: params.config,
             repairAuthority: params.repairAuthority,
-            channelIngress: {
-              channelIds: plan.channelIds ?? [],
-              stateDir: params.stateDir,
-              mutation: { assertCurrent: assertIngressMutationCurrent },
-            },
+            ...((plan.trustedForDurableStores ?? true)
+              ? {
+                  channelIngress: {
+                    channelIds: plan.channelIds ?? [],
+                    stateDir: params.stateDir,
+                    mutation: { assertCurrent: assertIngressMutationCurrent },
+                  },
+                }
+              : {}),
           }),
         });
         params.repairAuthority?.assertCurrent();

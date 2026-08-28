@@ -110,6 +110,7 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
       entries: [] as Array<{
         pluginId: string;
         channelIds?: string[];
+        trustedForDurableStores?: boolean;
         migration: {
           id: string;
           label: string;
@@ -140,6 +141,7 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
       entries: Array<{
         pluginId: string;
         channelIds?: string[];
+        trustedForDurableStores?: boolean;
         migration: {
           id: string;
           label: string;
@@ -1451,6 +1453,50 @@ describe("state migrations", () => {
 
     expect(digest()).toBe(beforeDigest);
     expect(await readPendingIds()).toStrictEqual(beforeIds);
+  });
+
+  it("withholds ingress queue access from an untrusted plugin owner", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const detectionLanes: unknown[] = [];
+    const migrationLanes: unknown[] = [];
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "line",
+        channelIds: ["line"],
+        // Same decision the runtime proxy makes for openChannelIngressQueue: an
+        // activated workspace plugin is neither bundled nor a trusted official install.
+        trustedForDurableStores: false,
+        migration: {
+          id: "line-ingress-trust-test",
+          label: "LINE ingress trust test",
+          detectLegacyState({ context }) {
+            detectionLanes.push(context.channelIngressQueues);
+            return { preview: ["ingress trust preview"] };
+          },
+          migrateLegacyState({ context }) {
+            migrationLanes.push(context.channelIngressQueues);
+            return { changes: ["ingress trust test ran"], warnings: [] };
+          },
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: createConfig(),
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: createConfig(), env });
+
+    expect(result.changes).toContain("ingress trust test ran");
+    // Neither phase is handed a lane at all - not an empty list, and not a lane that
+    // refuses on use. There is nothing to reach the durable queue through.
+    expect(detectionLanes.length).toBeGreaterThan(0);
+    expect(migrationLanes.length).toBeGreaterThan(0);
+    expect(detectionLanes.every((lanes) => lanes === undefined)).toBe(true);
+    expect(migrationLanes.every((lanes) => lanes === undefined)).toBe(true);
   });
 
   it("rejects a recovery predicate that resolves after the repair section returns", async () => {
