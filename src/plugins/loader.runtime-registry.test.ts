@@ -429,8 +429,10 @@ describe("clearPluginRegistryLoadCache", () => {
       },
     };
     const read = async (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-      const tool = await registry.tools[0]!.factory({ config: options.config });
-      if (!tool || Array.isArray(tool)) throw new Error("expected one lifetime probe tool");
+      const tool = registry.tools[0]!.factory({ config: options.config });
+      if (!tool || Array.isArray(tool)) {
+        throw new Error("expected one lifetime probe tool");
+      }
       return await tool.execute("probe", {});
     };
     const original = loadOpenClawPlugins(options);
