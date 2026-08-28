@@ -56,6 +56,10 @@ Call any Test Bot API method at
 The local proxy forwards the method, query, headers, and body to Telegram's
 Test Server.
 
+Command actions stay in the runner-owned process group by default. A command
+that deliberately creates a new process session owns that session and stops it
+before the scenario finishes.
+
 ```json
 {
   "actions": [

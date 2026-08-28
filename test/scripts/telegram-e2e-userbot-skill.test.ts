@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 const scriptsDir = path.resolve(".agents/skills/telegram-e2e-userbot/scripts");
 
@@ -19,6 +20,18 @@ function requireSuccess(command: string, args: string[]) {
 describe("repository Telegram E2E skill", () => {
   it("replaces the obsolete Telegram Crabbox recorder skill", () => {
     expect(fs.existsSync(".agents/skills/telegram-crabbox-e2e-proof")).toBe(false);
+  });
+
+  it("registers its UI metadata through the skill interface", () => {
+    const descriptor = parse(
+      fs.readFileSync(".agents/skills/telegram-e2e-userbot/agents/openai.yaml", "utf8"),
+    );
+    expect(Object.keys(descriptor)).toEqual(["interface"]);
+    expect(descriptor.interface).toMatchObject({
+      display_name: "Telegram E2E (Userbot)",
+      short_description: "Drive leased Telegram Test Server bots as a real QA user.",
+    });
+    expect(descriptor.interface.default_prompt).toContain("$telegram-e2e-userbot");
   });
 
   it("passes its Node test suite", () => {
