@@ -791,11 +791,6 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             error: OpenClawNodeError(code: .unavailable, message: message))
     }
 
-    private static func paramsJSON(_ object: [String: Any]) -> String? {
-        guard let data = self.jsonData(object) else { return nil }
-        return String(bytes: data, encoding: .utf8)
-    }
-
     private static func jsonData(_ object: Any) -> Data? {
         guard JSONSerialization.isValidJSONObject(object) else { return nil }
         return try? JSONSerialization.data(withJSONObject: object)
