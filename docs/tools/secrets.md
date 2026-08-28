@@ -81,6 +81,8 @@ arrived (`no_answer`). It should state the blocker or continue with best judgmen
 never ask you to paste the credential into chat.
 
 iOS, macOS, and Android render the same card with a masked secret field.
+Control UI and native app cards arrive through the existing Gateway connection
+and do not require `gateway.publicOrigin` or a public link.
 
 Chat channels never accept the value. On Telegram, Discord, and similar
 surfaces the request is delivered as a link to the Control UI prompt — typing

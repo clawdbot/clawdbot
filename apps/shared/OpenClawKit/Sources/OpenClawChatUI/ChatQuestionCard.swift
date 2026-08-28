@@ -449,10 +449,10 @@ struct OpenClawQuestionCard: View {
         let kind = protectedSecret ? String(localized: "Protected secret") :
             String(localized: "Agent-readable environment")
         return VStack(alignment: .leading, spacing: 8) {
-            Text("Requested by \(agent) • \(session)")
+            Text(String(format: String(localized: "Requested by %@ • %@"), agent, session))
                 .font(OpenClawChatTypography.caption)
                 .foregroundStyle(.secondary)
-            Text("Stores \(store.name) as \(kind)")
+            Text(String(format: String(localized: "Stores %@ as %@"), store.name, kind))
                 .font(OpenClawChatTypography.body)
             if let reason = store.reason, !reason.isEmpty {
                 Text(reason).font(OpenClawChatTypography.body)
@@ -460,11 +460,12 @@ struct OpenClawQuestionCard: View {
             if let existing = question.secretstoreexisting {
                 let updated = Date(timeIntervalSince1970: Double(existing.updatedatms) / 1000)
                     .formatted(date: .abbreviated, time: .shortened)
-                Text("Replaces \(store.name) — last updated \(updated)")
+                Text(String(format: String(localized: "Replaces %@ — last updated %@"), store.name, updated))
                     .font(OpenClawChatTypography.captionSemiBold)
                     .foregroundStyle(OpenClawChatTheme.danger)
                 if let updatedBy = existing.updatedby {
-                    Text("Updated by \(updatedBy)").font(OpenClawChatTypography.caption)
+                    Text(String(format: String(localized: "Updated by %@"), updatedBy))
+                        .font(OpenClawChatTypography.caption)
                 }
             }
             if protectedSecret {

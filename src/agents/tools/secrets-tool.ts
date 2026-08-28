@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import {
   validateSecretsStoreListResult,
   type QuestionRequestQuestion,
+  type QuestionWaitAnswerResult,
   type SecretsStoreListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -288,6 +289,7 @@ export function createSecretsTool(params: {
           ...(signal ? { signal } : {}),
         });
         delivery.markReady();
+        let questionResult: QuestionWaitAnswerResult | undefined;
         if (delivery.hasSubscriber) {
           const first = await Promise.race([
             delivery.waitForDelivery(signal).then((result) => ({
@@ -297,35 +299,33 @@ export function createSecretsTool(params: {
             answerPromise.then((result) => ({ kind: "answer" as const, result })),
           ]);
           if (first.kind === "delivery" && first.result.error !== undefined) {
-            await cancelPendingQuestion("prompt-delivery-failed");
-            throw new Error("credential-request prompt delivery failed", {
-              cause: first.result.error,
-            });
+            questionResult = await cancelPendingQuestion("prompt-delivery-failed");
+            signal?.throwIfAborted();
+            if (!questionResult) {
+              throw new Error("credential-request prompt delivery failed", {
+                cause: first.result.error,
+              });
+            }
           }
         }
-        const result = await answerPromise;
+        questionResult ??= await answerPromise;
+        if (questionResult.status === "pending") {
+          questionResult = (await cancelPendingQuestion("wait-timeout")) ?? questionResult;
+        }
         signal?.throwIfAborted();
-        if (result.status === "answered") {
-          if (result.answers.answers.secret_value?.[0] !== "stored") {
+        // Cancellation can lose to a committed answer; validate every recovered marker here too.
+        if (questionResult.status === "answered") {
+          if (questionResult.answers.answers.secret_value?.[0] !== "stored") {
             throw new Error("credential request returned an unexpected answer marker");
           }
           return storedSecretResult(request, storeProvider);
         }
-        if (result.status === "pending") {
-          // The human may have submitted between the wait timeout and this
-          // cancel; the Gateway then rejects the cancel and hands back the
-          // answer, which means the credential is already stored.
-          const answered = await cancelPendingQuestion("wait-timeout");
-          if (answered) {
-            return storedSecretResult(request, storeProvider);
-          }
-        }
         if (
-          result.status === "pending" ||
-          result.status === "expired" ||
-          result.status === "cancelled"
+          questionResult.status === "pending" ||
+          questionResult.status === "expired" ||
+          questionResult.status === "cancelled"
         ) {
-          return noSecretAnswerResult(result.status);
+          return noSecretAnswerResult(questionResult.status);
         }
         throw new Error("question.waitAnswer returned an invalid status");
       } catch (error) {

@@ -1,6 +1,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SecretRefSchema } from "../../config/zod-schema.core.js";
 import { isBuiltInDefaultSecretProviderRef } from "../../secrets/ref-contract.js";
@@ -240,38 +241,83 @@ describe("secrets tool", () => {
     },
   );
 
-  it("keeps a credential stored when the human answers during the wait timeout", async () => {
-    // The Gateway rejects the late cancel as terminal and hands back the answer;
-    // the value is already in the store, so the tool must not report no_answer.
-    const terminal = Object.assign(new Error("question is already answered"), {
-      name: "GatewayClientRequestError",
-      details: { reason: "QUESTION_ALREADY_TERMINAL" },
-    });
-    let waitCalls = 0;
-    const gateway = gatewayStub(async (method, _options, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
+  it.each([
+    { boundary: "wait timeout", marker: "stored", abort: false },
+    { boundary: "delivery failure", marker: "stored", abort: false },
+    { boundary: "wait timeout", marker: "unexpected", abort: false },
+    { boundary: "delivery failure", marker: "unexpected", abort: false },
+    { boundary: "delivery failure", marker: "stored", abort: true },
+  ])(
+    "consumes canonical answers after $boundary (marker=$marker, abort=$abort)",
+    async ({ boundary, marker, abort }) => {
+      const terminal = Object.assign(new Error("question is already answered"), {
+        name: "GatewayClientRequestError",
+        details: { reason: "QUESTION_ALREADY_TERMINAL" },
+      });
+      const sessionKey = "agent:main:late-answer";
+      const toolCallId = "call-late-answer";
+      const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
+      const normalized = normalizeSecretsRequestParams(args);
+      const reservation =
+        boundary === "delivery failure"
+          ? reserveAskUserPromptDelivery({
+              toolCallId,
+              sessionKey,
+              questions: normalized.questions,
+              timeoutSeconds: normalized.timeoutSeconds,
+            })
+          : undefined;
+      const firstWait = createDeferred<unknown>();
+      const controller = new AbortController();
+      let waitCalls = 0;
+      const gateway = gatewayStub(async (method, _options, params) => {
+        if (method === "question.request") {
+          return { id: params.id };
+        }
+        if (method === "question.resolve") {
+          if (abort) {
+            await Promise.resolve();
+            controller.abort(new Error("run stopped"));
+          }
+          throw terminal;
+        }
+        waitCalls += 1;
+        if (waitCalls === 1) {
+          return boundary === "wait timeout" ? { status: "pending" } : await firstWait.promise;
+        }
+        return { status: "answered", answers: { answers: { secret_value: [marker] } } };
+      });
+      const outcome = createSecretsTool({ sessionKey, gatewayCall: gateway.call })
+        .execute(toolCallId, args, controller.signal)
+        .then(
+          (result) => ({ result }),
+          (error: unknown) => ({ error }),
+        );
+      try {
+        if (reservation) {
+          await vi.waitFor(() => expect(waitCalls).toBe(1));
+          settleAskUserPromptDelivery(reservation.questionId, new Error("transport failed"));
+        }
+        if (abort) {
+          await expect(outcome).resolves.toMatchObject({ error: new Error("run stopped") });
+        } else if (marker !== "stored") {
+          await expect(outcome).resolves.toMatchObject({
+            error: new Error("credential request returned an unexpected answer marker"),
+          });
+        } else {
+          await expect(outcome).resolves.toMatchObject({
+            result: { details: { status: "stored", name: "SERVICE_API_KEY" } },
+          });
+        }
+        expect(
+          gateway.mock.mock.calls.filter(([method]) => method === "question.resolve"),
+        ).toHaveLength(1);
+      } finally {
+        firstWait.resolve({ status: "cancelled" });
+        await outcome;
       }
-      if (method === "question.resolve") {
-        throw terminal;
-      }
-      waitCalls += 1;
-      return waitCalls === 1
-        ? { status: "pending" }
-        : { status: "answered", answers: { answers: { secret_value: ["stored"] } } };
-    });
-
-    const result = await createSecretsTool({
-      sessionKey: "agent:main:late-answer",
-      gatewayCall: gateway.call,
-    }).execute("call-late-answer", {
-      action: "request",
-      name: "SERVICE_API_KEY",
-      kind: "secret",
-    });
-
-    expect(result.details).toMatchObject({ status: "stored", name: "SERVICE_API_KEY" });
-  });
+    },
+  );
 
   it("cancels a registered credential request when its agent run aborts", async () => {
     const controller = new AbortController();
