@@ -39,45 +39,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
-  const original = await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>();
-  return {
-    ...original,
-    postTrustedWebToolsJson: async (
-      params: {
-        url: string;
-        apiKey: string;
-        body: Record<string, unknown>;
-        extraHeaders?: Record<string, string>;
-        signal?: AbortSignal;
-      },
-      parseResponse: (response: Response) => Promise<unknown>,
-    ) => {
-      const response = await globalThis.fetch(params.url, {
-        method: "POST",
-        headers: {
-          ...params.extraHeaders,
-          Accept: "application/json",
-          Authorization: `Bearer ${params.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(params.body),
-        ...(params.signal ? { signal: params.signal } : {}),
-      });
-      if (!response.ok) {
-        const detail =
-          typeof response.text === "function"
-            ? await response.text()
-            : response.statusText || String(response.status);
-        throw new Error(`xAI API error (${response.status}): ${detail || response.statusText}`);
-      }
-      return await parseResponse(response);
-    },
-  };
-});
-
 const {
-  extractXaiWebSearchContent,
   resolveXaiInlineCitations,
   resolveXaiToolSearchConfig,
   resolveXaiWebSearchCredential,
@@ -876,71 +838,6 @@ describe("xai web search config resolution", () => {
       tool.execute({ query: "cancelled generic request" }, { signal: controller.signal }),
     ).rejects.toBe(reason);
     expect(mockFetch).not.toHaveBeenCalled();
-  });
-});
-
-describe("xai web search response parsing", () => {
-  it("extracts content from Responses API message blocks", () => {
-    const result = extractXaiWebSearchContent({
-      output: [
-        {
-          type: "message",
-          content: [{ type: "output_text", text: "hello from output" }],
-        },
-      ],
-    });
-    expect(result.text).toBe("hello from output");
-    expect(result.annotationCitations).toStrictEqual([]);
-  });
-
-  it("extracts url_citation annotations from content blocks", () => {
-    const result = extractXaiWebSearchContent({
-      output: [
-        {
-          type: "message",
-          content: [
-            {
-              type: "output_text",
-              text: "hello with citations",
-              annotations: [
-                { type: "url_citation", url: "https://example.com/a" },
-                { type: "url_citation", url: "https://example.com/b" },
-                { type: "url_citation", url: "https://example.com/a" },
-              ],
-            },
-          ],
-        },
-      ],
-    });
-    expect(result.text).toBe("hello with citations");
-    expect(result.annotationCitations).toEqual(["https://example.com/a", "https://example.com/b"]);
-  });
-
-  it("falls back to deprecated output_text", () => {
-    const result = extractXaiWebSearchContent({ output_text: "hello from output_text" });
-    expect(result.text).toBe("hello from output_text");
-    expect(result.annotationCitations).toStrictEqual([]);
-  });
-
-  it("returns undefined text when no content found", () => {
-    const result = extractXaiWebSearchContent({});
-    expect(result.text).toBeUndefined();
-    expect(result.annotationCitations).toStrictEqual([]);
-  });
-
-  it("extracts output_text blocks directly in output array", () => {
-    const result = extractXaiWebSearchContent({
-      output: [
-        { type: "web_search_call" },
-        {
-          type: "output_text",
-          text: "direct output text",
-          annotations: [{ type: "url_citation", url: "https://example.com/direct" }],
-        },
-      ],
-    });
-    expect(result.text).toBe("direct output text");
-    expect(result.annotationCitations).toEqual(["https://example.com/direct"]);
   });
 });
 

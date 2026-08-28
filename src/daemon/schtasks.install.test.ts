@@ -106,6 +106,20 @@ describe("installScheduledTask", () => {
     expect(schtasksCalls[index]).toEqual(["/Run", "/TN", taskName]);
   }
 
+  it("redirects stdin from NUL so a hidden service console is never interactive (#112173)", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      const { scriptPath } = await installDefaultGatewayTask(env);
+      const script = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
+      expect(script).toContain("node gateway.js < NUL");
+
+      const parsed = await readScheduledTaskCommand(env);
+      expect(parsed).toStrictEqual({
+        programArguments: ["node", "gateway.js"],
+        sourcePath: scriptPath,
+      });
+    });
+  });
+
   it("writes version-free gateway and node descriptions", async () => {
     await withUserProfileDir(async (_tmpDir, env) => {
       const gateway = await installDefaultGatewayTask(env);

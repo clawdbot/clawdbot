@@ -14,7 +14,7 @@ import type {
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentSkillsFilter, selectableAgentsList } from "../../lib/agents/display.ts";
@@ -927,7 +927,7 @@ class AgentsPage
         <div>
           <div class="page-title">${titleForRoute("agents")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("agents")} ${renderDocsLink(AGENTS_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("agents")} ${renderLearnMoreLink(AGENTS_DOCS_URL)}
           </div>
         </div>
       </section>

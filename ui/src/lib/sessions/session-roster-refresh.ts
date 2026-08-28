@@ -626,24 +626,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         }
       }
     },
-    setOwnerFilter(ownerId: string | null) {
-      const options = {
-        ...lastListOptions,
-        ownerId: ownerId?.trim() || undefined,
-        involvingMe: undefined,
-      };
-      delete options.offset;
-      return refresh({ ...options, force: true });
-    },
-    setInvolvingMeFilter(enabled: boolean) {
-      const options = {
-        ...lastListOptions,
-        ownerId: undefined,
-        involvingMe: enabled || undefined,
-      };
-      delete options.offset;
-      return refresh({ ...options, force: true });
-    },
     lastOptions: () => lastListOptions,
     // Gateway-owned membership filters require an authoritative list refresh.
     canApplyPrimarySnapshot: () => isPrimarySessionListQuery(lastListOptions),

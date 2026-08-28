@@ -385,6 +385,7 @@ async function resolveCronDeliveryRouteSessionKey(params: {
 // and gateway server-methods/send.ts.
 export async function commitDirectCronOutboundRoute(params: {
   cfg: OpenClawConfig;
+  runSessionKey: string;
   delivery: SuccessfulDeliveryTarget;
   route: OutboundSessionRoute | null;
 }): Promise<void> {
@@ -398,6 +399,7 @@ export async function commitDirectCronOutboundRoute(params: {
       channel: params.delivery.channel,
       accountId: params.delivery.accountId,
       route: params.route,
+      sourceSessionKey: params.runSessionKey,
     });
   } catch (err) {
     // Do not block delivery completion on session meta writes.
@@ -484,6 +486,7 @@ function resolveCronMessageToolAwarenessTarget(params: {
 /** Queues target-session context awareness for cron deliveries made via message tool. */
 export async function queueCronMessageToolDeliveryAwareness(params: {
   cfg: OpenClawConfig;
+  runSessionKey: string;
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
@@ -526,6 +529,7 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
     // so persisting the route here is post-success.
     await commitDirectCronOutboundRoute({
       cfg: params.cfg,
+      runSessionKey: params.runSessionKey,
       delivery: target,
       route: targetRoute,
     });

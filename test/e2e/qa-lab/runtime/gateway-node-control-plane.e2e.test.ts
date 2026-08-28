@@ -21,7 +21,6 @@ import {
   PROTOCOL_VERSION,
   type HelloOk,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import {
   loadOrCreateDeviceIdentity,
   type DeviceIdentity,
@@ -524,23 +523,24 @@ describe("Gateway node control plane", () => {
             OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           },
           mutateConfig: (cfg) => {
-            // Bundled plugins are disabled for this focused proof, so their
-            // configured slots cannot remain while the fixture plugin is merged.
-            const { slots: _bundledSlots, ...plugins } = cfg.plugins ?? {};
-            return withFixturePlugin(
-              {
-                ...cfg,
-                plugins,
-                gateway: {
-                  ...cfg.gateway,
-                  nodes: {
-                    ...cfg.gateway?.nodes,
-                    commands: { allow: ["camera.list", FIXTURE_COMMAND] },
-                  },
+            // This control-plane fixture must not request unrelated QA runtime plugin installs.
+            const { plugins: _plugins, ...withoutPlugins } = cfg;
+            return {
+              ...withoutPlugins,
+              plugins: {
+                enabled: true,
+                allow: [FIXTURE_PLUGIN_ID],
+                load: { paths: [fixture.pluginDir] },
+                entries: { [FIXTURE_PLUGIN_ID]: { enabled: true } },
+              },
+              gateway: {
+                ...cfg.gateway,
+                nodes: {
+                  ...cfg.gateway?.nodes,
+                  commands: { allow: ["camera.list", FIXTURE_COMMAND] },
                 },
               },
-              fixture.pluginDir,
-            );
+            };
           },
         });
         const identity = loadOrCreateDeviceIdentity({
@@ -1145,25 +1145,6 @@ async function createFixturePlugin(): Promise<{
     }
     throw error;
   }
-}
-
-function withFixturePlugin(config: OpenClawConfig, pluginDir: string): OpenClawConfig {
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      enabled: true,
-      allow: [...new Set([...(config.plugins?.allow ?? []), FIXTURE_PLUGIN_ID])],
-      load: {
-        ...config.plugins?.load,
-        paths: [...new Set([...(config.plugins?.load?.paths ?? []), pluginDir])],
-      },
-      entries: {
-        ...config.plugins?.entries,
-        [FIXTURE_PLUGIN_ID]: { enabled: true },
-      },
-    },
-  };
 }
 
 function parseConnectEnvelope(

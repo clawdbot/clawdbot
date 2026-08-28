@@ -265,6 +265,13 @@
   font-size: var(--control-ui-text-sm);
 }
 
+.channels-wizard__subtitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
 .channels-wizard__body {
   display: grid;
   gap: var(--space-3);
@@ -361,6 +368,11 @@ wa-radio-group.channels-wizard__options::part(radios) {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.channels-wizard__link,
+.channels-wizard__link:hover {
+  text-decoration: none;
 }
 
 .channels-wizard__footer {

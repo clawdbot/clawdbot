@@ -255,13 +255,43 @@ suite.define(() => {
     try {
       await page.goto(new URL("settings/connection", suite.server.baseUrl).href);
       await page.locator("openclaw-app-shell").waitFor();
+      await page.locator("openclaw-connection-page .content-header").waitFor();
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "test reconnect");
 
-      await page.getByText("Actions are unavailable while the Gateway reconnects.").waitFor();
+      const notice = page.locator('.connection-action-block[role="status"]');
+      await notice.waitFor();
+      expect((await notice.textContent())?.trim()).toBe(
+        "Changes to settings are disabled while the Gateway is reconnecting.",
+      );
+      expect(await notice.locator("svg").count()).toBe(1);
       const outlet = page.locator("openclaw-router-outlet");
       expect(await outlet.getAttribute("inert")).not.toBeNull();
       expect(await outlet.getAttribute("aria-disabled")).toBe("true");
+      const bounds = await page.evaluate(() => {
+        const noticeRect = document
+          .querySelector(".connection-action-block")
+          ?.getBoundingClientRect();
+        const navRect = document.querySelector(".shell-nav")?.getBoundingClientRect();
+        const mainRect = document.querySelector("#control-ui-main")?.getBoundingClientRect();
+        const headerRect = document
+          .querySelector("openclaw-connection-page .content-header")
+          ?.getBoundingClientRect();
+        return {
+          headerTop: headerRect?.top,
+          noticeBottom: noticeRect?.bottom,
+          noticeTop: noticeRect?.top,
+          noticeLeft: noticeRect?.left,
+          noticeRight: noticeRect?.right,
+          mainTop: mainRect?.top,
+          navRight: navRect?.right,
+          mainRight: mainRect?.right,
+        };
+      });
+      expect(bounds.noticeTop).toBe(bounds.mainTop);
+      expect((bounds.headerTop ?? 0) - (bounds.noticeBottom ?? 0)).toBeCloseTo(44, 3);
+      expect(bounds.noticeLeft).toBe(bounds.navRight);
+      expect(bounds.noticeRight).toBe(bounds.mainRight);
       await mkdir(RECOVERY_ARTIFACT_DIR, { recursive: true });
       await page.screenshot({
         path: path.join(RECOVERY_ARTIFACT_DIR, "02-reconnecting-actions-blocked.png"),

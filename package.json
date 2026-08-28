@@ -2021,6 +2021,7 @@
     "ui:proof:injected-turn-notice": "node --import ./scripts/tsx.mjs scripts/capture-injected-turn-notice-proof.mts",
     "ui:proof:model-picker": "node --import ./scripts/tsx.mjs scripts/capture-model-picker-proof.mts",
     "ui:proof:session-toolbar": "node --import ./scripts/tsx.mjs scripts/capture-session-toolbar-proof.mts",
+    "ui:proof:where-chip": "node --import ./scripts/tsx.mjs scripts/capture-where-chip-auto-proof.mts",
     "ui:proof:workboard": "node --import ./scripts/tsx.mjs scripts/capture-workboard-ui-proof.mts",
     "native:i18n:baseline": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts baseline --write",
     "native:i18n:check": "node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts check",

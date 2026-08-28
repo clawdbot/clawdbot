@@ -619,10 +619,16 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 ? html`<span
                     class="chat-send-status"
                     title=${sendFailure.error ?? nothing}
-                    data-send-state="failed"
+                    data-send-state=${sendFailure.state}
                   >
                     <span aria-hidden="true">·</span>
-                    <span>${t("chat.queue.notSent")}</span>
+                    <span
+                      >${t(
+                        sendFailure.state === "unconfirmed"
+                          ? "chat.queue.deliveryUnconfirmed"
+                          : "chat.queue.notSent",
+                      )}</span
+                    >
                     ${opts.onRetryQueuedMessage
                       ? html`
                           <span aria-hidden="true">·</span>

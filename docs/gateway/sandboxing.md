@@ -213,6 +213,13 @@ A containerized Gateway creates sibling sandboxes through the host's local Podma
 
 Use `backend: "ssh"` to sandbox `exec`, file tools, and media reads on an arbitrary SSH-accessible machine.
 
+The remote environment must provide `/bin/sh`, `python3`, and GNU-compatible
+`stat` (`-c`) and `readlink` (`-f`) for the filesystem bridge. These utilities
+must be available to the non-interactive SSH command, not just an interactive
+login shell. The Gateway host does not need these remote utilities: a macOS or
+Windows Gateway can use an SSH target that supplies them. This is a remote
+utility contract, not a Linux-only Gateway requirement.
+
 ```json5
 {
   agents: {

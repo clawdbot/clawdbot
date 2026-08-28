@@ -4,6 +4,12 @@ import {
   normalizeOptionalString,
   readStringValue as readString,
 } from "../../../../packages/normalization-core/src/string-coerce.js";
+import {
+  classifyCronAgentTurnShellPrompt,
+  hasCronShellToolAccess,
+  parseCronAgentTurnCommandPrompt,
+  type CronAgentTurnShellPromptKind,
+} from "../../../cron/agent-turn-command-prompt.js";
 import { toCanonicalOpenAIModelRef } from "../shared/codex-route-model-ref.js";
 import {
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
@@ -13,19 +19,6 @@ import {
 
 type UnknownRecord = Record<string, unknown>;
 
-type LegacyAgentTurnCommandPayload = {
-  command: string;
-  cwd?: string;
-  timeoutSeconds?: number;
-};
-
-type UnresolvedAgentTurnShellToolPromptKind = "commandPromptWithoutShellAccess" | "shellToolPrompt";
-
-const LEGACY_AGENT_TURN_COMMAND_MARKER_RE = /\bCommand to run\s*:/iu;
-const LEGACY_AGENT_TURN_COMMAND_FIELD_RE = /^\s*-\s*(command|workdir|timeout)\s*:\s*(.*?)\s*$/iu;
-const SHELL_TOOL_NAMES = new Set(["bash", "command", "exec", "process", "shell", "sh"]);
-const SHELL_COMMAND_MESSAGE_RE =
-  /\b(?:bash|command|execute|exec|process|run|shell)\b[\s\S]{0,240}\b(?:python3?|node|bun|pnpm|npm|npx|yarn|sh|bash|sudo|cd|\.\/|\/[A-Za-z0-9._/-]+)\b/iu;
 const LEGACY_DELIVERY_HINT_FIELDS = [
   "deliver",
   "bestEffortDeliver",
@@ -190,19 +183,6 @@ export function stripLegacyTopLevelFields(raw: UnknownRecord) {
   }
 }
 
-function hasShellToolAccess(toolsAllow: unknown): boolean {
-  if (toolsAllow === undefined) {
-    return true;
-  }
-  if (!Array.isArray(toolsAllow)) {
-    return false;
-  }
-  return toolsAllow.some((tool) => {
-    const normalized = normalizeOptionalLowercaseString(tool);
-    return normalized === "*" || (normalized ? SHELL_TOOL_NAMES.has(normalized) : false);
-  });
-}
-
 type LegacyOpenAICodexCronModelRoute = {
   legacyModelRef: string;
   canonicalModelRef: string;
@@ -249,55 +229,10 @@ function normalizeChannel(value: string): string {
   return normalizeOptionalLowercaseString(value) ?? "";
 }
 
-function parsePositiveInteger(value: string): number | undefined {
-  const trimmed = value.trim();
-  if (!/^\d+$/u.test(trimmed)) {
-    return undefined;
-  }
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
 function readPositiveInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
-}
-
-function parseLegacyAgentTurnCommandMessage(message: string): LegacyAgentTurnCommandPayload | null {
-  if (!LEGACY_AGENT_TURN_COMMAND_MARKER_RE.test(message)) {
-    return null;
-  }
-
-  let command = "";
-  let cwd: string | undefined;
-  let timeoutSeconds: number | undefined;
-
-  for (const line of message.split(/\r?\n/u)) {
-    const match = LEGACY_AGENT_TURN_COMMAND_FIELD_RE.exec(line);
-    if (!match) {
-      continue;
-    }
-    const key = match[1]?.toLowerCase();
-    const value = match[2]?.trim() ?? "";
-    if (key === "command" && value && !command) {
-      command = value;
-    } else if (key === "workdir" && value && !cwd) {
-      cwd = value;
-    } else if (key === "timeout" && value && timeoutSeconds === undefined) {
-      timeoutSeconds = parsePositiveInteger(value);
-    }
-  }
-
-  if (!command) {
-    return null;
-  }
-
-  return {
-    command,
-    ...(cwd ? { cwd } : {}),
-    ...(timeoutSeconds ? { timeoutSeconds } : {}),
-  };
 }
 
 /** Return true when a cron payload contains legacy Codex-route model refs. */
@@ -396,11 +331,11 @@ export function migrateLegacyAgentTurnCommandPayload(payload: UnknownRecord): bo
   if (typeof message !== "string") {
     return false;
   }
-  const parsed = parseLegacyAgentTurnCommandMessage(message);
+  const parsed = parseCronAgentTurnCommandPrompt(message);
   if (!parsed) {
     return false;
   }
-  if (!hasShellToolAccess(payload.toolsAllow)) {
+  if (!hasCronShellToolAccess(payload.toolsAllow)) {
     return false;
   }
 
@@ -430,21 +365,6 @@ export function migrateLegacyAgentTurnCommandPayload(payload: UnknownRecord): bo
 
 export function classifyUnresolvedAgentTurnShellToolPrompt(
   payload: UnknownRecord,
-): UnresolvedAgentTurnShellToolPromptKind | null {
-  if (payload.kind !== "agentTurn") {
-    return null;
-  }
-  const message = readString(payload.message);
-  if (typeof message !== "string") {
-    return null;
-  }
-  const parsed = parseLegacyAgentTurnCommandMessage(message);
-  const shellToolAccess = hasShellToolAccess(payload.toolsAllow);
-  if (parsed && !shellToolAccess) {
-    return "commandPromptWithoutShellAccess";
-  }
-  if (shellToolAccess && SHELL_COMMAND_MESSAGE_RE.test(message)) {
-    return "shellToolPrompt";
-  }
-  return null;
+): CronAgentTurnShellPromptKind | null {
+  return classifyCronAgentTurnShellPrompt(payload);
 }

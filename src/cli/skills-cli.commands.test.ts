@@ -738,6 +738,17 @@ describe("skills cli commands", () => {
     );
   });
 
+  it("passes a generic install confirmation to interactive ClawHub skill installs", async () => {
+    setTty(true);
+    primeCalendarInstall();
+
+    await runCommand(["skills", "install", "calendar"]);
+
+    expect(mockFirstObjectArg(installSkillFromClawHubMock).confirmInstall).toEqual(
+      expect.any(Function),
+    );
+  });
+
   it("passes noninteractive install-policy acknowledgement to skill installs", async () => {
     setTty(false);
     installSkillFromSourceMock.mockResolvedValue({
@@ -835,8 +846,6 @@ describe("skills cli commands", () => {
   it.each([
     { spec: "git:owner/tools", flag: "--force-install" },
     { spec: "./local-skill", flag: "--force-install" },
-    { spec: "git:owner/tools", flag: "--acknowledge-clawhub-risk" },
-    { spec: "./local-skill", flag: "--acknowledge-clawhub-risk" },
   ])("rejects ClawHub-only $flag for source install $spec", async ({ spec, flag }) => {
     await expect(runCommand(["skills", "install", spec, flag])).rejects.toThrow("__exit__:1");
 
@@ -906,38 +915,22 @@ describe("skills cli commands", () => {
     );
   });
 
-  it.each([
-    { flag: "--force-install", option: "forceInstall" },
-    { flag: "--acknowledge-clawhub-risk", option: "acknowledgeClawHubRisk" },
-  ])("passes $flag through for ClawHub skill installs", async ({ flag, option }) => {
-    primeCalendarInstall();
+  it.each([{ flag: "--force-install", option: "forceInstall" }])(
+    "passes $flag through for ClawHub skill installs",
+    async ({ flag, option }) => {
+      primeCalendarInstall();
 
-    await runCommand(["skills", "install", "calendar", flag]);
+      await runCommand(["skills", "install", "calendar", flag]);
 
-    expect(installSkillFromClawHubMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/workspace",
-        slug: "calendar",
-        [option]: true,
-      }),
-    );
-  });
-
-  it("prints acknowledgement guidance for unacknowledged ClawHub skill installs", async () => {
-    installSkillFromClawHubMock.mockResolvedValue({
-      ok: false,
-      code: "clawhub_risk_acknowledgement_required",
-      error:
-        "Install cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning.",
-      warning: "WARNING - ClawHub found security risks in this release",
-    });
-
-    await expect(runCommand(["skills", "install", "calendar"])).rejects.toThrow("__exit__:1");
-
-    expect(runtimeErrors).toContain(
-      "Install cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning.",
-    );
-  });
+      expect(installSkillFromClawHubMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceDir: "/tmp/workspace",
+          slug: "calendar",
+          [option]: true,
+        }),
+      );
+    },
+  );
 
   it("prints blocked ClawHub skill install failures when no trust warning was emitted", async () => {
     installSkillFromClawHubMock.mockResolvedValue({
@@ -1010,7 +1003,6 @@ describe("skills cli commands", () => {
   it.each([
     { flag: "--force", option: "force" },
     { flag: "--force-install", option: "forceInstall" },
-    { flag: "--acknowledge-clawhub-risk", option: "acknowledgeClawHubRisk" },
   ])("passes $flag through for ClawHub skill updates", async ({ flag, option }) => {
     primeCalendarUpdate();
 
@@ -1040,25 +1032,6 @@ describe("skills cli commands", () => {
 
     expect(runtimeErrors).toContain(
       'Skill "calendar" has local file changes. Updating replaces the installed skill directory. Re-run with --force to update it anyway.',
-    );
-  });
-
-  it("prints acknowledgement guidance for unacknowledged ClawHub skill updates", async () => {
-    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
-    updateSkillsFromClawHubMock.mockResolvedValue([
-      {
-        ok: false,
-        code: "clawhub_risk_acknowledgement_required",
-        error:
-          "Update cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning.",
-        warning: "WARNING - ClawHub found security risks in this release",
-      },
-    ]);
-
-    await expect(runCommand(["skills", "update", "calendar"])).rejects.toThrow("__exit__:1");
-
-    expect(runtimeErrors).toContain(
-      "Update cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning.",
     );
   });
 

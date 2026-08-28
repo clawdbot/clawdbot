@@ -94,7 +94,7 @@ A remote tool backend also changes what sandboxed code can reach. Hermes can mov
 
 Deterministic enforcement is not unique to OpenClaw — Claude Code, Codex, and Goose all gate approvals in code. Structural tool gating in a multi-channel assistant, rather than a terminal, is rarer: [permission modes](/gateway/permission-modes) shape which tools exist at all. A `read-only` session never has the file-mutation tools registered — `edit`, `write`, and `apply_patch` are not offered to the model — and its exec tool resolves to a deny policy that refuses at the call boundary. `full` requires `operator.admin`, and scopes are derived from request parameters before dispatch ([operator scopes](/gateway/operator-scopes)), so a method with a privileged parameter still needs the privileged scope.
 
-Three controls govern separate decisions ([sandbox vs. tool policy vs. elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)). The sandbox decides where tools run. Tool policy decides which tools exist; deny always wins, and a blocked call's audit entry names the deny rule that fired. `tools.elevated` is an exec-only escape hatch that cannot override a deny.
+Three controls govern separate decisions ([sandbox vs. tool policy vs. elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)). The sandbox decides where tools run. Tool policy decides which tools exist; deny always wins. Routine policy-filter diagnostics name the configured layer and matched deny entries at debug level; the [durable audit ledger](/gateway/audit) records blocked outcomes separately, without the matched rule. `tools.elevated` is an exec-only escape hatch that cannot override a deny.
 
 [Exec approvals](/tools/exec-approvals) bind an approved run to its canonical command, cwd, environment hash, and content-hashed file operands, and deny on any drift after approval. Supported pipelines and command chains can use enforced execution plans. Shell forms or interpreter invocations for which OpenClaw cannot establish the required execution and file bindings are refused. When no approval UI is reachable, the answer is deny by default, and strict cases (inline eval, heredocs) cannot be softened by any fallback setting.
 
@@ -180,7 +180,7 @@ Like other OpenClaw features, harnesses ship as plugins against a core that stay
 
 The public plugin SDK publishes about 150 entrypoints, held under shrink-only surface budgets so growth is a conscious decision. Hermes also has a broad [Python plugin API](https://github.com/NousResearch/hermes-agent/blob/6defe7eb6c462bb784d1f27f5afe7ca4b627fc70/hermes_cli/plugins.py), including tools, platforms, context engines, memory, secret sources, and media providers, plus a [desktop plugin SDK](https://github.com/NousResearch/hermes-agent/blob/6defe7eb6c462bb784d1f27f5afe7ca4b627fc70/website/docs/developer-guide/desktop-plugin-sdk.md). Its seven consent capability IDs describe permission gates, not the size of that API.
 
-[ClawHub](/clawhub) is OpenClaw's registry, with [publishing](/clawhub/publishing), moderation, [security audits](/clawhub/security-audits), and per-release trust verdicts consumed during installation. Hermes also distributes skills through tap repositories and maintains an MCP catalog. ClawHub shows skill scan status from VirusTotal, ClawScan, and static analysis, but a pending or stale scan can allow installation with a warning; installation is not proof that every scan completed. [`openclaw skills verify`](/tools/skills) checks installed content against its trust envelope to detect changes after installation.
+[ClawHub](/clawhub) is OpenClaw's registry, with [publishing](/clawhub/publishing), moderation, [security audits](/clawhub/security-audits), and per-release trust verdicts consumed during installation. Hermes also distributes skills through tap repositories and maintains an MCP catalog. ClawHub shows skill scan status from VirusTotal, ClawScan, and static analysis, but a pending or stale scan can allow installation with a warning; installation is not proof that every scan completed. [`openclaw skills verify`](/cli/skills) retrieves ClawHub's verification envelope for the selected skill, using installed registry and version metadata by default; it does not hash current local files.
 
 ## Open standards
 
@@ -246,12 +246,14 @@ Hermes also has [opt-in session pruning](https://github.com/NousResearch/hermes-
 | Security record      | Public repository advisories and documented trust model; counts are not a safety score                                      | Third-party CVEs and historical user reports; no public repository advisories at the review date                                                                                       |
 | Governance           | OpenClaw Foundation, MIT, public maturity scorecard                                                                         | Nous Research, venture-backed, MIT                                                                                                                                                     |
 
+Since the comparison snapshot, Hermes has added [optional persistent local Python kernels](https://github.com/NousResearch/hermes-agent/blob/dd401e0f15c6d527d5ce01367732746f1da5df3d/tools/code_execution_tool.py#L1464). `code_execution.kernel_mode: session` keeps Python state across local calls; the default remains `per-call`, and kernel state does not survive process restart.
+
 ## The hardened setup
 
 Each enterprise configuration item links to its reference:
 
 - Sandbox on: `agents.defaults.sandbox.mode: "all"` with the [`openshell`](/gateway/openshell) or [`docker`](/gateway/sandboxing) backend; `workspaceAccess: "ro"` unless the agent owns the workspace.
-- Set session defaults to [`guarded` or `workspace`](/gateway/permission-modes); `full` stays admin-only.
+- Select [`guarded` or `workspace`](/gateway/permission-modes) per session; `full` requires `operator.admin`. Managed worktree sessions default to `workspace`; other sessions without a mode use configured tool/exec policy.
 - Front the gateway with [Tailscale](/gateway/tailscale) or an [identity-aware proxy](/gateway/trusted-proxy-auth); define [`gateway.roles`](/gateway/operator-scopes) with a deny-all default; leave DM policy on [pairing](/channels/pairing).
 - Everything behind [SecretRefs](/gateway/secrets); run `openclaw secrets audit --check` against your config in CI.
 - Enable [message auditing](/gateway/audit); export [OpenTelemetry](/gateway/opentelemetry) to your SIEM with operator-owned retention and monitoring for dropped data.

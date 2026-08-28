@@ -69,8 +69,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI Gateway labels:** keep the discovered machine name through recovery initialization and refresh open folder-browser labels when name discovery finishes.
 - **Android settings:** keep form fields and actions reachable above the keyboard, and respect bottom system insets without duplicating navigation padding.
 - **Nextcloud Talk diagnostics:** redact reflected credentials before displaying send, reaction, and bot-preflight errors, and suppress incomplete error bodies. (#119976) Thanks @xialonglee.
+- **Control UI config drafts:** preserve external changes and newer Form or Raw edits across reconnects, including saves whose acknowledgments were lost, by keeping the draft's original document and write revision together.
 - Codex image attachments: decode mixed-case `file://` URLs as local image paths while preserving existing file URL validation and platform behavior. (#121611) Thanks @sunlit-deng.
 - **Android gateway discovery:** resolve nearby gateways one at a time on Android 12 and 13 so simultaneously advertised gateways are not silently omitted.
 

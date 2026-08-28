@@ -596,8 +596,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return () => listeners.delete(notify);
     },
     refreshList: (options) => roster.refreshList(options),
-    setOwnerFilter: (ownerId) => roster.setOwnerFilter(ownerId),
-    setInvolvingMeFilter: (enabled) => roster.setInvolvingMeFilter(enabled),
     reconcile,
     reconcileChanged,
     reconcileRunTerminal,

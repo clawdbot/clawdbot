@@ -670,6 +670,13 @@ With remote `imsg` v0.13.4, poll votes must use `pollOptionId`; its `poll.vote` 
 
 </Accordion>
 
+### LINE
+
+LINE is plugin-backed and configured under `channels.line`.
+
+- `channels.line.joinIntro` defaults to `true`. When the bot joins an allowed group or multi-person room, it posts one introduction using the group name when available. LINE exposes no multi-person room name or topic, and its Messaging API cannot read prior messages. Set this option to `false` to disable introductions, or use `channels.line.accounts.<accountId>.joinIntro` for an account-specific override. Introductions happen once per room and never run in one-to-one user chats; see [group join introductions](/channels#group-join-introductions).
+- Full LINE configuration, webhook setup, and access policy are documented in [LINE](/channels/line).
+
 ### Matrix
 
 Matrix is plugin-backed and configured under `channels.matrix`.
@@ -707,6 +714,7 @@ Matrix is plugin-backed and configured under `channels.matrix`.
 - `channels.matrix.network.dangerouslyAllowPrivateNetwork` allows private/internal homeservers. `proxy` and this network opt-in are independent controls.
 - `channels.matrix.defaultAccount` selects the preferred account in multi-account setups.
 - `channels.matrix.autoJoin` defaults to `"off"`, so invited rooms and fresh DM-style invites are ignored until you set `autoJoin: "allowlist"` with `autoJoinAllowlist` or `autoJoin: "always"`.
+- `channels.matrix.joinIntro` defaults to `true`. When the bot actually joins an allowed group room, it posts one introduction using the room name, topic, and up to 100 readable recent messages. A failed history read leaves a metadata-only introduction. Set this option to `false` to disable introductions, or use `channels.matrix.accounts.<accountId>.joinIntro` for an account-specific override. Introductions happen once per room; unaccepted invites, startup room snapshots, membership updates that leave the bot joined, and direct rooms do not trigger them. See [group join introductions](/channels#group-join-introductions).
 - `channels.matrix.execApprovals`: Matrix-native exec approval delivery and approver authorization.
   - `enabled`: `true`, `false`, or `"auto"` (default). In auto mode, exec approvals activate when approvers can be resolved from `approvers` or `commands.ownerAllowFrom`.
   - `approvers`: Matrix user IDs (e.g. `@owner:example.org`) allowed to approve exec requests.
@@ -798,7 +806,7 @@ Run multiple accounts per channel (each with its own `accountId`):
 
 ### Other plugin channels
 
-Many plugin channels are configured as `channels.<id>` and documented in their dedicated channel pages (for example Feishu, LINE, Nextcloud Talk, Nostr, QQ Bot, Synology Chat, Twitch, and Zalo).
+Many plugin channels are configured as `channels.<id>` and documented in their dedicated channel pages (for example Feishu, Nextcloud Talk, Nostr, QQ Bot, Synology Chat, Twitch, and Zalo).
 See the full channel index: [Channels](/channels).
 
 ### Group chat mention gating

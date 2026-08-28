@@ -198,6 +198,44 @@ describe("renderChannelWizard", () => {
     expect(document.querySelector("textarea")).toBeNull();
   });
 
+  it("links channel docs from the setup subtitle without static helper links", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderChannelWizard({
+        wizard: {
+          phase: "error",
+          channel: "slack",
+          message: "Setup failed",
+        },
+        channelLabel: () => "Slack",
+        multiselectValues: [],
+        onToggleMultiselect: vi.fn(),
+        textValue: "",
+        secretVisible: false,
+        onTextInput: vi.fn(),
+        onToggleSecretVisibility: vi.fn(),
+        onAnswer: vi.fn(),
+        onClose: vi.fn(),
+        whatsappQrDataUrl: null,
+        whatsappMessage: null,
+        whatsappConnected: null,
+        whatsappBusy: false,
+        onWhatsAppStart: vi.fn(),
+        onWhatsAppWait: vi.fn(),
+      }),
+      container,
+    );
+
+    const subtitle = container.querySelector(".channels-wizard__subtitle");
+    const docs = subtitle?.querySelector<HTMLAnchorElement>(".channels-wizard__link");
+    expect(subtitle?.textContent?.replace(/\s+/gu, " ").trim()).toBe(
+      "Guided channel setup View docs",
+    );
+    expect(docs?.href).toBe("https://docs.openclaw.ai/channels/slack");
+    expect(container.querySelector(".channels-wizard__links")).toBeNull();
+  });
+
   it.each(
     [true, false].flatMap((copied) => ["pending", "feedback"].map((phase) => ({ copied, phase }))),
   )(

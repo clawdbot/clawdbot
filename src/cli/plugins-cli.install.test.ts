@@ -368,6 +368,7 @@ type MockWithCalls = {
 type PluginInstallCall = {
   allowSourceTypeScriptEntries?: boolean;
   archivePath?: string;
+  confirmInstall?: () => boolean | Promise<boolean>;
   dangerouslyForceUnsafeInstall?: boolean;
   dryRun?: boolean;
   expectedIntegrity?: string;
@@ -1666,6 +1667,15 @@ describe("plugins cli install", () => {
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
   });
 
+  it("passes a generic install confirmation to interactive ClawHub installs", async () => {
+    setTty(true);
+    primeSuccessfulClawHubPluginInstall();
+
+    await runCapabilityAcceptedPluginsInstallCommand(["plugins", "install", "clawhub:demo"]);
+
+    expect(clawHubInstallCall().confirmInstall).toEqual(expect.any(Function));
+  });
+
   it("rejects unacknowledged noninteractive ClawHub installs before persistence", async () => {
     setTty(false);
     primeSuccessfulClawHubPluginInstall();
@@ -1754,56 +1764,6 @@ describe("plugins cli install", () => {
     ).rejects.toThrow("persistence failed");
 
     expect(reportClawHubPluginInstallTelemetryMock).not.toHaveBeenCalled();
-  });
-
-  it("passes ClawHub risk acknowledgement to explicit ClawHub installs", async () => {
-    primeSuccessfulClawHubPluginInstall({
-      trust: {
-        disposition: "review-required",
-        scanStatus: "suspicious",
-        reasons: ["payload_strings"],
-        checkedAt: "2026-05-14T18:00:00.000Z",
-        acknowledgedAt: "2026-05-14T18:00:03.000Z",
-      },
-    });
-
-    await runCapabilityAcceptedPluginsInstallCommand([
-      "plugins",
-      "install",
-      "clawhub:demo",
-      "--acknowledge-clawhub-risk",
-    ]);
-
-    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "clawhub:demo",
-        acknowledgeClawHubRisk: true,
-      }),
-    );
-    const record = persistedInstallRecord("demo");
-    expect(record.clawhubTrustDisposition).toBe("review-required");
-    expect(record.clawhubTrustScanStatus).toBe("suspicious");
-    expect(record.clawhubTrustReasons).toEqual(["payload_strings"]);
-    expect(record.clawhubTrustCheckedAt).toBe("2026-05-14T18:00:00.000Z");
-    expect(record.clawhubTrustAcknowledgedAt).toBe("2026-05-14T18:00:03.000Z");
-  });
-
-  it("prints acknowledgement guidance for unacknowledged ClawHub plugin installs", async () => {
-    pluginCliConfigMock.mockReturnValue(createEmptyPluginConfig());
-    parseClawHubPluginSpecMock.mockReturnValue({ name: "demo" });
-    installPluginFromClawHubMock.mockResolvedValue({
-      ok: false,
-      code: "clawhub_risk_acknowledgement_required",
-      error:
-        "Install cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning.",
-      warning: "WARNING - ClawHub found security risks in this release",
-    });
-
-    await expect(runPluginsCommand(["plugins", "install", "clawhub:demo"])).rejects.toThrow(
-      "__exit__:1",
-    );
-
-    expect(runtimeErrors.at(-1)).toContain("--acknowledge-clawhub-risk");
   });
 
   it("prints blocked ClawHub download failures when no trust warning was emitted", async () => {

@@ -61,11 +61,7 @@ function firstFetchInit(mockFetch: ReturnType<typeof installXSearchFetch>): Requ
 }
 
 function firstAuthorizationHeader(mockFetch: ReturnType<typeof installXSearchFetch>) {
-  const headers = firstFetchInit(mockFetch).headers;
-  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
-    throw new Error("expected x_search request headers");
-  }
-  return (headers as Record<string, string>).Authorization;
+  return new Headers(firstFetchInit(mockFetch).headers).get("Authorization");
 }
 
 function parseFirstRequestBody(mockFetch: ReturnType<typeof installXSearchFetch>) {

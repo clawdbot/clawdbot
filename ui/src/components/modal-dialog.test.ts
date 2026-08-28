@@ -8,7 +8,7 @@ import {
   installDialogPolyfill,
   nextFrame,
 } from "../test-helpers/modal-dialog.ts";
-import "./modal-dialog.ts";
+import { OpenClawModalDialog } from "./modal-dialog.ts";
 
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
@@ -142,6 +142,22 @@ describe("openclaw-modal-dialog", () => {
     }
   });
 
+  it("assigns overlay motion by interaction type", () => {
+    const styles = OpenClawModalDialog.styles.cssText;
+
+    expect(styles).toMatch(
+      /:host\(\.palette\)\s+wa-dialog\s*\{[^}]*--show-duration:\s*0ms;[^}]*--hide-duration:\s*0ms;/u,
+    );
+    expect(styles).toMatch(
+      /:host\(\.drawer\)\s+wa-dialog\s*\{[^}]*--show-duration:\s*200ms;[^}]*--hide-duration:\s*0ms;/u,
+    );
+    expect(styles).toMatch(
+      /:host\(\.drawer\)\s+wa-dialog\[open\]::part\(dialog\)\s*\{[^}]*animation:\s*openclaw-drawer-in 200ms cubic-bezier\(0\.32, 0\.72, 0, 1\);/u,
+    );
+    expect(styles).toMatch(
+      /@keyframes openclaw-drawer-in\s*\{\s*from\s*\{\s*transform:\s*translateX\(100%\);\s*\}\s*to\s*\{\s*transform:\s*translateX\(0\);/u,
+    );
+  });
   it("emits modal-cancel on Escape", async () => {
     const { modal, dialog } = await renderModal();
     const onCancel = vi.fn();

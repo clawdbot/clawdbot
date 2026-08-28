@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount, formatCost, formatTimeAgo } from "../../../lib/format.ts";
@@ -68,56 +68,35 @@ function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date.now())
   });
 }
 
-// Footer times read relative ("5m ago"); the absolute timestamp lives in the
-// tooltip, or in the msg-meta popover when usage metadata makes the
-// timestamp interactive (a nested tooltip would fight the popover).
-export function renderChatTimestamp(timestamp: number, interactive = false) {
+export function renderChatTimestamp(timestamp: number, metadata: TemplateResult[] = []) {
   const display = formatChatTimestampForDisplay(timestamp);
-  const timeEl = html`
+  const time = html`
     <time class="chat-group-timestamp" datetime=${display.dateTime} aria-live="off">
       ${formatChatRelativeTimestampLabel(timestamp)}
     </time>
   `;
-  if (interactive) {
-    return timeEl;
-  }
-  return html`<openclaw-tooltip content=${display.label}>${timeEl}</openclaw-tooltip>`;
-}
-
-function resolveMessageMetaDetails(target: EventTarget | null): HTMLDetailsElement | null {
-  if (target instanceof HTMLDetailsElement) {
-    return target;
-  }
-  return target instanceof HTMLElement
-    ? target.closest<HTMLDetailsElement>("details.msg-meta")
-    : null;
-}
-
-function previewMessageMeta(event: PointerEvent | FocusEvent) {
-  const details = resolveMessageMetaDetails(event.currentTarget);
-  if (!details || details.open || ("pointerType" in event && event.pointerType === "touch")) {
-    return;
-  }
-  details.dataset.preview = "true";
-  details.open = true;
-}
-
-function closeMessageMetaPreview(event: PointerEvent | FocusEvent) {
-  const details = resolveMessageMetaDetails(event.currentTarget);
-  if (!details || details.dataset.preview !== "true" || details.matches(":hover, :focus-within")) {
-    return;
-  }
-  delete details.dataset.preview;
-  details.open = false;
-}
-
-function pinMessageMetaPreview(event: MouseEvent) {
-  const details = resolveMessageMetaDetails(event.currentTarget);
-  if (details?.dataset.preview !== "true") {
-    return;
-  }
-  event.preventDefault();
-  delete details.dataset.preview;
+  return html`
+    <openclaw-tooltip
+      class="msg-meta"
+      ?open-on-click=${metadata.length > 0}
+      content=${metadata.length ? "" : display.label}
+    >
+      ${metadata.length
+        ? html`<button
+            type="button"
+            class="msg-meta__summary"
+            aria-label=${t("chat.messages.contextFor", { timestamp: display.title })}
+          >
+            ${time}
+          </button>`
+        : time}
+      ${metadata.length
+        ? html`<span slot="content" class="msg-meta__details">
+            <span class="msg-meta__time">${display.label}</span>${metadata}
+          </span>`
+        : nothing}
+    </openclaw-tooltip>
+  `;
 }
 
 type GroupMeta = {
@@ -240,30 +219,5 @@ export function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
     parts.push(html`<span class="msg-meta__model">${shortModel}</span>`);
   }
 
-  if (parts.length === 0) {
-    return renderChatTimestamp(timestamp);
-  }
-
-  const display = formatChatTimestampForDisplay(timestamp);
-  // Absolute time leads the popover; the summary label itself stays relative.
-  parts.unshift(html`<span class="msg-meta__time">${display.label}</span>`);
-
-  return html`
-    <details
-      class="msg-meta"
-      @pointerenter=${previewMessageMeta}
-      @pointerleave=${closeMessageMetaPreview}
-      @focusin=${previewMessageMeta}
-      @focusout=${closeMessageMetaPreview}
-    >
-      <summary
-        class="msg-meta__summary"
-        aria-label=${t("chat.messages.contextFor", { timestamp: display.title })}
-        @click=${pinMessageMetaPreview}
-      >
-        ${renderChatTimestamp(timestamp, true)}
-      </summary>
-      <span class="msg-meta__details">${parts}</span>
-    </details>
-  `;
+  return renderChatTimestamp(timestamp, parts);
 }

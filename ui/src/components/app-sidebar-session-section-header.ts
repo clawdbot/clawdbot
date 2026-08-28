@@ -22,7 +22,7 @@ export function renderSidebarSessionSectionHeader(params: {
         const header = event.currentTarget as HTMLElement;
         header.toggleAttribute(
           "data-section-drag-blocked",
-          Boolean((event.target as HTMLElement).closest("button")),
+          Boolean((event.target as HTMLElement).closest("button, a")),
         );
       }}
       @mouseup=${(event: MouseEvent) => {
@@ -34,11 +34,11 @@ export function renderSidebarSessionSectionHeader(params: {
           return;
         }
         const header = event.currentTarget as HTMLElement;
-        const startedFromButton =
-          Boolean((event.target as HTMLElement).closest("button")) ||
+        const startedFromControl =
+          Boolean((event.target as HTMLElement).closest("button, a")) ||
           header.hasAttribute("data-section-drag-blocked");
         header.removeAttribute("data-section-drag-blocked");
-        if (startedFromButton) {
+        if (startedFromControl) {
           event.preventDefault();
           return;
         }

@@ -52,6 +52,7 @@ import "./tooltip.ts";
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
 export interface SessionListHost {
+  readonly basePath: string;
   readonly sessionDataContext: Pick<ApplicationContext, "gateway"> | undefined;
   readonly sidebarLiveActivity: boolean;
   readonly sessionsShowPreview: boolean;
@@ -124,7 +125,7 @@ export interface SessionListHost {
   startSidebarSectionDrag(sectionId: string): void;
   finishSidebarSectionDrag(): void;
   toggleSection(sectionId: string): void;
-  openNewSession(target?: NewSessionTarget): void;
+  expandedAgentId(): string;
   readNewSessionAccess(): import("../lib/session-method-access.ts").SessionMethodAccess;
   readSessionMutationAccess(request: {
     method: string;
@@ -362,7 +363,7 @@ export function renderRecentSession(params: {
             <span class="sidebar-recent-session__details-endcap">
               ${!session.isChild && sessionHasBoard(session.key)
                 ? html`<span
-                    class="sidebar-board-glyph"
+                    class="session-row-badge"
                     role="img"
                     aria-label=${t("sessionsView.dashboardAvailable")}
                     title=${t("sessionsView.dashboardAvailable")}

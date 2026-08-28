@@ -8,6 +8,7 @@ export function createEmbeddedRunContextRecoveryState() {
     overflowCompactionAttempts: 0,
     timeoutCompactionAttempts: 0,
     toolResultTruncationAttempted: false,
+    transportDropContinuations: 0,
   };
 }
 

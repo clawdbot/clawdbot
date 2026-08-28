@@ -160,6 +160,21 @@ LINE IDs are case-sensitive. Valid IDs look like:
 - Group: `C` + 32 hex chars
 - Room: `R` + 32 hex chars
 
+## Group join introductions
+
+When the bot joins an allowed group or multi-person room, it posts one
+introduction there. LINE exposes a group name through its group summary API, but
+no room name or topic for multi-person rooms. The Messaging API cannot read prior
+messages, so introductions use only available metadata and ask what the room
+wants the bot to take on rather than inventing activity.
+
+Introductions are enabled by default. Set `channels.line.joinIntro: false` to
+disable them, or use `channels.line.accounts.<accountId>.joinIntro` to override
+one account. They never run in one-to-one user chats or when another member joins.
+See [group join introductions](/channels#group-join-introductions) for room
+admission, once-per-room behavior, and the no-tools turn that treats room content
+as untrusted.
+
 ## Message behavior
 
 - Text is chunked at 5000 characters.

@@ -41,6 +41,20 @@ vi.mock("../../commands/agent.js", () => ({
   agentCommandFromIngress: agentIngressMocks.agentCommandFromIngress,
 }));
 
+vi.mock("../../agents/prepared-model-runtime.js", () => ({
+  acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
+    release: vi.fn(),
+    snapshot: {},
+  })),
+  loadPublishedGatewayReplyDispatchRuntime: vi.fn(async ({ agentId }: { agentId: string }) => ({
+    agentId,
+    agentDir: configMocks.workspaceDir,
+    config: configMocks.getRuntimeConfig(),
+    pluginGeneration: { pluginMetadataSnapshot: {} },
+    workspaceDir: configMocks.workspaceDir,
+  })),
+}));
+
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {},
 }));

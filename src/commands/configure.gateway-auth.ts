@@ -171,11 +171,7 @@ export function buildGatewayAuthConfig(params: {
   mode: GatewayAuthChoice;
   token?: SecretInput;
   password?: string;
-  trustedProxy?: {
-    userHeader: string;
-    requiredHeaders?: string[];
-    allowUsers?: string[];
-  };
+  trustedProxy?: GatewayAuthConfig["trustedProxy"];
 }): GatewayAuthConfig | undefined {
   const base: GatewayAuthConfig = { ...params.existing };
   delete base.token;
@@ -282,17 +278,13 @@ export async function promptAuthConfig(
       preserveExistingDefaultModel: true,
     });
     next = applied.config;
-    if (applied.agentModelOverride) {
-      const targeted = applyOnboardingPrimaryModel(next, target, applied.agentModelOverride);
-      next = {
-        ...targeted,
-        agents: {
-          ...targeted.agents,
-          ...(beforeAuthConfig.agents?.defaults === undefined
-            ? { defaults: undefined }
-            : { defaults: beforeAuthConfig.agents.defaults }),
-        },
-      };
+    // Auth recommendations initialize an unset primary; reauth must not replace
+    // the target's explicit or inherited model.
+    if (
+      applied.agentModelOverride &&
+      !resolveAgentEffectiveModelPrimary(beforeAuthConfig, target.agentId)
+    ) {
+      next = applyOnboardingPrimaryModel(next, target, applied.agentModelOverride);
     }
     preferredProvider = resolveConfiguredProviderFromAuthChange({
       before: beforeAuthConfig,

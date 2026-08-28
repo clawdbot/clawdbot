@@ -118,7 +118,7 @@ export function resolveAcpSpawnRuntimeOptions(params: {
     };
   }
 
-  let thinking = thinkingPlan.thinkingOverride;
+  let thinking = thinkingPlan.thinkingOverride ?? targetAgentConfig?.thinkingDefault;
   if (!thinking && model) {
     const { provider, model: modelId } = splitModelRef(model);
     if (provider && modelId) {

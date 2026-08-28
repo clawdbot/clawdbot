@@ -13,6 +13,44 @@ afterEach(async () => {
 });
 
 describe("chat composer steering queue", () => {
+  it("keeps attempted unconfirmed messages inline while local commands retain retry and discard", () => {
+    const onQueueRetry = vi.fn();
+    const onQueueRemove = vi.fn();
+    const container = renderQueue({
+      queue: [
+        {
+          id: "message",
+          text: "Already attempted",
+          createdAt: 1,
+          sendState: "unconfirmed",
+          sendAttempts: 1,
+        },
+        {
+          id: "reset",
+          text: "/reset",
+          localCommandName: "reset",
+          createdAt: 2,
+          sendState: "unconfirmed",
+          sendError: "Check the conversation before retrying the command.",
+          sendAttempts: 1,
+        },
+      ],
+      onQueueRetry,
+      onQueueRemove,
+    });
+
+    const rows = container.querySelectorAll(".chat-queue__item");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.getAttribute("data-chat-queue-item")).toBe("reset");
+    expect(rows[0]?.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(
+      t("chat.queue.states.needsReview"),
+    );
+    rows[0]?.querySelector<HTMLButtonElement>(".chat-queue__retry")?.click();
+    rows[0]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
+    expect(onQueueRetry).toHaveBeenCalledWith("reset");
+    expect(onQueueRemove).toHaveBeenCalledWith("reset");
+  });
+
   it("renders the durable steer mode without a run-bound state", () => {
     const container = document.createElement("div");
     document.body.append(container);

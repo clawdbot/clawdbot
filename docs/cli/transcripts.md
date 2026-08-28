@@ -103,14 +103,22 @@ when it will not repeat on the same date.
 
 ## Missing summaries
 
-Live sessions store and materialize `summary.md` when the session stops;
-imported transcripts do so immediately after import. A session can appear in
-`list` without a summary while capture is still active, if a provider failed
-during stop, or if metadata was stored before any utterances arrived.
+Live sessions save summaries when capture stops; imported transcripts do so
+immediately after import. Tool-driven stops, configured auto-start shutdown, and
+imports also attempt to materialize `summary.md`. A session can appear in `list`
+without a summary while capture is still active, if a provider failed during stop,
+or if metadata was stored before any utterances arrived.
 
 Use `path <session> --transcript` to inspect the raw append-only transcript,
 or run the `transcripts` tool's `summarize` action to regenerate the Markdown
 summary.
+
+Summaries are saved in SQLite before optional artifact export. If export fails,
+the saved summary remains available even when `summary.md` is missing. Configured
+auto-start captures log warnings during shutdown for failed exports or provider
+stop errors. Correct the export destination problem, then run
+`openclaw transcripts path <session>` or `openclaw transcripts show <session>`
+to retry the export; an intended path in a warning is not proof of an exported file.
 
 Historical sessions without complete account-owner metadata remain on a local
 recovery path. Recover an agent-owned row with a local turn for that agent; a row
