@@ -464,6 +464,17 @@ export BUZZ_RELAY_URL="wss://buzz.example.com"
 export BUZZ_PRIVATE_KEY="nsec1..."
 ```
 
+With `BUZZ_PRIVATE_KEY` set, non-interactive setup can also save an account name:
+
+```bash
+openclaw channels add --channel buzz --name "Support bot" \
+  --relay-url wss://buzz.example.com --use-env
+```
+
+Omitting `--name` or supplying a blank name preserves the existing name. This
+command saves credentials and settings; use guided setup to discover and select
+rooms before starting a new bot.
+
 If a hosted workspace operator gives you an identity authorization value, set
 `channels.buzz.authTag` or `BUZZ_AUTH_TAG`. It can use the same plaintext or
 SecretRef forms as the private key. Treat this delegated, reusable value as a
