@@ -156,9 +156,14 @@ describe("AppSidebar session catalog pagination", () => {
     sidebar.sessionData.requestSessionDataUpdate();
     await sidebar.updateComplete;
 
-    const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-catalog-new");
-    expect(button?.getAttribute("aria-label")).toBe("New session — Claude Code");
-    button?.click();
+    const link = sidebar.querySelector<HTMLAnchorElement>(".sidebar-session-catalog-new")!;
+    expect(link.getAttribute("aria-label")).toBe("New session — Claude Code");
+    expect(link.getAttribute("href")).toBe("/new?agent=research&catalog=claude");
+    const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    link.dispatchEvent(contextMenu);
+    expect(contextMenu.defaultPrevented).toBe(false);
+    expect(sidebar.querySelector(".sidebar-session-catalog-view-menu")).toBeNull();
+    link.click();
 
     expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
   });
