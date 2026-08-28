@@ -468,6 +468,21 @@ describe("full release execution plan", () => {
     ).toMatchObject({ required: false });
   });
 
+  it("does not require candidate acquisition when reusing release evidence", () => {
+    expect(
+      plan({
+        candidateAcquisitionResult: "skipped",
+        candidateRequired: true,
+        childPhaseVersion: 3,
+        evidenceReuse: true,
+      }).gates.at(-1),
+    ).toMatchObject({
+      name: "Acquire full release candidate",
+      required: false,
+      result: "skipped",
+    });
+  });
+
   it("requires live-e2e candidate preparation only without a suite filter", () => {
     expect(plan({ rerunGroup: "live-e2e" }).gates.at(-1)).toMatchObject({ required: true });
     expect(plan({ liveSuiteFilter: "discord", rerunGroup: "live-e2e" }).gates.at(-1)).toMatchObject(

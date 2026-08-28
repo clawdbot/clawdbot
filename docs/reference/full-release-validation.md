@@ -252,8 +252,9 @@ the newest artifact with at least fourteen hours of remaining lifetime for the
 same canonical request only after it revalidates the exact workflow run,
 publisher job identity, archive digest, manifest, producer attempt and job, and
 live metadata for every package, registry, and image artifact.
-Only a proven absence permits a fresh build. Discovery uncertainty and failures
-after selection are blocking so the run cannot silently switch candidates.
+A proven absence creates a fresh candidate. Bounded lookup uncertainty and
+failures after selection are blocking so the run cannot silently switch
+candidates.
 
 Also for `rerun_group=all`, a `Verify Docker runtime image assets` job builds
 the `runtime-assets` Docker target with

@@ -561,7 +561,7 @@ export function buildReleaseExecutionPlan(input) {
     {
       name: phasedChildren ? "Acquire full release candidate" : "Prepare shared release candidate",
       required: phasedChildren
-        ? booleanValue(input.candidateRequired)
+        ? !reused && booleanValue(input.candidateRequired)
         : candidatePreparationRequired(input),
       result: stringValue(
         phasedChildren ? input.candidateAcquisitionResult : input.candidateBindingResult,

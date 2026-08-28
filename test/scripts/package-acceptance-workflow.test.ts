@@ -5511,7 +5511,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       package_source_sha: "${{ needs.prepare_release_package.outputs.source_sha }}",
       package_version: "${{ needs.prepare_release_package.outputs.package_version }}",
       prepublish_plugin_registry_json:
-        "${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_json }}",
+        "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '' }}",
       suite_profile: "custom",
     });
     expect(packageAcceptanceJob.with?.candidate_artifact_json).toBe(
