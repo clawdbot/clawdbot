@@ -209,6 +209,7 @@ function workerDeployBuildConfig(): UserConfig {
       onlyBundle: false,
     },
     fixedExtension: false,
+    minify: { codegen: true, compress: true, mangle: { keepNames: true } },
     outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
     outputOptions: { codeSplitting: false, assetFileNames: "worker/[name][extname]" },
     plugins: [createStateSchemaInlinePlugin(), createWorkerDeployBuildPlugin()],
