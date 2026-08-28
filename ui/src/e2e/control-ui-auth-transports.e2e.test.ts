@@ -6,7 +6,6 @@ import net from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { RouterState } from "@openclaw/uirouter";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
@@ -17,6 +16,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.js";
+import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import {
   canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
@@ -589,83 +589,64 @@ async function readConfigProofSnapshot(): Promise<{ identifier: unknown; prefix:
   };
 }
 
-async function captureConfigReadbackFailure(page: Page, pageErrors: string[]): Promise<void> {
+async function captureConfigReadbackFailure(page: Page): Promise<void> {
   const deadline = new AbortController();
   try {
-    // Capture only route/DOM facts, never config values or the runtime's auth/hello state.
-    // Playwright evaluate has no timeout; a stalled renderer must not hide the click failure.
+    // Capture fixed name/connection facts, never label text or auth/config state.
+    // The separate deadline must not hide the original click failure.
     const snapshot = await Promise.race([
-      page
-        .evaluate(() => {
-          const app = document.querySelector<
-            HTMLElement & {
-              runtime?: { router: { getState: () => RouterState } };
-            }
-          >("openclaw-app");
-          const state = app?.runtime?.router.getState();
-          const matches = (entries: RouterState["matches"] = []) =>
-            entries.slice(0, 3).map((entry) => ({
-              routeId: entry.routeId.slice(0, 80),
-              status: entry.status,
-              fetching: entry.isFetching,
-              moduleLoaded: entry.module !== undefined,
-              hasError: entry.error !== undefined,
-            }));
-          const rawButtons = [...document.querySelectorAll<HTMLButtonElement>("button")].filter(
-            (button) => button.textContent?.trim() === "Raw",
+      Promise.all([
+        page.evaluate(() => {
+          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+            "openclaw-app",
           );
+          const phase = app?.runtime?.context.gateway.snapshot.phase;
+          const phases = [
+            "stopped",
+            "connecting",
+            "starting",
+            "connected",
+            "reconnecting",
+            "reload-required",
+            "offline",
+          ];
           return {
             pathname: location.pathname.slice(0, 160),
-            readyState: document.readyState,
-            routerStatus: state?.status ?? null,
-            resolvedPathname: state?.resolvedLocation?.pathname.slice(0, 160) ?? null,
-            matches: matches(state?.matches),
-            pendingMatches: matches(state?.pendingMatches),
-            configPageId:
-              document
-                .querySelector<HTMLElement & { pageId?: string }>("openclaw-config-page")
-                ?.pageId?.slice(0, 80) ?? null,
-            elements: Object.fromEntries(
-              [
-                "openclaw-app-shell",
-                "openclaw-config-page",
-                ".config-mode-toggle",
-                ".lazy-view-error",
-                ".lazy-view-state--loading",
-                ".login-gate__failure",
-              ].map((selector) => [selector, document.querySelectorAll(selector).length]),
-            ),
-            rawButtonCount: rawButtons.length,
-            rawButtons: rawButtons.slice(0, 3).map((button) => ({
-              disabled: button.disabled,
-              hasLayout: button.getClientRects().length > 0,
-            })),
-            scripts: (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
-              .filter((entry) => entry.initiatorType === "script")
-              .filter((entry) => {
-                const url = new URL(entry.name);
-                return url.origin === location.origin && url.pathname.startsWith("/assets/");
-              })
-              .slice(-8)
-              .map((entry) => ({
-                pathname: new URL(entry.name).pathname.slice(0, 160),
-                responseStatus: entry.responseStatus,
+            navigationAgeMs: Math.round(performance.now()),
+            gatewayPhase: phases.includes(phase ?? "") ? phase : "unknown",
+            mainInert: document.querySelector("main")?.inert ?? null,
+            outletInert:
+              document.querySelector<HTMLElement>("openclaw-router-outlet")?.inert ?? null,
+            rawButtons: [
+              ...document.querySelectorAll<HTMLButtonElement>(".config-mode-toggle button"),
+            ]
+              .filter((button) => button.textContent?.trim() === "Raw")
+              .slice(0, 3)
+              .map((button) => ({
+                disabled: button.disabled,
+                hasLayout: button.getClientRects().length > 0,
+                inertAncestor: button.closest("[inert]") !== null,
+                label: !button.hasAttribute("aria-label")
+                  ? "absent"
+                  : button.getAttribute("aria-label") === "Raw"
+                    ? "raw"
+                    : "other",
+                labelledBy: button.hasAttribute("aria-labelledby"),
               })),
           };
-        })
+        }),
+        page.getByRole("button", { name: "Raw", exact: true }).count(),
+        page.getByRole("button", { name: "Raw", exact: true, includeHidden: true }).count(),
+      ])
+        .then(([state, roleMatches, roleMatchesIncludingHidden]) => ({
+          ...state,
+          roleMatches,
+          roleMatchesIncludingHidden,
+        }))
         .catch(() => "unavailable"),
       delay(1_000, "timed-out", { signal: deadline.signal }),
     ]);
-    const errorCategories = pageErrors
-      .slice(-8)
-      .map((error) =>
-        /dynamically imported module|module script|ChunkLoadError/u.test(error)
-          ? "module-load"
-          : (/^(?:TypeError|ReferenceError|SyntaxError|RangeError)\b/u.exec(error)?.[0] ?? "other"),
-      );
-    console.error(
-      `[real-config-readback-failure] ${JSON.stringify({ pathname: new URL(page.url()).pathname.slice(0, 160), snapshot, errorCategories })}`,
-    );
+    console.error(`[real-config-readback-failure] ${JSON.stringify(snapshot)}`);
   } finally {
     deadline.abort();
   }
@@ -821,7 +802,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     try {
       await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
     } catch (error) {
-      await captureConfigReadbackFailure(connected.page, connected.errors).catch(() => {});
+      await captureConfigReadbackFailure(connected.page).catch(() => {});
       throw error;
     }
     const rawEditor = connected.page.locator(".config-raw-field textarea");

@@ -162,7 +162,12 @@ export function installTitleTooltips(ownerDocument: Document) {
     }
     anchor.addEventListener("pointerleave", handlePointerLeave);
     anchor.addEventListener("focusout", handleFocusOut);
-    observer.observe(anchor, { attributes: true, attributeFilter: ["title", "data-tooltip"] });
+    observer.observe(anchor, {
+      attributes: true,
+      attributeFilter: ["title", "data-tooltip"],
+      characterData: true,
+      subtree: true,
+    });
     observer.observe(ownerDocument, { childList: true, subtree: true });
     const root = anchor.getRootNode();
     if (root instanceof ShadowRoot) {

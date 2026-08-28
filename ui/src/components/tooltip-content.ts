@@ -20,6 +20,7 @@ function collectTooltipText(element: Element, checkOpacity: boolean): string {
   const style = element.ownerDocument.defaultView?.getComputedStyle(element);
   if (
     element.hasAttribute("hidden") ||
+    (!checkOpacity && element.getAttribute("aria-hidden") === "true") ||
     style?.display === "none" ||
     style?.contentVisibility === "hidden"
   ) {
