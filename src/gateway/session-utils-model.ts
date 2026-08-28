@@ -91,10 +91,13 @@ function resolveGatewaySessionThinkingLevel(params: {
         modelId: params.model,
       })
     : undefined;
-  // Lightweight sessions.changed projections intentionally omit the catalog.
+  // Lightweight projections can omit the catalog or carry identity-only entries.
   // Runtime/model patches normalize persisted state with authoritative metadata;
   // projections must not reinterpret an already-validated level without it.
-  if (!catalogEntry) {
+  if (
+    !catalogEntry ||
+    (params.providerPolicySource === "active" && catalogEntry.reasoning === undefined)
+  ) {
     return params.level;
   }
   return resolveSupportedThinkingLevel({
@@ -348,8 +351,9 @@ export function getSessionDefaults(
     provider: resolved.provider,
     model: resolved.model,
     agentId,
-    modelCatalog,
+    modelCatalog: modelCatalog ?? (options?.allowPluginNormalization === false ? [] : undefined),
     sessionKey,
+    providerPolicySource: options?.allowPluginNormalization === false ? "active" : undefined,
   });
   return {
     modelProvider: resolved.provider ?? null,

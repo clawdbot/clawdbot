@@ -2957,7 +2957,6 @@ src/gateway/server-methods/nodes.invoke-talk-events.ts	1
 src/gateway/server-methods/nodes.pending-work.ts	1
 src/gateway/server-methods/nodes.read.ts	2
 src/gateway/server-methods/open-path.ts	1
-src/gateway/server-methods/optional-model-catalog.ts	2
 src/gateway/server-methods/plugin-approval.ts	3
 src/gateway/server-methods/plugin-host-hooks.ts	1
 src/gateway/server-methods/question.ts	4

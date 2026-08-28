@@ -69,6 +69,7 @@ import type {
   RespondFn,
 } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import type { GatewaySessionsDefaults } from "./session-utils.types.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -1374,89 +1375,6 @@ describe("gateway server chat", () => {
     },
   );
 
-  test("chat.history returns catalog-backed session metadata with history", async () => {
-    openDirectChatSession();
-    try {
-      testState.agentConfig = {
-        model: { primary: "test-provider/catalog-model" },
-      };
-      await writeStoredMainSession({
-        modelProvider: "test-provider",
-        model: "catalog-model",
-      });
-      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-      const config = {
-        agents: { defaults: { model: { primary: "test-provider/catalog-model" } } },
-      };
-      const catalog = [
-        {
-          provider: "test-provider",
-          id: "catalog-model",
-          name: "Catalog Model",
-          reasoning: true,
-          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-        },
-      ];
-      const context = createDirectChatContext({
-        loadGatewayModelCatalogSnapshot: vi
-          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
-          .mockResolvedValue({
-            agentId: "main",
-            agentDir: "/tmp/chat-history-agent",
-            catalogComplete: false,
-            workspaceDir: "/tmp/chat-history-workspace",
-            config,
-            entries: catalog,
-            routeVariants: catalog,
-          }),
-      });
-      await callDirectChat("chat.history", {
-        id: "history-no-catalog",
-        params: makeMainSessionParams(),
-        respond: captureChatResponse(responses),
-        context,
-      });
-
-      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
-      expect(responses).toHaveLength(1);
-      expect(responses[0]?.ok).toBe(true);
-      const payload = responses[0]?.payload as
-        | {
-            sessionKey?: string;
-            sessionId?: string;
-            messages?: unknown;
-            defaults?: {
-              modelProvider?: string | null;
-              thinkingLevels?: Array<{ id?: string }>;
-            };
-            sessionInfo?: {
-              key?: string;
-              sessionId?: string;
-              modelProvider?: string;
-              model?: string;
-              thinkingLevels?: Array<{ id?: string }>;
-            };
-          }
-        | undefined;
-      expect(payload?.sessionKey).toBe("main");
-      expect(payload?.sessionId).toBe("sess-main");
-      expect(payload?.defaults?.modelProvider).toBe("test-provider");
-      expect(payload?.defaults?.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
-      expect(payload?.sessionInfo).toMatchObject({
-        key: "agent:main:main",
-        sessionId: "sess-main",
-        modelProvider: "test-provider",
-        model: "catalog-model",
-      });
-      expect(payload?.sessionInfo?.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
-      expect(Array.isArray(payload?.messages)).toBe(true);
-    } finally {
-      clearConfigCache();
-      testState.agentConfig = undefined;
-      testState.sessionStorePath = undefined;
-    }
-  });
-
   test("chat.history exposes selected and synthetic session metadata for startup hydration", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
@@ -1708,90 +1626,347 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("chat.startup returns a profile-neutral transcript while metadata replacement is pending", async () => {
-    openDirectChatSession();
-    try {
-      await writeStoredMainSession();
-      await writeMainSessionTranscript([
-        createTextTranscriptEvent("user", "paint without metadata"),
-      ]);
-      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-      const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
-      const metadataRuntime = createGatewayChatMetadataRuntime({
-        getConfig: () => ({}),
-        getContext: () => context,
-        log: context.logGateway,
-      });
-      context.readChatStartupProjection = metadataRuntime.readStartup;
-      metadataRuntime.invalidate();
-
-      const startup = callDirectChat("chat.startup", {
-        id: "startup-neutral-pending-metadata",
-        params: makeMainSessionParams(),
-        respond: captureChatResponse(responses),
-        context,
-      });
-
+  test.each(["chat.startup", "chat.history"] as const)(
+    "%s returns a profile-neutral transcript while metadata replacement is pending",
+    async (method) => {
+      openDirectChatSession();
       try {
-        await vi.waitFor(() => expect(responses).toHaveLength(1), FAST_WAIT_OPTS);
-        expect(responses[0]).toMatchObject({
-          ok: true,
-          payload: {
-            messages: [
-              expect.objectContaining({
-                role: "user",
-                content: [{ type: "text", text: "paint without metadata" }],
-              }),
-            ],
-          },
+        await writeStoredMainSession();
+        await writeMainSessionTranscript([
+          createTextTranscriptEvent("user", "paint without metadata"),
+        ]);
+        const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+        const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
+        const metadataRuntime = createGatewayChatMetadataRuntime({
+          getConfig: () => ({}),
+          getContext: () => context,
+          log: context.logGateway,
         });
-        expect(responses[0]?.payload).not.toHaveProperty("metadata");
-      } finally {
-        metadataRuntime.fail(new Error("test metadata replacement stopped"));
-        await startup;
-      }
-    } finally {
-      testState.sessionStorePath = undefined;
-    }
-  });
+        context.readChatStartupProjection = metadataRuntime.readStartup;
+        metadataRuntime.invalidate();
 
-  test("chat.history degrades promptly when the optional model catalog is slow", async () => {
-    openDirectChatSession();
+        const startup = callDirectChat(method, {
+          id: "startup-neutral-pending-metadata",
+          params: makeMainSessionParams(),
+          respond: captureChatResponse(responses),
+          context,
+        });
+
+        try {
+          await vi.waitFor(() => expect(responses).toHaveLength(1), FAST_WAIT_OPTS);
+          expect(responses[0]).toMatchObject({
+            ok: true,
+            payload: {
+              messages: [
+                expect.objectContaining({
+                  role: "user",
+                  content: [{ type: "text", text: "paint without metadata" }],
+                }),
+              ],
+            },
+          });
+          expect(responses[0]?.payload).not.toHaveProperty("metadata");
+        } finally {
+          metadataRuntime.fail(new Error("test metadata replacement stopped"));
+          await startup;
+        }
+      } finally {
+        testState.sessionStorePath = undefined;
+      }
+    },
+  );
+
+  test.each<{
+    name: string;
+    preparedReasoning?: boolean;
+    rawCatalog: "slow" | "empty" | "nonreasoning" | "prepared";
+    configured?: { agent?: "off" | "low"; model?: "off" | "medium"; global?: "off" | "high" };
+    thinkingLevel?: "off" | "xhigh";
+    preparedEmpty?: boolean;
+    preparedUnknown?: boolean;
+    expectedDefault?: string;
+  }>([
+    {
+      name: "inherits prepared Medium while raw discovery is slow",
+      preparedReasoning: true,
+      rawCatalog: "slow",
+      expectedDefault: "medium",
+    },
+    {
+      name: "inherits prepared Medium when the raw catalog is empty",
+      preparedReasoning: true,
+      rawCatalog: "empty",
+      expectedDefault: "medium",
+    },
+    {
+      name: "inherits prepared Medium over a non-reasoning raw route",
+      preparedReasoning: true,
+      rawCatalog: "nonreasoning",
+      expectedDefault: "medium",
+    },
+    { name: "leaves unavailable prepared metadata unknown", rawCatalog: "slow" },
+    {
+      name: "keeps identity-only prepared metadata unknown and explicit XHigh intact",
+      rawCatalog: "empty",
+      preparedUnknown: true,
+      thinkingLevel: "xhigh",
+    },
+    {
+      name: "respects a prepared non-reasoning model",
+      preparedReasoning: false,
+      rawCatalog: "prepared",
+      expectedDefault: "off",
+    },
+    {
+      name: "respects configured Off without prepared metadata",
+      rawCatalog: "slow",
+      configured: { global: "off" },
+      expectedDefault: "off",
+    },
+    {
+      name: "keeps an empty prepared catalog unknown",
+      rawCatalog: "nonreasoning",
+      preparedEmpty: true,
+    },
+    {
+      name: "respects per-model Off over the global default without metadata",
+      rawCatalog: "slow",
+      configured: { model: "off", global: "high" },
+      expectedDefault: "off",
+    },
+    {
+      name: "respects per-agent Off over model and global defaults without metadata",
+      rawCatalog: "slow",
+      configured: { agent: "off", model: "medium", global: "high" },
+      expectedDefault: "off",
+    },
+    {
+      name: "respects per-model Medium over global Off without metadata",
+      rawCatalog: "slow",
+      configured: { model: "medium", global: "off" },
+      expectedDefault: "medium",
+    },
+    {
+      name: "respects per-agent Low over model and global defaults without metadata",
+      rawCatalog: "slow",
+      configured: { agent: "low", model: "medium", global: "high" },
+      expectedDefault: "low",
+    },
+    {
+      name: "keeps explicit Off when the inherited default is unknown",
+      rawCatalog: "slow",
+      thinkingLevel: "off",
+    },
+    {
+      name: "keeps explicit Off separate from inherited Medium",
+      preparedReasoning: true,
+      rawCatalog: "prepared",
+      thinkingLevel: "off",
+      expectedDefault: "medium",
+    },
+  ])("chat.history reasoning-default projection $name", async (fixture) => {
+    const { storePath } = openDirectChatSession();
+    preparedThinkingPolicy.fallback = "base";
     try {
+      testState.agentConfig = {
+        model: { primary: "test-provider/slow-catalog-model" },
+        thinkingDefault: fixture.configured?.global,
+        models: {
+          "test-provider/slow-catalog-model": { params: { thinking: fixture.configured?.model } },
+        },
+      };
+      testState.agentsConfig = {
+        defaults: testState.agentConfig,
+        entries: { main: { thinkingDefault: fixture.configured?.agent } },
+      };
+      const config = { agents: testState.agentsConfig };
+
       await writeStoredMainSession({
         modelProvider: "test-provider",
         model: "slow-catalog-model",
+        ...(fixture.thinkingLevel ? { thinkingLevel: fixture.thinkingLevel } : {}),
       });
-      const catalog =
+      await appendTranscriptMessage(makeMainSessionScope(storePath), {
+        eventId: "reasoning-projection-message",
+        parentId: null,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "reasoning projection" }],
+        },
+      });
+      const preparedModel = {
+        provider: "test-provider",
+        id: "slow-catalog-model",
+        name: "Reasoning Model",
+        reasoning: fixture.preparedReasoning,
+        compat: fixture.preparedUnknown
+          ? undefined
+          : { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+      };
+      const preparedCatalog = [preparedModel];
+      const rawSnapshot = {
+        agentId: "main",
+        agentDir: "/tmp/chat-history-agent",
+        catalogComplete: false,
+        workspaceDir: "/tmp/chat-history-workspace",
+        config,
+        entries:
+          fixture.rawCatalog === "empty"
+            ? []
+            : fixture.rawCatalog === "nonreasoning"
+              ? [{ ...preparedModel, reasoning: false }]
+              : preparedCatalog,
+        routeVariants: [],
+      };
+      const slowCatalog =
         createDeferred<
           Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>>
         >();
-      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = createDirectChatContext({
         loadGatewayModelCatalogSnapshot: vi
           .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
-          .mockReturnValue(catalog.promise),
-        getRuntimeConfig: () => ({}),
+          .mockReturnValue(
+            fixture.rawCatalog === "slow" ? slowCatalog.promise : Promise.resolve(rawSnapshot),
+          ),
+        getRuntimeConfig: () => config,
+        readChatStartupProjection: async () =>
+          fixture.preparedEmpty
+            ? {
+                metadata: { swarmEnabled: false },
+                sessionModelCatalog: [],
+                defaultModelCatalog: [],
+              }
+            : fixture.preparedReasoning === undefined && !fixture.preparedUnknown
+              ? undefined
+              : {
+                  metadata: { models: preparedCatalog, swarmEnabled: false },
+                  sessionModelCatalog: preparedCatalog,
+                  defaultModelCatalog: preparedCatalog,
+                },
       });
-      await callDirectChat("chat.history", {
-        id: "history-slow-catalog",
-        params: makeMainSessionParams(),
-        respond: captureChatResponse(responses),
-        context,
-      });
+      try {
+        let cursor: string | undefined;
+        for (const mode of ["startup", "page", "delta"] as const) {
+          if (mode === "delta") {
+            await appendTranscriptMessage(makeMainSessionScope(storePath), {
+              eventId: "reasoning-projection-reply",
+              parentId: "reasoning-projection-message",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "reasoning reply" }],
+              },
+            });
+          }
+          const responses: CapturedChatResponse[] = [];
+          await callDirectChat(mode === "startup" ? "chat.startup" : "chat.history", {
+            id: `history-reasoning-${mode}`,
+            params: makeMainSessionParams(mode === "delta" ? { cursor } : {}),
+            respond: captureChatResponse(responses),
+            context,
+          });
 
-      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
-      expect(responses).toHaveLength(1);
-      expect(responses[0]?.ok).toBe(true);
-      expect(
-        (responses[0]?.payload as { sessionInfo?: { sessionId?: string } })?.sessionInfo?.sessionId,
-      ).toBe("sess-main");
+          expect(responses).toHaveLength(1);
+          expect(responses[0]?.ok, JSON.stringify(responses[0]?.error)).toBe(true);
+          const payload = responses[0]?.payload as {
+            kind?: string;
+            deltaCursor?: string;
+            messages: Array<{ session?: Record<string, unknown> }>;
+            thinkingLevel?: string;
+            defaults?: GatewaySessionsDefaults;
+            sessionInfo: {
+              sessionId?: string;
+              modelProvider?: string;
+              model?: string;
+              agentRuntime?: unknown;
+              activeLeafEntryId?: string | null;
+              thinkingLevel?: string | null;
+              thinkingDefault?: string;
+              thinkingLevels?: Array<{ id: string; label: string }>;
+              thinkingOptions?: string[];
+            };
+          };
+          expect(payload.sessionInfo, mode).toMatchObject({
+            sessionId: "sess-main",
+            modelProvider: "test-provider",
+            model: "slow-catalog-model",
+          });
+          if (mode !== "startup") {
+            expect(payload).not.toHaveProperty("metadata");
+          }
+          if (mode === "delta") {
+            expect(payload.kind).toBe("delta");
+            expect(payload.messages).toHaveLength(1);
+            expect(payload.messages[0]?.session).toMatchObject({
+              sessionId: payload.sessionInfo.sessionId,
+              modelProvider: payload.sessionInfo.modelProvider,
+              model: payload.sessionInfo.model,
+              agentRuntime: payload.sessionInfo.agentRuntime,
+              thinkingLevel: fixture.thinkingLevel ?? null,
+            });
+            for (const field of ["thinkingDefault", "thinkingLevels", "thinkingOptions"]) {
+              expect(payload.messages[0]?.session).not.toHaveProperty(field);
+            }
+            expect(payload.sessionInfo.activeLeafEntryId).toBe("reasoning-projection-reply");
+            expect(payload.deltaCursor).toEqual(expect.any(String));
+            expect(payload.deltaCursor).not.toBe(cursor);
+          } else {
+            expect(payload.messages).toEqual([
+              expect.objectContaining({
+                content: [{ type: "text", text: "reasoning projection" }],
+              }),
+            ]);
+            expect(payload.deltaCursor).toEqual(expect.any(String));
+            cursor = payload.deltaCursor;
+            expect
+              .soft(payload.thinkingLevel, `${mode} effective thinking`)
+              .toBe(fixture.thinkingLevel ?? fixture.expectedDefault);
+          }
+          expect(payload.sessionInfo.thinkingLevel ?? null, `${mode} override`).toBe(
+            fixture.thinkingLevel ?? null,
+          );
+          const projections =
+            mode === "delta"
+              ? [payload.sessionInfo]
+              : [payload.sessionInfo, expectDefined(payload.defaults, "page defaults")];
+          for (const projection of projections) {
+            expect
+              .soft(projection.thinkingDefault, `${mode} default`)
+              .toBe(fixture.expectedDefault);
+            if (fixture.preparedReasoning === true) {
+              expect
+                .soft(
+                  projection.thinkingLevels?.map((level) => level.id),
+                  `${mode} supported levels`,
+                )
+                .toEqual(expect.arrayContaining(["medium", "xhigh"]));
+            } else if (fixture.preparedReasoning === false) {
+              expect(
+                projection.thinkingLevels?.map((level) => level.id),
+                mode,
+              ).toEqual(["off"]);
+            } else {
+              expect.soft(projection.thinkingLevels, `${mode} unknown levels`).toBeUndefined();
+              expect.soft(projection.thinkingOptions, `${mode} unknown options`).toBeUndefined();
+            }
+          }
+          expect(
+            loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.thinkingLevel,
+          ).toBe(fixture.thinkingLevel);
+        }
+        expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+      } finally {
+        slowCatalog.resolve(rawSnapshot);
+      }
     } finally {
+      preparedThinkingPolicy.fallback = "off";
+      testState.agentConfig = undefined;
+      testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
+      clearConfigCache();
     }
   });
 
-  test("chat.startup projects route thinking metadata per agent and session auth", async () => {
+  test("chat.startup and chat.history preserve reasoning-default projection per agent and session auth", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -1810,6 +1985,8 @@ describe("gateway server chat", () => {
       },
       async (state) => {
         let releasePluginMetadata: () => boolean = () => false;
+        const previousAgentConfig = testState.agentConfig;
+        const previousAgentsConfig = testState.agentsConfig;
         openDirectChatSession();
         try {
           const config = {
@@ -1848,6 +2025,7 @@ describe("gateway server chat", () => {
             "openai:expired",
           ]);
           testState.agentsConfig = persistedConfig.agents;
+          testState.agentConfig = persistedConfig.agents?.defaults;
           await writeSessionStore({
             entries: {
               "agent:work:main": {
@@ -1883,6 +2061,17 @@ describe("gateway server chat", () => {
                 updatedAt: Date.now(),
               },
             },
+          });
+          const { loadGatewaySessionEntryReadOnly } = await import("./session-utils.js");
+          const loaded = loadGatewaySessionEntryReadOnly("agent:work:main");
+          expect(loaded.cfg.agents?.defaults?.model).toEqual(config.agents.defaults.model);
+          expect(loaded.cfg.agents?.entries).toEqual(config.agents.entries);
+          expect(loaded.canonicalKey).toBe("agent:work:main");
+          expect(loaded.entry).toMatchObject({
+            sessionId: "sess-work",
+            modelProvider: "openai",
+            model: "gpt-5.5",
+            authProfileOverride: "openai:chatgpt",
           });
           await state.writeAuthProfiles({
             version: 1,
@@ -2072,6 +2261,26 @@ describe("gateway server chat", () => {
             selectedProfileId: "openai:api",
             selectedRoute: { authRequirement: "api-key" },
           });
+          // Main only has subscription auth; work's neutral default selects API auth.
+          // Keep the Off-only default control separate from work's locked session profile.
+          await callDirectChat("chat.startup", {
+            id: "startup-main-neutral-route",
+            params: { sessionKey: "agent:main:main" },
+            respond: captureChatResponse(responses),
+            context,
+          });
+          expect(responses).toHaveLength(1);
+          expect(responses[0]?.ok, JSON.stringify(responses[0]?.error)).toBe(true);
+          const mainPayload = responses[0]?.payload as {
+            defaults?: GatewaySessionsDefaults;
+            sessionInfo?: { thinkingLevels?: Array<{ id: string }> };
+          };
+          expect(mainPayload.defaults).toMatchObject({ modelProvider: "openai", model: "gpt-5.5" });
+          expect(mainPayload.defaults?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+          expect(mainPayload.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual([
+            "off",
+          ]);
+          responses.length = 0;
           await callDirectChat("chat.startup", {
             id: "startup-dual-route-catalog",
             params: { sessionKey: "agent:work:main" },
@@ -2106,7 +2315,14 @@ describe("gateway server chat", () => {
             }),
           ]);
           expect(payload?.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
-          expect(payload?.defaults?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+          expect(payload?.defaults?.thinkingLevels?.map((level) => level.id)).toEqual([
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+          ]);
           const serialized = JSON.stringify(responses[0]?.payload);
           expect(serialized).not.toContain("private-route-token");
           expect(serialized).not.toContain("platform-api-key");
@@ -2115,11 +2331,21 @@ describe("gateway server chat", () => {
           expect(serialized).not.toContain(platformRoute.baseUrl);
           expect(serialized).not.toContain(subscriptionRoute.baseUrl);
 
-          for (const [index, [sessionKey, expectedRoute]] of [
-            ["agent:work:auto-preferred", "subscription"],
-            ["agent:work:auto", "platform"],
-            ["agent:work:legacy-auto", "platform"],
+          for (const [index, [sessionKey, sessionId, expectedRoute]] of [
+            ["agent:work:auto-preferred", "sess-work-auto-preferred", "subscription"],
+            ["agent:work:auto", "sess-work-auto", "platform"],
+            ["agent:work:legacy-auto", "sess-work-legacy-auto", "platform"],
           ].entries()) {
+            await writeMainSessionTranscript(
+              [
+                createTextTranscriptEvent("user", "route reasoning", {
+                  id: "route-message",
+                  parentId: null,
+                }),
+              ],
+              sessionId,
+              { agentId: "work", sessionKey },
+            );
             responses.length = 0;
             await callDirectChat("chat.startup", {
               id: `startup-preferred-route-${index}`,
@@ -2130,13 +2356,19 @@ describe("gateway server chat", () => {
               context,
             });
 
-            expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
             expect(responses).toHaveLength(1);
             expect(responses[0]?.ok).toBe(true);
             const preferredPayload = responses[0]?.payload as
               | {
                   metadata?: { models?: Array<{ contextWindow?: number }> };
-                  sessionInfo?: { thinkingLevels?: Array<{ id?: string }> };
+                  defaults?: GatewaySessionsDefaults;
+                  sessionInfo?: {
+                    agentRuntime?: unknown;
+                    thinkingLevel?: string;
+                    thinkingDefault?: string;
+                    thinkingLevels?: Array<{ id?: string }>;
+                    thinkingOptions?: string[];
+                  };
                 }
               | undefined;
             expect(preferredPayload?.metadata?.models?.[0]?.contextWindow, sessionKey).toBe(
@@ -2150,12 +2382,60 @@ describe("gateway server chat", () => {
             } else {
               expect(thinkingLevels, sessionKey).toContain("high");
             }
+            expect(preferredPayload?.sessionInfo?.thinkingLevel ?? null).toBeNull();
+            let cursor: string | undefined;
+            for (const mode of ["page", "delta"] as const) {
+              responses.length = 0;
+              await callDirectChat("chat.history", {
+                id: `history-preferred-route-${index}-${mode}`,
+                params: { sessionKey, ...(mode === "delta" ? { cursor } : {}) },
+                respond: captureChatResponse(responses),
+                context,
+              });
+              expect(responses).toHaveLength(1);
+              expect(responses[0]?.ok, JSON.stringify(responses[0]?.error)).toBe(true);
+              const history = responses[0]?.payload as {
+                kind?: string;
+                deltaCursor?: string;
+                thinkingLevel?: string;
+                defaults?: GatewaySessionsDefaults;
+                sessionInfo?: NonNullable<typeof preferredPayload>["sessionInfo"];
+              };
+              const label = `${sessionKey} ${mode}`;
+              if (mode === "delta") {
+                expect(history.kind, label).toBe("delta");
+              } else {
+                expect(history.deltaCursor, label).toEqual(expect.any(String));
+                cursor = history.deltaCursor;
+                expect(history.defaults, `${label} neutral defaults`).toEqual(
+                  preferredPayload?.defaults,
+                );
+                expect
+                  .soft(history.thinkingLevel, `${label} effective thinking`)
+                  .toBe(preferredPayload?.sessionInfo?.thinkingDefault);
+              }
+              expect(history.sessionInfo?.thinkingLevel ?? null, `${label} override`).toBeNull();
+              expect(history.sessionInfo?.agentRuntime, `${label} runtime`).toEqual(
+                preferredPayload?.sessionInfo?.agentRuntime,
+              );
+              expect
+                .soft(history.sessionInfo?.thinkingDefault, `${label} default`)
+                .toBe(preferredPayload?.sessionInfo?.thinkingDefault);
+              expect
+                .soft(history.sessionInfo?.thinkingLevels, `${label} supported levels`)
+                .toEqual(preferredPayload?.sessionInfo?.thinkingLevels);
+              expect
+                .soft(history.sessionInfo?.thinkingOptions, `${label} supported options`)
+                .toEqual(preferredPayload?.sessionInfo?.thinkingOptions);
+            }
           }
         } finally {
           preparedThinkingPolicy.fallback = "off";
-          testState.agentsConfig = undefined;
+          testState.agentConfig = previousAgentConfig;
+          testState.agentsConfig = previousAgentsConfig;
           testState.sessionStorePath = undefined;
           releasePluginMetadata();
+          clearConfigCache();
         }
       },
     );
@@ -2202,141 +2482,153 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.startup scopes metadata to agent session keys without explicit agentId", async () => {
-    openDirectChatSession();
-    try {
-      await writeSessionStore({
-        entries: {
-          "agent:work:main": {
-            sessionId: "sess-work",
-            updatedAt: Date.now(),
-          },
-        },
-      });
-      const config = {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-main",
-            },
-            models: {
-              "openai/gpt-main": {},
-            },
-          },
+  test.each(["chat.startup", "chat.history"] as const)(
+    "%s scopes metadata to agent session keys without explicit agentId",
+    async (method) => {
+      openDirectChatSession();
+      try {
+        await writeSessionStore({
           entries: {
-            main: { default: true },
-            work: {
+            "agent:work:main": {
+              sessionId: "sess-work",
+              updatedAt: Date.now(),
+            },
+          },
+        });
+        const config = {
+          agents: {
+            defaults: {
               model: {
-                primary: "minimax/MiniMax-M2.7-highspeed",
+                primary: "openai/gpt-main",
               },
               models: {
-                "minimax/MiniMax-M2.7-highspeed": {},
+                "openai/gpt-main": {},
+              },
+            },
+            entries: {
+              main: { default: true },
+              work: {
+                model: {
+                  primary: "minimax/MiniMax-M2.7-highspeed",
+                },
+                models: {
+                  "minimax/MiniMax-M2.7-highspeed": {},
+                },
               },
             },
           },
-        },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://openai.example.com/v1",
-              models: [{ id: "gpt-main", name: "GPT Main" }],
-            },
-            minimax: {
-              baseUrl: "https://minimax.example.com/v1",
-              models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://openai.example.com/v1",
+                models: [{ id: "gpt-main", name: "GPT Main" }],
+              },
+              minimax: {
+                baseUrl: "https://minimax.example.com/v1",
+                models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
+              },
             },
           },
-        },
-      } as unknown as OpenClawConfig;
-      await writeGatewayConfig(config);
-      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-      const metadata = {
-        models: [
-          {
-            id: "MiniMax-M2.7-highspeed",
-            name: "MiniMax M2.7 Highspeed",
-            provider: "minimax",
-          },
-        ],
-        swarmEnabled: false,
-      };
-      const readChatStartupProjection = vi.fn(async () => ({
-        metadata,
-        sessionModelCatalog: metadata.models,
-        defaultModelCatalog: metadata.models,
-      }));
-      const context = createDirectChatContext({
-        loadGatewayModelCatalogSnapshot: vi
-          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
-          .mockImplementation(async () => {
-            await Promise.resolve();
-            await Promise.resolve();
-            const entries = [
-              {
-                id: "gpt-main",
-                name: "GPT Main",
-                provider: "openai",
-              },
-              {
-                id: "MiniMax-M2.7-highspeed",
-                name: "MiniMax M2.7 Highspeed",
-                provider: "minimax",
-              },
-            ];
-            return {
-              agentId: "work",
-              agentDir: "/tmp/chat-work-agent",
-              catalogComplete: false,
-              workspaceDir: "/tmp/chat-work-workspace",
-              config,
-              entries,
-              routeVariants: entries,
-            };
-          }),
-        getRuntimeConfig: () => config,
-        readChatStartupProjection,
-      });
-      await callDirectChat("chat.startup", {
-        id: "startup-agent-scoped-metadata",
-        params: { sessionKey: "agent:work:main" },
-        respond: captureChatResponse(responses),
-        context,
-      });
+        } as unknown as OpenClawConfig;
+        await writeGatewayConfig(config);
+        const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+        const metadata = {
+          models: [
+            {
+              id: "MiniMax-M2.7-highspeed",
+              name: "MiniMax M2.7 Highspeed",
+              provider: "minimax",
+            },
+          ],
+          swarmEnabled: false,
+        };
+        const readChatStartupProjection = vi.fn(async () => ({
+          metadata,
+          sessionModelCatalog: metadata.models,
+          defaultModelCatalog: metadata.models,
+        }));
+        const context = createDirectChatContext({
+          loadGatewayModelCatalogSnapshot: vi
+            .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
+            .mockImplementation(async () => {
+              await Promise.resolve();
+              await Promise.resolve();
+              const entries = [
+                {
+                  id: "gpt-main",
+                  name: "GPT Main",
+                  provider: "openai",
+                },
+                {
+                  id: "MiniMax-M2.7-highspeed",
+                  name: "MiniMax M2.7 Highspeed",
+                  provider: "minimax",
+                },
+              ];
+              return {
+                agentId: "work",
+                agentDir: "/tmp/chat-work-agent",
+                catalogComplete: false,
+                workspaceDir: "/tmp/chat-work-workspace",
+                config,
+                entries,
+                routeVariants: entries,
+              };
+            }),
+          getRuntimeConfig: () => config,
+          readChatStartupProjection,
+        });
+        await callDirectChat(method, {
+          id: "startup-agent-scoped-metadata",
+          params: { sessionKey: "agent:work:main" },
+          respond: captureChatResponse(responses),
+          context,
+        });
 
-      expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
-      expect(readChatStartupProjection).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "work",
-          sessionEntry: expect.objectContaining({ sessionId: "sess-work" }),
-        }),
-      );
-      expect(context.readChatMetadata).not.toHaveBeenCalled();
-      expect(responses).toHaveLength(1);
-      expect(responses[0]?.ok).toBe(true);
-      const payload = responses[0]?.payload as
-        | {
-            metadata?: {
-              models?: Array<{ id?: string; provider?: string }>;
-            };
-            sessionInfo?: { key?: string; sessionId?: string };
-          }
-        | undefined;
-      expect(payload?.sessionInfo).toMatchObject({
-        key: "agent:work:main",
-        sessionId: "sess-work",
-      });
-      expect(payload?.metadata?.models).toEqual(
-        expect.arrayContaining([
+        expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+        expect(readChatStartupProjection).toHaveBeenCalledWith(
           expect.objectContaining({
-            id: "MiniMax-M2.7-highspeed",
-            provider: "minimax",
+            agentId: "work",
+            sessionEntry: expect.objectContaining({ sessionId: "sess-work" }),
           }),
-        ]),
-      );
-    } finally {
-      testState.sessionStorePath = undefined;
-    }
-  });
+        );
+        expect(context.readChatMetadata).not.toHaveBeenCalled();
+        expect(responses).toHaveLength(1);
+        expect(responses[0]?.ok).toBe(true);
+        const payload = responses[0]?.payload as
+          | {
+              metadata?: {
+                models?: Array<{ id?: string; provider?: string }>;
+              };
+              sessionInfo?: { key?: string; sessionId?: string };
+              defaults?: { modelProvider?: string; model?: string };
+            }
+          | undefined;
+        expect(payload?.sessionInfo).toMatchObject({
+          key: "agent:work:main",
+          sessionId: "sess-work",
+        });
+        expect(payload?.defaults).toMatchObject({
+          model: "MiniMax-M2.7-highspeed",
+          modelProvider: "minimax",
+        });
+        if (method === "chat.startup") {
+          expect(payload?.metadata?.models).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                id: "MiniMax-M2.7-highspeed",
+                provider: "minimax",
+              }),
+            ]),
+          );
+        } else {
+          expect(payload).not.toHaveProperty("metadata");
+        }
+      } finally {
+        testState.sessionStorePath = undefined;
+      }
+    },
+  );
 
   test("chat.metadata coalesces configured models and text commands", async () => {
     await withGatewayChatHarness(async ({ ws }) => {
