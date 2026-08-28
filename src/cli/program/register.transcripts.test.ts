@@ -99,22 +99,36 @@ describe("transcripts CLI", () => {
     expect(output).toContain(path.join(sessionDir, "summary.md"));
   });
 
-  it("prints summary markdown and keeps its export current", async () => {
+  it.each([
+    ["", "\n"],
+    ["# Design review", "# Design review\n"],
+    ["# Design review\n", "# Design review\n"],
+    ["# Design review\n\n", "# Design review\n\n"],
+  ])("prints and materializes exact bytes for summary %j", async (markdown, expected) => {
     const sessionDir = await writeSession(stateDir, "design-review");
+    const database = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    const db = getNodeSqliteKysely<
+      Pick<OpenClawStateKyselyDatabase, "meeting_transcript_summaries">
+    >(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("meeting_transcript_summaries")
+        .set({ markdown })
+        .where("session_id", "=", "design-review"),
+    );
     await fs.rm(sessionDir, { recursive: true, force: true });
 
     const output = await runTranscriptsCli(["show", "design-review"]);
 
-    expect(output).toContain("# Design review");
-    expect(output).toContain("Ship CLI");
-    expect(output.endsWith("\n")).toBe(true);
+    expect(output).toBe(expected);
     const jsonOutput = JSON.parse(await runTranscriptsCli(["show", "design-review", "--json"])) as {
       summary: string;
     };
-    expect(jsonOutput.summary.endsWith("\n")).toBe(true);
-    await expect(fs.readFile(path.join(sessionDir, "summary.md"), "utf8")).resolves.toContain(
-      "Ship CLI",
-    );
+    expect(jsonOutput.summary).toBe(expected);
+    await expect(fs.readFile(path.join(sessionDir, "summary.md"), "utf8")).resolves.toBe(expected);
   });
 
   it("keeps JSON inspection available before a summary exists", async () => {
