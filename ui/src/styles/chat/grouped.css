@@ -362,6 +362,7 @@
 
 /* ── Group footer action buttons ── */
 .chat-group-footer-actions button,
+.chat-group-footer .chat-send-status__retry,
 .chat-message-actions-row button {
   background: none;
   border: none;

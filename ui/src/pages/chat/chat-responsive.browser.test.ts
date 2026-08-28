@@ -3861,6 +3861,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             expectedColor,
           );
           const retry = status.locator("button");
+          expect(await retry.evaluate((element) => getComputedStyle(element).borderStyle)).toBe(
+            "none",
+          );
           expect(await retry.evaluate((element) => getComputedStyle(element).color)).toBe(
             expectedColor,
           );
