@@ -5793,22 +5793,18 @@ export const en: TranslationMap = {
     },
     goals: {
       composerMode: "Goal",
-      sessionChanged:
-        "This conversation changed since the goal draft was created. Cancel goal entry and select Goal again to use the current conversation.",
+      sessionChanged: "Conversation changed. Cancel and select Goal again.",
       start: "Start goal",
       save: "Save goal",
-      startHint: "Send an objective to start working toward it.",
-      editHint: "Update the objective without starting a new run.",
+      startHint: "Enter your objective.",
+      editHint: "Save without starting a run.",
       objectivePlaceholder: "What should this goal accomplish?",
       cancel: "Cancel goal entry",
-      offline: "Reconnect to the Gateway before starting or changing a goal.",
-      busy: "Wait for the current run to finish before starting a goal. Your objective is still in the composer.",
-      annotationUnsupported:
-        "Send or remove browser annotations before starting a goal. Your objective and attachments are unchanged.",
-      actionPending:
-        "A goal action is already in progress. Wait for its result before trying again.",
-      admissionImmutable:
-        "This goal request can only be retried or removed. Start a new goal to change its objective.",
+      offline: "Reconnect to manage goals.",
+      busy: "Wait for this run to finish. Your draft is unchanged.",
+      annotationUnsupported: "Send or remove browser annotations first. Your draft is unchanged.",
+      actionPending: "Wait for the pending goal action.",
+      admissionImmutable: "Retry or remove this request. Editing requires a new goal.",
       edit: "Edit goal",
       pause: "Pause goal",
       resume: "Resume goal",
