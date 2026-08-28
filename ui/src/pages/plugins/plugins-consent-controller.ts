@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import {
   inspectPlugin,
   readPluginCapabilityConsentError,
@@ -19,6 +20,7 @@ import {
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import type { PluginConsentIntent, PluginConsentState } from "./consent-dialog.ts";
 import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
+import { confirmPluginInstall } from "./plugin-lifecycle-confirmation.ts";
 import { pluginRowKey, type PluginRowMessage } from "./view.ts";
 
 type PluginMutationSuccess<Result> = (
@@ -78,12 +80,16 @@ export class PluginsConsentController {
 
   private mutationToken = 0;
   private readonly mutationTokens = new Map<string, number>();
+  // Server reviews continue one confirmed install only while its Gateway epoch survives.
+  // Reconnect reset drops the scope before a surviving row warning can be acknowledged.
+  private readonly confirmedInstallScopes = new Map<string, GatewayConnectionScope>();
 
   constructor(private readonly host: PluginsConsentControllerHost) {}
 
   reset(): void {
     this.close();
     this.mutationTokens.clear();
+    this.confirmedInstallScopes.clear();
   }
 
   async runMutation<Result>(
@@ -91,7 +97,7 @@ export class PluginsConsentController {
     mutate: (client: GatewayBrowserClient) => Promise<Result>,
     onSuccess: PluginMutationSuccess<Result>,
     options: PluginMutationOptions = {},
-    onError: (error: unknown) => void = (error) => {
+    onError: (error: unknown, scope: GatewayConnectionScope) => void = (error) => {
       this.host.setMessage(rowKey, { kind: "error", text: formatUiError(error) });
     },
   ): Promise<void> {
@@ -131,7 +137,7 @@ export class PluginsConsentController {
       }
     } catch (error) {
       if (isCurrent()) {
-        onError(error);
+        onError(error, scope);
       }
     } finally {
       if (this.mutationTokens.get(rowKey) === mutationToken) {
@@ -224,11 +230,14 @@ export class PluginsConsentController {
     }
   }
 
-  async install(
-    request: PluginInstallRequest,
-    installIdentity: string,
-    confirm?: () => Promise<boolean>,
-  ): Promise<void> {
+  async install(request: PluginInstallRequest, installIdentity: string): Promise<void> {
+    const confirmedScope = this.confirmedInstallScopes.get(installIdentity);
+    this.confirmedInstallScopes.delete(installIdentity);
+    const isConfirmedContinuation =
+      (request.acknowledgeInstallPolicyWarning === true ||
+        request.acknowledgeCapabilities !== undefined) &&
+      confirmedScope &&
+      this.host.gateway.isCurrent(confirmedScope);
     // The server stages and inspects the requested artifact before asking for consent.
     // Catalog/search metadata cannot authorize that artifact's capabilities.
     await this.runMutation(
@@ -246,10 +255,14 @@ export class PluginsConsentController {
         );
         await this.host.refreshCatalogAfterMutation(client);
       },
-      { confirm, preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true },
-      (error) => {
+      {
+        confirm: isConfirmedContinuation ? undefined : () => confirmPluginInstall(request),
+        preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true,
+      },
+      (error, scope) => {
         const consentDetails = readPluginCapabilityConsentError(error);
         if (consentDetails) {
+          this.confirmedInstallScopes.set(installIdentity, scope);
           this.open(
             { kind: "install", request, installIdentity },
             consentDetails.pluginId,
@@ -259,6 +272,7 @@ export class PluginsConsentController {
         }
         const policyWarning = readPluginInstallPolicyWarning(error);
         if (policyWarning) {
+          this.confirmedInstallScopes.set(installIdentity, scope);
           this.host.setMessage(installIdentity, {
             kind: "warning",
             text: policyWarning.reason,

@@ -19,7 +19,6 @@ import { inspectPlugin } from "../../lib/plugins/capability-consent-error.ts";
 import {
   uninstallPlugin,
   type PluginCatalogItem,
-  type PluginInstallRequest,
   type PluginListResult,
   type PluginMutationResult,
   type PluginSearchResult,
@@ -31,7 +30,7 @@ import {
 } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { fetchPluginIconBlobUrl } from "./icon-loader.ts";
-import { confirmPluginInstall, confirmPluginUninstall } from "./plugin-lifecycle-confirmation.ts";
+import { confirmPluginUninstall } from "./plugin-lifecycle-confirmation.ts";
 import { PluginsConsentController } from "./plugins-consent-controller.ts";
 import { renderPluginsHubHeader } from "./plugins-hub-header.ts";
 import type { PluginsHubTab } from "./plugins-hub.ts";
@@ -648,18 +647,6 @@ class PluginsPage extends OpenClawLightDomElement {
     return this.consentController.updateEnabled(pluginId, enabled, key);
   }
 
-  private async install(request: PluginInstallRequest, installIdentity: string): Promise<void> {
-    // Policy acknowledgement is the continuation of an already confirmed install.
-    // Confirming again would split one operator action across two restart prompts.
-    if (request.acknowledgeInstallPolicyWarning) {
-      await this.consentController.install(request, installIdentity);
-      return;
-    }
-    await this.consentController.install(request, installIdentity, () =>
-      confirmPluginInstall(request),
-    );
-  }
-
   private async uninstall(pluginId: string, rowKey: string): Promise<void> {
     const name = this.result?.plugins.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
     await this.consentController.runMutation(
@@ -727,7 +714,8 @@ class PluginsPage extends OpenClawLightDomElement {
           onShowDetails: (pluginId) => void this.showDetails(pluginId),
           onSetEnabled: (pluginId, enabled, rowKey) =>
             void this.updateEnabled(pluginId, enabled, rowKey),
-          onInstall: (request, installIdentity) => void this.install(request, installIdentity),
+          onInstall: (request, installIdentity) =>
+            void this.consentController.install(request, installIdentity),
           onCancelConsent: () => this.consentController.close(),
           onConfirmConsent: () => this.consentController.confirm(),
           onRetryConsentInspection: () => void this.consentController.inspect(),
