@@ -29,7 +29,6 @@ sees through the dedicated QA user account.
 
 ## Other branches
 
-- [Crabbox visual proof](./crabbox.md): held session with desktop recording for PR review.
 - [Runtime reference](./runtime-reference.md): backends, manual tools, event fields, and failure triage.
 
 ## Reaching non-default config
@@ -43,7 +42,7 @@ The whole point of an audit lane is exercising config the default path never use
 | `E2E_REQUIRE_MENTION=true`  | makes the test group mention-required; ack scope treats `group-mentions` as mention-_required_ groups, so reaction rows need it |
 | `E2E_TELEGRAM_PROVIDER_API` | `openai-completions` for commentary and preamble scenarios                                                                      |
 | `E2E_MOCK_SERVER_PATH`      | an alternate mock server for provider-shape controls                                                                            |
-| `--source-gateway`          | the exact TypeScript checkout without a build step                                                                               |
+| `--source-gateway`          | the exact TypeScript checkout without a build step                                                                              |
 | `--pre-send '<text>'`       | posts as the QA user before the driven turn, for history-scoped rows                                                            |
 
 Scenario action `command` runs one bounded argv command without a shell in the

@@ -9131,6 +9131,22 @@ esac
     expect(ignored.stderr).toBe("");
   });
 
+  it("keeps Telegram E2E credential state ignored", () => {
+    const privatePaths = [
+      ".agents/skills/telegram-e2e-userbot/credentials.local.json",
+      ".agents/skills/telegram-e2e-userbot/session.tgz",
+      ".agents/skills/telegram-e2e-userbot/db/td_test.binlog",
+      ".agents/goals/local-run.md",
+    ];
+    const ignored = spawnSync("git", ["check-ignore", "--no-index", "--stdin"], {
+      encoding: "utf8",
+      input: `${privatePaths.join("\n")}\n`,
+    });
+    expect(ignored.status).toBe(0);
+    expect(ignored.stdout.trim().split("\n")).toEqual(privatePaths);
+    expect(ignored.stderr).toBe("");
+  });
+
   it("does not track generated node_modules entries", () => {
     const tracked = execFileSync("git", ["ls-files", "-z", "--", ":(glob)**/node_modules/**"], {
       encoding: "utf8",
