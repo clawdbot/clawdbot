@@ -1,12 +1,13 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { build } from "tsdown";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverDeclarationSources } from "../../scripts/lib/declaration-source-index.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 describe("declaration source discovery", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let root: string;
   let tsconfig: string;
 
@@ -18,7 +19,7 @@ describe("declaration source discovery", () => {
   }
 
   beforeEach(() => {
-    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "declaration-source-index-")));
+    root = fs.realpathSync(tempDirs.make("declaration-source-index-"));
     write("package.json", '{"type":"module"}');
     fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
     tsconfig = write(
@@ -37,10 +38,6 @@ describe("declaration source discovery", () => {
         include: ["entries/**/*.ts"],
       }),
     );
-  });
-
-  afterEach(() => {
-    fs.rmSync(root, { recursive: true, force: true });
   });
 
   it("emits aliases and transitive type-only sources outside the selected entry roots", async () => {

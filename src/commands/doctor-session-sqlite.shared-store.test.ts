@@ -3,8 +3,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  lookupSessionGoalOperation,
+  type SessionGoalOperation,
+} from "../config/sessions/goals-operations.js";
+import {
   loadExactSessionEntry,
   listSessionParticipantsReadOnly,
+  persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -67,8 +72,36 @@ async function createStore(layout: "shared" | "custom") {
 
 async function createHistoricalSharedStore(corruptIndex = false) {
   const store = await createStore("shared");
+  const goalOperation = {
+    action: "start",
+    operationId: "goal-before-participant-upgrade",
+    issuedAtMs: Date.now(),
+    requestFingerprint: "shared-store-goal-fixture",
+    objective: "Preserve this Goal across the participant migration.",
+  } satisfies SessionGoalOperation;
+  const turn = await persistSessionTranscriptTurn(
+    { ...store.scope, sessionId: "doctor-session" },
+    {
+      expectedSessionId: "doctor-session",
+      messages: [{ message: { role: "user", content: goalOperation.objective } }],
+      sessionTurnMutation: { kind: "goal", operation: goalOperation, runId: "goal-start" },
+      updateMode: "none",
+    },
+  );
+  const goalReceipt = turn.sessionTurnMutationResult?.result;
+  expect(goalReceipt).toMatchObject({ action: "start", status: "started", runId: "goal-start" });
+  expect(
+    lookupSessionGoalOperation({
+      ...store.scope,
+      expectedSessionId: "doctor-session",
+      operation: goalOperation,
+    }),
+  ).toEqual(goalReceipt);
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   const database = openNodeSqliteDatabase(store.sqlitePath);
   try {
+    const goalState = readStoredGoalState(database, store.scope.sessionKey);
     // Restore the actual v17 table contract as well as both version markers;
     // header-only downgrades test refusal, not an ordinary supported upgrade.
     database.exec("DROP TABLE session_participants;");
@@ -94,10 +127,31 @@ async function createHistoricalSharedStore(corruptIndex = false) {
       const schemaVersion = Number(database.prepare("PRAGMA schema_version").get()?.schema_version);
       database.exec(`PRAGMA schema_version = ${schemaVersion + 1};`);
     }
+    return { ...store, goalOperation, goalReceipt, goalState };
   } finally {
     database.close();
   }
-  return store;
+}
+
+function readStoredGoalState(
+  database: ReturnType<typeof openNodeSqliteDatabase>,
+  sessionKey: string,
+) {
+  return {
+    goal: database
+      .prepare(
+        "SELECT json_extract(entry_json, '$.goal') AS goal_json FROM session_nodes WHERE session_key = ?",
+      )
+      .get(sessionKey),
+    receipts: database
+      .prepare("SELECT * FROM session_goal_operations WHERE session_key = ? ORDER BY operation_id")
+      .all(sessionKey),
+    ddl: database
+      .prepare(
+        "SELECT name, sql FROM sqlite_schema WHERE tbl_name = 'session_goal_operations' ORDER BY name",
+      )
+      .all(),
+  };
 }
 
 async function repairHistoricalSharedStore(
@@ -122,7 +176,7 @@ async function repairHistoricalSharedStore(
   }
 }
 
-function expectUpgradedSharedStore(store: Awaited<ReturnType<typeof createStore>>) {
+function expectUpgradedSharedStore(store: Awaited<ReturnType<typeof createHistoricalSharedStore>>) {
   const reopened = openOpenClawAgentDatabase(store.options);
   expect(reopened.agentId).toBe("main");
   expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(18);
@@ -131,6 +185,15 @@ function expectUpgradedSharedStore(store: Awaited<ReturnType<typeof createStore>
     schema_version: 18,
   });
   expect(loadExactSessionEntry(store.scope)?.entry.sessionId).toBe("doctor-session");
+  expect(loadExactSessionEntry(store.scope)?.entry.goal).toEqual(store.goalReceipt?.goal);
+  expect(readStoredGoalState(reopened.db, store.scope.sessionKey)).toEqual(store.goalState);
+  expect(
+    lookupSessionGoalOperation({
+      ...store.scope,
+      expectedSessionId: "doctor-session",
+      operation: store.goalOperation,
+    }),
+  ).toEqual(store.goalReceipt);
   expect(listSessionParticipantsReadOnly(store.scope).get(store.scope.sessionKey)).toEqual([
     {
       identity: { type: "profile", id: "person" },
@@ -220,6 +283,7 @@ describe("Doctor canonical session SQLite targets", () => {
     ).toBe(false);
     const preserved = openNodeSqliteDatabase(store.sqlitePath, { readOnly: true });
     try {
+      expect(readStoredGoalState(preserved, store.scope.sessionKey)).toEqual(store.goalState);
       expect(preserved.prepare("PRAGMA user_version").get()?.user_version).toBe(17);
       expect(preserved.prepare("SELECT agent_id, schema_version FROM schema_meta").get()).toEqual({
         agent_id: "main",
