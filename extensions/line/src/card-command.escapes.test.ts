@@ -105,7 +105,7 @@ describe("line card option separators", () => {
       ),
       "LINE buttons template message",
     );
-    if (message.template.type !== "buttons") {
+    if (message.type !== "template" || message.template.type !== "buttons") {
       throw new Error("Expected a LINE buttons template");
     }
 
