@@ -9,7 +9,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import type { CodexSteeringQueueOptions } from "./attempt-steering.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
-import type { CodexServerNotification } from "./protocol.js";
+import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import {
   createParams,
   createStartedThreadHarness,
@@ -197,147 +197,216 @@ describe("runCodexAppServerAttempt steering", () => {
     await run;
   });
 
-  it("accepts Gateway transcript-backed steering for the active Codex turn", async () => {
-    const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
-    const params = createSteeringParams();
-    const storePath = path.join(tempDir, `${params.sessionId}.sqlite`);
-    const sessionTarget = {
-      agentId: "main",
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey!,
-      storePath,
-    };
-    params.taskSuggestionDeliveryMode = "gateway";
-    params.sessionTarget = sessionTarget;
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionKey: params.sessionKey!,
-      storePath,
-      entry: {
-        sessionFile: params.sessionFile,
+  it.each(["none", "sleep", "dynamicToolCall", "commandExecution"])(
+    "persists every completed answer before Gateway steering across a %s barrier",
+    async (barrierType) => {
+      const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
+      const params = createSteeringParams();
+      const storePath = path.join(tempDir, `${params.sessionId}.sqlite`);
+      const sessionTarget = {
+        agentId: "main",
         sessionId: params.sessionId,
-        updatedAt: Date.now(),
-      },
-    });
-    let steerPersisted = false;
-    const userTurnTranscriptRecorder = {
-      persistApproved: vi.fn(async () => {
-        if (steerPersisted) {
-          return undefined;
-        }
-        steerPersisted = true;
-        return await appendSessionTranscriptMessageByIdentity({
-          ...sessionTarget,
-          message: {
-            role: "user",
-            content: "steer this active turn",
-            timestamp: Date.now(),
-            idempotencyKey: `${params.runId}:steer:user`,
+        sessionKey: params.sessionKey!,
+        storePath,
+      };
+      params.taskSuggestionDeliveryMode = "gateway";
+      params.sessionTarget = sessionTarget;
+      await upsertSessionEntry({
+        agentId: "main",
+        sessionKey: params.sessionKey!,
+        storePath,
+        entry: {
+          sessionFile: params.sessionFile,
+          sessionId: params.sessionId,
+          updatedAt: Date.now(),
+        },
+      });
+      let steerPersisted = false;
+      const userTurnTranscriptRecorder = {
+        persistApproved: vi.fn(async () => {
+          if (steerPersisted) {
+            return undefined;
+          }
+          steerPersisted = true;
+          return await appendSessionTranscriptMessageByIdentity({
+            ...sessionTarget,
+            message: {
+              role: "user",
+              content: "steer this active turn",
+              timestamp: Date.now(),
+              idempotencyKey: `${params.runId}:steer:user`,
+            },
+          });
+        }),
+        hasPersisted: () => steerPersisted,
+      } as unknown as NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
+
+      const run = runCodexAppServerAttempt(params, {
+        pluginConfig: { appServer: { mode: "yolo" } },
+      });
+      await waitForMethod("turn/start");
+      const onQueueAccepted = vi.fn();
+      await notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "agentMessage",
+            id: "pre-steer-commentary",
+            phase: "commentary",
+            text: "PRE-STEER-COMMENTARY",
+          },
+        },
+      });
+      for (const id of ["answer-a", "answer-b"]) {
+        await notify({
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: { type: "agentMessage", id, phase: "final_answer", text: "" },
           },
         });
-      }),
-      hasPersisted: () => steerPersisted,
-    } as unknown as NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
+        await notify({
+          method: "item/agentMessage/delta",
+          params: { threadId: "thread-1", turnId: "turn-1", itemId: id, delta: id },
+        });
+        await notify({
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: { type: "agentMessage", id, phase: "final_answer", text: id },
+          },
+        });
+      }
+      if (barrierType !== "none") {
+        const barrier: JsonObject =
+          barrierType === "commandExecution"
+            ? {
+                type: barrierType,
+                id: "barrier",
+                command: "true",
+                cwd: params.workspaceDir,
+                status: "inProgress",
+                commandActions: [],
+              }
+            : barrierType === "dynamicToolCall"
+              ? { type: barrierType, id: "barrier", tool: "memory_search", status: "inProgress" }
+              : { type: barrierType, id: "barrier", durationMs: 250 };
+        await notify({
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: barrier,
+          },
+        });
+      }
 
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-    await waitForMethod("turn/start");
-    const onQueueAccepted = vi.fn();
-    await notify({
-      method: "item/completed",
-      params: {
+      await vi.waitFor(() => {
+        expect(
+          activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+            (call) => call[0] === params.sessionId,
+          )?.[1],
+        ).toMatchObject({ taskSuggestionDeliveryMode: "gateway" });
+      }, fastWait);
+
+      // This public queue returns immediate eligibility; the handle's delivery
+      // promise stays pending until the matching item/completed notification below.
+      await waitAndQueueActiveRunMessage(params.sessionId, "steer this active turn", {
+        debounceMs: 0,
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+        taskSuggestionDeliveryMode: "gateway",
+        waitForTranscriptCommit: true,
+        onQueueAccepted,
+        userTurnTranscriptRecorder,
+      });
+      await vi.waitFor(
+        () => expect(requests.map((entry) => entry.method)).toContain("turn/steer"),
+        fastWait,
+      );
+      const steer = requests.find((entry) => entry.method === "turn/steer");
+      const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
+        ?.clientUserMessageId;
+      if (!clientUserMessageId) {
+        throw new Error("turn/steer clientUserMessageId missing");
+      }
+      await vi.waitFor(() => expect(onQueueAccepted).toHaveBeenCalledWith(true), fastWait);
+
+      await notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "steered-user-message", type: "userMessage", clientId: clientUserMessageId },
+        },
+      });
+      const readTextRows = async () =>
+        (await readSessionTranscriptEvents(sessionTarget)).flatMap((event) => {
+          const message = (
+            event as {
+              message?: {
+                role: string;
+                content: string | Array<{ type: string; text?: string }>;
+                __openclaw?: { mirrorIdentity?: string };
+              };
+            }
+          ).message;
+          if (!message || (message.role !== "assistant" && message.role !== "user")) {
+            return [];
+          }
+          const text =
+            typeof message.content === "string"
+              ? message.content
+              : message.content
+                  .flatMap((part) => (part.type === "text" ? [part.text] : []))
+                  .join("");
+          return text
+            ? [{ role: message.role, text, mirrorIdentity: message["__openclaw"]?.mirrorIdentity }]
+            : [];
+        });
+      const prefix = await readTextRows();
+      await notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "agentMessage",
+            id: "final-answer",
+            phase: "final_answer",
+            text: "Steering completed.",
+          },
+        },
+      });
+      await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+
+      expect(steer?.params).toMatchObject({
         threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "agentMessage",
-          id: "pre-steer-commentary",
-          phase: "commentary",
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "steer this active turn" }],
+      });
+      expect(prefix).toEqual([
+        { role: "user", text: params.prompt, mirrorIdentity: "turn-1:prompt" },
+        {
+          role: "assistant",
           text: "PRE-STEER-COMMENTARY",
+          mirrorIdentity: "turn-1:commentary:pre-steer-commentary",
         },
-      },
-    });
-    await notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "agentMessage",
-          id: "pre-steer-answer",
-          phase: "final_answer",
-          text: "PRE-STEER-ANSWER",
-        },
-      },
-    });
-
-    await vi.waitFor(() => {
-      expect(
-        activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
-          (call) => call[0] === params.sessionId,
-        )?.[1],
-      ).toMatchObject({ taskSuggestionDeliveryMode: "gateway" });
-    }, fastWait);
-
-    // This public queue returns immediate eligibility; the handle's delivery
-    // promise stays pending until the matching item/completed notification below.
-    await waitAndQueueActiveRunMessage(params.sessionId, "steer this active turn", {
-      debounceMs: 0,
-      isInboundUserMessage: true,
-      toolAuthorityFingerprint: params.toolAuthorityFingerprint,
-      taskSuggestionDeliveryMode: "gateway",
-      waitForTranscriptCommit: true,
-      onQueueAccepted,
-      userTurnTranscriptRecorder,
-    });
-    await vi.waitFor(
-      () => expect(requests.map((entry) => entry.method)).toContain("turn/steer"),
-      fastWait,
-    );
-    const steer = requests.find((entry) => entry.method === "turn/steer");
-    const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
-      ?.clientUserMessageId;
-    if (!clientUserMessageId) {
-      throw new Error("turn/steer clientUserMessageId missing");
-    }
-    await vi.waitFor(() => expect(onQueueAccepted).toHaveBeenCalledWith(true), fastWait);
-
-    await notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: { id: "steered-user-message", type: "userMessage", clientId: clientUserMessageId },
-      },
-    });
-    await userTurnTranscriptRecorder.persistApproved();
-    await notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "agentMessage",
-          id: "final-answer",
-          phase: "final_answer",
-          text: "Steering completed.",
-        },
-      },
-    });
-    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-
-    expect(steer?.params).toMatchObject({
-      threadId: "thread-1",
-      expectedTurnId: "turn-1",
-      input: [{ type: "text", text: "steer this active turn" }],
-    });
-    const roles = (await readSessionTranscriptEvents(sessionTarget)).flatMap((event) => {
-      const message = (event as { message?: { role?: string } }).message;
-      return message?.role ? [message.role] : [];
-    });
-    expect(roles).toEqual(["user", "assistant", "assistant", "user", "assistant"]);
-  });
+        { role: "assistant", text: "answer-a", mirrorIdentity: "turn-1:assistant:answer-a" },
+        { role: "assistant", text: "answer-b", mirrorIdentity: "turn-1:assistant:answer-b" },
+        { role: "user", text: "steer this active turn", mirrorIdentity: undefined },
+      ]);
+      expect(await readTextRows()).toEqual([
+        ...prefix,
+        { role: "assistant", text: "Steering completed.", mirrorIdentity: "turn-1:assistant" },
+      ]);
+    },
+  );
 
   it("forwards queued text and images to the active app-server turn", async () => {
     const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();

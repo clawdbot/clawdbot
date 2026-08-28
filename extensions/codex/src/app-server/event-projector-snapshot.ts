@@ -17,9 +17,9 @@ export function buildCodexMessagesSnapshot(params: {
   reasoningText: string | undefined;
   asyncMessages: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   commentaryMessages: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
+  assistantMessages?: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   toolMessages: readonly AgentMessage[];
   lastAssistant: AssistantMessage | undefined;
-  lastAssistantIdentity?: string;
   createAssistantMirrorMessage: (title: string, text: string) => AssistantMessage;
 }): AgentMessage[] {
   const messages = promptSnapshot(params.runParams, params.turnId, params.upstreamUserText);
@@ -43,6 +43,9 @@ export function buildCodexMessagesSnapshot(params: {
   const visibleWorkMessages = [
     ...commentaryMessages,
     ...asyncMessages,
+    ...(params.assistantMessages ?? []).map(({ itemId, message }) =>
+      attachCodexMirrorIdentity(message, `${params.turnId}:assistant:${itemId}`),
+    ),
     ...params.toolMessages,
   ].toSorted(
     (left, right) =>
@@ -50,12 +53,7 @@ export function buildCodexMessagesSnapshot(params: {
   );
   messages.push(...visibleWorkMessages);
   if (params.lastAssistant) {
-    messages.push(
-      attachCodexMirrorIdentity(
-        params.lastAssistant,
-        params.lastAssistantIdentity ?? `${params.turnId}:assistant`,
-      ),
-    );
+    messages.push(attachCodexMirrorIdentity(params.lastAssistant, `${params.turnId}:assistant`));
   }
   const taint = { tainted: false };
   return messages.map((message) =>
@@ -80,9 +78,8 @@ export function buildCodexSteeringMessagesSnapshot(params: {
   const commentaryMessages = params.assistantProjection
     .collectCommentaryMessages()
     .filter(({ itemId }) => params.completedItemIds.has(itemId));
-  const assistantBoundary = params.assistantProjection.createCompletedAssistantBoundaryMessage(
+  const assistantMessages = params.assistantProjection.collectCompletedAssistantMessages(
     params.completedItemIds,
-    { tokenUsage: undefined, aborted: false, promptError: undefined },
   );
   const messages = buildCodexMessagesSnapshot({
     runParams: params.runParams,
@@ -91,16 +88,14 @@ export function buildCodexSteeringMessagesSnapshot(params: {
     reasoningText: undefined,
     asyncMessages,
     commentaryMessages,
+    assistantMessages,
     toolMessages: params.toolMessages,
-    lastAssistant: assistantBoundary?.message,
-    ...(assistantBoundary
-      ? { lastAssistantIdentity: `${params.turnId}:assistant:${assistantBoundary.itemId}` }
-      : {}),
+    lastAssistant: undefined,
     createAssistantMirrorMessage: (title, text) =>
       params.assistantProjection.createAssistantMirrorMessage(title, text),
   }).filter((message) => message.role !== "user");
   return {
     messages,
-    ...(assistantBoundary ? { assistantBoundaryItemId: assistantBoundary.itemId } : {}),
+    assistantBoundaryItemId: assistantMessages.at(-1)?.itemId,
   };
 }

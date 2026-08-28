@@ -517,6 +517,106 @@ describe("chat history in-flight assistant recovery", () => {
     },
   );
 
+  it.each(["fresh adoption", "retained boundary", "fragmented history"])(
+    "keeps every item of the cumulative prefix after persisted history replacement: %s",
+    async (mode) => {
+      const history = activeHistory("active-run");
+      const savedTexts =
+        mode === "fragmented history" ? ["Before tool.", "Before steer."] : ["Before steer."];
+      const prefixText = savedTexts.join("");
+      const original = {
+        role: "user",
+        content: "Original prompt",
+        timestamp: 1,
+        __openclaw: { idempotencyKey: "active-run:user", seq: 1 },
+      };
+      const steer = {
+        role: "user",
+        content: "Steer prompt",
+        timestamp: savedTexts.length + 2,
+        __openclaw: {
+          id: "steer",
+          idempotencyKey: "steer-run:user",
+          seq: savedTexts.length + 2,
+          steerTargetRunId: "active-run",
+        },
+      };
+      history.messages = [
+        original,
+        ...savedTexts.map((content, index) => ({
+          role: "assistant",
+          content,
+          timestamp: index + 2,
+          __openclaw: {
+            runId: "active-run",
+            mirrorIdentity: `turn-1:assistant:answer-${index}`,
+            seq: index + 2,
+          },
+        })),
+        steer,
+      ];
+      history.inFlightRun!.text = `${prefixText} After steer.`;
+      const state = createState(history);
+      if (mode === "retained boundary") {
+        state.chatRunId = "active-run";
+        state.chatMessages = [original, steer];
+        handleChatGatewayEvent(state, {
+          sessionKey: "main",
+          runId: "active-run",
+          state: "delta",
+          message: { role: "assistant", content: history.inFlightRun!.text },
+        });
+        state.chatStreamSegments = [
+          {
+            text: prefixText,
+            ts: 2,
+            runId: "active-run",
+            boundaryRunId: "steer-run",
+          },
+        ];
+      }
+      await loadChatHistory(state);
+      expect(renderedText(state)).toEqual([
+        "Original prompt",
+        ...savedTexts,
+        "Steer prompt",
+        "After steer.",
+      ]);
+      handleChatGatewayEvent(state, {
+        sessionKey: "main",
+        runId: "active-run",
+        state: "delta",
+        deltaText: " Continued.",
+        message: {
+          role: "assistant",
+          content: `${prefixText} After steer. Continued.`,
+        },
+      });
+      expect(renderedText(state)).toEqual([
+        "Original prompt",
+        ...savedTexts,
+        "Steer prompt",
+        "After steer. Continued.",
+      ]);
+      expect(state.chatStream).toBe(`${prefixText} After steer. Continued.`);
+      handleChatGatewayEvent(state, {
+        sessionKey: "main",
+        runId: "active-run",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: `${prefixText} After steer. Continued. Final suffix.`,
+        },
+      });
+      expect(renderedText(state)).toEqual([
+        "Original prompt",
+        ...savedTexts,
+        "Steer prompt",
+        "After steer. Continued. Final suffix.",
+      ]);
+    },
+  );
+
   it.each([true, undefined])(
     "rolls over a live steer with optional active-run publication (runActive=%s)",
     async (runActive) => {
