@@ -315,7 +315,7 @@ describe("cli session history", () => {
 
       await fs.rm(filePath);
       const deleted = await read();
-      expect(deleted).toEqual({ messages: [], imported: false });
+      expect(deleted).toEqual({ messages: [], imported: false, expanded: false });
     });
   });
 
@@ -1036,6 +1036,16 @@ describe("cli session history", () => {
 
     const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
     expect(merged).toHaveLength(3);
+    expectFields(readRecord(merged[0])["__openclaw"], {
+      importedFrom: "claude-cli",
+      externalId: "user-1",
+      cliSessionId: "session-1",
+    });
+    expectFields(readRecord(merged[1])["__openclaw"], {
+      importedFrom: "claude-cli",
+      externalId: "assistant-1",
+      cliSessionId: "session-1",
+    });
     expectFields(merged[2], {
       role: "user",
     });
@@ -1119,7 +1129,14 @@ describe("cli session history", () => {
         localMessages,
       });
 
-      expect(messages).toBe(localMessages);
+      expect(messages).not.toBe(localMessages);
+      expect(messages).toHaveLength(1);
+      expectFields(readRecord(messages[0])["__openclaw"], {
+        importedFrom: "claude-cli",
+        externalId: "user-secret-copy",
+        cliSessionId: sessionId,
+      });
+      expect(readRecord(messages[0]).content).toBe(redactedContent);
       const streamSpy = vi.spyOn(rawFs, "createReadStream");
       try {
         await expect(
@@ -1425,23 +1442,38 @@ describe("cli session history", () => {
     });
   });
 
-  it("does not mark a fully deduplicated Claude transcript as imported", async () => {
-    await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
-      const localMessages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
-      const result = resolveChatHistoryWithCliSessionImports({
-        entry: {
-          sessionId: "openclaw-session",
-          updatedAt: Date.now(),
-          cliSessionBindings: { "claude-cli": { sessionId } },
+  it("retains import provenance when a Claude transcript is fully deduplicated", () => {
+    const sessionId = "session-fully-deduplicated";
+    const localMessages = [
+      { role: "user", content: "hello", timestamp: 1 },
+      { role: "assistant", content: "hi", timestamp: 2 },
+    ];
+    const result = resolveChatHistoryWithCliSessionImports({
+      entry: {
+        sessionId: "openclaw-session",
+        updatedAt: Date.now(),
+        cliSessionBindings: { "claude-cli": { sessionId } },
+      },
+      provider: "claude-cli",
+      localMessages,
+      preparedImportedMessages: localMessages.map((message, index) => ({
+        ...message,
+        __openclaw: {
+          importedFrom: "claude-cli",
+          externalId: `external-${index}`,
+          cliSessionId: sessionId,
         },
-        provider: "claude-cli",
-        localMessages,
-        homeDir,
-      });
-
-      expect(result.imported).toBe(false);
-      expect(result.messages).toBe(localMessages);
+      })),
     });
+
+    expect(result.imported).toBe(true);
+    expect(result.expanded).toBe(false);
+    expect(result.messages).toHaveLength(localMessages.length);
+    expect(
+      result.messages.every(
+        (message) => readRecord(readRecord(message)["__openclaw"]).cliSessionId === sessionId,
+      ),
+    ).toBe(true);
   });
 
   it("falls back to legacy cliSessionIds when bindings are absent", async () => {

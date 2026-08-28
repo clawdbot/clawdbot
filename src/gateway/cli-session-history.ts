@@ -41,10 +41,11 @@ function resolveEligibleCliSessionBinding(params: CliSessionHistoryParams) {
 export function resolveChatHistoryWithCliSessionImports(params: CliSessionHistoryParams): {
   messages: unknown[];
   imported: boolean;
+  expanded: boolean;
 } {
   const binding = resolveEligibleCliSessionBinding(params);
   if (!binding) {
-    return { messages: params.localMessages, imported: false };
+    return { messages: params.localMessages, imported: false, expanded: false };
   }
   const importedMessages =
     params.preparedImportedMessages ??
@@ -55,15 +56,19 @@ export function resolveChatHistoryWithCliSessionImports(params: CliSessionHistor
       reseedReceipt: binding.reseedReceipt,
     });
   if (importedMessages.length === 0) {
-    return { messages: params.localMessages, imported: false };
+    return { messages: params.localMessages, imported: false, expanded: false };
   }
   const messages = mergeImportedChatHistoryMessages({
     localMessages: params.localMessages,
     importedMessages,
   });
-  return messages.length > params.localMessages.length
-    ? { messages, imported: true }
-    : { messages: params.localMessages, imported: false };
+  return messages === params.localMessages
+    ? { messages, imported: false, expanded: false }
+    : {
+        messages,
+        imported: true,
+        expanded: messages.length > params.localMessages.length,
+      };
 }
 
 /** Acquires one request-local redacted view of the process-owned external snapshot. */

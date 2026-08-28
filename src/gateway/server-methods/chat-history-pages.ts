@@ -368,7 +368,7 @@ export async function readChatHistoryPage(params: {
         localMessages: localMessagesWithBoundaryFilter,
       });
   const cliHistory = params.ignoreCliSessionImports
-    ? { messages: localMessagesWithBoundaryFilter, imported: false }
+    ? { messages: localMessagesWithBoundaryFilter, imported: false, expanded: false }
     : resolveChatHistoryWithCliSessionImports({
         entry,
         provider,
@@ -378,7 +378,7 @@ export async function readChatHistoryPage(params: {
   if ((offset !== undefined || messageId) && !cliHistory.imported) {
     return readChatHistoryPage({ ...params, ignoreCliSessionImports: true });
   }
-  if (cliHistory.imported) {
+  if (cliHistory.expanded || messageId) {
     // Reuse this request's redacted external snapshot after the full local read;
     // re-reading here would duplicate a large import and defeat cross-client singleflight.
     const completeLocalMessages = dropPreSessionStartAnnouncePairs(
@@ -395,7 +395,7 @@ export async function readChatHistoryPage(params: {
       localMessages: completeLocalMessages,
       preparedImportedMessages: importedMessages,
     });
-    if (!completeCliHistory.imported) {
+    if (!completeCliHistory.expanded) {
       return readChatHistoryPage({ ...params, ignoreCliSessionImports: true });
     }
     const mergedMessages = dropPreSessionStartAnnouncePairs(
@@ -419,14 +419,30 @@ export async function readChatHistoryPage(params: {
       },
     };
   }
+  const projectedTailMessages = cliHistory.imported
+    ? projectChatDisplayMessages(cliHistory.messages, {
+        includeCommentaryFallbacks: true,
+        maxChars: effectiveMaxChars,
+        resolveCurrentUserProfileDisplay,
+        turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(
+          incrementalTail.overreadContextMessage,
+        ),
+      })
+    : incrementalTail.projected;
+  const windowedTailMessages =
+    offset === undefined
+      ? projectedTailMessages.length > max
+        ? projectedTailMessages.slice(-max)
+        : projectedTailMessages
+      : capOffsetChatHistoryProjectedMessages(projectedTailMessages, max);
   return {
     activeLeafEntryId,
     ...(readPage.transcriptSource === "active" && readPage.deltaCursor
       ? { deltaCursor: readPage.deltaCursor }
       : {}),
-    messages: augmentChatHistoryWithCanvasBlocks(incrementalTail.projected),
+    messages: augmentChatHistoryWithCanvasBlocks(windowedTailMessages),
     pagination: {
-      offset: 0,
+      offset: offset ?? 0,
       totalMessages: readPage.totalMessages,
       rawPageMessages: incrementalTail.rawPageMessages,
     },

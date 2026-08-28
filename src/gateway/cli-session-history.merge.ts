@@ -1,6 +1,7 @@
 // Imported CLI history merge helpers.
 // Deduplicates external history messages against local OpenClaw transcripts.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -20,8 +21,8 @@ type ComparableHistoryMessage = {
 };
 
 type TimestampSummary = {
-  hasMissingTimestamp: boolean;
-  buckets: Map<number, { min: number; max: number }>;
+  missingTimestamp?: ComparableHistoryMessage;
+  buckets: Map<number, { min: ComparableHistoryMessage; max: ComparableHistoryMessage }>;
 };
 
 type RoleTextIndex = Map<string, Map<string, TimestampSummary>>;
@@ -111,44 +112,82 @@ function addRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMess
   }
   let summary = byText.get(entry.text);
   if (!summary) {
-    summary = { hasMissingTimestamp: false, buckets: new Map() };
+    summary = { buckets: new Map() };
     byText.set(entry.text, summary);
   }
   if (entry.timestamp === undefined) {
-    summary.hasMissingTimestamp = true;
+    summary.missingTimestamp ??= entry;
     return;
   }
   const bucketKey = Math.floor(entry.timestamp / DEDUPE_TIMESTAMP_WINDOW_MS);
   const bucket = summary.buckets.get(bucketKey);
   if (bucket) {
-    bucket.min = Math.min(bucket.min, entry.timestamp);
-    bucket.max = Math.max(bucket.max, entry.timestamp);
+    if ((bucket.min.timestamp ?? Number.POSITIVE_INFINITY) > entry.timestamp) {
+      bucket.min = entry;
+    }
+    if ((bucket.max.timestamp ?? Number.NEGATIVE_INFINITY) < entry.timestamp) {
+      bucket.max = entry;
+    }
   } else {
-    summary.buckets.set(bucketKey, { min: entry.timestamp, max: entry.timestamp });
+    summary.buckets.set(bucketKey, { min: entry, max: entry });
   }
 }
 
-function hasRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMessage): boolean {
+function findRoleTextCandidate(
+  index: RoleTextIndex,
+  entry: ComparableHistoryMessage,
+): ComparableHistoryMessage | undefined {
   if (!entry.role || !entry.text) {
-    return false;
+    return undefined;
   }
   const summary = index.get(entry.role)?.get(entry.text);
   if (!summary) {
-    return false;
+    return undefined;
   }
-  if (entry.timestamp === undefined || summary.hasMissingTimestamp) {
-    return true;
+  if (summary.missingTimestamp) {
+    return summary.missingTimestamp;
+  }
+  if (entry.timestamp === undefined) {
+    return summary.buckets.values().next().value?.min;
   }
   const bucketKey = Math.floor(entry.timestamp / DEDUPE_TIMESTAMP_WINDOW_MS);
-  if (summary.buckets.has(bucketKey)) {
-    return true;
+  const current = summary.buckets.get(bucketKey);
+  if (current) {
+    return current.min;
   }
   const previous = summary.buckets.get(bucketKey - 1);
-  if (previous && previous.max >= entry.timestamp - DEDUPE_TIMESTAMP_WINDOW_MS) {
-    return true;
+  if (
+    previous?.max.timestamp !== undefined &&
+    previous.max.timestamp >= entry.timestamp - DEDUPE_TIMESTAMP_WINDOW_MS
+  ) {
+    return previous.max;
   }
   const next = summary.buckets.get(bucketKey + 1);
-  return next !== undefined && next.min <= entry.timestamp + DEDUPE_TIMESTAMP_WINDOW_MS;
+  return next?.min.timestamp !== undefined &&
+    next.min.timestamp <= entry.timestamp + DEDUPE_TIMESTAMP_WINDOW_MS
+    ? next.min
+    : undefined;
+}
+
+function projectImportedIdentity(localMessage: unknown, importedMessage: unknown): unknown {
+  if (!isRecord(localMessage) || !isRecord(importedMessage)) {
+    return localMessage;
+  }
+  const importedMeta = importedMessage["__openclaw"];
+  if (!isRecord(importedMeta)) {
+    return localMessage;
+  }
+  const localMeta = localMessage["__openclaw"];
+  const nextMeta = isRecord(localMeta) ? { ...localMeta } : {};
+  let changed = false;
+  for (const field of ["importedFrom", "externalId", "cliSessionId"] as const) {
+    const value = normalizeOptionalString(importedMeta[field]);
+    if (value && nextMeta[field] === undefined) {
+      nextMeta[field] = value;
+      changed = true;
+    }
+  }
+  return changed ? { ...localMessage, __openclaw: nextMeta } : localMessage;
 }
 
 function compareHistoryMessages(a: ComparableHistoryMessage, b: ComparableHistoryMessage): number {
@@ -167,12 +206,12 @@ export function mergeImportedChatHistoryMessages(params: {
     return params.localMessages;
   }
   const merged = params.localMessages.map(prepareComparableMessage);
-  const exactExternalIdentityIndex = new Set<string>();
+  const exactExternalIdentityIndex = new Map<string, ComparableHistoryMessage>();
   const allMessageRoleTextIndex: RoleTextIndex = new Map();
   const identitylessRoleTextIndex: RoleTextIndex = new Map();
   const indexEntry = (entry: ComparableHistoryMessage) => {
     if (entry.externalIdentityKey) {
-      exactExternalIdentityIndex.add(entry.externalIdentityKey);
+      exactExternalIdentityIndex.set(entry.externalIdentityKey, entry);
     } else {
       addRoleTextCandidate(identitylessRoleTextIndex, entry);
     }
@@ -181,19 +220,33 @@ export function mergeImportedChatHistoryMessages(params: {
   for (const entry of merged) {
     indexEntry(entry);
   }
+  let changed = false;
   let nextOrder = merged.length;
   for (const message of params.importedMessages) {
     const imported = prepareComparableMessage(message, nextOrder);
     const duplicate = imported.externalIdentityKey
-      ? exactExternalIdentityIndex.has(imported.externalIdentityKey) ||
-        hasRoleTextCandidate(identitylessRoleTextIndex, imported)
-      : hasRoleTextCandidate(allMessageRoleTextIndex, imported);
+      ? (exactExternalIdentityIndex.get(imported.externalIdentityKey) ??
+        findRoleTextCandidate(identitylessRoleTextIndex, imported))
+      : findRoleTextCandidate(allMessageRoleTextIndex, imported);
     if (duplicate) {
+      const projected = projectImportedIdentity(duplicate.message, imported.message);
+      if (projected !== duplicate.message) {
+        duplicate.message = projected;
+        duplicate.externalIdentityKey = resolveImportedExternalIdentityKey(projected);
+        if (duplicate.externalIdentityKey) {
+          exactExternalIdentityIndex.set(duplicate.externalIdentityKey, duplicate);
+        }
+        changed = true;
+      }
       continue;
     }
     merged.push(imported);
     indexEntry(imported);
     nextOrder += 1;
+    changed = true;
+  }
+  if (!changed) {
+    return params.localMessages;
   }
   merged.sort(compareHistoryMessages);
   return merged.map((entry) => entry.message);
