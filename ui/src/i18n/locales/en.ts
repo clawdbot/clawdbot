@@ -347,7 +347,7 @@ export const en: TranslationMap = {
       dialogLabel: "Set up {channel}",
       title: "Set up {channel}",
       genericTitle: "a channel",
-      subtitle: "A short guided setup — you can fine-tune everything later.",
+      subtitle: "Guided channel setup",
       starting: "Starting setup…",
       working: "Working…",
       sessionExpired:
@@ -356,7 +356,7 @@ export const en: TranslationMap = {
       finish: "Finish",
       copyText: "Copy",
       openLink: "Open link",
-      docs: "Docs",
+      viewDocs: "View docs",
       doneTitle: "Channel configured",
       doneBody:
         "Configuration saved. The gateway reloads the channel automatically; check its card for live status.",

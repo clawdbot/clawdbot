@@ -290,41 +290,6 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/hub-meta.ts",
-      "text": "@BotFather"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/hub-meta.ts",
-      "text": "api.slack.com/apps"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/hub-meta.ts",
-      "text": "Developer Portal"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/hub-meta.ts",
-      "text": "signal-cli"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/hub-meta.ts",
-      "text": "web.telegram.org"
-    },
-    {
-      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/channels/view.nostr.ts",
