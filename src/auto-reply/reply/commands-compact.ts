@@ -22,8 +22,8 @@ import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/a
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -189,11 +189,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   if (!compactRequested) {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /compact from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
+  const unauthorized = rejectUnauthorizedCommand(params, "/compact");
+  if (unauthorized) {
+    return unauthorized;
   }
   const targetSessionEntry = params.commandInvocationSignal
     ? params.compactionSessionEntry
