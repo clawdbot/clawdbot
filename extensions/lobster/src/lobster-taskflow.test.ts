@@ -85,9 +85,14 @@ describe("runManagedLobsterFlow", () => {
     });
   });
 
-  it("moves the flow to waiting when Lobster requests approval", async () => {
+  it("serializes cyclic and supported approval items before waiting", async () => {
     const taskFlow = createFakeTaskFlow();
     const createdAt = new Date("2026-04-05T21:00:00.000Z");
+    const selfArray: unknown[] = [];
+    selfArray.push(selfArray);
+    const objectArrayCycle: Record<string, unknown> = {};
+    objectArrayCycle.items = [objectArrayCycle];
+    const shared = { id: "shared" };
     const runner = createRunner({
       ok: true,
       status: "needs_approval",
@@ -95,7 +100,23 @@ describe("runManagedLobsterFlow", () => {
       requiresApproval: {
         type: "approval_request",
         prompt: "Approve this?",
-        items: [{ id: "item-1", createdAt, count: 2n, skip: undefined }],
+        items: [
+          {
+            selfArray,
+            objectArrayCycle,
+            repeated: [shared, shared],
+            createdAt,
+            infinity: Number.POSITIVE_INFINITY,
+            count: 2n,
+            omitted: {
+              kept: true,
+              undefinedValue: undefined,
+              function: () => true,
+              symbol: Symbol("skip"),
+            },
+            arrayValues: [undefined, () => true, Symbol("skip"), Number.NaN],
+          },
+        ],
         resumeToken: "resume-1",
       },
     });
@@ -110,7 +131,18 @@ describe("runManagedLobsterFlow", () => {
       waitJson: {
         kind: "lobster_approval",
         prompt: "Approve this?",
-        items: [{ id: "item-1", createdAt: createdAt.toISOString(), count: "2" }],
+        items: [
+          {
+            selfArray: ["[Circular]"],
+            objectArrayCycle: { items: ["[Circular]"] },
+            repeated: [{ id: "shared" }, { id: "shared" }],
+            createdAt: createdAt.toISOString(),
+            infinity: "Infinity",
+            count: "2",
+            omitted: { kept: true },
+            arrayValues: [null, null, null, "NaN"],
+          },
+        ],
         resumeToken: "resume-1",
       },
     });
