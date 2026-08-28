@@ -2632,12 +2632,16 @@ verify_git_rebase_recovery() {
     local repo_dir="$1"
     local expected_head="$2"
     local expected_status="$3"
+    local git_dir
 
-    git -C "$repo_dir" rebase --abort >/dev/null 2>&1 &&
-        [[ "$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)" == "$expected_head" ]] &&
+    git_dir="$(git -C "$repo_dir" rev-parse --absolute-git-dir)" || return 1
+    if [[ -d "$git_dir/rebase-merge" || -d "$git_dir/rebase-apply" ]]; then
+        git -C "$repo_dir" rebase --abort >/dev/null 2>&1 || return 1
+    fi
+
+    [[ "$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)" == "$expected_head" ]] &&
         [[ "$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)" == "$expected_status" ]] &&
-        [[ ! -d "$(git -C "$repo_dir" rev-parse --git-path rebase-merge)" ]] &&
-        [[ ! -d "$(git -C "$repo_dir" rev-parse --git-path rebase-apply)" ]]
+        [[ ! -d "$git_dir/rebase-merge" && ! -d "$git_dir/rebase-apply" ]]
 }
 
 checkout_git_openclaw_ref() {
