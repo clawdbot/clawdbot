@@ -8,7 +8,7 @@ import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { collectChannelOperationFailures } from "./server-reload-utils.js";
 
-export function startGatewayChannelFromActiveRegistry(
+function startGatewayChannelFromActiveRegistry(
   params: Pick<GatewayReloadHandlerParams, "startChannel">,
   channel: ChannelKind,
   accountId?: string,
