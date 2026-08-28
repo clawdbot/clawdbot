@@ -105,7 +105,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
       const params = args as Record<string, unknown>;
       const objective = readToolStringParam(params, "objective", { required: true });
       const tokenBudget = readPositiveIntegerParam(params, "token_budget", {
-        message: "token_budget must be a positive integer",
+        message: "token_budget must be a positive safe integer",
       });
       const scope = resolveGoalSessionScope(options);
       const goal = await createSessionGoal({

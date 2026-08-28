@@ -8,6 +8,7 @@ import {
   setSessionRuntimeModel,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
@@ -30,6 +31,19 @@ type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["run
 
 const usageFormatModuleLoader = createLazyImportLoader(() => import("../../utils/usage-format.js"));
 const contextModuleLoader = createLazyImportLoader(() => import("../context.js"));
+
+function rebaseSessionGoalTokenCursor(
+  goal: NonNullable<SessionEntry["goal"]>,
+  totalTokens: number,
+  options?: { resetStart?: boolean },
+): NonNullable<SessionEntry["goal"]> {
+  return {
+    ...goal,
+    ...(options?.resetStart ? { tokenStart: totalTokens } : {}),
+    tokenStartFresh: true,
+    tokenCursor: totalTokens,
+  };
+}
 
 async function getUsageFormatModule() {
   return await usageFormatModuleLoader.load();
@@ -276,6 +290,12 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (compactionsThisRun > 0 && !preserveUserFacingRunState) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
+  if (!preserveUserFacingRunState) {
+    const accountedGoal = resolveSessionGoalDisplayState(next, now);
+    if (accountedGoal) {
+      next.goal = accountedGoal;
+    }
+  }
   const metadataPatch = preserveUserFacingRunState
     ? {
         // Preserved-state runs must not alter perceived session state, so the
@@ -301,14 +321,45 @@ export async function updateSessionStoreAfterAgentRun(params: {
         // recreate rows that were reset/deleted while the run was active.
         return null;
       }
-      return preserveUserFacingRunState
-        ? metadataPatch
-        : projectSessionSnapshotChanges({
-            initial: entry,
-            next,
-            current: currentEntry,
-            reassertAbortedLastRun: result.meta.aborted === true,
-          });
+      if (preserveUserFacingRunState) {
+        return metadataPatch;
+      }
+      const snapshotPatch = projectSessionSnapshotChanges({
+        initial: entry,
+        next,
+        current: currentEntry,
+        reassertAbortedLastRun: result.meta.aborted === true,
+      });
+      if (
+        currentEntry.goal &&
+        typeof next.totalTokens === "number" &&
+        next.totalTokensFresh === true
+      ) {
+        const currentGoalCursor = currentEntry.goal.tokenCursor;
+        const isOlderFinalizerSnapshot =
+          compactionTokensAfter === undefined &&
+          typeof currentGoalCursor === "number" &&
+          Number.isSafeInteger(currentGoalCursor) &&
+          currentGoalCursor >= 0 &&
+          next.totalTokens < currentGoalCursor;
+        snapshotPatch.goal =
+          entry.goal?.id === currentEntry.goal.id
+            ? isOlderFinalizerSnapshot
+              ? currentEntry.goal
+              : resolveSessionGoalDisplayState(
+                  {
+                    goal: currentEntry.goal,
+                    totalTokens: next.totalTokens,
+                    totalTokensFresh: true,
+                    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+                  },
+                  now,
+                )
+            : rebaseSessionGoalTokenCursor(currentEntry.goal, next.totalTokens, {
+                resetStart: true,
+              });
+      }
+      return snapshotPatch;
     },
     {
       ...(preserveUserFacingRunState ? {} : { fallbackEntry: entry }),
@@ -549,7 +600,15 @@ export async function recordCliCompactionInStore(params: {
       ) {
         return null;
       }
-      return next;
+      return {
+        ...next,
+        // The durable row owns concurrent Goal edits. Rebase that exact Goal to the new token
+        // epoch instead of restoring the caller's stale in-memory snapshot.
+        goal:
+          tokensAfterCompaction !== undefined && currentEntry.goal
+            ? rebaseSessionGoalTokenCursor(currentEntry.goal, Math.floor(tokensAfterCompaction))
+            : currentEntry.goal,
+      };
     },
     { fallbackEntry: entry },
   );

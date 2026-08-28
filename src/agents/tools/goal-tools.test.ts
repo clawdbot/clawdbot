@@ -133,11 +133,36 @@ describe("goal tools", () => {
           objective: "ship global work",
           token_budget: tokenBudget,
         }),
-      ).rejects.toThrow("token_budget must be a positive integer");
+      ).rejects.toThrow("token_budget must be a positive safe integer");
 
       expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal).toBeUndefined();
     },
   );
+
+  it("rejects unsafe token budgets instead of silently creating an unlimited goal", async () => {
+    const { config, template } = await createStoreConfig();
+    const tool = createCreateGoalTool({
+      agentSessionKey: "global",
+      runSessionKey: "global",
+      sessionAgentId: "research",
+      config,
+    });
+
+    const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "global",
+      entry: { sessionId: "sess-global", updatedAt: 1 },
+    });
+    await expect(
+      tool.execute("call-unsafe-budget", {
+        objective: "ship safely",
+        token_budget: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).rejects.toThrow("token_budget must be a positive safe integer");
+
+    expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal).toBeUndefined();
+  });
 
   it("prefers scoped run session keys over the fallback session agent", async () => {
     const { config, template } = await createStoreConfig();

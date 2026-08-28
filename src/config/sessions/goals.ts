@@ -43,9 +43,12 @@ function nowMs(value: number | undefined): number {
 }
 
 function normalizeTokenCount(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? Math.floor(value)
-    : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function addTokenCounts(left: number, right: number): number {
+  const sum = left + right;
+  return Number.isSafeInteger(sum) ? sum : Number.MAX_SAFE_INTEGER;
 }
 
 function resolveEntryFreshTotalTokens(
@@ -61,8 +64,14 @@ function resolveEntryGoalStartTokens(
 }
 
 function normalizeTokenBudget(value: number | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
   const normalized = normalizeTokenCount(value);
-  return normalized && normalized > 0 ? normalized : undefined;
+  if (normalized === undefined || normalized <= 0) {
+    throw new Error("token budget must be a positive safe integer");
+  }
+  return normalized;
 }
 
 function cloneGoal(goal: SessionGoal): SessionGoal {
@@ -103,29 +112,40 @@ function accountGoalUsage(
     return undefined;
   }
   const totalTokens = resolveEntryFreshTotalTokens(entry);
-  const hasFreshStart = goal.tokenStartFresh !== false;
-  // Old entries may have a stale token baseline; display-only reads can hold it, while persisted
-  // reads adopt the fresh total so future budget checks use current accounting.
-  const shouldHoldStaleStart = !hasFreshStart && options?.adoptFreshBaseline === false;
-  const shouldAdoptFreshStart =
-    !shouldHoldStaleStart && totalTokens !== undefined && !hasFreshStart;
-  const tokenStart = shouldAdoptFreshStart
-    ? totalTokens
-    : (normalizeTokenCount(goal.tokenStart) ?? totalTokens ?? 0);
-  const tokensUsed =
-    totalTokens === undefined || shouldAdoptFreshStart || shouldHoldStaleStart
-      ? goal.tokensUsed
-      : Math.max(goal.tokensUsed, Math.max(0, totalTokens - tokenStart));
+  const storedCursor = normalizeTokenCount(goal.tokenCursor);
+  const tokenStart = normalizeTokenCount(goal.tokenStart);
+  const tokensUsed = normalizeTokenCount(goal.tokensUsed) ?? Number.MAX_SAFE_INTEGER;
+  // Before tokenCursor existed, tokensUsed was the monotonic distance from tokenStart. Reconstruct
+  // the last-accounted snapshot so upgrading an already-accounted goal does not charge it twice.
+  const legacyCursor =
+    storedCursor === undefined && goal.tokenStartFresh !== false && tokenStart !== undefined
+      ? addTokenCounts(tokenStart, tokensUsed)
+      : undefined;
+  const cursor = storedCursor ?? legacyCursor;
+  // A newly-created or explicitly stale goal has no comparable snapshot epoch yet. Read-only
+  // projections hold that pending baseline; persisted accounting adopts the first fresh snapshot
+  // without charging it, preventing pre-goal history from entering the new budget window.
+  const shouldHoldPendingBaseline = cursor === undefined && options?.adoptFreshBaseline === false;
+  const shouldAdoptFreshBaseline =
+    !shouldHoldPendingBaseline && totalTokens !== undefined && cursor === undefined;
+  const delta =
+    totalTokens === undefined || cursor === undefined ? 0 : Math.max(0, totalTokens - cursor);
+  const nextTokensUsed = addTokenCounts(tokensUsed, delta);
   const next: SessionGoal = {
     ...goal,
-    tokenStart,
-    tokenStartFresh: hasFreshStart || shouldAdoptFreshStart,
-    tokensUsed,
+    // Preserve the legacy projection contract where an omitted freshness flag meant a trusted
+    // baseline. A cursor likewise proves that a comparable baseline has been established.
+    ...(cursor !== undefined ? { tokenStartFresh: true } : {}),
+    ...(shouldAdoptFreshBaseline ? { tokenStart: totalTokens, tokenStartFresh: true } : {}),
+    ...(totalTokens !== undefined && !shouldHoldPendingBaseline
+      ? { tokenCursor: totalTokens }
+      : {}),
+    tokensUsed: nextTokensUsed,
   };
   if (
     next.status === "active" &&
     next.tokenBudget !== undefined &&
-    tokensUsed >= next.tokenBudget
+    nextTokensUsed >= next.tokenBudget
   ) {
     next.status = "budget_limited";
     next.budgetLimitedAt = now;
@@ -222,7 +242,7 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
         throw new Error("goal already exists");
       }
       const tokenBudget = normalizeTokenBudget(options.tokenBudget);
-      const tokenStartFresh = resolveEntryFreshTotalTokens(entry) !== undefined;
+      const freshTokenStart = resolveEntryFreshTotalTokens(entry);
       created = {
         schemaVersion: 1,
         id: crypto.randomUUID(),
@@ -230,8 +250,9 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
         status: "active",
         createdAt: now,
         updatedAt: now,
-        tokenStart: resolveEntryGoalStartTokens(entry),
-        tokenStartFresh,
+        tokenStart: freshTokenStart ?? resolveEntryGoalStartTokens(entry),
+        tokenStartFresh: freshTokenStart !== undefined,
+        ...(freshTokenStart !== undefined ? { tokenCursor: freshTokenStart } : {}),
         tokensUsed: 0,
         ...(tokenBudget ? { tokenBudget } : {}),
         continuationTurns: 0,
@@ -283,6 +304,11 @@ export async function updateSessionGoalStatus(
       if (resetsBudgetWindow) {
         next.tokenStart = freshTokenStart ?? 0;
         next.tokenStartFresh = freshTokenStart !== undefined;
+        if (freshTokenStart !== undefined) {
+          next.tokenCursor = freshTokenStart;
+        } else {
+          delete next.tokenCursor;
+        }
         next.tokensUsed = 0;
         delete next.budgetLimitedAt;
         delete next.usageLimitedAt;
