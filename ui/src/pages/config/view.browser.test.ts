@@ -403,14 +403,19 @@ describe("config view", () => {
       setShowAdvancedSettings,
     });
 
-    const ghost = queryRequired(collapsed.container, ".config-advanced-ghost", HTMLButtonElement);
-    expect(ghost.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "1 advanced setting hidden Show advanced",
+    const disclosure = queryRequired(
+      collapsed.container,
+      "details.config-advanced-disclosure",
+      HTMLDetailsElement,
     );
-    ghost.click();
+    expect(disclosure.open).toBe(false);
+    expect(queryRequired(disclosure, "summary", HTMLElement).textContent?.trim()).toBe(
+      "Advanced settings",
+    );
+    expect(normalizedText(collapsed.container)).not.toContain("Reload mode");
+    disclosure.open = true;
+    disclosure.dispatchEvent(new Event("toggle"));
     expect(setShowAdvancedSettings).toHaveBeenCalledWith(true);
-    expect(ghost.classList.contains("config-show-advanced")).toBe(true);
-    expect(ghost.getAttribute("aria-pressed")).toBe("false");
 
     const global = renderConfigView({
       schema,
@@ -419,13 +424,14 @@ describe("config view", () => {
       activeSection: "gateway",
       showAdvancedSettings: true,
     });
-    expect(global.container.querySelector(".config-advanced-ghost")).toBeNull();
-    const divider = queryRequired(global.container, ".config-advanced-divider", HTMLElement);
-    expect(divider.textContent?.replace(/\s+/g, " ").trim()).toBe("Advanced Hide Advanced");
-    const hide = queryRequired(divider, ".config-advanced-divider__toggle", HTMLButtonElement);
-    expect(hide.classList.contains("config-show-advanced")).toBe(true);
-    expect(hide.getAttribute("aria-pressed")).toBe("true");
-    hide.click();
+    const expandedDisclosure = queryRequired(
+      global.container,
+      "details.config-advanced-disclosure",
+      HTMLDetailsElement,
+    );
+    expect(expandedDisclosure.open).toBe(true);
+    expandedDisclosure.open = false;
+    expandedDisclosure.dispatchEvent(new Event("toggle"));
     expect(global.props.setShowAdvancedSettings).toHaveBeenCalledWith(false);
     expect(normalizedText(global.container)).toContain("Reload mode");
 
@@ -436,7 +442,10 @@ describe("config view", () => {
       activeSection: "gateway",
       forceAdvancedSection: "gateway",
     });
-    expect(searchHit.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(
+      queryRequired(searchHit.container, "details.config-advanced-disclosure", HTMLDetailsElement)
+        .open,
+    ).toBe(true);
     expect(normalizedText(searchHit.container)).toContain("Reload mode");
 
     const nested = document.createElement("div");
@@ -466,7 +475,9 @@ describe("config view", () => {
       }),
       nested,
     );
-    expect(nested.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(
+      queryRequired(nested, "details.config-advanced-disclosure", HTMLDetailsElement).open,
+    ).toBe(true);
     expect(normalizedText(nested)).toContain("Tuning");
 
     const forcedPage = renderConfigView({
@@ -477,7 +488,10 @@ describe("config view", () => {
       forceShowAdvanced: true,
     });
     expect(findOptionalButtonByText(forcedPage.container, "Show advanced")).toBeUndefined();
-    expect(forcedPage.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(
+      queryRequired(forcedPage.container, "details.config-advanced-disclosure", HTMLDetailsElement)
+        .open,
+    ).toBe(true);
     expect(normalizedText(forcedPage.container)).toContain("Reload mode");
   });
 
@@ -505,7 +519,7 @@ describe("config view", () => {
       activeSection: "diagnostics",
     });
     expect(findOptionalButtonByText(unhinted.container, "Show advanced")).toBeUndefined();
-    expect(unhinted.container.querySelector(".config-advanced-ghost")).not.toBeNull();
+    expect(unhinted.container.querySelector("details.config-advanced-disclosure")).not.toBeNull();
 
     // An advanced hint in a different top-level section must not surface a
     // no-op toggle on a fully-common active section.
@@ -519,7 +533,7 @@ describe("config view", () => {
       activeSection: "gateway",
     });
     expect(findOptionalButtonByText(offScope.container, "Show advanced")).toBeUndefined();
-    expect(offScope.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(offScope.container.querySelector("details.config-advanced-disclosure")).toBeNull();
   });
 
   it("shows the form-unsafe banner only for populated unsupported paths", () => {
@@ -1300,9 +1314,11 @@ describe("config view", () => {
     });
 
     expect(
-      [...container.querySelectorAll(".settings-section__heading")].map((title) =>
-        title.textContent?.trim(),
-      ),
+      [
+        ...container.querySelectorAll(
+          ".settings-section > .settings-section__header .settings-section__heading",
+        ),
+      ].map((title) => title.textContent?.trim()),
     ).toEqual(["Authentication", "Gateway"]);
   });
 

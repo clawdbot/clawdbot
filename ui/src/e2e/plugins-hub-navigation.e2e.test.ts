@@ -237,8 +237,7 @@ suite.define(() => {
         });
         expect(Math.abs(layout.tabsLeft - layout.titleLeft)).toBeLessThanOrEqual(1);
         expect(layout.aboveTabs).toBeGreaterThan(0);
-        expect(layout.belowTabs - layout.aboveTabs).toBeGreaterThanOrEqual(7);
-        expect(layout.belowTabs - layout.aboveTabs).toBeLessThanOrEqual(9);
+        expect(Math.abs(layout.belowTabs - layout.aboveTabs)).toBeLessThanOrEqual(1);
         if (label === "desktop") {
           expect(Math.abs(layout.tabsLeft - layout.contentLeft)).toBeLessThanOrEqual(1);
         }

@@ -19,7 +19,8 @@
 }
 
 .plugins-hub-header + .settings-workspace {
-  margin-top: var(--space-2);
+  /* The settings page already contributes the lower half of the tab rhythm. */
+  margin-top: 0;
 }
 
 @media (max-width: 400px) {

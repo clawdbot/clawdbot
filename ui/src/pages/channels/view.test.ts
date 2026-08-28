@@ -272,16 +272,18 @@ function renderWhatsAppConfigForm(
 }
 
 describe("channel config advanced tier", () => {
-  it("hides advanced channel settings behind the ghost row by default", () => {
+  it("hides advanced channel settings behind the disclosure by default", () => {
     const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(false);
 
     expect(container.textContent).toContain("Enabled");
     expect(container.textContent).not.toContain("Timeout Ms");
-    expect(container.querySelector(".config-advanced-divider")).toBeNull();
-
-    const ghost = container.querySelector<HTMLButtonElement>(".config-advanced-ghost");
-    expect(ghost?.textContent).toContain("2 advanced settings hidden");
-    ghost!.click();
+    const disclosure = container.querySelector<HTMLDetailsElement>(
+      "details.config-advanced-disclosure",
+    );
+    expect(disclosure?.open).toBe(false);
+    expect(disclosure?.querySelector("summary")?.textContent?.trim()).toBe("Advanced settings");
+    disclosure!.open = true;
+    disclosure!.dispatchEvent(new Event("toggle"));
     expect(onShowAdvancedSettings).toHaveBeenCalledWith(true);
   });
 
@@ -290,11 +292,12 @@ describe("channel config advanced tier", () => {
 
     expect(container.textContent).toContain("Enabled");
     expect(container.textContent).toContain("Timeout Ms");
-    expect(container.querySelector(".config-advanced-ghost")).toBeNull();
-
-    const collapse = container.querySelector<HTMLButtonElement>(".config-advanced-divider__toggle");
-    expect(collapse).toBeInstanceOf(HTMLButtonElement);
-    collapse!.click();
+    const disclosure = container.querySelector<HTMLDetailsElement>(
+      "details.config-advanced-disclosure",
+    );
+    expect(disclosure?.open).toBe(true);
+    disclosure!.open = false;
+    disclosure!.dispatchEvent(new Event("toggle"));
     expect(onShowAdvancedSettings).toHaveBeenCalledWith(false);
   });
 
@@ -304,9 +307,12 @@ describe("channel config advanced tier", () => {
       "channels.whatsapp.enabled": { advanced: true },
     });
 
-    const collapse = container.querySelector<HTMLButtonElement>(".config-advanced-divider__toggle");
-    expect(collapse).toBeInstanceOf(HTMLButtonElement);
-    collapse!.click();
+    const disclosure = container.querySelector<HTMLDetailsElement>(
+      "details.config-advanced-disclosure",
+    );
+    expect(disclosure?.open).toBe(true);
+    disclosure!.open = false;
+    disclosure!.dispatchEvent(new Event("toggle"));
     expect(onShowAdvancedSettings).toHaveBeenCalledWith(false);
   });
 

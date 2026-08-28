@@ -84,7 +84,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const config = {
-      messages: { queueLimit: 5 },
+      messages: { queueLimit: 5, responsePrefix: "[OpenClaw]" },
       tts: { auto: "off" },
     };
     const schema = {
@@ -95,6 +95,7 @@ suite.define(() => {
           title: "Messages",
           properties: {
             queueLimit: { type: "integer", title: "Queue limit", minimum: 0 },
+            responsePrefix: { type: "string", title: "Response prefix" },
           },
         },
         tts: {
@@ -129,6 +130,8 @@ suite.define(() => {
               label: "Messages",
               docsUrl: "https://docs.openclaw.ai/concepts/messages",
             },
+            "messages.queueLimit": { advanced: false },
+            "messages.responsePrefix": { advanced: true },
             tts: { label: "Voice", docsUrl: "https://docs.openclaw.ai/tts" },
           },
           version: "communications-layout",
@@ -152,12 +155,44 @@ suite.define(() => {
         ["Messages", "Voice"],
       );
       expect(await page.locator(".settings-section__help-button").count()).toBe(0);
+      const spacing = await page.evaluate(() => {
+        const subtitle = document.querySelector<HTMLElement>(".page-subtitle");
+        const tabs = document.querySelector<HTMLElement>("wa-tab-group.config-sections-hub-tabs");
+        const section = document.querySelector<HTMLElement>(".settings-section");
+        if (!subtitle || !tabs || !section) {
+          throw new Error("Communications layout did not render");
+        }
+        return {
+          aboveTabs: tabs.getBoundingClientRect().top - subtitle.getBoundingClientRect().bottom,
+          belowTabs: section.getBoundingClientRect().top - tabs.getBoundingClientRect().bottom,
+        };
+      });
+      expect(spacing.aboveTabs).toBeGreaterThan(0);
+      expect(Math.abs(spacing.belowTabs - spacing.aboveTabs)).toBeLessThanOrEqual(1);
+
+      const advanced = page.locator("details.config-advanced-disclosure");
+      await expect.poll(() => advanced.count()).toBe(1);
+      await expect.poll(() => advanced.getAttribute("open")).toBeNull();
+      await expect
+        .poll(() => advanced.locator("summary").textContent())
+        .toContain("Advanced settings");
       if (proofEnabled) {
         await mkdir(proofDir, { recursive: true });
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
           path: path.join(proofDir, "communications-messages.png"),
+        });
+      }
+
+      await advanced.locator("summary").click();
+      await expect.poll(() => advanced.getAttribute("open")).not.toBeNull();
+      await expect.poll(() => page.getByText("Response prefix", { exact: true }).count()).toBe(1);
+      if (proofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(proofDir, "communications-advanced-expanded.png"),
         });
       }
 
