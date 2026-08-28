@@ -21,9 +21,10 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
 import { QuestionManager } from "../question-manager.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createQuestionHandlers } from "./question.js";
 import { createSecretsHandlers, createSecretStoreWriteService } from "./secrets.js";
-import type { GatewayClient, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+import type { GatewayClient, RespondFn } from "./types.js";
 
 afterEach(() => {
   clearSecretsRuntimeSnapshot();
@@ -46,11 +47,9 @@ async function invoke(
       responses.push(args);
     },
     isWebchatConnect: () => false,
-    context: {
-      broadcast: () => {},
-      getRuntimeConfig: () => ({}),
+    context: createDirectChatContext({
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-    } as GatewayRequestHandlerOptions["context"],
+    }),
   });
   return responses[0];
 }

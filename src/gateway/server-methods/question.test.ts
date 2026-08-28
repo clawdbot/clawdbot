@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -28,19 +29,21 @@ import {
   type ChatAbortControllerEntry,
 } from "../chat-abort.js";
 import { QuestionManager } from "../question-manager.js";
+import type { GatewayBroadcastFn } from "../server-broadcast-types.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { canReceiveSessionEvent } from "../session-sharing.js";
 import { createQuestionHandlers } from "./question.js";
 import { createSecretStoreWriteService } from "./secrets.js";
-import type { GatewayClient, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+import type { GatewayClient, RespondFn } from "./types.js";
 
 let manager: QuestionManager;
 let requesterAuthority: AgentRunDelegatedAuthority;
 let unregisterAuthorityClosed: () => void;
 let adminRequestClient: GatewayClient;
-let broadcast: ReturnType<typeof vi.fn>;
+let broadcast: ReturnType<typeof vi.fn<GatewayBroadcastFn>>;
 let handlers: ReturnType<typeof createQuestionHandlers>;
 type SecretStoreReload = Parameters<typeof createSecretStoreWriteService>[0]["reloadSecrets"];
 let reloadSecrets: ReturnType<typeof vi.fn<SecretStoreReload>>;
@@ -73,7 +76,7 @@ beforeEach(() => {
   unregisterAuthorityClosed = registerAgentRunDelegatedAuthorityClosedHandler(() =>
     manager.cancelClosedAuthorities(),
   );
-  broadcast = vi.fn();
+  broadcast = vi.fn<GatewayBroadcastFn>();
   reloadSecrets = vi.fn<SecretStoreReload>().mockResolvedValue({ warningCount: 0 });
   handlers = createQuestionHandlers(manager, createSecretStoreWriteService({ reloadSecrets }));
 });
@@ -100,11 +103,11 @@ async function call(
     respond,
     client: options?.client ?? null,
     isWebchatConnect: () => false,
-    context: {
+    context: createDirectChatContext({
       broadcast,
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
       getRuntimeConfig: () => options?.cfg ?? {},
-    } as unknown as GatewayRequestHandlerOptions["context"],
+    }),
   });
   const response = calls[0];
   if (!response) {
@@ -928,7 +931,7 @@ describe("question gateway methods", () => {
     async (racer) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         mockReferencedStoreSnapshot();
-        const reload = Promise.withResolvers<{ warningCount: number }>();
+        const reload = createDeferred<{ warningCount: number }>();
         reloadSecrets.mockReturnValue(reload.promise);
         const requested = await call("question.request", secretRequestParams, {
           client: adminRequestClient,
