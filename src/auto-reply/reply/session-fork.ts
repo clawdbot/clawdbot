@@ -35,6 +35,7 @@ type ParentForkDecisionParams = {
 };
 
 type ForkSessionFromParentParams = {
+  maxTokens?: number;
   parentSessionKey: string;
   parentEntry: SessionEntry;
   agentId: string;
@@ -139,6 +140,7 @@ export async function forkSessionFromParentWithDecision(
     agentId: params.agentId,
     ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
     enforceTokenLimit: true,
+    ...(params.maxTokens ? { maxTokens: params.maxTokens } : {}),
     parentEntry: params.parentEntry,
     parentSessionKey: params.parentSessionKey,
     sessionKey: params.sessionKey,

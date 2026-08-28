@@ -639,6 +639,8 @@ export type ForkSessionFromParentTranscriptParams = {
   forkFrom?: "last-completed";
   /** Enforce the parent-fork context cap against the selected source. */
   enforceTokenLimit?: boolean;
+  /** Resolved child-model capacity; omission preserves the legacy safety cap. */
+  maxTokens?: number;
   /** Stable target identity for lifecycle-owned hidden or resumable sessions. */
   targetSessionId?: string;
   /** Cross-agent forks land the child transcript in the target agent's store. */
