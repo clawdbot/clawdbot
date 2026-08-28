@@ -1,5 +1,4 @@
 // Loads documented plugin public surfaces while preserving lazy boundaries.
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
@@ -14,40 +13,17 @@ import {
   resolveBundledPluginPublicSurfacePath,
   resolvePluginRootPublicSurfacePath,
 } from "./public-surface-runtime.js";
-import { resolvePluginLoaderTryNative, resolveLoaderPackageRoot } from "./sdk-alias.js";
+import { resolveLoaderPackageRoot } from "./sdk-alias.js";
 
 const OPENCLAW_PACKAGE_ROOT =
   resolveLoaderPackageRoot({
     modulePath: fileURLToPath(import.meta.url),
     moduleUrl: import.meta.url,
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
-const sourceArtifactRequire = createRequire(import.meta.url);
 type PublicSurfaceLocation = {
   modulePath: string;
   boundaryRoot: string;
 };
-
-function isSourceArtifactPath(modulePath: string): boolean {
-  switch (path.extname(modulePath).toLowerCase()) {
-    case ".ts":
-    case ".tsx":
-    case ".mts":
-    case ".cts":
-    case ".mtsx":
-    case ".ctsx":
-      return true;
-    default:
-      return false;
-  }
-}
-
-function canUseSourceArtifactRequire(params: { modulePath: string; tryNative: boolean }): boolean {
-  return (
-    !params.tryNative &&
-    isSourceArtifactPath(params.modulePath) &&
-    typeof sourceArtifactRequire.extensions?.[".ts"] === "function"
-  );
-}
 
 function createResolutionKey(params: { dirName: string; artifactBasename: string }): string {
   const bundledPluginsDir = resolveBundledPluginsDir();
@@ -92,21 +68,16 @@ function resolvePublicSurfaceLocation(params: {
   return resolved;
 }
 
-function getModuleLoader(modulePath: string) {
-  return getCachedPluginModuleLoader({
+function loadPublicSurfaceModule(modulePath: string): unknown {
+  // A TS require hook can force import-only dependencies through CommonJS resolution.
+  // Keep source transforms and built-artifact native loading on the same canonical owner.
+  const load = getCachedPluginModuleLoader({
     modulePath,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
     loaderFilename: import.meta.url,
   });
-}
-
-function loadPublicSurfaceModule(modulePath: string): unknown {
-  const tryNative = resolvePluginLoaderTryNative(modulePath, { preferBuiltDist: true });
-  if (canUseSourceArtifactRequire({ modulePath, tryNative })) {
-    return sourceArtifactRequire(modulePath);
-  }
-  return getModuleLoader(modulePath)(modulePath);
+  return load(modulePath);
 }
 
 function loadValidatedPublicSurfaceModule(params: {

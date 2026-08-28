@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  clearNativeRequireJavaScriptModuleCache,
+  clearPluginModuleRequireCache,
   isJavaScriptModulePath,
   tryNativeRequireJavaScriptModule,
 } from "./native-module-require.js";
@@ -207,7 +207,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
     });
 
     fs.writeFileSync(modulePath, 'module.exports = { marker: "after" };\n', "utf8");
-    clearNativeRequireJavaScriptModuleCache(modulePath);
+    clearPluginModuleRequireCache(modulePath);
 
     expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
       ok: true,
@@ -227,7 +227,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
     });
 
     fs.writeFileSync(helperPath, 'module.exports = { marker: "after" };\n', "utf8");
-    clearNativeRequireJavaScriptModuleCache(modulePath, { dependencyRoot: dir });
+    clearPluginModuleRequireCache(modulePath, { dependencyRoot: dir });
 
     expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
       ok: true,
