@@ -129,10 +129,17 @@ export type ToolSearchCatalogSession = {
   callCount: number;
 };
 
+export type ToolSearchCatalogTelemetry = Omit<ToolSearchCatalogSession, "entries"> & {
+  catalogSize: number;
+  sources: Record<CatalogSource, number>;
+};
+
 export type ToolSearchCatalogRef = {
   current?: ToolSearchCatalogSession;
+  closedTelemetry?: ToolSearchCatalogTelemetry;
   onChange?: () => void;
-  onDispose?: () => void;
+  disposeObserver?: () => void;
+  onDispose?: Set<() => void>;
 };
 
 export type CodeModeBridgeMethod = "search" | "describe" | "call";

@@ -76,7 +76,10 @@ import {
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { selectMessageActionRequesterIdentity } from "../message-action-turn-capability.js";
-import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import {
+  authorizeGatewaySessionCreation,
+  resolveSandboxedSessionCreation,
+} from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
@@ -1436,6 +1439,8 @@ export const sendHandlers: GatewayRequestHandlers = {
               channel,
               accountId,
               route: outboundRoute,
+              creation: resolveSandboxedSessionCreation(client, cfg),
+              sourceSessionKey: client?.internal?.agentRuntimeIdentity?.sessionKey,
             });
           };
           const outboundSession = buildOutboundSessionContext({

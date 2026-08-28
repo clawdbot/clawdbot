@@ -233,7 +233,7 @@ extensions/codex/src/app-server/scheduled-app-authority.ts	5
 extensions/codex/src/app-server/session-binding.ts	4
 extensions/codex/src/app-server/session-history.ts	6
 extensions/codex/src/app-server/settled-turn-context.ts	3
-extensions/codex/src/app-server/shared-client.ts	5
+extensions/codex/src/app-server/shared-client.ts	4
 extensions/codex/src/app-server/shell-dynamic-tools.ts	2
 extensions/codex/src/app-server/side-question.ts	8
 extensions/codex/src/app-server/startup-binding.ts	2
@@ -2490,7 +2490,6 @@ src/commands/channels/add-wizard.ts	2
 src/commands/channels/add.ts	3
 src/commands/channels/capabilities.ts	4
 src/commands/channels/list.ts	1
-src/commands/channels/remove.ts	1
 src/commands/channels/status.runtime.ts	9
 src/commands/cleanup-utils.ts	1
 src/commands/configure.channels.ts	1
@@ -2960,16 +2959,12 @@ src/gateway/server-methods/memory-search.ts	3
 src/gateway/server-methods/migrations.ts	1
 src/gateway/server-methods/models-auth-status.ts	1
 src/gateway/server-methods/models-probe.ts	1
-src/gateway/server-methods/nodes.event.ts	1
-src/gateway/server-methods/nodes.handlers.invoke-progress.ts	1
-src/gateway/server-methods/nodes.handlers.invoke-result.ts	2
+src/gateway/server-methods/nodes.handlers.invoke-result.ts	1
 src/gateway/server-methods/nodes.helpers.ts	1
 src/gateway/server-methods/nodes.invoke-foreground.ts	1
 src/gateway/server-methods/nodes.invoke-talk-events.ts	1
-src/gateway/server-methods/nodes.invoke.ts	1
-src/gateway/server-methods/nodes.pairing.ts	4
-src/gateway/server-methods/nodes.pending-work.ts	2
-src/gateway/server-methods/nodes.read.ts	3
+src/gateway/server-methods/nodes.pending-work.ts	1
+src/gateway/server-methods/nodes.read.ts	2
 src/gateway/server-methods/open-path.ts	1
 src/gateway/server-methods/optional-model-catalog.ts	2
 src/gateway/server-methods/plugin-approval.ts	3

@@ -596,7 +596,7 @@ describe("normalizeStoredCronJobs", () => {
             "- If the command prints exactly NO_REPLY, respond exactly NO_REPLY.",
             "- Otherwise return the concise command output.",
           ].join("\n"),
-          toolsAllow: ["bash", "process"],
+          toolsAllow: ["group:runtime"],
           lightContext: true,
           timeoutSeconds: 900,
           model: "openai/gpt-5.5",

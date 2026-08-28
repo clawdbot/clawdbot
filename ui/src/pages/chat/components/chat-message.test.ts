@@ -867,6 +867,34 @@ describe("grouped chat rendering", () => {
     expect(order).toEqual(["Reply to message", "Rewind", "name", "time"]);
   });
 
+  it.each([
+    { state: "failed", label: "Not sent" },
+    { state: "unconfirmed", label: "Delivery unconfirmed" },
+  ] as const)("shows a $state footer with its diagnostic and retry action", ({ state, label }) => {
+    const container = document.createElement("div");
+    const onRetryQueuedMessage = vi.fn();
+    renderGroupedMessage(
+      container,
+      createUserMessage("Attempted message", {
+        __openclaw: {
+          id: "attempted-send",
+          kind: "pending-send",
+          state,
+          error: "Delivery diagnostic",
+        },
+      }),
+      "user",
+      { onRetryQueuedMessage },
+    );
+
+    const status = expectElement(container, ".chat-group.user .chat-send-status", HTMLElement);
+    expect(status.dataset.sendState).toBe(state);
+    expect(status.title).toBe("Delivery diagnostic");
+    expect(status.textContent?.replace(/\s+/g, " ").trim()).toBe(`· ${label} · Retry`);
+    status.querySelector<HTMLButtonElement>(".chat-send-status__retry")?.click();
+    expect(onRetryQueuedMessage).toHaveBeenCalledWith("attempted-send");
+  });
+
   it("orders peer footer actions after the sender name and timestamp", () => {
     const container = document.createElement("div");
     const message = createUserMessage("Peer footer order.");
@@ -2440,6 +2468,63 @@ describe("grouped chat rendering", () => {
     expect(activity.textContent).not.toContain("read_file");
     expect(activity.textContent).not.toContain("run_command");
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+  });
+
+  it("counts one exec and one wait across completed history, live snapshots, and separated activity groups", () => {
+    const container = document.createElement("div");
+    const messages: TestMessage[] = [];
+    const toolMessages: TestMessage[] = [];
+    for (const [index, name] of ["exec", "wait"].entries()) {
+      const toolCallId = `call-${name}`;
+      const args = name === "exec" ? { command: "echo ready" } : { runId: "cell-1" };
+      const call = { type: "toolcall", name, id: toolCallId, arguments: args };
+      const result = { type: "toolresult", name, id: toolCallId, text: `${name} finished` };
+      messages.push(
+        createAssistantMessage([call], { runId: "run-count", timestamp: index * 10 + 1 }),
+      );
+      messages.push(
+        createToolResultMessage(toolCallId, name, `${name} finished`, {
+          runId: "run-count",
+          timestamp: index * 10 + 2,
+        }),
+      );
+      toolMessages.push(
+        createAssistantMessage([call, result], {
+          runId: "run-count",
+          toolCallId,
+          timestamp: index * 10 + 1,
+          __openclawToolStreamLive: true,
+          __openclawToolStreamResultReceived: true,
+        }),
+      );
+    }
+    messages.push(
+      createToolResultMessage("call-wait", "wait", "wait finished", {
+        runId: "run-count",
+        timestamp: 30,
+      }),
+    );
+    const items = buildCachedChatItems({
+      paneId: "counting",
+      sessionKey: "main",
+      runId: "run-count",
+      messages,
+      toolMessages,
+      streamSegments: [{ text: "Resuming the cell", ts: 8, itemId: "between", runId: "run-count" }],
+      stream: null,
+      streamStartedAt: null,
+      showToolCalls: true,
+    });
+    const groups = items.filter((item) => item.kind === "group");
+    expect(items.filter((item) => item.kind === "stream")).toHaveLength(1);
+    render(
+      renderActivityGroup(groups, { showReasoning: false, isToolMessageExpanded: () => true }),
+      container,
+    );
+    expect(container.querySelector(".chat-activity-group__label")?.textContent?.trim()).toBe(
+      "Ran a command, used Wait",
+    );
+    expect(container.querySelectorAll(".chat-tool-row")).toHaveLength(2);
   });
 
   it("keeps a persisted tool review icon-only until its command activity expands", () => {

@@ -518,11 +518,9 @@ export function createGatewayHookDispatcher(params: {
               // Isolated runs derive their lifecycle key from random jobId (or an
               // already-stable cron: key), so accepted agentId closes reload drift.
               agentId,
-              // Hook agent runs get their own lane rather than sharing
-              // `cron-nested` with cron inner work, so a saturated cron budget
-              // cannot starve them. Aggregate capacity stays bounded by the lane
-              // group that owns both lanes.
-              lane: CommandLane.HookDispatch,
+              // Only HTTP hooks own the opt-in reserved lane. Trusted plugin
+              // triggers share cron capacity even when the HTTP surface is off.
+              lane: pluginId ? CommandLane.CronNested : CommandLane.HookDispatch,
               executionIdentity: {
                 ingress: pluginId
                   ? {

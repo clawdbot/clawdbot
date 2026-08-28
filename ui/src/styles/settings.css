@@ -112,14 +112,32 @@
   min-width: 0;
 }
 
-/* Header and description indent to var(--space-4) so the eyebrow label lines
-   up with the row content inside the group surface below it. */
+/* Section copy aligns to the group surface, while rows own their internal
+   content inset. */
 .settings-section__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: 0 var(--space-4);
+  padding: 0;
+}
+
+/* Keep heading copy independent from taller header actions. Without this
+   grouping, a button row pushes the description away from its heading. */
+.settings-section__copy {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.settings-section__header:has(.settings-section__copy) {
+  align-items: flex-start;
+}
+
+.settings-section__header:has(.settings-section__copy):has(.settings-section__actions) {
+  column-gap: var(--space-5);
 }
 
 .settings-section__heading {
@@ -133,10 +151,14 @@
 
 .settings-section__desc {
   margin: calc(-1 * var(--space-2)) 0 0;
-  padding: 0 var(--space-4);
+  padding: 0;
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: var(--muted);
+}
+
+.settings-section__copy > .settings-section__desc {
+  margin: 0;
 }
 
 /* Control-height header actions overhang the one-line heading; keep the
@@ -159,28 +181,31 @@
 
 .settings-section__help-button {
   display: inline-grid;
-  width: 22px;
-  height: 22px;
+  width: 16px;
+  height: 16px;
   padding: 0;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--muted) 35%, transparent);
-  border-radius: 50%;
+  border: 0;
   background: transparent;
   color: var(--muted);
-  font: 600 var(--control-ui-text-xs) / 1 var(--font-body);
   cursor: var(--cursor-action);
 }
 
 .settings-section__help-button > span {
-  /* SF's ascent+descent exceed 1em, so a centered line box parks the glyph
-     below the circle's midline; trim to cap bounds for true centering. */
   display: block;
-  text-box: trim-both cap alphabetic;
+  width: 100%;
+  height: 100%;
+}
+
+.settings-section__help-button svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  stroke-width: 1.75;
 }
 
 .settings-section__help-button:hover,
 .settings-section__help-button:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   color: var(--accent);
 }
 
@@ -757,6 +782,16 @@ textarea.settings-input {
 @media (max-width: 640px) {
   .settings-page {
     padding-inline: var(--space-3);
+  }
+
+  .settings-section__header:has(.settings-section__copy) {
+    align-items: stretch;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .settings-section__header:has(.settings-section__copy) .settings-section__actions {
+    align-self: flex-end;
   }
 
   .settings-row {

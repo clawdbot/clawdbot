@@ -5,7 +5,6 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   resolveSessionPreferredFaceForKey,
@@ -13,8 +12,6 @@ import {
   SESSION_NAVIGATION_KEY_PARAM,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
-import { patchChatSessionLabel } from "./chat-state-route.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
 const uuid = "12345678-90ab-cdef-1234-567890abcdef";
@@ -108,26 +105,6 @@ function targetLocation(target: ReturnType<typeof sessionNavigationTarget>) {
 }
 
 describe("gateway-backed session route resolution", () => {
-  it("patches a canonical global session on the selected agent", async () => {
-    const patch = vi.fn(async () => ({}));
-    const state = {
-      sessionKey: "global",
-      assistantAgentId: "research",
-      agentsList: null,
-      hello: null,
-    } as ChatPageHost;
-
-    const sessions = { patch } as unknown as Pick<SessionCapability, "patch">;
-
-    await patchChatSessionLabel(state, sessions, "global", "Research thread");
-
-    expect(patch).toHaveBeenCalledWith(
-      "global",
-      { label: "Research thread" },
-      { agentId: "research" },
-    );
-  });
-
   it("resolves a non-default agent's canonical global face from its scoped row", async () => {
     const globalRow = row({ key: "global", kind: "global", boardFace: "dashboard" });
     const { context, list } = contextFor(({ agentId, search }) =>

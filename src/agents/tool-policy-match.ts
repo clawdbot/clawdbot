@@ -7,7 +7,7 @@ import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { readToolAllowlistIntersection } from "./tool-policy-shared.js";
 import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
 
-function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
+function makeToolPolicyMatcher(policy: SandboxToolPolicy, writeAllowsApplyPatch = true) {
   const deny = compileGlobPatterns({
     raw: expandToolGroups(policy.deny ?? []),
     normalize: normalizeToolPolicyName,
@@ -27,9 +27,13 @@ function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
     if (matchesAnyGlobPattern(normalized, allow)) {
       return true;
     }
-    // `apply_patch` is the concrete write tool, so a broad write allowlist entry
-    // should cover it even though its tool name is more specific.
-    if (normalized === "apply_patch" && matchesAnyGlobPattern("write", allow)) {
+    // Runtime policy historically treats `write` as covering `apply_patch`.
+    // Construction planning can disable that compatibility to avoid selecting a shell factory.
+    if (
+      writeAllowsApplyPatch &&
+      normalized === "apply_patch" &&
+      matchesAnyGlobPattern("write", allow)
+    ) {
       return true;
     }
     return false;
@@ -50,6 +54,16 @@ export function isRuntimeToolAllowed(name: string, toolsAllow?: string[]): boole
     toolsAllow === undefined ||
     (readToolAllowlistIntersection(toolsAllow) ?? [toolsAllow]).every(
       (allow) => allow.length > 0 && isToolAllowedByPolicyName(name, { allow }),
+    )
+  );
+}
+
+/** Avoid selecting the shell factory solely through the `write` compatibility alias. */
+export function isRuntimeToolAllowedForConstruction(name: string, toolsAllow?: string[]): boolean {
+  return (
+    toolsAllow === undefined ||
+    (readToolAllowlistIntersection(toolsAllow) ?? [toolsAllow]).every(
+      (allow) => allow.length > 0 && makeToolPolicyMatcher({ allow }, false)(name),
     )
   );
 }

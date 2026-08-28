@@ -191,7 +191,10 @@ export function sessionExclusionReason(
   if (!policy) {
     return undefined;
   }
-  const metadata = loadMemorySessionMetadata(source.sessionOrigin);
+  const metadata = loadMemorySessionMetadata({
+    ...source.sessionOrigin,
+    storePath: source.buildOptions.storePath,
+  });
   if (!metadata) {
     return undefined;
   }

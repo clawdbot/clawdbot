@@ -592,22 +592,24 @@ suite.define(() => {
 
       await gateway.closeLatest(1006, "lost ack");
 
-      const queue = page.locator(".chat-queue");
-      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
+      const deliveryStatus = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
+      await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-queue").count()).toBe(0);
+      await page.locator(".chat-group.user").getByText(prompt, { exact: true }).waitFor();
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      await queue.locator(".chat-queue__retry").click();
+      await deliveryStatus.getByRole("button", { name: "Retry queued message" }).click();
 
       const sends = await waitForRequests(gateway, "chat.send", 2);
       const secondParams = requireRecord(sends[1]?.params);
       expect(secondParams.idempotencyKey).toBe(runId);
       expect(secondParams.message).toBe(prompt);
-      await queue.waitFor({ state: "detached", timeout: 10_000 });
+      await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
-  it("dismisses an ACK-lost banner after exact authoritative history proof", async () => {
+  it("clears inline delivery uncertainty after exact authoritative history proof", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -644,8 +646,11 @@ suite.define(() => {
       );
       await gateway.closeLatest(1006, "lost ack");
 
-      const queue = page.locator(".chat-queue");
-      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
+      const deliveryStatus = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
+      await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-queue").count()).toBe(0);
+      const userBubble = page.locator(".chat-group.user").getByText(prompt, { exact: true });
+      await userBubble.waitFor();
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/01-delivery-uncertain.png`, fullPage: true });
       }
@@ -665,7 +670,7 @@ suite.define(() => {
         sessionKey: "main",
         status: "done",
       });
-      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
+      await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       if (artifactDir) {
         await page.screenshot({
@@ -691,8 +696,9 @@ suite.define(() => {
         status: "running",
       });
 
-      await queue.waitFor({ state: "detached", timeout: 10_000 });
-      await page.locator(".chat-group.user").getByText(prompt).waitFor({ timeout: 10_000 });
+      await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
+      await userBubble.waitFor({ timeout: 10_000 });
+      expect(await userBubble.count()).toBe(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/03-delivery-proven.png`, fullPage: true });

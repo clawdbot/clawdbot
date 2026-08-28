@@ -105,6 +105,7 @@ const nodeDrivenBrowserLayoutTests = [
   "src/styles/cursor-policy.browser.test.ts",
   "src/styles/chat-file-link-presentation.browser.test.ts",
   "src/styles/chat-github-link-presentation.browser.test.ts",
+  "src/styles/shimmer.browser.test.ts",
   "src/styles/sr-only.browser.test.ts",
 ] as const;
 const mockRegistryUnitTests = [

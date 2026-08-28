@@ -573,6 +573,74 @@ suite.define(() => {
     await expect.poll(() => page.locator(".shell-nav.nav-drawer").isVisible()).toBe(true);
   });
 
+  it("keeps overlay motion anchored to its owning interaction", async () => {
+    const page = await openPage({ nativeNav: false });
+
+    await page.keyboard.press("Meta+K");
+    const palette = page.locator(".cmd-palette");
+    const paletteDialog = page.locator("openclaw-modal-dialog.palette");
+    await palette.waitFor({ state: "visible" });
+    const paletteAnimationName = await palette.evaluate(
+      (element) => getComputedStyle(element).animationName,
+    );
+    const paletteDialogAnimationDuration = await paletteDialog.evaluate((element) => {
+      const webAwesomeDialog = element.shadowRoot?.querySelector("wa-dialog");
+      const dialog = webAwesomeDialog?.shadowRoot?.querySelector<HTMLElement>('[part~="dialog"]');
+      return dialog ? getComputedStyle(dialog).animationDuration : "missing";
+    });
+    await page.keyboard.press("Escape");
+
+    const sidebar = page.locator("openclaw-app-sidebar");
+    await sidebar.locator(".sidebar-identity-card").click();
+    const buildLink = sidebar.getByRole("link", {
+      name: "Control UI build details",
+      exact: true,
+    });
+    await page.clock.install();
+    await buildLink.hover();
+    await page.clock.runFor(600);
+    const hoverCardMotion = await sidebar
+      .locator("openclaw-sidebar-build-chip openclaw-tooltip")
+      .evaluate((tooltip) => {
+        const webAwesomeTooltip = tooltip.shadowRoot?.querySelector("wa-tooltip");
+        const popup = webAwesomeTooltip?.shadowRoot?.querySelector("wa-popup");
+        const popupSurface = popup?.shadowRoot?.querySelector<HTMLElement>('[part~="popup"]');
+        if (!popup || !popupSurface) {
+          throw new Error("expected the open sidebar hovercard shadow parts");
+        }
+        const [originX, originY] = getComputedStyle(popupSurface)
+          .transformOrigin.split(" ")
+          .map(Number.parseFloat);
+        return {
+          animationDuration: getComputedStyle(popupSurface).animationDuration,
+          popupHeight: popupSurface.offsetHeight,
+          popupWidth: popupSurface.offsetWidth,
+          originX,
+          originY,
+          placement: popup.getAttribute("data-current-placement"),
+        };
+      });
+    await page.clock.resume();
+    await page.keyboard.press("Escape");
+
+    await page.setViewportSize({ width: 900, height: 900 });
+    const drawer = page.locator(".shell-nav.nav-drawer");
+    await expect.poll(() => drawer.count()).toBe(1);
+    await page.locator(".chat-pane__nav-toggle:visible").first().click();
+    const drawerAnimationName = await drawer.evaluate(
+      (element) => getComputedStyle(element).animationName,
+    );
+
+    expect(paletteAnimationName).toBe("none");
+    expect(paletteDialogAnimationDuration).toBe("0s");
+    expect(drawerAnimationName).toBe("none");
+    expect(hoverCardMotion.animationDuration).toBe("0.14s");
+    expect(hoverCardMotion.placement).toMatch(/^top(?:-|$)/u);
+    expect(hoverCardMotion.originX).toBeGreaterThan(hoverCardMotion.popupWidth * 0.45);
+    expect(hoverCardMotion.originX).toBeLessThan(hoverCardMotion.popupWidth * 0.55);
+    expect(hoverCardMotion.originY).toBeGreaterThan(hoverCardMotion.popupHeight * 0.95);
+  });
+
   it("keeps the mobile drawer modal, keyboard-contained, and focus-restoring", async () => {
     const page = await openPage({
       nativeNav: false,

@@ -154,6 +154,26 @@ describe("chat pane composer controls", () => {
     expect(activeIcons.size).toBe(5);
   });
 
+  it("links the permission picker to the permission modes guide", () => {
+    const container = document.createElement("div");
+    render(
+      renderChatPermissionPicker({
+        canSelectFull: true,
+        mode: "workspace",
+        onSelect: () => undefined,
+      }),
+      container,
+    );
+
+    const docsLink = container.querySelector<HTMLAnchorElement>(
+      ".chat-controls__permission-learn-more",
+    );
+    expect(docsLink?.textContent?.trim()).toBe("Learn more");
+    expect(docsLink?.href).toBe("https://docs.openclaw.ai/gateway/permission-modes");
+    expect(docsLink?.target).toBe("_blank");
+    expect(docsLink?.rel.split(/\s+/).toSorted()).toEqual(["noopener", "noreferrer"]);
+  });
+
   it("patches a rootless session, clears to default, and locks full access", async () => {
     const container = document.createElement("div");
     const patch = vi.fn(async () => ({}));

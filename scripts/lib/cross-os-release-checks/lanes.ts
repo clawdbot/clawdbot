@@ -55,6 +55,7 @@ import {
   waitForInstalledGateway,
   waitForInstalledGatewayToStop,
 } from "./installed.ts";
+import { installLaneCompanions } from "./lane-companions.ts";
 import { maybeRunDiscordRoundtrip } from "./network-smokes.ts";
 import {
   reserveGatewayPortForLane,
@@ -74,45 +75,6 @@ import {
   waitForGateway,
 } from "./runtime.ts";
 import { formatError, trimForSummary } from "./shared.ts";
-
-async function installLaneCompanions(
-  params: LaneBaseParams & {
-    lane: LaneState;
-    env: NodeJS.ProcessEnv;
-    cliPath?: string;
-  },
-) {
-  if (params.companions.length === 0) {
-    return;
-  }
-  await runTimedLanePhase(params.lane, "install-companions", async () => {
-    for (const companion of params.companions) {
-      const logPath = join(
-        params.logsDir,
-        `companion-${companion.name.replace(/[^a-z0-9]+/giu, "-")}.log`,
-      );
-      const args = ["plugins", "install", `npm-pack:${companion.tarballPath}`, "--force"];
-      if (params.cliPath) {
-        await runInstalledCli({
-          cliPath: params.cliPath,
-          args,
-          env: params.env,
-          cwd: params.lane.homeDir,
-          logPath,
-          timeoutMs: 10 * 60 * 1000,
-        });
-        continue;
-      }
-      await runOpenClaw({
-        lane: params.lane,
-        args,
-        env: params.env,
-        logPath,
-        timeoutMs: 10 * 60 * 1000,
-      });
-    }
-  });
-}
 
 export async function runFreshLane(params: LaneBaseParams & { build: CandidateBuild }) {
   const lane = createLaneState("fresh");

@@ -31,8 +31,12 @@ import { processImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeType } from "../../utils/mime.js";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import {
+  resolveFileMutationQueueKey,
+  withFileMutationQueueKeysResolution,
+} from "./file-mutation-queue.js";
 import { normalizePositiveLimit } from "./limits.js";
-import { getReadPathVariants, resolveToCwd } from "./path-utils.js";
+import { getReadPathVariants, getReadQueuePaths, resolveToCwd } from "./path-utils.js";
 import {
   createReadToolDetails,
   readToolInputSchema,
@@ -101,6 +105,8 @@ const COMPACT_RESOURCE_FILE_NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.m
  * Override these to delegate file reading to remote systems (for example SSH).
  */
 export interface ReadOperations {
+  /** Resolve the physical identity used to order this backend's file operations. */
+  resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Resolve a user-supplied path for this read backend. */
   resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
   /** Decode text bytes for this backend. Custom backends default to UTF-8. */
@@ -237,12 +243,18 @@ async function resolveLocalReadPath(filePath: string, cwd: string): Promise<stri
   return resolveToCwd(filePath, cwd);
 }
 
-async function resolveReadToolPath(
+async function resolveReadToolInputPath(
   ops: ReadOperations,
   filePath: string,
   cwd: string,
+): Promise<string> {
+  return await (ops.resolvePath?.(filePath, cwd) ?? resolveToCwd(filePath, cwd));
+}
+
+async function resolveReadToolPathFromAbsolute(
+  ops: ReadOperations,
+  absolutePath: string,
 ): Promise<{ absolutePath: string; note?: string }> {
-  const absolutePath = await (ops.resolvePath?.(filePath, cwd) ?? resolveToCwd(filePath, cwd));
   try {
     await ops.access(absolutePath);
     return { absolutePath };
@@ -518,11 +530,36 @@ export function createReadToolDefinition(
             let note: string | undefined;
             let buffer: Buffer;
             try {
-              ({ absolutePath, note } = await resolveReadToolPath(ops, path, cwd));
-              if (aborted) {
+              // Share write/edit ordering through byte capture only. Decode the
+              // immutable snapshot below after releasing the path queue.
+              const inputPathResolution = resolveReadToolInputPath(ops, path, cwd);
+              const queueKeysResolution = inputPathResolution.then(
+                async (absoluteInputPath) =>
+                  await Promise.all(
+                    getReadQueuePaths(absoluteInputPath).map(
+                      async (candidate) =>
+                        await resolveFileMutationQueueKey(candidate, ops.resolveQueueKey, signal),
+                    ),
+                  ),
+              );
+              const snapshot = await withFileMutationQueueKeysResolution(
+                queueKeysResolution,
+                async () => {
+                  const absoluteInputPath = await inputPathResolution;
+                  const resolved = await resolveReadToolPathFromAbsolute(ops, absoluteInputPath);
+                  if (aborted) {
+                    return undefined;
+                  }
+                  return {
+                    ...resolved,
+                    buffer: await ops.readFile(resolved.absolutePath),
+                  };
+                },
+              );
+              if (!snapshot) {
                 return;
               }
-              buffer = await ops.readFile(absolutePath);
+              ({ absolutePath, note, buffer } = snapshot);
             } catch (error) {
               if (aborted) {
                 return;

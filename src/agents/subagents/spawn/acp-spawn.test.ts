@@ -949,6 +949,75 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
   });
 
+  it("reconciles a transport-ambiguous ACP dispatch so an accepted run is surfaced instead of misreported as dispatch_failed", async () => {
+    let agentDispatchAttempts = 0;
+    // A plain Error whose message matches isGatewayRpcUnavailableError (the gateway
+    // timeout transport shape) models "the gateway may have accepted the ACP run
+    // before the ack was lost" - distinct from a genuine dispatch rejection. The
+    // reconcile lives on the shared subagent gateway seam, so the ACP launch (which
+    // replays with the same childIdem idempotency key) surfaces the accepted run.
+    hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
+      const args = argsUnknown as { method?: string };
+      if (args.method === "agent") {
+        agentDispatchAttempts += 1;
+        if (agentDispatchAttempts === 1) {
+          throw new Error("gateway timeout after 60000ms");
+        }
+        return { runId: "accepted-acp-run", status: "in_flight" };
+      }
+      if (args.method === "sessions.patch") {
+        return { ok: true };
+      }
+      return args.method === "sessions.delete" ? { ok: true } : {};
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "ambiguous ACP child",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+        agentThreadId: "requester-thread",
+      },
+    );
+
+    // The reconcile replay reuses the same childIdem idempotency key; the gateway
+    // surfaces the already-accepted run, so the caller must not conclude the ACP
+    // child never started.
+    expect(agentDispatchAttempts).toBe(2);
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.runId).toBe("accepted-acp-run");
+    expect(accepted.childSessionKey).toMatch(/^agent:codex:acp:/);
+  });
+
+  it("does not register an ACP child when reconciliation finds a terminal run", async () => {
+    let agentDispatchAttempts = 0;
+    hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
+      const args = argsUnknown as { method?: string };
+      if (args.method === "agent" && ++agentDispatchAttempts === 1) {
+        throw new Error("gateway timeout after 60000ms");
+      }
+      return args.method === "agent"
+        ? { runId: "stopped-acp-run", status: "timeout" }
+        : { ok: true };
+    });
+
+    const result = await spawnAcpDirect(
+      { task: "ambiguous ACP child", agentId: "codex", mode: "run" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(agentDispatchAttempts).toBe(2);
+    expect(expectFailedSpawn(result).error).toContain("no active subagent run (status: timeout)");
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
   it("forwards ACP lineage with unsupported external native actions and the exact parent token", async () => {
     const parentToken = createExecutionIdentityAdmissionToken("parent-run", {
       contextId: "parent-context",

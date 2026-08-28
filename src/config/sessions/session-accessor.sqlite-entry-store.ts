@@ -1,9 +1,11 @@
+import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { getChildLogger } from "../../logging/logger.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
@@ -57,6 +59,7 @@ import {
   canonicalSessionKeyMigrationRequiredError,
 } from "./session-canonical-key.js";
 import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
+import { preserveCreationStamp } from "./session-entry-provenance.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import {
   collectSessionEntryLookupKeys,
@@ -561,7 +564,7 @@ export function writeSessionEntry(
     previousEntry?: SessionEntry | null;
     routeContext?: ConversationRouteContext | null;
   } = {},
-): void {
+): SessionEntry {
   const db = getSessionKysely(database.db);
   if (!options.allowStoredAliases) {
     assertCanonicalSessionKeyWriteMatchesDatabase(database, sessionKey);
@@ -572,22 +575,31 @@ export function writeSessionEntry(
       );
     }
   }
-  const normalizedEntry = normalizeSessionEntryTimestamp(entry);
+  let normalizedEntry = normalizeSessionEntryTimestamp(entry);
   if (!hasValidSessionEntryIdentity(normalizedEntry)) {
     throw new Error("Refusing invalid SQLite session entry identity");
   }
   const updatedAt = normalizedEntry.updatedAt;
   // Doctor validated the raw rejected row before entering the transaction and passes its
   // hydrated snapshot explicitly; re-reading it through the runtime parser must stay fail-closed.
-  const canonicalPreviousRow =
-    options.allowStoredAliases && options.previousEntry !== undefined
-      ? undefined
-      : readExactSessionEntryRow(database, sessionKey);
   const canonicalPreviousEntry =
-    canonicalPreviousRow?.entry ??
-    (options.allowStoredAliases && options.previousEntry !== undefined
+    options.allowStoredAliases && options.previousEntry !== undefined
       ? (options.previousEntry ?? undefined)
-      : undefined);
+      : readExactSessionEntryRow(database, sessionKey)?.entry;
+  if (canonicalPreviousEntry?.sandbox === "required") {
+    if (
+      normalizedEntry.sandbox !== "required" ||
+      normalizedEntry.createdVia !== canonicalPreviousEntry.createdVia ||
+      normalizedEntry.createdAt !== canonicalPreviousEntry.createdAt ||
+      !isDeepStrictEqual(normalizedEntry.createdActor, canonicalPreviousEntry.createdActor)
+    ) {
+      getChildLogger({ subsystem: "session-sqlite" }).warn(
+        "blocked role-required session creation provenance downgrade",
+        { agentId: database.agentId, sessionKey },
+      );
+    }
+    normalizedEntry = preserveCreationStamp(normalizedEntry, canonicalPreviousEntry);
+  }
   const previousEntry =
     options.previousEntry === undefined
       ? canonicalPreviousEntry
@@ -717,6 +729,7 @@ export function writeSessionEntry(
     });
   }
   publishSessionEntryCacheInvalidation(database, sessionNode, writeGeneration);
+  return normalizedEntry;
 }
 
 /** Resolves the parent fork decision using SQLite transcript rows when totals are stale. */

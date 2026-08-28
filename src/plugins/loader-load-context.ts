@@ -155,17 +155,19 @@ function buildActivationMetadataHash(params: {
     })
     .map(([channelId]) => channelId)
     .toSorted((left, right) => left.localeCompare(right));
-  const pluginEntryStates = Object.entries(params.activationSource.plugins.entries)
-    .map(([pluginId, entry]) => [pluginId, entry?.enabled ?? null] as const)
+  // Source config selects validation and defaults even when resolved values match.
+  // Object fields keep an absent config distinct from an explicit null source.
+  const pluginEntryInputs = Object.entries(params.activationSource.plugins.entries)
+    .map(([pluginId, { enabled, config }]) => [pluginId, { enabled, config }] as const)
     .toSorted(([left], [right]) => left.localeCompare(right));
   // Explicit selection reads the AUTHORED entries (`isPluginExplicitlySelectedByAlias` counts a
   // material entry through `hasMaterialPluginEntryConfig`), and normalization drops exactly the
-  // shapes that flip it — an empty `hooks`/`subagent`/`llm` object, an `apiKey`, an `env` — so
-  // neither the normalized entries in the outer cache key nor the `enabled` states above can see
-  // a `{}` -> `{ hooks: {} }` edit that suppresses a replacement's `preferOver` edge and moves
-  // the cede map baked into a cached registry. Hash material PRESENCE, not the entry bodies:
-  // hashing whole authored entries would rebuild the registry on edits that move no activation
-  // input, and hashing normalized entries would miss these shapes entirely.
+  // shapes that flip it — an empty `hooks`/`subagent`/`llm` object, an `apiKey`, an `env`. The
+  // entry pair above carries `enabled` and `config`, which covers those two arms of the predicate;
+  // the rest survive nowhere in the normalized entries, so a `{}` -> `{ hooks: {} }` edit that
+  // suppresses a replacement's `preferOver` edge would move the cede map baked into a cached
+  // registry without moving this hash. Hash material PRESENCE, not the entry bodies: hashing whole
+  // authored entries would rebuild the registry on edits that move no activation input.
   const materialSourceEntryIds = Object.entries(
     params.activationSource.rootConfig?.plugins?.entries ?? {},
   )
@@ -183,7 +185,7 @@ function buildActivationMetadataHash(params: {
         allow: params.activationSource.plugins.allow,
         deny: params.activationSource.plugins.deny,
         memorySlot: params.activationSource.plugins.slots.memory,
-        entries: pluginEntryStates,
+        entries: pluginEntryInputs,
         materialSourceEntries: materialSourceEntryIds,
         enabledChannels: enabledSourceChannels,
         configuredChannels,

@@ -1463,55 +1463,82 @@ describe("initSessionState RawBody", () => {
     },
   );
 
-  it("stamps trusted creation provenance when initializing a missing session", async () => {
-    const root = await makeCaseDir("openclaw-session-creation-provenance-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:dashboard:created";
+  it.each([undefined, "required"] as const)(
+    "stamps trusted creation provenance for a new session (sandbox=%s)",
+    async (sandbox) => {
+      const root = await makeCaseDir("openclaw-session-creation-provenance-");
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:dashboard:created";
 
-    const result = await withEnvAsync(
-      { OPENCLAW_STATE_DIR: path.join(root, "state") },
-      async () => {
-        const initialized = await initSessionState({
-          ctx: {
-            RawBody: "hello",
-            ChatType: "direct",
-            SessionKey: sessionKey,
-            SessionCreation: {
-              via: "operator",
-              actor: { type: "human", id: "profile-ada" },
+      const result = await withEnvAsync(
+        { OPENCLAW_STATE_DIR: path.join(root, "state") },
+        async () => {
+          const initialized = await initSessionState({
+            ctx: {
+              RawBody: "hello",
+              ChatType: "direct",
+              SessionKey: sessionKey,
+              SessionCreation: {
+                via: "operator",
+                actor: { type: "human", id: "profile-ada" },
+                sandbox,
+              },
             },
-          },
-          cfg: { session: { store: storePath } } as OpenClawConfig,
-        });
-        expect(listSessionStateEventsSince(sessionKey, "main", 0, 20).events).toContainEqual(
-          expect.objectContaining({
-            kind: "created",
-            actorType: "human",
-            actorId: "profile-ada",
-          }),
-        );
-        await vi.waitFor(() =>
+            cfg: { session: { store: storePath } } as OpenClawConfig,
+          });
+          expect(listSessionStateEventsSince(sessionKey, "main", 0, 20).events).toContainEqual(
+            expect.objectContaining({
+              kind: "created",
+              actorType: "human",
+              actorId: "profile-ada",
+            }),
+          );
+          await vi.waitFor(() =>
+            expect(
+              listSessionParticipantsReadOnly({ agentId: "main", storePath }).get(sessionKey),
+            ).toEqual([
+              {
+                actor: { type: "human", id: "profile-ada" },
+                contributionCount: 1,
+                firstPromptedAt: expect.any(Number),
+                lastPromptedAt: expect.any(Number),
+                source: "profile",
+              },
+            ]),
+          );
           expect(
-            listSessionParticipantsReadOnly({ agentId: "main", storePath }).get(sessionKey),
-          ).toEqual([
-            {
-              actor: { type: "human", id: "profile-ada" },
-              contributionCount: 1,
-              firstPromptedAt: expect.any(Number),
-              lastPromptedAt: expect.any(Number),
-              source: "profile",
+            loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })?.sandbox,
+          ).toBe(sandbox);
+          await initSessionState({
+            ctx: {
+              RawBody: "another participant",
+              ChatType: "direct",
+              SessionKey: sessionKey,
+              SessionCreation: {
+                via: "operator",
+                actor: { type: "human", id: "profile-other" },
+                sandbox: "required",
+              },
             },
-          ]),
-        );
-        return initialized;
-      },
-    );
-    expect(result.sessionEntry).toMatchObject({
-      createdVia: "operator",
-      createdActor: { type: "human", id: "profile-ada" },
-      createdAt: expect.any(Number),
-    });
-  });
+            cfg: { session: { store: storePath } } as OpenClawConfig,
+          });
+          const persisted = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
+          expect(persisted).toMatchObject({
+            createdActor: { type: "human", id: "profile-ada" },
+            createdAt: initialized.sessionEntry.createdAt,
+          });
+          expect(persisted?.sandbox).toBe(sandbox);
+          return initialized;
+        },
+      );
+      expect(result.sessionEntry).toMatchObject({
+        createdVia: "operator",
+        createdActor: { type: "human", id: "profile-ada" },
+        createdAt: expect.any(Number),
+      });
+      expect(result.sessionEntry.sandbox).toBe(sandbox);
+    },
+  );
 
   it("keeps channel and agent participant sources distinct", async () => {
     const root = await makeCaseDir("openclaw-session-participant-admission-");

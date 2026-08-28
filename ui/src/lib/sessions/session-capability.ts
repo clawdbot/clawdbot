@@ -162,8 +162,6 @@ export type SessionCapability = {
     listener: (snapshot: SessionListSnapshot) => void,
   ) => () => void;
   refreshList: (options?: SessionRefreshOptions) => Promise<void>;
-  setOwnerFilter: (ownerId: string | null) => Promise<void>;
-  setInvolvingMeFilter: (enabled: boolean) => Promise<void>;
   reconcile: (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],

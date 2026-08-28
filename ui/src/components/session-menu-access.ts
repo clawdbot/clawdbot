@@ -37,9 +37,7 @@ export function sessionMenuReasons(params: {
       params: {
         targets: batchRows.map((row) => ({
           key: row.key,
-          ...(typeof patch.archived === "boolean" && row.sessionId
-            ? { expectedSessionId: row.sessionId }
-            : {}),
+          ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
         })),
         patch,
       },

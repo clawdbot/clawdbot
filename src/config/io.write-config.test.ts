@@ -31,6 +31,7 @@ import {
   writeConfigFile,
 } from "./io.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
 
 const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
@@ -195,6 +196,25 @@ describe("config io write", () => {
     path.join(home, ".openclaw", fileName);
 
   const formatConfig = (config: unknown) => `${JSON.stringify(config, null, 2)}\n`;
+
+  const createExistingConfigSnapshot = (
+    configPath: string,
+    config: OpenClawConfig,
+    raw: string | null,
+  ): ConfigFileSnapshot => ({
+    path: configPath,
+    exists: true,
+    raw,
+    parsed: config,
+    sourceConfig: config,
+    resolved: config,
+    valid: true,
+    runtimeConfig: config,
+    config,
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+  });
 
   const readPersistedConfig = async (configPath: string): Promise<OpenClawConfig> =>
     JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
@@ -626,20 +646,7 @@ describe("config io write", () => {
       env: { VITEST: "true" } as NodeJS.ProcessEnv,
       logger: { warn, error: vi.fn() },
     });
-    const baseSnapshot = {
-      path: configPath,
-      exists: true,
-      raw: originalRaw,
-      parsed: original,
-      sourceConfig: original,
-      resolved: original,
-      valid: true,
-      runtimeConfig: original,
-      config: original,
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
-    } satisfies ConfigFileSnapshot;
+    const baseSnapshot = createExistingConfigSnapshot(configPath, original, originalRaw);
 
     await expectConfigWriteRejected(
       io.writeConfigFile(
@@ -679,20 +686,7 @@ describe("config io write", () => {
         configPath,
         env: { VITEST: "true" } as NodeJS.ProcessEnv,
       });
-      const baseSnapshot = {
-        path: configPath,
-        exists: true,
-        raw: originalRaw,
-        parsed: original,
-        sourceConfig: original,
-        resolved: original,
-        valid: true,
-        runtimeConfig: original,
-        config: original,
-        issues: [],
-        warnings: [],
-        legacyIssues: [],
-      } satisfies ConfigFileSnapshot;
+      const baseSnapshot = createExistingConfigSnapshot(configPath, original, originalRaw);
       let preflightCalls = 0;
 
       await expectConfigWriteRejected(
@@ -835,20 +829,7 @@ describe("config io write", () => {
       const io = createHomeConfigIO(home, {
         env: { VITEST: "true" } as NodeJS.ProcessEnv,
       });
-      const baseSnapshot = {
-        path: configPath,
-        exists: true,
-        raw: originalRaw,
-        parsed: original,
-        sourceConfig: original,
-        resolved: original,
-        valid: true,
-        runtimeConfig: original,
-        config: original,
-        issues: [],
-        warnings: [],
-        legacyIssues: [],
-      } satisfies ConfigFileSnapshot;
+      const baseSnapshot = createExistingConfigSnapshot(configPath, original, originalRaw);
 
       const acceptedWrite = await io.writeConfigFile(
         { meta: original.meta, gateway: { mode: "local" } },
@@ -1851,56 +1832,24 @@ describe("config io write", () => {
   itWithHome("writes runtime-derived edits back to source SecretRef markers", async (home) => {
     const { configPath } = await writeConfigFixture(home, {
       gateway: { mode: "local" },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            models: [],
-          },
-        },
-      },
+      ...createProviderConfigFixture(),
     });
 
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
       setRuntimeConfigSnapshot(
         {
           gateway: { mode: "local" },
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: "sk-runtime-resolved",
-                models: [],
-              },
-            },
-          },
+          ...createProviderConfigFixture("sk-runtime-resolved"),
         },
         {
           gateway: { mode: "local" },
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-                models: [],
-              },
-            },
-          },
+          ...createProviderConfigFixture(),
         },
       );
 
       await writeConfigFile({
         gateway: { mode: "local", port: 18789 },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: "sk-runtime-resolved",
-              models: [],
-            },
-          },
-        },
+        ...createProviderConfigFixture("sk-runtime-resolved"),
       });
 
       const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
@@ -2361,20 +2310,7 @@ describe("config io write", () => {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       const initialConfig = { gateway: { mode: "local", port: 18789 } } satisfies OpenClawConfig;
       await writeConfigJson(configPath, initialConfig);
-      const baseSnapshot = {
-        path: configPath,
-        exists: true,
-        raw: null,
-        parsed: initialConfig,
-        sourceConfig: initialConfig,
-        resolved: initialConfig,
-        valid: true,
-        runtimeConfig: initialConfig,
-        config: initialConfig,
-        issues: [],
-        warnings: [],
-        legacyIssues: [],
-      } satisfies ConfigFileSnapshot;
+      const baseSnapshot = createExistingConfigSnapshot(configPath, initialConfig, null);
 
       try {
         await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {

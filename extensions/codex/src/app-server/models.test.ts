@@ -27,6 +27,7 @@ vi.mock("./auth-bridge.js", () => ({
   reconcileCodexComputerUseStartArtifacts: mocks.authBridge.reconcileComputerUseArtifacts,
   resolveCodexAppServerFallbackApiKeyCacheKey: mocks.authBridge.fallbackApiKeyCacheKey,
   resolveCodexAppServerAuthProfileIdForAgent: mocks.authBridge.authProfileId,
+  resolveCodexAppServerAuthProfileStore: () => ({ version: 1, profiles: {} }),
   resolveCodexAppServerHomeDir: (agentDir: string) => `${agentDir}/codex-home`,
 }));
 

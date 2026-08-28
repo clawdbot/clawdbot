@@ -1154,7 +1154,9 @@ export async function createGatewaySession(params: {
           ...(params.creation && createdNewEntry
             ? buildSessionCreationStamp({
                 ...params.creation,
-                sandbox: resolveCreatorSandbox(params.cfg, params.creation),
+                // Delegated isolation survives changes to the creator's current role.
+                sandbox:
+                  params.creation.sandbox ?? resolveCreatorSandbox(params.cfg, params.creation),
               })
             : {}),
           ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),

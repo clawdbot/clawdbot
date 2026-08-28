@@ -207,18 +207,18 @@ export type GatewayTrustedProxyConfig = {
    */
   allowLoopback?: boolean;
   /**
-   * Automatically approve new browser device identities after trusted-proxy
-   * authentication. Disabled by default; existing-device upgrades stay manual.
+   * Automatically approve new browser devices and same-key scope upgrades after
+   * trusted-proxy authentication. Disabled by default; configured scopes cap grants.
    */
   deviceAutoApprove?: {
-    /** Enable automatic approval for new browser devices. @default false */
+    /** Enable automatic browser enrollment and same-key scope upgrades. @default false */
     enabled?: boolean;
     /**
      * Maximum operator scopes granted by automatic approval. Listing
      * operator.admin explicitly lets every proxy-authenticated user request
      * automatic full-admin device grants. Requests without scopes receive the
      * configured maximum. @default operator.read, operator.write,
-     * operator.approvals
+     * operator.approvals, operator.questions
      */
     scopes?: string[];
   };

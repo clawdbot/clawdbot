@@ -4,7 +4,6 @@
 import { html, type TemplateResult } from "lit";
 import { icons } from "../../components/icons.ts";
 import {
-  renderDocsLink,
   renderSettingsDefaultState,
   renderSettingsRow,
   renderSettingsSection,
@@ -15,8 +14,6 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { PROFILE_OPTIONS } from "../../lib/agents/display.ts";
-
-const SECURITY_DOCS_URL = "https://docs.openclaw.ai/gateway/security";
 
 export type SecurityOverview = {
   gatewayAuth: string;
@@ -123,13 +120,7 @@ function renderSecurityOverview(props: SecurityViewProps) {
 export function renderSecurity(props: SecurityViewProps) {
   return html`
     <section class="security-page">
-      <div class="settings-page">
-        <p class="settings-page__intro">
-          ${t("quickSettings.security.intro")}
-          ${renderDocsLink(SECURITY_DOCS_URL, t("common.learnMore"))}
-        </p>
-        ${renderSecurityOverview(props)}
-      </div>
+      <div class="settings-page">${renderSecurityOverview(props)}</div>
       ${props.editor}
     </section>
   `;

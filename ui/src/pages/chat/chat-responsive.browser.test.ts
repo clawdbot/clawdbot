@@ -3372,10 +3372,37 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(rectsOverlap(model, send)).toBe(false);
         const contextModelGap = model.x - (context.x + context.width);
         expect(contextModelGap).toBeGreaterThanOrEqual(-1);
-        const composerFontSize = await page
-          .locator(".agent-chat__composer-combobox > textarea")
-          .evaluate((textareaNode) => Number.parseFloat(getComputedStyle(textareaNode).fontSize));
-        expect(composerFontSize).toBe(16);
+        const composerFontSizes = await page.evaluate(() => {
+          const textareaNode = document.querySelector<HTMLTextAreaElement>(
+            ".agent-chat__composer-combobox > textarea",
+          );
+          const selectors = [
+            ".chat-controls__permission-trigger .chat-controls__inline-select-label",
+            ".chat-controls__model-trigger .chat-controls__inline-select-label",
+            ".chat-controls__effort-trigger .chat-controls__inline-select-label",
+          ];
+          if (!textareaNode) {
+            throw new Error("Missing composer textarea");
+          }
+          const fontSize = (node: Element, pseudo?: string) =>
+            Number.parseFloat(getComputedStyle(node, pseudo).fontSize);
+          return {
+            labels: selectors.map((selector) => {
+              const label = document.querySelector(selector);
+              if (!label) {
+                throw new Error(`Missing composer label: ${selector}`);
+              }
+              return fontSize(label);
+            }),
+            placeholder: fontSize(textareaNode, "::placeholder"),
+            textarea: fontSize(textareaNode),
+          };
+        });
+        expect(composerFontSizes).toEqual({
+          labels: [14, 14, 14],
+          placeholder: 16,
+          textarea: 16,
+        });
         if (width <= 480) {
           const modelSettings = expectControlRect(
             controls.modelSettings,
@@ -3818,6 +3845,60 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it.for(["dark", "light"])(
+    "keeps unconfirmed footers and Retry amber while failed sends stay red in %s mode",
+    async (theme, context) => {
+      const page = await openBrowserPage(390, 844);
+      try {
+        await page.setContent(`<!doctype html><html data-theme-mode="${theme}"><head><style>${readUiCss()}</style></head><body>
+        <span id="warning-color-probe" style="color: var(--warn)">Warning</span>
+        <span id="danger-color-probe" style="color: var(--danger)">Failure</span>
+        ${[
+          { state: "unconfirmed", label: "Delivery unconfirmed" },
+          { state: "failed", label: "Not sent" },
+        ]
+          .map(
+            ({ state, label }) => `<div class="chat-group user chat-group--with-footer">
+          <div class="chat-group-messages"><div class="chat-bubble">Attempted message</div></div>
+          <div class="chat-group-footer chat-group-footer--send-failure">
+            <div class="chat-group-footer__meta"><span class="chat-sender-name">You</span>
+              <span class="chat-send-status" data-send-state="${state}">
+                <span>·</span><span>${label}</span><span>·</span>
+                <button class="chat-send-status__retry" type="button">Retry</button>
+              </span>
+            </div>
+          </div>
+        </div>`,
+          )
+          .join("")}
+      </body></html>`);
+
+        for (const [state, probe] of [
+          ["unconfirmed", "warning"],
+          ["failed", "danger"],
+        ]) {
+          const status = page.locator(`.chat-send-status[data-send-state="${state}"]`);
+          const expectedColor = await page
+            .locator(`#${probe}-color-probe`)
+            .evaluate((element) => getComputedStyle(element).color);
+          expect(await status.evaluate((element) => getComputedStyle(element).color)).toBe(
+            expectedColor,
+          );
+          const retry = status.locator("button");
+          expect(await retry.evaluate((element) => getComputedStyle(element).color)).toBe(
+            expectedColor,
+          );
+          await retry.hover();
+          await context.expect
+            .poll(() => retry.evaluate((element) => getComputedStyle(element).color))
+            .toBe(expectedColor);
+        }
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
   it("covers every reachable queue presentation cell without repeating global state", async () => {
     const page = await openBrowserPage(1520, 2400);
     const reachableCells = QUEUE_MATRIX_MODES.flatMap((mode) =>
@@ -3856,11 +3937,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           '<span class="chat-queue__error"><span class="chat-queue__badge">Failed</span><span class="chat-queue__error-text">Request rejected</span></span>',
         ),
         queueExceptionCellHtml(
-          "unconfirmed",
+          "unconfirmed-local-command",
           "",
           "chat-queue__item--failed",
           "",
-          '<span class="chat-queue__error"><span class="chat-queue__badge">Delivery uncertain</span><span class="chat-queue__error-text">Review before retrying</span></span>',
+          '<span class="chat-queue__error"><span class="chat-queue__badge">Delivery uncertain</span><span class="chat-queue__error-text">Reconnected before delivery was confirmed. Check the conversation — retry only if your message didn\'t arrive.</span></span>',
         ),
         queueExceptionCellHtml(
           "applying-settings",
@@ -3932,7 +4013,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           "item-reconnect",
           "running-command",
           "failed",
-          "unconfirmed",
+          "unconfirmed-local-command",
           "applying-settings",
         ]) {
           await page.locator(`[data-queue-exception="${key}"]`).screenshot({
@@ -4017,36 +4098,62 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const card = page.locator(".session-progress-card--composer");
       const list = page.locator(".session-progress-card__steps");
       const widthBefore = (await card.boundingBox())?.width;
-      const expandedBefore = await page.evaluate(() => {
-        const style = (selector: string) =>
-          getComputedStyle(document.querySelector<HTMLElement>(selector)!);
-        const bounds = (selector: string) =>
-          document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
-        return {
-          cardBackground: style(".session-progress-card--composer").backgroundColor,
-          summaryBackground: style(".session-progress-card__summary").backgroundColor,
-          titleColor: style(".session-progress-card__summary-title").color,
-          actionsColor: style(".session-progress-card__heading-actions").color,
-          chevronColor: style(".session-progress-card__summary-chevron").color,
-          titleLeft: bounds(".session-progress-card__summary-title").left,
-          firstMarkerLeft: bounds(".session-progress-card__step-marker").left,
-          y: bounds(".session-progress-card__summary").y,
-        };
-      });
+      const readSummaryState = () =>
+        page.evaluate(() => {
+          const style = (selector: string) =>
+            getComputedStyle(document.querySelector<HTMLElement>(selector)!);
+          const bounds = (selector: string) =>
+            document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+          const spinner = style(".session-progress-card__summary-indicator .session-run-spinner");
+          return {
+            cardBackground: style(".session-progress-card--composer").backgroundColor,
+            summaryBackground: style(".session-progress-card__summary").backgroundColor,
+            titleColor: style(".session-progress-card__summary-title").color,
+            actionsColor: style(".session-progress-card__heading-actions").color,
+            currentColor: style(".session-progress-card__current").color,
+            countColor: style(".session-progress-card__summary-count--collapsed").color,
+            chevronColor: style(".session-progress-card__summary-chevron").color,
+            spinnerBorderColor: spinner.borderColor,
+            spinnerBorderTopColor: spinner.borderTopColor,
+            titleLeft: bounds(".session-progress-card__summary-title").left,
+            firstMarkerLeft: bounds(".session-progress-card__step-marker").left,
+            y: bounds(".session-progress-card__summary").y,
+          };
+        });
+      const waitForSummaryColors = async (
+        selectors: string[],
+        colors: string[],
+        comparison: "equal" | "different",
+      ) => {
+        const match = await page.waitForFunction(
+          ({ expectedColors, expectedComparison, targetSelectors }) =>
+            targetSelectors.every((selector, index) => {
+              const current = getComputedStyle(
+                document.querySelector<HTMLElement>(selector)!,
+              ).color;
+              return (current === expectedColors[index]) === (expectedComparison === "equal");
+            }),
+          {
+            expectedColors: colors,
+            expectedComparison: comparison,
+            targetSelectors: selectors,
+          },
+        );
+        await match.dispose();
+      };
+      const expandedBefore = await readSummaryState();
       await summary.hover();
-      await page.waitForTimeout(180);
+      await waitForSummaryColors(
+        [
+          ".session-progress-card__summary-title",
+          ".session-progress-card__heading-actions",
+          ".session-progress-card__summary-chevron",
+        ],
+        [expandedBefore.titleColor, expandedBefore.actionsColor, expandedBefore.chevronColor],
+        "different",
+      );
       const widthAfter = (await card.boundingBox())?.width;
-      const expandedAfter = await page.evaluate(() => {
-        const style = (selector: string) =>
-          getComputedStyle(document.querySelector<HTMLElement>(selector)!);
-        return {
-          cardBackground: style(".session-progress-card--composer").backgroundColor,
-          summaryBackground: style(".session-progress-card__summary").backgroundColor,
-          titleColor: style(".session-progress-card__summary-title").color,
-          actionsColor: style(".session-progress-card__heading-actions").color,
-          chevronColor: style(".session-progress-card__summary-chevron").color,
-        };
-      });
+      const expandedAfter = await readSummaryState();
       expect(widthBefore).toBeCloseTo(760, 1);
       expect(widthAfter).toBeCloseTo(widthBefore ?? 0, 1);
       expect(expandedBefore.titleLeft).toBeCloseTo(expandedBefore.firstMarkerLeft, 1);
@@ -4134,37 +4241,24 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
       await page.mouse.move(0, 0);
       await card.evaluate((node) => node.removeAttribute("open"));
-      await page.waitForTimeout(180);
-      const collapsedBefore = await page.evaluate(() => {
-        const style = (selector: string) =>
-          getComputedStyle(document.querySelector<HTMLElement>(selector)!);
-        const spinner = style(".session-progress-card__summary-indicator .session-run-spinner");
-        return {
-          cardBackground: style(".session-progress-card--composer").backgroundColor,
-          summaryBackground: style(".session-progress-card__summary").backgroundColor,
-          currentColor: style(".session-progress-card__current").color,
-          countColor: style(".session-progress-card__summary-count--collapsed").color,
-          chevronColor: style(".session-progress-card__summary-chevron").color,
-          spinnerBorderColor: spinner.borderColor,
-          spinnerBorderTopColor: spinner.borderTopColor,
-        };
-      });
+      const collapsedColorSelectors = [
+        ".session-progress-card__current",
+        ".session-progress-card__summary-count--collapsed",
+        ".session-progress-card__summary-chevron",
+      ];
+      await waitForSummaryColors(
+        collapsedColorSelectors,
+        [expandedBefore.currentColor, expandedBefore.countColor, expandedBefore.chevronColor],
+        "equal",
+      );
+      const collapsedBefore = await readSummaryState();
       await summary.hover();
-      await page.waitForTimeout(180);
-      const collapsedAfter = await page.evaluate(() => {
-        const style = (selector: string) =>
-          getComputedStyle(document.querySelector<HTMLElement>(selector)!);
-        const spinner = style(".session-progress-card__summary-indicator .session-run-spinner");
-        return {
-          cardBackground: style(".session-progress-card--composer").backgroundColor,
-          summaryBackground: style(".session-progress-card__summary").backgroundColor,
-          currentColor: style(".session-progress-card__current").color,
-          countColor: style(".session-progress-card__summary-count--collapsed").color,
-          chevronColor: style(".session-progress-card__summary-chevron").color,
-          spinnerBorderColor: spinner.borderColor,
-          spinnerBorderTopColor: spinner.borderTopColor,
-        };
-      });
+      await waitForSummaryColors(
+        collapsedColorSelectors,
+        [collapsedBefore.currentColor, collapsedBefore.countColor, collapsedBefore.chevronColor],
+        "different",
+      );
+      const collapsedAfter = await readSummaryState();
       expect(collapsedAfter.cardBackground).toBe(collapsedBefore.cardBackground);
       expect(collapsedAfter.summaryBackground).toBe(collapsedBefore.summaryBackground);
       expect(collapsedAfter.currentColor).not.toBe(collapsedBefore.currentColor);

@@ -105,7 +105,7 @@ const HOST_BUILDERS = [
     "sessionRuntime.buildChannelInboundEventContext",
   ],
   ["extensions/tlon/src/monitor/index.ts", "core.channel.inbound.buildContext"],
-  ["extensions/twitch/src/monitor.ts", "core.channel.inbound.buildContext"],
+  ["extensions/twitch/src/monitor.ts", "channelRuntime.inbound.buildContext"],
   ["extensions/whatsapp/src/auto-reply/monitor/prepared-inbound.ts", "params.buildContext({"],
   ["extensions/zalo/src/monitor.ts", "core.channel.inbound.buildContext"],
   ["extensions/zalouser/src/monitor.ts", "core.channel.inbound.buildContext"],

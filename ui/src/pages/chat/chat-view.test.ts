@@ -7182,9 +7182,9 @@ describe("chat model controls", () => {
     ).toBe("32.8k");
     expect(
       container.querySelector(
-        '[data-chat-model-option="lmstudio/qwen3-8b"] .chat-controls__model-chat-only-info',
-      )?.textContent,
-    ).toBe("i");
+        '[data-chat-model-option="lmstudio/qwen3-8b"] .chat-controls__model-chat-only-info svg',
+      ),
+    ).not.toBeNull();
     expect(
       container.querySelector('[data-chat-model-option="openai/gpt-5.5"]')?.textContent,
     ).not.toContain("Chat only");

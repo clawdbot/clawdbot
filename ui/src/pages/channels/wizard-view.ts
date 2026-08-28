@@ -6,7 +6,7 @@ import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
-import { channelDocsUrl, channelHubMeta } from "./hub-meta.ts";
+import { channelDocsUrl } from "./hub-meta.ts";
 import type { ChannelWizardState, ChannelWizardStep } from "./wizard-controller.ts";
 
 type ChannelWizardViewProps = {
@@ -192,26 +192,20 @@ function renderDoneBody(channels: readonly string[], props: ChannelWizardViewPro
   `;
 }
 
-function renderHelperLinks(channel: string | null, step: ChannelWizardStep | null) {
-  const links = [...(channel ? (channelHubMeta(channel).setupLinks ?? []) : [])];
-  if (step?.externalUrl) {
-    links.unshift({ label: t("channels.setup.openLink"), url: step.externalUrl });
-  }
-  if (channel) {
-    links.push({ label: t("channels.setup.docs"), url: channelDocsUrl(channel) });
-  }
-  if (links.length === 0) {
+function renderExternalStepLink(step: ChannelWizardStep | null) {
+  if (!step?.externalUrl) {
     return nothing;
   }
   return html`
     <div class="channels-wizard__links">
-      ${links.map(
-        (link) => html`
-          <a class="btn btn--sm" href=${link.url} target="_blank" rel="noreferrer noopener">
-            ${link.label} ↗
-          </a>
-        `,
-      )}
+      <a
+        class="channels-wizard__link"
+        href=${step.externalUrl}
+        target="_blank"
+        rel="noreferrer noopener"
+      >
+        ${t("channels.setup.openLink")}
+      </a>
     </div>
   `;
 }
@@ -263,10 +257,21 @@ export function renderChannelWizard(
           ${channel ? renderChannelIcon(channel, label, "tile") : nothing}
           <div class="channels-wizard__heading">
             <h2>${t("channels.setup.title", { channel: label })}</h2>
-            <div class="muted">${t("channels.setup.subtitle")}</div>
+            <div class="muted channels-wizard__subtitle">
+              <span>${t("channels.setup.subtitle")}</span>
+              ${channel
+                ? html`<a
+                    class="channels-wizard__link"
+                    href=${channelDocsUrl(channel)}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    >${t("channels.setup.viewDocs")}</a
+                  >`
+                : nothing}
+            </div>
           </div>
         </div>
-        <div class="channels-wizard__body">${renderHelperLinks(channel, step)} ${body}</div>
+        <div class="channels-wizard__body">${renderExternalStepLink(step)} ${body}</div>
       </div>
     </openclaw-modal-dialog>
   `;

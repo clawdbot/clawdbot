@@ -735,7 +735,7 @@ describe("scope upgrade dismissal fact", () => {
       state: { phase: "rejected", requestId: "request-1", expired: false },
       dismissible: false,
     },
-    { state: { phase: "error", message: "request failed" }, dismissible: false },
+    { state: { phase: "error", message: "request failed", retryable: false }, dismissible: false },
   ];
 
   it.each(cases)(

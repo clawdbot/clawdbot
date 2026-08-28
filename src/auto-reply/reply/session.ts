@@ -877,6 +877,7 @@ async function initSessionStateAttemptLocked(
   sessionEntry = {
     ...baseEntry,
     ...preservedState,
+    ...creationStamp,
     sessionId,
     lifecycleRevision: isNewSession ? crypto.randomUUID() : baseEntry?.lifecycleRevision,
     updatedAt: Date.now(),
@@ -894,10 +895,6 @@ async function initSessionStateAttemptLocked(
     cliSessionIds: baseEntry?.cliSessionIds,
     cliSessionBindings: baseEntry?.cliSessionBindings,
     claudeCliSessionId: baseEntry?.claudeCliSessionId,
-    createdVia: preservedState?.createdVia ?? baseEntry?.createdVia ?? creationStamp?.createdVia,
-    createdActor:
-      preservedState?.createdActor ?? baseEntry?.createdActor ?? creationStamp?.createdActor,
-    createdAt: preservedState?.createdAt ?? baseEntry?.createdAt ?? creationStamp?.createdAt,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,
     queueDebounceMs: baseEntry?.queueDebounceMs,

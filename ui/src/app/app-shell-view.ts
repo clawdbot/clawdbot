@@ -602,6 +602,20 @@ export function renderApplicationShell(host: ShellViewHost) {
         .tabIndex=${-1}
         ?inert=${pageActionsBlocked || (mobileNavLayout && navDrawerOpen)}
       >
+        ${pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
+          ? html`<div class="connection-action-block" role="status" aria-live="polite">
+              <span class="connection-action-block__icon" aria-hidden="true"
+                >${icons.globeOff}</span
+              >
+              <span class="connection-action-block__text">
+                ${t(
+                  settingsTakeover
+                    ? "connection.settingsChangesUnavailable"
+                    : "connection.actionsUnavailable",
+                )}
+              </span>
+            </div>`
+          : nothing}
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           mobileNavLayout,
@@ -624,11 +638,6 @@ export function renderApplicationShell(host: ShellViewHost) {
           onNavigate: (routeId) => host.navigate(routeId),
           onOpenApprovals: () => host.openApprovals(),
         })}
-        ${pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
-          ? html`<div class="connection-action-block" role="status" aria-live="polite">
-              ${t("connection.actionsUnavailable")}
-            </div>`
-          : nothing}
         <openclaw-router-outlet
           ?inert=${pageActionsBlocked}
           aria-disabled=${pageActionsBlocked ? "true" : nothing}

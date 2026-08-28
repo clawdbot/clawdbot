@@ -126,7 +126,7 @@ async function handleProxyRequest(
             : undefined,
         }),
         signal: upstreamAbort.signal,
-        ...(body ? { body: toFetchBody(body) } : {}),
+        ...(body ? { body } : {}),
       },
       auditContext: "copilot-byok-provider",
       requireHttps: true,
@@ -210,18 +210,12 @@ function isNonceProtectedProxyRequest(req: IncomingMessage, proxyPathPrefix: str
   );
 }
 
-async function readBody(req: IncomingMessage): Promise<Buffer | undefined> {
+async function readBody(req: IncomingMessage): Promise<Buffer<ArrayBuffer> | undefined> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return chunks.length > 0 ? Buffer.concat(chunks) : undefined;
-}
-
-function toFetchBody(body: Buffer): Uint8Array<ArrayBuffer> {
-  const copy = new Uint8Array(body.byteLength);
-  copy.set(body);
-  return copy;
 }
 
 function normalizeProxyRequestHeaders(headers: IncomingMessage["headers"]): Record<string, string> {

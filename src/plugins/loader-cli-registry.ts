@@ -195,6 +195,9 @@ export async function loadOpenClawPluginCliRegistry(
       schema: manifestRecord.configSchema,
       cacheKey: manifestRecord.schemaCacheKey,
       value: entry?.config,
+      sourceValue: manifestRecord.configContracts?.secretInputs
+        ? context.activationSource.plugins.entries[policyId]?.config
+        : undefined,
     });
     if (!validatedConfig.ok) {
       logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.error.join(", ")}`);
