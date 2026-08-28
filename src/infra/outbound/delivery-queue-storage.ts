@@ -706,16 +706,15 @@ export async function failPendingDelivery(
   },
   stateDir?: string,
 ): Promise<FailPendingDeliveryResult> {
-  let terminalized: ReturnType<typeof terminalizePendingDeliveryQueueEntry> = {
-    status: "not_pending",
-  };
+  let terminalized = false;
   const terminalize = () => {
-    terminalized = terminalizePendingDeliveryQueueEntry({
-      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-      id: params.id,
-      entry: params.entry,
-      stateDir,
-    });
+    terminalized =
+      terminalizePendingDeliveryQueueEntry({
+        queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+        id: params.id,
+        entry: params.entry,
+        stateDir,
+      }).status === "terminalized";
   };
   if (params.expectedPlatformSendAttemptId !== undefined) {
     transitionOwnedDeliveryQueueEntry(
@@ -730,7 +729,7 @@ export async function failPendingDelivery(
   } else {
     terminalize();
   }
-  if (terminalized.status === "terminalized") {
+  if (terminalized) {
     if (params.retainSpoolArtifacts !== true) {
       await releaseSpoolArtifacts(
         collectEntrySpoolPaths(queuedDeliveryPayloads(params.entry), stateDir),
