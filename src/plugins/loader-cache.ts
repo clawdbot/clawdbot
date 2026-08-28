@@ -1,3 +1,4 @@
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { PluginLoaderCacheState } from "./loader-cache-state.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import type { PluginLoadOptions } from "./loader-types.js";
@@ -6,8 +7,12 @@ import type { PluginRegistry } from "./registry-types.js";
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
 
-export const pluginLoaderCacheState = new PluginLoaderCacheState<PluginRegistry>(
-  MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
+export const pluginLoaderCacheState = resolveGlobalSingleton(
+  Symbol.for("openclaw.plugins.loader-cache-state"),
+  () => new PluginLoaderCacheState<PluginRegistry>(MAX_PLUGIN_REGISTRY_CACHE_ENTRIES),
+  // Runtime retirement closes registrations even when the load options stay unchanged.
+  (cache) => cache.clearCachedRegistries(),
+  "plugin-registry",
 );
 
 export function setCachedPluginRegistry(cacheKey: string, registry: PluginRegistry): void {
