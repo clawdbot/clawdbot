@@ -79,11 +79,11 @@ describe("update failure hints", () => {
     expect(output).toContain("Install pnpm manually");
   });
 
-  it("returns a recovery command when stable remotes are ambiguous", () => {
+  it("returns a checkout-root-relative recovery command when stable remotes are ambiguous", () => {
     const result = {
       status: "error",
       mode: "git",
-      root: "/srv/openclaw",
+      root: "/srv/OpenClaw Release",
       reason: "ambiguous-release-remote",
       steps: [],
       durationMs: 1,
@@ -92,7 +92,10 @@ describe("update failure hints", () => {
     const output = renderResult(result);
 
     expect(output).toContain("multiple Git remotes");
-    expect(output).toContain("git -C /srv/openclaw config branch.main.remote <canonical-remote>");
+    expect(output).toContain(
+      "From the checkout root, set the canonical release remote, then rerun the update: git config branch.main.remote <canonical-remote>",
+    );
+    expect(output).not.toContain("git -C /srv/OpenClaw Release");
     expect(output).toContain("rerun the update");
   });
 

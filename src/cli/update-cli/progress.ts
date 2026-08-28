@@ -97,10 +97,9 @@ function inferUpdateFailureHints(result: UpdateRunResult): string[] {
     ];
   }
   if (result.reason === "ambiguous-release-remote") {
-    const root = result.root ?? ".";
     return [
       "This stable/beta checkout has multiple Git remotes but no configured main remote, so the updater stopped without choosing one.",
-      `Set the canonical release remote, then rerun the update: git -C ${root} config branch.main.remote <canonical-remote>`,
+      "From the checkout root, set the canonical release remote, then rerun the update: git config branch.main.remote <canonical-remote>",
     ];
   }
   if (result.mode !== "npm") {
