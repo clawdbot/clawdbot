@@ -351,10 +351,21 @@ export async function prepareAgentCommandExecution(
   });
   const runLease = worktreeId ? await acquireWorktreeRunLease(worktreeId) : undefined;
   try {
+    const { resolveAcpAgentWorkspaceProvisioningForTurn } =
+      await import("../acp-workspace-provisioning.js");
+    const workspaceProvisioning = await resolveAcpAgentWorkspaceProvisioningForTurn({
+      cfg,
+      agentId: sessionAgentId,
+      workspaceDir,
+      cwd: resolvedCwd,
+      sessionKey: sessionKey ?? undefined,
+      sessionEntry: sessionEntryRaw ?? undefined,
+    });
     await ensureAgentWorkspace({
       dir: workspaceDirRaw,
       ensureBootstrapFiles: !agentCfg?.skipBootstrap,
       skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+      provisioning: workspaceProvisioning,
     });
     const runId = opts.runId?.trim() || sessionId;
     const { getAcpSessionManager } = await loadAcpManagerRuntime();

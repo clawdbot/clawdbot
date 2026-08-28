@@ -116,6 +116,7 @@ sync the current checkout on every run, and stop it before handoff.
   proportional to the touched contract. Untrusted repository tooling never runs
   locally. Remote proof requires a remote-environment or isolation reason.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
+- Standing up a local container Gateway for UI proof goes through `scripts/docker/setup.sh` (see `docs/install/docker.md`). It seeds `gateway.controlUi.allowedOrigins` for the published host port; a hand-rolled `docker run` skips that and the dashboard dead-ends on "Browser origin not allowed" with the Gateway logging `code=4008 reason=connect failed`. Never reuse the Compose defaults for a proof: they bind-mount the operator's real `~/.openclaw` and claim port 18789.
 - Use standard Git commands when committing; stage only your files.
 - If dependencies are missing on the selected host, run `pnpm install`, retry
   once, then report the first actionable error.

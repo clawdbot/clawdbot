@@ -13,10 +13,12 @@ vi.mock("../../infra/device-pairing-node.js", () => ({
 }));
 
 vi.mock("../node-registry-private.js", () => ({
-  collectNodeRunnerIssuesByNodeId: vi.fn(() => new Map()),
-  collectNodeWorkerBundleStatusByNodeId: vi.fn(() => new Map()),
-  collectNodeWorkerCapacityByNodeId: vi.fn(() => new Map()),
-  isNodeRunnerSessionHost: vi.fn(() => false),
+  collectNodeCatalogRuntimeState: vi.fn(() => ({
+    sessionHostNodeIds: new Set(),
+    issuesByNodeId: new Map(),
+    workerSlotsByNodeId: new Map(),
+    workerBundleByNodeId: new Map(),
+  })),
 }));
 
 beforeEach(() => {

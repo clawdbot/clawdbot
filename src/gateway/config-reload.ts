@@ -806,12 +806,12 @@ export function startGatewayConfigReloader(opts: {
     }
   };
 
-  const runAcceptedTransaction = async (run: () => Promise<void>) => {
-    if (opts.runTransaction) {
-      await opts.runTransaction(run);
-      return;
-    }
-    await run();
+  const runAcceptedTransaction = async (
+    run: () => Promise<void>,
+    application?: RuntimeConfigWriteApplicationClaim,
+  ) => {
+    const runTransaction = application?.runTransaction ?? opts.runTransaction;
+    await (runTransaction ? runTransaction(run) : run());
   };
 
   const acceptCurrentRuntimeEcho = async (
@@ -899,7 +899,7 @@ export function startGatewayConfigReloader(opts: {
               activeInProcessConfig = null;
             }
             await promoteAcceptedInProcessWrite(pendingWrite.persistedHash);
-          });
+          }, pendingWrite.application);
         } catch (err) {
           if (lastAppliedWriteHash === pendingWrite.persistedHash) {
             lastAppliedWriteHash = null;
@@ -980,7 +980,7 @@ export function startGatewayConfigReloader(opts: {
               watcherIntentCameFromPendingWrite = false;
             }
             await promoteAcceptedSnapshot(snapshot, "in-process-write");
-          });
+          }, intentCandidate.application);
         } catch (err) {
           if (lastAppliedWriteHash === intentCandidate.persistedHash) {
             lastAppliedWriteHash = null;

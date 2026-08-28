@@ -1643,7 +1643,7 @@ describe("providerScopedModelRegistryProviders", () => {
         useExplicit: false,
         useSmall: false,
       }),
-    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" }]);
+    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/routers/glm-5p2-fast" }]);
   });
 
   it("loads explicit gateway model refs through dynamic discovery", () => {
@@ -1796,6 +1796,22 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
         requestedLevel: "high",
       }),
     ).toBe("off");
+  });
+
+  it.each([
+    ["openai-completions", "off"],
+    ["anthropic-messages", "high"],
+  ] as const)("uses the discovered %s transport for provider thinking policy", (api, expected) => {
+    expect(
+      resolveGatewayLiveModelThinkingLevel({
+        model: {
+          ...createGatewayLiveTestModel("opencode-go", "glm-5.1"),
+          api,
+          reasoning: true,
+        },
+        requestedLevel: "high",
+      }),
+    ).toBe(expected);
   });
 
   it.each(["xai", "x-ai"])(
@@ -4712,6 +4728,7 @@ function resolveGatewayLiveModelThinkingLevel(params: {
     context: {
       provider: model.provider,
       modelId: model.id,
+      api: model.api,
       agentRuntime: "openclaw",
       reasoning: model.reasoning,
       compat: getProviderThinkingModelCompat(model),

@@ -797,7 +797,8 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     trigger.remove();
   });
 
-  it("closes an open navigation drawer before moving its sidebar into desktop layout", () => {
+  it("closes an open navigation drawer before moving its sidebar into desktop layout", async () => {
+    await import("../components/app-sidebar.ts");
     vi.stubGlobal("matchMedia", () => ({ matches: false }));
     const shell = document.createElement("openclaw-app-shell") as ShellNavDrawerCloseState;
     const updateNavigation = vi.fn();
@@ -809,9 +810,10 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         },
       } as unknown as ApplicationContext,
     };
-    const sidebar = document.createElement("openclaw-app-sidebar");
-    const dismissTransientMenus = vi.fn(() => true);
-    Object.defineProperty(sidebar, "dismissTransientMenus", { value: dismissTransientMenus });
+    const sidebar = document.createElement("openclaw-app-sidebar") as HTMLElement & {
+      dismissTransientMenus: () => boolean;
+    };
+    const dismissTransientMenus = vi.spyOn(sidebar, "dismissTransientMenus").mockReturnValue(true);
     shell.append(sidebar);
     const trigger = document.body.appendChild(document.createElement("button"));
     const restoreTriggerFocus = vi.spyOn(trigger, "focus");

@@ -909,6 +909,13 @@ export async function ensureAgentWorkspace(params?: {
    * Required workspace setup such as AGENTS.md still runs.
    */
   skipOptionalBootstrapFiles?: string[];
+  /**
+   * Workspace provisioning mode. "runtime-managed-implicit" marks a workspace
+   * owned by a runtime-managed (ACP) agent without an explicit workspace and
+   * with a distinct authoritative cwd: only the directory is provisioned, and
+   * bootstrap files, workspace setup state, and `git init` are skipped (#92015).
+   */
+  provisioning?: "standard" | "runtime-managed-implicit";
 }): Promise<{
   dir: string;
   agentsPath?: string;
@@ -921,6 +928,13 @@ export async function ensureAgentWorkspace(params?: {
 }> {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
+  if (params?.provisioning === "runtime-managed-implicit") {
+    // The workspace belongs to a runtime-managed agent with a distinct cwd.
+    // Provision the directory (cwd fallback, media staging) without scaffolding
+    // bootstrap files, setup state, or a nested git repository (#92015).
+    await fs.mkdir(dir, { recursive: true });
+    return { dir, bootstrapPending: false };
+  }
   let initialState = readCanonicalWorkspaceStateSnapshot(dir);
   let reseedingExpiredWorkspaceState = false;
   const recentAttestation = recentWorkspaceAttestation(initialState.attestation);

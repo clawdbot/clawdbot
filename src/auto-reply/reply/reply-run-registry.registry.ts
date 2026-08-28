@@ -260,11 +260,14 @@ export function clearReplyRunForResetBySessionId(sessionId: string): void {
   if (!operation || isReplyOperationPreBackendPhase(operation.phase)) {
     return;
   }
-  operation.abortForRestart();
-  // Backend cancellation may synchronously retire this operation and admit a
-  // replacement. Only clear the exact archived operation resolved above.
-  if (replyRunState.activeRunsByKey.get(operation.key) === operation) {
-    operation.complete();
+  try {
+    operation.abortForRestart();
+  } finally {
+    // Backend cancellation may synchronously retire this operation and admit a
+    // replacement. Only clear the exact archived operation resolved above.
+    if (replyRunState.activeRunsByKey.get(operation.key) === operation) {
+      operation.complete();
+    }
   }
 }
 

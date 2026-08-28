@@ -202,12 +202,13 @@ export function validatePluginConfig(params: {
   schema?: Record<string, unknown>;
   cacheKey?: string;
   value?: unknown;
+  sourceValue?: unknown;
 }): Result<Record<string, unknown> | undefined, string[]> {
   const { schema, value } = params;
   if (!schema) {
     return ok(value as Record<string, unknown> | undefined);
   }
-  if (isEmptyPluginConfigJsonSchema(schema)) {
+  if (params.sourceValue === undefined && isEmptyPluginConfigJsonSchema(schema)) {
     if (
       value === undefined ||
       (value &&
@@ -226,6 +227,7 @@ export function validatePluginConfig(params: {
     schema,
     cacheKey: params.cacheKey ?? JSON.stringify(schema),
     value: value ?? {},
+    sourceValue: params.sourceValue,
     applyDefaults: true,
   });
   return result.ok

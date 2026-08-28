@@ -8,6 +8,7 @@ import {
   tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
+import { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
@@ -589,7 +590,10 @@ export function buildGatewayCronService(params: {
   const sessionStorePath = resolveSessionStorePath(defaultAgentId);
   const cronTriggersEnabled = params.cfg.cron?.triggers?.enabled !== false;
   const scriptRuntime = cronTriggersEnabled
-    ? createCronScriptRuntime({ config: params.cfg })
+    ? createCronScriptRuntime({
+        config: params.cfg,
+        loadPluginRegistry: loadPreparedInboundPluginRegistry,
+      })
     : undefined;
 
   const runCronChangedHook = (evt: PluginHookCronChangedEvent) => {

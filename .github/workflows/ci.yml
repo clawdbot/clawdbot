@@ -747,7 +747,12 @@ jobs:
           const runnerProfile = process.env.OPENCLAW_CI_RUNNER_PROFILE ?? "blacksmith";
           const usesHostedRunnerProfile =
             runnerProfile === "github" || runnerProfile === "hybrid";
-          const uiE2eShardCount = usesHostedRunnerProfile ? 12 : 4;
+          // Control UI E2E is serial Chromium work: 2114s of measured body plus a
+          // ~116s median per-shard floor (checkout, pnpm install, Vitest transform)
+          // that every added row pays again. Sharding is the only lever on the
+          // tallest row -- duration-weighted packing already lands within ~10% of
+          // ideal -- so the count is set from that floor, not from packing slack.
+          const uiE2eShardCount = usesHostedRunnerProfile ? 14 : 4;
           const qaSmokeCiPartCount = usesHostedRunnerProfile ? 6 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&
@@ -1826,7 +1831,7 @@ jobs:
       OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
     strategy:
       fail-fast: false
-      max-parallel: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 12 || 4 }}
+      max-parallel: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 14 || 4 }}
       matrix: ${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}
     steps:
       - *linux_node_checkout_step

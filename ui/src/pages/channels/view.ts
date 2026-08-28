@@ -28,7 +28,11 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelDetail } from "./view.detail.ts";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
-import { channelEnabled, resolveChannelDisplayState } from "./view.shared.ts";
+import {
+  channelEnabled,
+  renderChannelRefreshAction,
+  resolveChannelDisplayState,
+} from "./view.shared.ts";
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./view.types.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
@@ -63,28 +67,15 @@ export function renderChannels(props: ChannelsProps) {
       ${props.setupBlockedByDirtyConfig && props.configFormDirty
         ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
         : nothing}
-      ${renderChannelPairingQueue(props)}
       ${renderSettingsSection(
         {
           title: t("channels.hub.connectedTitle"),
           ...(connected.length > 0 ? { count: connected.length } : {}),
-          actions: html`
-            <span class="settings-row__value">
-              ${props.lastSuccessAt
-                ? t("channels.hub.updatedAgo", {
-                    ago: formatRelativeTimestamp(props.lastSuccessAt),
-                  })
-                : t("common.na")}
-            </span>
-            <button
-              type="button"
-              class="btn btn--sm"
-              ?disabled=${props.loading}
-              @click=${() => props.onRefresh(true)}
-            >
-              ${t("common.refresh")}
-            </button>
-          `,
+          actions: renderChannelRefreshAction({
+            updatedAt: props.lastSuccessAt,
+            disabled: props.loading,
+            onRefresh: () => props.onRefresh(true),
+          }),
         },
         connected.length === 0
           ? html`
@@ -108,6 +99,7 @@ export function renderChannels(props: ChannelsProps) {
               ${renderBrowseAllRow(props)}`}
         `,
       )}
+      ${renderChannelPairingQueue(props)}
     `)}
     ${selected
       ? renderChannelDetail({

@@ -112,8 +112,8 @@ describe("gateway agent handler", () => {
     );
 
     expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
-    const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
-    expectStringFieldContains(error, "message", "quarantined after restart recovery exhaustion");
+    const error = expectRespondError(respond, { code: ErrorCodes.INVALID_REQUEST });
+    expectStringFieldContains(error, "message", "ended during restart recovery");
   });
 
   it("rejects ordinary work while restart recovery exhaustion is being tombstoned", async () => {

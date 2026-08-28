@@ -68,7 +68,7 @@ function pendingFinalRecoveryAction(
     return "complete";
   }
   const owners = deliveries.map(({ id }) => findDeliveryIntentOwner(id, stateDir));
-  if (owners.some((owner) => owner?.status === "pending")) {
+  if (owners.some((owner) => owner?.status === "pending" || owner?.settlementPending)) {
     return "defer";
   }
   if (
@@ -117,6 +117,7 @@ async function completePendingFinalRecoveryWithNotice(
         pendingFinalDelivery: undefined,
         ...(pending?.context &&
         pending.intentId &&
+        current.pendingDeliveryNotice?.intentId !== pending.intentId &&
         (!current.pendingDeliveryNotice ||
           current.pendingDeliveryNotice.createdAt <= pending.createdAt)
           ? {

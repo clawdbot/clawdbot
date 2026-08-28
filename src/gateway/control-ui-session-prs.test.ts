@@ -435,6 +435,9 @@ describe("loadControlUiSessionPullRequests", () => {
       stdout: ` 1 file changed, ${root === "/repo/b" ? 3 : additions} insertions(+)`,
       stderr: "",
       code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit" as const,
     }));
     const load = (sessionKey: string, refresh = false) =>
       loadControlUiSessionPullRequests(

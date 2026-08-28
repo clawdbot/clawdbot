@@ -622,7 +622,7 @@ function renderTimeSeriesCompact(
             const isOutside = hasSelection && (i < rangeStartIdx || i >= rangeEndIdx);
 
             if (!breakdownByType) {
-              return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${bh}" class="ts-bar${isOutside ? " dimmed" : ""}" rx="1"><title>${tooltip}</title></rect>`;
+              return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${bh}" class="ts-bar${isOutside ? " dimmed" : ""}" rx="1" data-tooltip=${tooltip} aria-label=${tooltip}></rect>`;
             }
             let yC = padding.top + chartHeight;
             const dim = isOutside ? " dimmed" : "";
@@ -634,7 +634,7 @@ function renderTimeSeriesCompact(
                 }
                 const sh = bh * (value / val);
                 yC -= sh;
-                return svg`<rect x="${x}" y="${yC}" width="${barWidth}" height="${sh}" class="ts-bar ${className}${dim}" rx="1"><title>${tooltip}</title></rect>`;
+                return svg`<rect x="${x}" y="${yC}" width="${barWidth}" height="${sh}" class="ts-bar ${className}${dim}" rx="1" data-tooltip=${tooltip} aria-label=${tooltip}></rect>`;
               })}
             `;
           })}

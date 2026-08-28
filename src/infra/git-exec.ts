@@ -1,18 +1,14 @@
+import { createCommandError } from "../process/command-error.js";
+import type { SpawnResult } from "../process/exec-result.js";
 import { runCommandBuffered, runCommandWithTimeout } from "../process/exec.js";
 
 export const GIT_TIMEOUT_MS = 120_000;
-
-type GitCommandResult = {
-  stdout: string;
-  stderr: string;
-  code: number | null;
-};
 
 export async function executeGitCommand(
   cwd: string,
   args: string[],
   options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
-): Promise<GitCommandResult> {
+): Promise<SpawnResult> {
   return await runCommandWithTimeout(["git", "-C", cwd, ...args], {
     timeoutMs: GIT_TIMEOUT_MS,
     env: options.env,
@@ -20,9 +16,15 @@ export async function executeGitCommand(
   });
 }
 
-export function createGitCommandError(command: string, result: GitCommandResult): Error {
-  const detail = (result.stderr || result.stdout).trim().split("\n").slice(-12).join("\n");
-  return new Error(`${command} failed${detail ? `:\n${detail}` : ""}`);
+export function createGitCommandError(
+  command: string,
+  result: SpawnResult | Awaited<ReturnType<typeof runCommandBuffered>>,
+): Error {
+  const error = createCommandError(command, result, { timeoutMs: GIT_TIMEOUT_MS });
+  if (result.termination === "timeout") {
+    error.message += "\nCheck repository access and disk space.";
+  }
+  return error;
 }
 
 export async function requireGitCommand(
@@ -61,13 +63,7 @@ export async function requireGitCommandBuffer(
     ...(options.maxOutputBytes !== undefined ? { maxOutputBytes: options.maxOutputBytes } : {}),
   });
   if (result.code !== 0) {
-    const detail = (result.stderr.length > 0 ? result.stderr : result.stdout)
-      .toString("utf8")
-      .trim()
-      .split("\n")
-      .slice(-12)
-      .join("\n");
-    throw new Error(`git ${args.join(" ")} failed${detail ? `:\n${detail}` : ""}`);
+    throw createGitCommandError(`git ${args.join(" ")}`, result);
   }
   return result.stdout;
 }

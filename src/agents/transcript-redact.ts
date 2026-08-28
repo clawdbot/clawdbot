@@ -31,11 +31,6 @@ function resolveTranscriptLoggingConfig(cfg?: OpenClawConfig) {
   return redactPatterns ? { redactPatterns } : undefined;
 }
 
-function isTranscriptRedactionDisabled(cfg?: OpenClawConfig): boolean {
-  void cfg;
-  return false;
-}
-
 function redactTranscriptText(
   value: string,
   cfg?: OpenClawConfig,
@@ -549,6 +544,14 @@ function redactTranscriptStructuredValue(
     if (location === "root" && key === "idempotencyKey") {
       continue;
     }
+    // Correlation keys must match live events; nested payload lookalikes are still redacted.
+    if (
+      typeof item === "string" &&
+      ((location === "root" && source.role === "toolResult" && key === "toolCallId") ||
+        (location === "assistant-content-block" && source.type === "toolCall" && key === "id"))
+    ) {
+      continue;
+    }
     if (location === "root" && source.role === "assistant" && key === "providerReplay") {
       const sanitizedReplay = sanitizeCompactionReplayState(
         item,
@@ -682,9 +685,6 @@ function redactTranscriptStructuredValue(
 
 /** Return a redacted transcript message according to logging config. */
 export function redactTranscriptMessage(message: AgentMessage, cfg?: OpenClawConfig): AgentMessage {
-  if (isTranscriptRedactionDisabled(cfg)) {
-    return message;
-  }
   return redactTranscriptStructuredValue(
     message,
     cfg,

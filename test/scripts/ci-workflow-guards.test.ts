@@ -3624,7 +3624,7 @@ NODE
     expect(
       JSON.parse(expectDefined(dispatchManifest.outputs.ui_e2e_matrix, "dispatch UI E2E matrix"))
         .include,
-    ).toHaveLength(12);
+    ).toHaveLength(14);
     expect(
       JSON.parse(
         expectDefined(dispatchManifest.outputs.qa_smoke_ci_matrix, "dispatch QA smoke matrix"),
@@ -7805,7 +7805,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiE2e.env).toEqual({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" });
     expect(uiE2e.strategy["fail-fast"]).toBe(false);
     expect(uiE2e.strategy["max-parallel"]).toBe(
-      "${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 12 || 4 }}",
+      "${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 14 || 4 }}",
     );
     expect(uiE2e.strategy.matrix).toBe("${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}");
     const expectedUiE2eMatrix = (shardCount: number) => ({
@@ -7821,8 +7821,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     for (const [runnerBackend, shardCount] of [
       ["blacksmith", 4],
-      ["github", 12],
-      ["hybrid", 12],
+      ["github", 14],
+      ["hybrid", 14],
     ] as const) {
       const manifest = runCiManifestFixture({
         bundledPlanner: true,

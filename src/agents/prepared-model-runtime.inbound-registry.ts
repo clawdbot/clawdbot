@@ -11,15 +11,21 @@ import {
   getActivePluginRegistryWorkspaceDir,
   getActivePluginRuntimeSubagentMode,
 } from "../plugins/runtime.js";
+import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
+type PreparedInboundRegistryInput = Pick<
+  PreparedModelRuntimeInput,
+  "config" | "env" | "workspaceDir" | "allowGatewaySubagentBinding"
+>;
+
 export type PreparedInboundRegistryLoader = (
-  input: PreparedModelRuntimeInput,
+  input: PreparedInboundRegistryInput,
   metadataSnapshot: PluginMetadataSnapshot,
 ) => PluginRegistry;
 
-function inboundRegistryIdentity(input: PreparedModelRuntimeInput): string {
+function inboundRegistryIdentity(input: PreparedInboundRegistryInput): string {
   return JSON.stringify({
     config: hashRuntimeConfigValue(input.config),
     env: hashRuntimeConfigValue(input.env ?? process.env),
@@ -46,47 +52,60 @@ export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntim
   });
 }
 
+/** Loads generic plugin facts without acquiring model, catalog, or credential state. */
+export function loadPreparedInboundPluginRegistry(
+  input: PreparedInboundRegistryInput,
+  metadataSnapshot = prepareOwnedPluginLoadContext(input, input.env ?? process.env, undefined),
+): PluginRegistry {
+  const activeRegistry = getActivePluginRegistry();
+  // Identity is the generation authority. Manifest equivalence alone could let a
+  // stale active registry satisfy a newer bundled snapshot.
+  const reusableGatewayRegistry =
+    input.allowGatewaySubagentBinding === true &&
+    input.env === undefined &&
+    getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
+    activeRegistry &&
+    getActivePluginRegistryWorkspaceDir() === metadataSnapshot.workspaceDir &&
+    getCurrentPluginMetadataSnapshot({
+      config: input.config,
+      workspaceDir: metadataSnapshot.workspaceDir,
+      allowWorkspaceScopedSnapshot: true,
+    }) === metadataSnapshot &&
+    registryMatchesManifestPluginIds(
+      activeRegistry,
+      metadataSnapshot.manifestRegistry.plugins,
+      listRuntimePluginIdsFromRegistry(activeRegistry),
+    )
+      ? activeRegistry
+      : undefined;
+  const registry =
+    reusableGatewayRegistry ??
+    loadAgentRuntimePluginRegistryHandle({
+      config: input.config,
+      env: input.env ?? process.env,
+      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+      ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+      metadataSnapshot,
+      preferBuiltPluginArtifacts: true,
+    });
+  prepareOwnedPluginLoadContext(input, input.env ?? process.env, registry, metadataSnapshot, true);
+  return registry;
+}
+
 /** Creates one lifecycle-batch loader that shares exact generic registry identities. */
 export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLoader {
-  const registries = new Map<string, PluginRegistry>();
+  const registries = new Map<
+    string,
+    { metadataSnapshot: PluginMetadataSnapshot; registry: PluginRegistry }
+  >();
   return (input, metadataSnapshot) => {
     const key = inboundRegistryIdentity(input);
     const existing = registries.get(key);
-    if (existing) {
-      return existing;
+    if (existing?.metadataSnapshot === metadataSnapshot) {
+      return existing.registry;
     }
-    const activeRegistry = getActivePluginRegistry();
-    // Identity is the generation authority. Manifest equivalence alone could let a
-    // stale active registry satisfy a newer bundled snapshot.
-    const reusableGatewayRegistry =
-      input.allowGatewaySubagentBinding === true &&
-      input.env === undefined &&
-      getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
-      activeRegistry &&
-      getActivePluginRegistryWorkspaceDir() === metadataSnapshot.workspaceDir &&
-      getCurrentPluginMetadataSnapshot({
-        config: input.config,
-        workspaceDir: metadataSnapshot.workspaceDir,
-        allowWorkspaceScopedSnapshot: true,
-      }) === metadataSnapshot &&
-      registryMatchesManifestPluginIds(
-        activeRegistry,
-        metadataSnapshot.manifestRegistry.plugins,
-        listRuntimePluginIdsFromRegistry(activeRegistry),
-      )
-        ? activeRegistry
-        : undefined;
-    const registry =
-      reusableGatewayRegistry ??
-      loadAgentRuntimePluginRegistryHandle({
-        config: input.config,
-        env: input.env ?? process.env,
-        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-        ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-        metadataSnapshot,
-        preferBuiltPluginArtifacts: true,
-      });
-    registries.set(key, registry);
+    const registry = loadPreparedInboundPluginRegistry(input, metadataSnapshot);
+    registries.set(key, { metadataSnapshot, registry });
     return registry;
   };
 }

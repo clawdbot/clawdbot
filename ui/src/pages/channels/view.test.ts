@@ -88,6 +88,47 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
   };
 }
 
+describe("channel hub refresh actions", () => {
+  it("keeps both timestamps in icon-button tooltips", () => {
+    const onRefresh = vi.fn();
+    const onPairingRefresh = vi.fn();
+    const props = createProps({
+      ts: Date.now(),
+      channelOrder: ["slack"],
+      channelLabels: { slack: "Slack" },
+      channels: { slack: { configured: true } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    props.lastSuccessAt = Date.now();
+    props.pairingLastSuccessAt = Date.now();
+    props.onRefresh = onRefresh;
+    props.onPairingRefresh = onPairingRefresh;
+    const container = document.createElement("div");
+
+    render(renderChannels(props), container);
+
+    const refreshButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button[aria-label="Refresh"]'),
+    );
+    expect(refreshButtons).toHaveLength(2);
+    expect(refreshButtons.map((button) => button.textContent?.trim())).toEqual(["", ""]);
+    expect(container.textContent).not.toContain("Updated just now");
+    expect(
+      refreshButtons.map(
+        (button) =>
+          (button.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+            ?.content,
+      ),
+    ).toEqual(["Updated just now", "Updated just now"]);
+
+    refreshButtons[0]!.click();
+    refreshButtons[1]!.click();
+    expect(onPairingRefresh).toHaveBeenCalledOnce();
+    expect(onRefresh).toHaveBeenCalledWith(true);
+  });
+});
+
 describe("channels setup access", () => {
   it("replaces setup actions with an admin-required notice for non-admin viewers", () => {
     const onStartSetup = vi.fn();
@@ -112,6 +153,26 @@ describe("channels setup access", () => {
     ).not.toContain("Set up");
     expect(container.textContent).not.toContain("More channels…");
     expect(onStartSetup).not.toHaveBeenCalled();
+  });
+});
+
+describe("channels section order", () => {
+  it("places DM access requests after the channel management sections", () => {
+    const props = createProps({
+      ts: Date.now(),
+      channelOrder: ["telegram"],
+      channelLabels: { telegram: "Telegram" },
+      channels: { telegram: { configured: false } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    const container = document.createElement("div");
+    render(renderChannels(props), container);
+
+    const headings = Array.from(container.querySelectorAll(".settings-section__heading"), (node) =>
+      node.textContent?.trim(),
+    );
+    expect(headings).toEqual(["Your channels", "Add a channel", "DM access requests"]);
   });
 });
 

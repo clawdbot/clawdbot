@@ -287,8 +287,15 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     : undefined;
   const existingToolNames = new Set(params.existingToolNames ?? []);
   const preparedModelRuntime = params.options?.preparedModelRuntime;
-  const runtimeRegistry =
-    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry() ?? undefined;
+  const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const runtimeRegistry = requestRegistry ?? getActivePluginRegistry() ?? undefined;
+  // A scoped registry can own prepared plugin facts without a model runtime (headless cron).
+  // Never borrow process-global load facts for an unrelated direct caller.
+  const preparedRegistry = preparedModelRuntime
+    ? preparedModelRuntime.pluginRegistry
+    : requestRegistry;
+  const loadContext = getPluginRuntimeLoadContext(preparedRegistry);
+  const metadataSnapshot = preparedModelRuntime?.metadataSnapshot ?? loadContext?.metadataSnapshot;
   const pluginTools = resolvePluginTools({
     ...pluginToolInputs,
     context: {
@@ -304,12 +311,12 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
     ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
     ...(runtimeRegistry ? { runtimeRegistry } : {}),
-    ...(preparedModelRuntime
+    ...(metadataSnapshot
       ? {
           preparedRuntime: {
-            loadContext: getPluginRuntimeLoadContext(preparedModelRuntime.pluginRegistry),
-            metadataSnapshot: preparedModelRuntime.metadataSnapshot,
-            registry: preparedModelRuntime.pluginRegistry,
+            loadContext,
+            metadataSnapshot,
+            registry: preparedRegistry,
           },
         }
       : {}),

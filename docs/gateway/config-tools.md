@@ -92,17 +92,17 @@ catalog bridge, and MCP tools are available through the generated `MCP`
 namespace. The model normally sees `exec` and `wait`; tools such as `computer`
 whose structured results cannot cross the JSON-only bridge stay direct.
 
-`enabled` defaults to `"auto"`, which engages code mode only for models whose
-catalog entry flags `compat.codeMode: "preferred"`. See
+`enabled` defaults to `false` when Code Mode is otherwise unconfigured. An
+object that sets other Code Mode options without `enabled` preserves the
+`"auto"` tier. To engage code mode only for models whose catalog entry flags
+`compat.codeMode: "preferred"`, enable `"auto"` explicitly. See
 [Code Mode - automatic per-model activation](/tools/code-mode#automatic-per-model-activation).
-
-To opt out for every run:
 
 ```json5
 {
   tools: {
     codeMode: {
-      enabled: false,
+      enabled: "auto",
     },
   },
 }
@@ -112,7 +112,7 @@ The shorthand is also accepted:
 
 ```json5
 {
-  tools: { codeMode: false },
+  tools: { codeMode: "auto" },
 }
 ```
 

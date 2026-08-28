@@ -179,7 +179,7 @@ export type SessionCapability = {
   recover: (params: { key: string; agentId?: string }) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
   archiveVisibility: (key: string) => SessionArchiveVisibility | undefined;
-  setArchiveVisibility: (key: string, visibility: SessionArchiveVisibility | undefined) => void;
+  setArchivePending: (key: string, pending: boolean) => void;
   assignOwner: (
     key: string,
     owner: SessionsAssignOwnerParams["owner"],
