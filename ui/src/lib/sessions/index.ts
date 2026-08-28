@@ -178,7 +178,9 @@ export function createSessionCapability(
   ): SessionsListResult | null =>
     deletions.apply(
       mutations.applyConfirmedOwners(
-        mutations.applyConfirmedArchives(mutations.applyPendingRows(swarmActivity.decorate(result))),
+        mutations.applyConfirmedArchives(
+          mutations.applyPendingRows(swarmActivity.decorate(result)),
+        ),
         scope,
         requestRevision,
         agentId === undefined ? state.agentId : agentId,

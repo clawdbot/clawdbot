@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import { createSessionCapability } from "./index.ts";
+import { createTestSessionCapability as createSessionCapability } from "./session-capability.test-support.ts";
 
 function sessionsResult(sessions: SessionsListResult["sessions"], ts: number): SessionsListResult {
   return {

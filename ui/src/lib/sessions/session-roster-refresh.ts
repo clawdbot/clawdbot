@@ -28,6 +28,7 @@ import {
   sessionListQueryAgentId,
   type QueuedSessionRefresh,
 } from "./session-list-query.ts";
+import { sessionListAgentMatches } from "./session-list-scope.ts";
 import {
   buildSessionListParams,
   normalizeManagedSessionListQuery,
@@ -132,12 +133,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   const directListRequests = new Map<string, { agentId?: string; revision: number }>();
 
   const activeManagedLists = (): ManagedSessionList[] =>
-    [...managedLists.values()].filter((entry) => entry.listeners.size > 0 || entry.pending);
-
-  const matchesAgent = (queryAgentId: string | undefined, agentId: string | null | undefined) =>
-    !agentId?.trim() ||
-    !queryAgentId ||
-    normalizeAgentId(queryAgentId) === normalizeAgentId(agentId);
+    [...managedLists.values()].filter(
+      (entry) => entry.listeners.size > 0 || entry.pending !== null,
+    );
 
   const publishManagedList = (entry: ManagedSessionList, snapshot: SessionListSnapshot): void => {
     entry.snapshot = snapshot;
@@ -733,9 +731,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     refreshReplacement: (agentId?: string | null) => refreshReplacementOwned(agentId),
     async refreshOwnerAssignmentScopes(agentId?: string | null): Promise<void> {
       const refreshes = activeManagedLists()
-        .filter((entry) => matchesAgent(sessionListQueryAgentId(entry.query), agentId))
+        .filter((entry) => sessionListAgentMatches(sessionListQueryAgentId(entry.query), agentId))
         .map((entry) => refreshManagedList(entry, { append: false, invalidated: true }));
-      if (matchesAgent(lastListOptions.agentId, agentId)) {
+      if (sessionListAgentMatches(lastListOptions.agentId, agentId)) {
         refreshes.push(refreshReplacementOwned().then(() => undefined));
       }
       await Promise.all(refreshes);
@@ -744,14 +742,18 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return {
         revision: requestRevision,
         scopes: new Map([
-          ...(matchesAgent(lastListOptions.agentId, agentId)
+          ...(sessionListAgentMatches(lastListOptions.agentId, agentId)
             ? ([[PRIMARY_LIST_SCOPE, requestRevision]] as const)
             : []),
           ...[...directListRequests].flatMap(([scope, request]) =>
-            matchesAgent(request.agentId, agentId) ? [[scope, request.revision] as const] : [],
+            sessionListAgentMatches(request.agentId, agentId)
+              ? [[scope, request.revision] as const]
+              : [],
           ),
           ...activeManagedLists()
-            .filter((entry) => matchesAgent(sessionListQueryAgentId(entry.query), agentId))
+            .filter((entry) =>
+              sessionListAgentMatches(sessionListQueryAgentId(entry.query), agentId),
+            )
             .map((entry) => [managedSessionListScope(entry), requestRevision] as const),
         ]),
       };

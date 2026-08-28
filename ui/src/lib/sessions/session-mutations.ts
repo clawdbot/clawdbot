@@ -682,10 +682,13 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return optimisticUnread.apply(optimisticPins.apply(result));
     },
     applyConfirmedArchives: archiveState.apply,
-    applyConfirmedOwners: ownerAssignments.decorate,
-    observeCanonicalOwners: ownerAssignments.observeCanonical,
-    observeCanonicalOwnerEvent: ownerAssignments.observeRow,
-    retireCanonicalOwnerScope: ownerAssignments.retireScope,
+    applyConfirmedOwners: (...args: Parameters<typeof ownerAssignments.decorate>) =>
+      ownerAssignments.decorate(...args),
+    observeCanonicalOwners: (...args: Parameters<typeof ownerAssignments.observeCanonical>) =>
+      ownerAssignments.observeCanonical(...args),
+    observeCanonicalOwnerEvent: (...args: Parameters<typeof ownerAssignments.observeRow>) =>
+      ownerAssignments.observeRow(...args),
+    retireCanonicalOwnerScope: (scope: string) => ownerAssignments.retireScope(scope),
     observeArchiveState: archiveState.observe,
     reset,
     retireModelOverride,
