@@ -1,7 +1,7 @@
 // Verifies plugin manifest registry construction and lookups.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectChannelSchemaMetadataCore } from "../config/channel-config-metadata.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
@@ -10,16 +10,12 @@ import type { PluginCandidate } from "./discovery.js";
 import { resolvePluginManifestInstallOwner } from "./manifest-install-owner.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 vi.unmock("../version.js");
 
 const tempDirs: string[] = [];
-let manifestChangeCase: {
-  firstName: string | undefined;
-  secondName: string | undefined;
-};
-
 function chmodSafeDir(dir: string) {
   if (process.platform === "win32") {
     return;
@@ -482,8 +478,8 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  beforeAll(() => {
-    const stateDir = makeTempDir();
+  it("keeps manifest facts stable until a fresh operation reads the changed file", () => {
+    const stateDir = fs.realpathSync(makeTempDir());
     const pluginDir = path.join(stateDir, "extensions", "cached-manifest");
     mkdirSafe(pluginDir);
     fs.writeFileSync(path.join(pluginDir, "index.js"), "export default function () {}", "utf-8");
@@ -515,16 +511,22 @@ describe("loadPluginManifestRegistry", () => {
     const updatedAt = new Date(Date.now() + 5000);
     fs.utimesSync(manifestPath, updatedAt, updatedAt);
 
+    const open = vi.spyOn(fs, "openSync");
     const second = loadPluginManifestRegistryCore({ env });
-    manifestChangeCase = {
-      firstName: first.plugins.find((plugin) => plugin.id === "cached-manifest")?.name,
-      secondName: second.plugins.find((plugin) => plugin.id === "cached-manifest")?.name,
-    };
-  });
+    expect(first.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("Before");
+    expect(second.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("Before");
+    expect(open.mock.calls.filter(([file]) => file === manifestPath)).toEqual([]);
 
-  it("reflects plugin manifest changes on the next registry load", () => {
-    expect(manifestChangeCase.firstName).toBe("Before");
-    expect(manifestChangeCase.secondName).toBe("After");
+    const refreshed = withPluginCache(createPluginCache(), () =>
+      loadPluginManifestRegistryCore({ env }),
+    );
+    expect(refreshed.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("After");
+    expect(open.mock.calls.filter(([file]) => file === manifestPath)).toHaveLength(1);
+    expect(
+      loadPluginManifestRegistryCore({ env }).plugins.find(
+        (plugin) => plugin.id === "cached-manifest",
+      )?.name,
+    ).toBe("Before");
   });
 
   it("synthesizes an empty manifest for explicitly configured standalone files", () => {
@@ -1903,10 +1905,10 @@ describe("loadPluginManifestRegistry", () => {
         description: "Slack channel, DM, command, and app event integration.",
       },
     );
-    expectRecordFields(slackConfig.schema, "slack schema", {
-      type: "object",
-      additionalProperties: true,
-    });
+    // The catalog carries no schema copy: channel schemas are single-sourced
+    // from the zod-derived generated bundled channel metadata (see #131292),
+    // which validation seeds by channelId regardless of install origin.
+    expect(slackConfig.schema).toBeUndefined();
     expectNoRegistryDiagnosticContains(registry, "without channelConfigs metadata");
   });
 

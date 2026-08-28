@@ -86,9 +86,9 @@ type RenderMessageGroupOptions = {
   isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
   onRequestUpdate?: () => void;
-  onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  onAssistantAttachmentLoaded?: () => void;
   assistantName?: string;
   assistantAvatar?: string | null;
   userId?: string | null;
@@ -100,6 +100,7 @@ type RenderMessageGroupOptions = {
   showAssistantAvatar?: boolean;
   resourceBasePath?: string;
   localMediaPreviewRoots?: readonly string[];
+  connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
   canvasPluginSurfaceUrl?: string | null;
@@ -178,12 +179,13 @@ function buildGroupedMessageRenderOptions(
     isToolExpanded: opts.isToolExpanded,
     onToggleToolExpanded: opts.onToggleToolExpanded,
     onRequestUpdate: opts.onRequestUpdate,
-    onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
+    onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
     canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
     resourceBasePath: opts.resourceBasePath,
     localMediaPreviewRoots: opts.localMediaPreviewRoots,
+    connectionEpoch: opts.connectionEpoch,
     assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
     resolveArtifactDownload: opts.resolveArtifactDownload,
     embedSandboxMode: opts.embedSandboxMode,
@@ -490,12 +492,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     }
   }
   const lastMessageIndex = group.messages.length - 1;
-  const runFrameActive = ownsRunFrame && Boolean(group.isStreaming || opts.activeContinuation);
-  const footerActionDetails = runFrameActive
-    ? null
-    : ownsRunFrame
-      ? (messageActionDetails[0] ?? null)
-      : (messageActionDetails[lastMessageIndex] ?? null);
+  const footerActionDetails = ownsRunFrame
+    ? (messageActionDetails[0] ?? null)
+    : (messageActionDetails[lastMessageIndex] ?? null);
   const footerActionMessageKey = ownsRunFrame
     ? opts.frameActionOwner?.key
     : group.messages[lastMessageIndex]?.key;
@@ -595,7 +594,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             ? renderTurnRecapRow(opts.turnRecap, { presentation: "continuation" })
             : nothing}
       </div>
-      ${normalizedRole === "tool"
+      ${normalizedRole === "tool" || group.isStreaming || opts.activeContinuation
         ? nothing
         : html`<div
             class="chat-group-footer ${persistUserIdentity
@@ -617,10 +616,16 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 ? html`<span
                     class="chat-send-status"
                     title=${sendFailure.error ?? nothing}
-                    data-send-state="failed"
+                    data-send-state=${sendFailure.state}
                   >
                     <span aria-hidden="true">·</span>
-                    <span>${t("chat.queue.notSent")}</span>
+                    <span
+                      >${t(
+                        sendFailure.state === "unconfirmed"
+                          ? "chat.queue.deliveryUnconfirmed"
+                          : "chat.queue.notSent",
+                      )}</span
+                    >
                     ${opts.onRetryQueuedMessage
                       ? html`
                           <span aria-hidden="true">·</span>

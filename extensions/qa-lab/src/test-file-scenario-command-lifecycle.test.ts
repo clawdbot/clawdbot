@@ -53,12 +53,16 @@ function createChild(pid = 42) {
   return child;
 }
 
-function runCommand(timeoutMs?: number) {
+function runCommand(
+  timeoutMs?: number,
+  onOutput?: (stream: "stderr" | "stdout", chunk: Buffer) => void,
+) {
   return runQaScenarioCommandLifecycle({
     command: "/usr/local/bin/scenario-command",
     args: ["--run"],
     cwd: "/tmp/qa",
     env: { OPENCLAW_QA_REF: "test" },
+    ...(onOutput ? { onOutput } : {}),
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   });
 }
@@ -282,12 +286,18 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
 
   it("preserves the exact close result and removes parent handlers", async () => {
     const child = createChild();
-    const resultPromise = runCommand(5_000);
+    const output = vi.fn();
+    const resultPromise = runCommand(5_000, output);
 
     child.stdout?.emit("data", Buffer.from("out\n"));
     child.stderr?.emit("data", Buffer.from("err\n"));
     child.emit("exit", 3, null);
     child.emit("close", 3, null);
+
+    expect(output.mock.calls).toEqual([
+      ["stdout", Buffer.from("out\n")],
+      ["stderr", Buffer.from("err\n")],
+    ]);
 
     await expect(resultPromise).resolves.toEqual({
       exitCode: 3,

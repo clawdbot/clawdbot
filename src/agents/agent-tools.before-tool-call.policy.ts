@@ -57,6 +57,14 @@ import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js"
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
 
+/** Keep receipt routing private without widening observable hook outcomes. */
+function markPrivateDecision(
+  outcome: HookOutcome,
+  marker: "genericDecision" | "ownerDecision",
+): void {
+  Object.defineProperty(outcome, marker, { value: true });
+}
+
 export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDiagnosticState {
   const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
   return {
@@ -134,13 +142,15 @@ export async function runBeforeToolCallHook(args: {
           args.ctx,
         );
         if (intervention) {
-          return {
+          const outcome: HookOutcome = {
             blocked: true,
             kind: "veto",
             deniedReason: "tool-loop",
             reason: intervention.reason,
             params,
           };
+          markPrivateDecision(outcome, "genericDecision");
+          return outcome;
         }
       }
     }
@@ -253,13 +263,15 @@ export async function runBeforeToolCallHook(args: {
         )
       : undefined;
     if (trustedPolicyResult?.block) {
-      return {
+      const outcome: HookOutcome = {
         blocked: true,
         kind: "veto",
         deniedReason: "plugin-before-tool-call",
         reason: trustedPolicyResult.blockReason || "Tool call blocked by trusted plugin policy",
         params,
       };
+      markPrivateDecision(outcome, "genericDecision");
+      return outcome;
     }
     let trustedApprovalParams: unknown;
     let trustedApprovalResolution: PluginApprovalResolution | undefined;
@@ -312,17 +324,22 @@ export async function runBeforeToolCallHook(args: {
         params: policyAdjustedParams,
       };
       if (trustedApprovalResolution) {
+        markPrivateDecision(allowed, "ownerDecision");
         allowed.approvalResolution = trustedApprovalResolution;
       }
       return allowed;
     }
     const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
     const callerIdentity = getGatewayToolCallerIdentity();
+    let ownerDecisionMarked = false;
     const receipt =
       callerIdentity?.executionIdentityToken && callerIdentity.receiptAuthority
         ? {
             token: callerIdentity.executionIdentityToken,
             assertAuthority: callerIdentity.receiptAuthority,
+            markOwnerDecision: () => {
+              ownerDecisionMarked = true;
+            },
           }
         : undefined;
     const hookResult = await hookRunner.runBeforeToolCall(
@@ -397,6 +414,9 @@ export async function runBeforeToolCallHook(args: {
       blocked: false as const,
       params: finalParams,
     };
+    if (ownerDecisionMarked || finalApprovalResolution) {
+      markPrivateDecision(allowed, "ownerDecision");
+    }
     if (finalApprovalResolution) {
       allowed.approvalResolution = finalApprovalResolution;
     }

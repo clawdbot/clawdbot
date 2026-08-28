@@ -742,7 +742,6 @@ describe("collectMissingPackPaths", () => {
         ...requiredBundledPluginPackPaths,
         ...requiredStaticExtensionAssetPaths,
         ...requiredPluginSdkPackPaths,
-        ...packagedPrivatePluginSdkRuntimePaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/prepare-git-hooks.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
@@ -756,6 +755,7 @@ describe("collectMissingPackPaths", () => {
         "dist/agents/compaction-planning.worker.js",
         "dist/agents/model-provider-auth.worker.js",
         "dist/agents/prepared-model-catalog.worker.js",
+        "dist/extensions/memory-core/memory-search-knn.child.js",
         "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
         "dist/config/sessions/session-transcript-reconcile.worker.js",
         "dist/state/openclaw-database-verify.worker.js",
@@ -784,13 +784,14 @@ describe("collectMissingPackPaths", () => {
         writeFileSync(filePath, "export {};\n");
       }
       for (const relativePath of requiredBundledPluginPackPaths) {
-        if (!/^dist\/extensions\/[^/]+\/package\.json$/u.test(relativePath)) {
-          continue;
-        }
-        const packageJsonPath = join(packageRoot, relativePath);
-        mkdirSync(dirname(packageJsonPath), { recursive: true });
-        writeFileSync(packageJsonPath, "{}\n");
+        const artifactPath = join(packageRoot, relativePath);
+        mkdirSync(dirname(artifactPath), { recursive: true });
+        writeFileSync(artifactPath, relativePath.endsWith(".json") ? "{}\n" : "export {};\n");
       }
+      writeFileSync(
+        join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH),
+        JSON.stringify(requiredBundledPluginPackPaths),
+      );
       for (const relativePath of collectInstalledBundledRuntimeSidecarPaths(packageRoot)) {
         const sidecarPath = join(packageRoot, relativePath);
         mkdirSync(dirname(sidecarPath), { recursive: true });

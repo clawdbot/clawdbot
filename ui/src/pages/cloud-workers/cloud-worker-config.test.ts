@@ -18,6 +18,7 @@ const configuredProfile = {
     ttl: "24h",
     idleTimeout: "60m",
     setup: "install-node",
+    setupEnv: ["OPENCLAW_WORKER_ARTIFACT_TOKEN"],
     desktop: true,
     binary: "/opt/crabbox",
     region: "eu-west-1",
@@ -25,6 +26,24 @@ const configuredProfile = {
 };
 
 describe("cloud worker settings state", () => {
+  it.each([undefined, ""])("requires an explicit class for an empty draft (%j)", (machineClass) => {
+    const profile = readCloudWorkerProfiles({
+      cloudWorkers: {
+        profiles: {
+          production: {
+            ...configuredProfile,
+            settings: { ...configuredProfile.settings, class: machineClass },
+          },
+        },
+      },
+    })[0];
+    const draft = createCloudWorkerDraft(machineClass === undefined ? undefined : profile);
+    expect(draft.machineClass).toBe("");
+    expect(
+      validateCloudWorkerDraft({ ...draft, id: "new-profile", backend: "hetzner" }, {}, null),
+    ).toBe("machineClass");
+  });
+
   it("distinguishes empty, advertised, and restart-required profiles", () => {
     expect(readCloudWorkerProfiles({})).toEqual([]);
     expect(
@@ -60,7 +79,13 @@ describe("cloud worker settings state", () => {
     ["idleTimeout", { idleTimeout: "0m" }],
     ["binary", { binary: "relative/crabbox" }],
   ] as const)("returns %s for an invalid add draft", (expected, patch) => {
-    const draft = { ...createCloudWorkerDraft(), id: "new-profile", backend: "hetzner", ...patch };
+    const draft = {
+      ...createCloudWorkerDraft(),
+      id: "new-profile",
+      backend: "hetzner",
+      machineClass: "standard",
+      ...patch,
+    };
     expect(validateCloudWorkerDraft(draft, { production: configuredProfile }, null)).toBe(expected);
   });
 
@@ -91,6 +116,7 @@ describe("cloud worker settings state", () => {
                 ttl: "8h",
                 idleTimeout: "45m",
                 setup: null,
+                setupEnv: null,
                 desktop: null,
                 binary: null,
                 region: "eu-west-1",
@@ -99,6 +125,92 @@ describe("cloud worker settings state", () => {
           },
         },
       },
+    });
+  });
+
+  it.each(["standard", "fast", "large", "beast", "custom", "batch/ARM64.v2", "x".repeat(128)])(
+    "preserves class %s and hidden settings when backend and binary change",
+    (machineClass) => {
+      const profile = {
+        ...configuredProfile,
+        settings: { ...configuredProfile.settings, class: machineClass },
+      };
+      const config = { cloudWorkers: { profiles: { production: profile } } };
+      const draft = {
+        ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]),
+        backend: "hetzner",
+        binary: "/opt/crabbox-next",
+      };
+
+      expect(buildCloudWorkerUpsertPatch(config, draft, "production")).toEqual({
+        patch: {
+          cloudWorkers: {
+            profiles: {
+              production: {
+                ...profile,
+                settings: {
+                  ...profile.settings,
+                  provider: "hetzner",
+                  binary: "/opt/crabbox-next",
+                },
+              },
+            },
+          },
+        },
+      });
+    },
+  );
+
+  it.each([undefined, []])("keeps empty setup environment unchanged (%j)", (setupEnv) => {
+    const existingSettings = Object.fromEntries(
+      Object.entries(configuredProfile.settings).filter(
+        ([key]) => key !== "setupEnv" || setupEnv !== undefined,
+      ),
+    );
+    if (setupEnv) {
+      existingSettings.setupEnv = setupEnv;
+    }
+    const profile = { ...configuredProfile, settings: existingSettings };
+    const config = { cloudWorkers: { profiles: { production: profile } } };
+    const draft = { ...createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]), setup: "" };
+
+    expect(buildCloudWorkerUpsertPatch(config, draft, "production")).toEqual({
+      patch: {
+        cloudWorkers: {
+          profiles: {
+            production: { ...profile, settings: { ...existingSettings, setup: null } },
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects an edit after its authoritative profile changes provider", () => {
+    const config = {
+      cloudWorkers: {
+        profiles: {
+          production: {
+            provider: "static-ssh",
+            settings: { host: "worker.example.test", user: "openclaw" },
+          },
+        },
+      },
+    };
+    const draft = createCloudWorkerDraft({
+      id: "production",
+      providerId: "crabbox",
+      install: "bundle",
+      backend: "aws",
+      machineClass: "standard",
+      ttl: "8h",
+      idleTimeout: "45m",
+      setup: "",
+      desktop: false,
+      binary: "",
+    });
+
+    expect(buildCloudWorkerUpsertPatch(config, draft, "production")).toEqual({
+      error: "profileMissing",
     });
   });
 

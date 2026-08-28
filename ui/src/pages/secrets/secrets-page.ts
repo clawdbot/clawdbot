@@ -6,6 +6,7 @@ import { isSensitiveEnvName } from "../../../../src/secrets/secret-env-name.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -339,9 +340,10 @@ class SecretsPage extends OpenClawLightDomElement {
       onDelete: (entry) => void this.removeEntry(entry),
     });
     return html`
-      <section class="content-header">
-        <div><div class="page-title">${titleForRoute("secrets")}</div></div>
-      </section>
+      ${renderSettingsPageHeader({
+        title: titleForRoute("secrets"),
+        subtitle: t("secretsStore.hint"),
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

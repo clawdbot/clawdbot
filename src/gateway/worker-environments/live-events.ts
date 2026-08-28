@@ -56,14 +56,15 @@ type OwnedLiveRun = {
   trajectoryRecorder: WorkerLiveTrajectoryRecorder;
 };
 
-type WorkerLiveCredentialRotation = Readonly<{
-  credentialHash: string;
-  environmentId: string;
-  newProcessTurn?: boolean;
-  previousCredentialHash: string;
-  runEpoch: number;
-  sessionId: string;
-}>;
+type WorkerLiveCredentialRotation = Readonly<
+  {
+    credentialHash: string;
+    environmentId: string;
+    previousCredentialHash: string;
+    runEpoch: number;
+    sessionId: string;
+  } & ({ newProcessTurn: true; ackedSeq: number } | { newProcessTurn?: false })
+>;
 
 type LiveEventWindow = {
   activeRuns: Map<string, OwnedLiveRun>;
@@ -173,13 +174,21 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       window.runEpoch === rotation.runEpoch
     ) {
       if (rotation.newProcessTurn === true) {
+        if (
+          !Number.isSafeInteger(rotation.ackedSeq) ||
+          rotation.ackedSeq < 0 ||
+          rotation.ackedSeq > window.ackedSeq
+        ) {
+          return false;
+        }
         // A per-turn credential is an unforgeable process boundary. Retire only
-        // the prior process's transient run claims/fences while preserving the
-        // durable ACK cursor; cron may intentionally reuse its durable run id.
+        // the prior process's transient state and rewind previews to the durable
+        // ACK cursor; cron may intentionally reuse its durable run id.
         for (const [runId, owned] of window.activeRuns) {
           releaseAgentRunContext(runId, owned.claimId);
         }
         window.activeRuns.clear();
+        window.ackedSeq = rotation.ackedSeq;
         window.pending.clear();
         window.pendingBytes = 0;
         window.terminalRuns.clear();
@@ -367,7 +376,25 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         return resyncRequired(0);
       }
       if (windows.size >= maxSessions) {
-        return capacityExceeded();
+        // Attached sessions keep windows for the gateway's lifetime, so at the cap
+        // evict the oldest registry-quiescent window (stale activeRuns look busy);
+        // it rebinds via resync. Reject only when every window has an active run.
+        let evicted = false;
+        for (const candidate of windows.values()) {
+          const busy = [...candidate.activeRuns.entries()].some(
+            ([runId, owned]) =>
+              getAgentRunContextOwnerStatus(runId, owned.claimId, owned.lifecycleGeneration) ===
+              "active",
+          );
+          if (!busy) {
+            clearWindow(candidate);
+            evicted = true;
+            break;
+          }
+        }
+        if (!evicted) {
+          return capacityExceeded();
+        }
       }
       window = {
         activeRuns: new Map(),

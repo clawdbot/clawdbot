@@ -37,7 +37,18 @@ export const agentSessionAutomaticCompaction: unique symbol = Symbol.for(
   "openclaw.agent-session.automatic-compaction",
 );
 
+/** Installs a synchronous callback for model-context replacement during compaction. */
+export const agentSessionSetContextReplacementHook: unique symbol = Symbol.for(
+  "openclaw.agent-session.set-context-replacement-hook",
+);
+
 export abstract class AgentSessionCompaction extends AgentSessionInspection {
+  private onContextReplaced?: () => void;
+
+  [agentSessionSetContextReplacementHook](callback: (() => void) | undefined): void {
+    this.onContextReplaced = callback;
+  }
+
   // =========================================================================
   // Compaction
   // =========================================================================
@@ -258,6 +269,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     // Compaction replaces the request prefix, invalidating retained usage and thinking signatures.
     // Sanitize at assignment so every continuation driver receives replay-safe history.
     this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
+    // The retry loop can continue before queued subscribers observe compaction_end.
+    // Invalidate context-bound state synchronously with the authoritative replacement.
+    this.onContextReplaced?.();
 
     const savedCompactionEntry = newEntries.find(
       (e) => e.type === "compaction" && e.summary === compactionResult.summary,

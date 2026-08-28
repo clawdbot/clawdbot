@@ -45,6 +45,7 @@ export const ChatHistoryDeltaResultSchema = closedObject({
   deltaCursor: Type.String(),
   sessionInfo: Type.Unknown(),
   agentsList: Type.Optional(Type.Unknown()),
+  inFlightRun: Type.Optional(Type.Unknown()),
   metadata: Type.Optional(Type.Unknown()),
 });
 
@@ -209,6 +210,9 @@ const ChatEventErrorKindSchema = Type.Union([
 /** Coarse startup stages shown while a run has not produced visible activity yet. */
 export const ChatRunStartupPhaseSchema = Type.Union([
   Type.Literal("preparing_workspace"),
+  Type.Literal("naming_worktree"),
+  Type.Literal("creating_worktree"),
+  Type.Literal("running_setup"),
   Type.Literal("provisioning_environment"),
   Type.Literal("preparing_context"),
   Type.Literal("starting_model"),

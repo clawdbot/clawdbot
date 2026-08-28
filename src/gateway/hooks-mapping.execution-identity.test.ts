@@ -22,7 +22,7 @@ describe("hook mapping execution identity", () => {
     });
     expect(result).toMatchObject({
       ok: true,
-      action: { kind: "agent", mappingId: "source-gmail", message: "Hello" },
+      actions: [{ kind: "agent", mappingId: "source-gmail", message: "Hello" }],
     });
   });
 });

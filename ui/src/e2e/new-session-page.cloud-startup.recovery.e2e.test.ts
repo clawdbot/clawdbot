@@ -493,7 +493,7 @@ suite.define(() => {
         message: "send outcome unknown",
       });
 
-      const alert = page.locator('.chat-cloud-startup-error[role="alert"]');
+      const alert = page.getByRole("alert").filter({ hasText: "send outcome unknown" });
       await pollLocatorText(alert).toContain("send outcome unknown");
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await replaceGatewayClient(page);

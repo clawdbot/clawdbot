@@ -36,6 +36,7 @@ describe("recoverEmbeddedRunOverflow", () => {
         },
       ],
     } as EmbeddedRunAttemptResult;
+    const markOwnedTranscriptRetry = vi.fn();
 
     const result = await recoverEmbeddedRunOverflow({
       runParams: {
@@ -95,10 +96,12 @@ describe("recoverEmbeddedRunOverflow", () => {
       getActiveSession: () => ({ id: "session-1", file: "agent:main:session-1" }),
       prepareCurrentTranscriptRetry: () => {},
       prepareCompactedTranscriptRetry: async () => {},
+      markOwnedTranscriptRetry,
       armPostCompactionGuard: () => {},
     } as unknown as Parameters<typeof recoverEmbeddedRunOverflow>[0]);
 
     expect(result).toEqual({ action: "retry" });
+    expect(markOwnedTranscriptRetry).toHaveBeenCalledOnce();
     expect(truncateOversizedToolResultsInActiveTargetMock).toHaveBeenCalledWith(
       expect.objectContaining({
         projectionState,

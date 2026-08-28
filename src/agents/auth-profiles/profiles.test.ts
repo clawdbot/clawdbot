@@ -16,6 +16,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { withEnvAsync } from "../../test-utils/env.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
+import { resolveApiKeyForProfile } from "./oauth.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   clearLastGoodProfileWithLock,
@@ -36,10 +37,14 @@ import {
   getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreStateMutationToken,
-  listRuntimeAuthProfileStoreSnapshots,
+  listOwnedRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./runtime-snapshots.js";
-import { resolveAuthProfileDatabasePath, runAuthProfileWriteTransaction } from "./sqlite.js";
+import {
+  resolveAuthProfileDatabasePath,
+  runAuthProfileWriteTransaction,
+  writePersistedAuthProfileStoreRaw,
+} from "./sqlite.js";
 import {
   captureAuthProfileStorePersistenceSnapshot,
   ensureAuthProfileStoreWithoutExternalProfiles,
@@ -334,24 +339,157 @@ describe("promoteAuthProfileInOrder", () => {
     );
   });
 
-  it("clears runtime snapshots when postcommit publication throws", () => {
-    replaceRuntimeAuthProfileStoreSnapshots([
-      {
-        store: {
+  it("isolates postcommit publication failure to the saving owner", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-publication-owner-isolation-",
+      async ({ agentDirFor }) => {
+        const savingAgentDir = agentDirFor("saving");
+        const siblingAgentDir = agentDirFor("sibling");
+        const siblingStore: RuntimeAuthProfileStore = {
           version: AUTH_STORE_VERSION,
           profiles: {
-            "openai:default": { type: "api_key", provider: "openai", key: "sk-runtime" },
+            "anthropic:sibling": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "sk-sibling",
+            },
           },
-        },
-      },
-    ]);
+          runtimeLocalProfileIds: ["anthropic:sibling"],
+        };
+        saveAuthProfileStore(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:saving": { type: "api_key", provider: "openai", key: "sk-old" },
+            },
+          },
+          savingAgentDir,
+        );
+        replaceRuntimeAuthProfileStoreSnapshots([
+          { agentDir: savingAgentDir, store: loadAuthProfileStoreForRuntime(savingAgentDir) },
+          { agentDir: siblingAgentDir, store: siblingStore },
+        ]);
+        storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
+          publish();
+          throw new Error("postcommit publication failed");
+        });
 
-    expect(
-      storeTesting.publishRuntimeSnapshotsAfterCommit(() => {
-        throw new Error("postcommit publication failed");
-      }),
-    ).toBe(false);
-    expect(getRuntimeAuthProfileStoreSnapshot()).toBeUndefined();
+        saveAuthProfileStore(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:saving": { type: "api_key", provider: "openai", key: "sk-new" },
+            },
+          },
+          savingAgentDir,
+        );
+
+        expect(getRuntimeAuthProfileStoreSnapshot(savingAgentDir)).toBeUndefined();
+        expect(getRuntimeAuthProfileStoreSnapshot(siblingAgentDir)).toEqual(siblingStore);
+      },
+    );
+  });
+
+  it("converges unreadable derived owners on committed shared credentials", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-derived-refresh-convergence-",
+      async ({ agentDirFor }) => {
+        const brokenAgentDir = agentDirFor("broken");
+        const healthyAgentDir = agentDirFor("healthy");
+        const sharedStore = (profileId: string, key: string): AuthProfileStore => ({
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [profileId]: { type: "api_key", provider: "openai", key },
+          },
+        });
+        saveAuthProfileStore(sharedStore("openai:shared", "sk-shared-old"));
+        saveAuthProfileStore(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "anthropic:broken": {
+                type: "api_key",
+                provider: "anthropic",
+                key: "sk-broken-local",
+              },
+            },
+          },
+          brokenAgentDir,
+        );
+        saveAuthProfileStore(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "google:healthy": {
+                type: "api_key",
+                provider: "google",
+                key: "sk-healthy-local",
+              },
+            },
+          },
+          healthyAgentDir,
+        );
+        replaceRuntimeAuthProfileStoreSnapshots([
+          { agentDir: brokenAgentDir, store: loadAuthProfileStoreForRuntime(brokenAgentDir) },
+          { agentDir: healthyAgentDir, store: loadAuthProfileStoreForRuntime(healthyAgentDir) },
+        ]);
+        writePersistedAuthProfileStoreRaw(
+          { version: AUTH_STORE_VERSION, profiles: "invalid-profile-map" },
+          brokenAgentDir,
+        );
+
+        saveAuthProfileStore(sharedStore("openai:shared", "sk-shared-new"));
+
+        const brokenAfterRotation = getRuntimeAuthProfileStoreSnapshot(brokenAgentDir);
+        const healthyAfterRotation = getRuntimeAuthProfileStoreSnapshot(healthyAgentDir);
+        expect(brokenAfterRotation).toBeDefined();
+        expect(healthyAfterRotation).toBeDefined();
+        await expect(
+          resolveApiKeyForProfile({
+            cfg: {},
+            store: brokenAfterRotation!,
+            profileId: "openai:shared",
+            agentDir: brokenAgentDir,
+          }),
+        ).resolves.toMatchObject({ apiKey: "sk-shared-new" });
+        await expect(
+          resolveApiKeyForProfile({
+            cfg: {},
+            store: healthyAfterRotation!,
+            profileId: "openai:shared",
+            agentDir: healthyAgentDir,
+          }),
+        ).resolves.toMatchObject({ apiKey: "sk-shared-new" });
+        expect(brokenAfterRotation?.profiles["anthropic:broken"]).toMatchObject({
+          key: "sk-broken-local",
+        });
+        expect(healthyAfterRotation?.profiles["google:healthy"]).toMatchObject({
+          key: "sk-healthy-local",
+        });
+
+        saveAuthProfileStore(sharedStore("openai:replacement", "sk-shared-replacement"));
+
+        const brokenAfterDeletion = getRuntimeAuthProfileStoreSnapshot(brokenAgentDir);
+        expect(brokenAfterDeletion).toBeDefined();
+        await expect(
+          resolveApiKeyForProfile({
+            cfg: {},
+            store: brokenAfterDeletion!,
+            profileId: "openai:shared",
+            agentDir: brokenAgentDir,
+          }),
+        ).resolves.toBeNull();
+        await expect(
+          resolveApiKeyForProfile({
+            cfg: {},
+            store: brokenAfterDeletion!,
+            profileId: "openai:replacement",
+            agentDir: brokenAgentDir,
+          }),
+        ).resolves.toMatchObject({ apiKey: "sk-shared-replacement" });
+      },
+      { clearOAuthDir: true },
+    );
   });
 
   it("keeps a direct save committed when postcommit publication throws", async () => {
@@ -866,7 +1004,7 @@ describe("promoteAuthProfileInOrder", () => {
         });
 
         expect(committed.publishRuntimeSnapshots()).toBe(true);
-        expect(listRuntimeAuthProfileStoreSnapshots()).toEqual([
+        expect(listOwnedRuntimeAuthProfileStoreSnapshots()).toEqual([
           expect.objectContaining({
             databasePath,
             store: expect.objectContaining({
@@ -879,7 +1017,7 @@ describe("promoteAuthProfileInOrder", () => {
 
         restoreAuthProfileStorePersistenceSnapshot(snapshot, committed.owned);
 
-        expect(listRuntimeAuthProfileStoreSnapshots()).toEqual([
+        expect(listOwnedRuntimeAuthProfileStoreSnapshots()).toEqual([
           expect.objectContaining({
             databasePath,
             store: expect.objectContaining({

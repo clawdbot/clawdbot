@@ -51,7 +51,6 @@ type PublishedReleaseVersion = { year: number; month: number; patch: number };
 type UpgradeSurvivorExpansion = { lanes: DockerE2eLane[]; omittedLaneNames: string[] };
 type DockerE2ePlanOptions = {
   allowFrozenTargetScenarioOmissions?: boolean;
-  candidatePackageRoot?: string;
   includeOpenWebUI: boolean;
   liveMode: LiveMode;
   liveRetries: number;
@@ -113,6 +112,7 @@ const UPGRADE_SURVIVOR_SCENARIOS = [
   "plugin-deps-cleanup",
   "configured-plugin-installs",
   "stale-source-plugin-shadow",
+  "prerelease-plugin-registry",
   "tilde-log-path",
   "meeting-transcripts-sqlite",
   "versioned-runtime-deps",
@@ -120,12 +120,18 @@ const UPGRADE_SURVIVOR_SCENARIOS = [
   "sqlite-volume",
 ];
 
+// Prerelease registry proof requires an explicit artifact contract and must not
+// join broad survivor sweeps that do not supply one.
+const UPGRADE_SURVIVOR_AGGREGATE_SCENARIOS = UPGRADE_SURVIVOR_SCENARIOS.filter(
+  (scenario) => scenario !== "prerelease-plugin-registry",
+);
+
 const UPGRADE_SURVIVOR_SCENARIO_ALIASES = new Map([
   [
     "reported-issues",
-    UPGRADE_SURVIVOR_SCENARIOS.filter((scenario) => scenario !== "sqlite-volume"),
+    UPGRADE_SURVIVOR_AGGREGATE_SCENARIOS.filter((scenario) => scenario !== "sqlite-volume"),
   ],
-  ["far-reaching", UPGRADE_SURVIVOR_SCENARIOS],
+  ["far-reaching", UPGRADE_SURVIVOR_AGGREGATE_SCENARIOS],
 ]);
 
 // Upgrade recipes select an OpenAI model whose runtime is supplied by the
@@ -135,6 +141,10 @@ const UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES = ["@openclaw/codex"];
 // Pre-protocol catalogs are content-addressed. Unknown legacy blocks fail
 // closed instead of requiring a dependency or reimplementing a JavaScript parser.
 const LEGACY_UPGRADE_SURVIVOR_SCENARIO_CATALOGS = new Map([
+  [
+    "f886fb3ca6232eb97cdfe93a9ab7fc8e8cd4a39658c5518bfb736a2242d0c949",
+    "base acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow prerelease-plugin-registry tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume auth-profile-v2026-7-2-beta-5",
+  ],
   [
     "0c5d3ce3533c035033890923aae7e210f4fdb24e7b8af32371930cdf12a00fd5",
     "base acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume auth-profile-v2026-7-2-beta-5",
@@ -555,69 +565,6 @@ function applyLiveRetries(poolLanes: DockerE2eLane[], retries: number): DockerE2
   return poolLanes.map((poolLane) => (poolLane.live ? { ...poolLane, retries } : poolLane));
 }
 
-const PNPM_NON_SCRIPT_COMMANDS = new Set([
-  "add",
-  "audit",
-  "config",
-  "dlx",
-  "exec",
-  "fetch",
-  "install",
-  "pack",
-  "publish",
-  "rebuild",
-  "remove",
-]);
-
-function candidatePackageScripts(
-  candidatePackageRoot: string | undefined,
-): Set<string> | undefined {
-  if (!candidatePackageRoot) {
-    return undefined;
-  }
-  const packageJson = JSON.parse(
-    readFileSync(resolve(candidatePackageRoot, "package.json"), "utf8"),
-  );
-  if (!packageJson || typeof packageJson !== "object" || Array.isArray(packageJson)) {
-    throw new Error("Candidate package manifest must be an object");
-  }
-  if (
-    packageJson.scripts !== undefined &&
-    (!packageJson.scripts ||
-      typeof packageJson.scripts !== "object" ||
-      Array.isArray(packageJson.scripts))
-  ) {
-    throw new Error("Candidate package manifest has an invalid scripts field");
-  }
-  return new Set(
-    Object.entries(packageJson.scripts ?? {})
-      .filter(([, command]) => typeof command === "string")
-      .map(([name]) => name),
-  );
-}
-
-function requiredPackageScripts(poolLane: DockerE2eLane): string[] {
-  return [...poolLane.command.matchAll(/\bpnpm\s+(?:run\s+)?([a-z][a-z0-9:-]*)/giu)]
-    .map(([, script]) => script)
-    .filter((script): script is string => script !== undefined)
-    .filter((script) => !PNPM_NON_SCRIPT_COMMANDS.has(script));
-}
-
-function filterUnavailableCandidateScriptLanes(
-  poolLanes: DockerE2eLane[],
-  candidatePackageRoot: string | undefined,
-): DockerE2eLane[] {
-  const scripts = candidatePackageScripts(candidatePackageRoot);
-  if (!scripts) {
-    return poolLanes;
-  }
-  // The trusted catalog can add lanes before a frozen candidate has their scripts.
-  // Only schedule package-script commands the selected candidate can execute.
-  return poolLanes.filter((poolLane) =>
-    requiredPackageScripts(poolLane).every((script) => scripts.has(script)),
-  );
-}
-
 export function laneWeight(poolLane: DockerE2eLane): number {
   return Math.max(1, poolLane.weight ?? 1);
 }
@@ -746,6 +693,9 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
   const configuredChannelIds = new Set<string>();
   const requiredPackages = new Set<string>();
   for (const poolLane of poolLanes) {
+    for (const packageName of poolLane.prepublishPluginPackages ?? []) {
+      requiredPackages.add(packageName);
+    }
     const scenario = upgradeSurvivorScenarioForLane(poolLane);
     if (!scenario) {
       continue;
@@ -932,16 +882,8 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       : options.liveMode === "only"
         ? []
         : applyLiveMode(retriedTailLanes, options.liveMode);
-  const availableLanes = filterUnavailableCandidateScriptLanes(
-    configuredLanes,
-    options.candidatePackageRoot,
-  );
-  const availableTailLanes = filterUnavailableCandidateScriptLanes(
-    configuredTailLanes,
-    options.candidatePackageRoot,
-  );
-  const orderedLanes = options.orderLanes(availableLanes, options.timingStore);
-  const orderedTailLanes = options.orderLanes(availableTailLanes, options.timingStore);
+  const orderedLanes = options.orderLanes(configuredLanes, options.timingStore);
+  const orderedTailLanes = options.orderLanes(configuredTailLanes, options.timingStore);
   return {
     omittedUnsupportedLaneNames: [...omittedUnsupportedLaneNames],
     orderedLanes,

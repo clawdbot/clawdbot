@@ -19,13 +19,8 @@ import {
   splitSessionDiffFileText,
   type SessionDiffGapDirection,
 } from "../../../lib/chat/session-diff-gaps.ts";
-import {
-  pairSessionDiffLines,
-  type SessionSplitDiffRow,
-} from "../../../lib/chat/session-diff-split.ts";
 import { parseSessionDiffPatch, type ParsedFilePatch } from "../../../lib/chat/session-diff.ts";
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
@@ -166,7 +161,6 @@ class SessionDiffPanel extends OpenClawLightDomElement {
   @state() private split = loadPreferences().split;
   @state() private wrap = loadPreferences().wrap;
 
-  private readonly splitCache = new WeakMap<ParsedFilePatch, SessionSplitDiffRow[]>();
   private readonly fileTextCache = new WeakMap<FileView, Promise<string[] | null>>();
   private readonly unavailableFileText = new WeakSet<FileView>();
   private prefetchedDiffResult: SessionsDiffResult | null = null;
@@ -263,9 +257,6 @@ class SessionDiffPanel extends OpenClawLightDomElement {
       case "scope":
         this.scope = action.value;
         return;
-      case "copy-path":
-        void copyToClipboard(action.path);
-        return;
       case "open-file":
         this.openFile?.(action.path);
         return;
@@ -337,16 +328,6 @@ class SessionDiffPanel extends OpenClawLightDomElement {
         </openclaw-tooltip>
       </div>
     `;
-  }
-
-  private splitRows(parsed: ParsedFilePatch): SessionSplitDiffRow[] {
-    const cached = this.splitCache.get(parsed);
-    if (cached) {
-      return cached;
-    }
-    const rows = pairSessionDiffLines(parsed.lines);
-    this.splitCache.set(parsed, rows);
-    return rows;
   }
 
   private canExpandGaps(view: FileView): boolean {
@@ -424,7 +405,6 @@ class SessionDiffPanel extends OpenClawLightDomElement {
       return;
     }
     parsed.lines = expanded;
-    this.splitCache.delete(parsed);
     this.requestUpdate();
   }
 
@@ -473,8 +453,8 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     const renderGap = (line: DiffLine) => this.renderGap(view, line);
     return html`
       ${this.split
-        ? renderSessionSplitDiff(this.splitRows(parsed), renderGap)
-        : renderDiffBlock(parsed.lines, "succeeded", renderGap)}
+        ? renderSessionSplitDiff(parsed.lines, renderGap, file)
+        : renderDiffBlock(parsed.lines, "succeeded", renderGap, file)}
       ${parsed.truncated
         ? html`<div class="session-diff__note">${t("chat.sessionDiff.truncatedFile")}</div>`
         : nothing}

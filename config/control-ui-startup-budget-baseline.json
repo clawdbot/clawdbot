@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 340388,
-  "reason": "rebase onto current main; startup growth landed on main since the boot-group ratchet",
-  "updatedAt": "2026-08-24"
+  "startupJsGzipBytes": 345524,
+  "reason": "typography picker module on the boot path (+301 B) plus unpinned boot growth from #131335 tooltips and #131336 new-session tab controls (~1.2 KiB) that predates this branch; measured on main 515c3d8ff3f",
+  "updatedAt": "2026-08-28"
 }

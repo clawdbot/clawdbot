@@ -44,48 +44,48 @@ describe("managed llama-server", () => {
       "arm64",
       "metal",
       "tar.gz",
-      "llama-b10472-bin-macos-arm64.tar.gz",
-      "194a3e7008cc8c4e7a8d201012f4a32102333664c2eb7d0511d091589c48a13c",
+      "llama-b10488-bin-macos-arm64.tar.gz",
+      "ada90bbc4787caac49fbb95ed2487a03fb4bbb456057a31e316878e1a895827a",
     ],
     [
       "darwin",
       "x64",
       "cpu",
       "tar.gz",
-      "llama-b10472-bin-macos-x64.tar.gz",
-      "fc92e1521cb1ddfd723ff81ea48fac0792a988da6ed052965a84411634d97fd4",
+      "llama-b10488-bin-macos-x64.tar.gz",
+      "80567f47511d5e11872835614b99cd678fa276b05553563e8aab3f2cb6b90abd",
     ],
     [
       "linux",
       "arm64",
       "cpu",
       "tar.gz",
-      "llama-b10472-bin-ubuntu-arm64.tar.gz",
-      "3c289bb7be0766189f71c47791e28d9d80540871771c1c7930be3711784c1f4d",
+      "llama-b10488-bin-ubuntu-arm64.tar.gz",
+      "e977e13e9d72b8ee0068336bb9196f4f8158e8b53b8d502dc8bdb55eaea1222f",
     ],
     [
       "linux",
       "x64",
       "cpu",
       "tar.gz",
-      "llama-b10472-bin-ubuntu-x64.tar.gz",
-      "8826da7085323c25180cb997ebb48c121c0a3698ec102ea3248843d3a7ed4166",
+      "llama-b10488-bin-ubuntu-x64.tar.gz",
+      "5a7073371d5a9b8e39978b35f49b2ff244f7a064edb92f0326d94e12b52261dd",
     ],
     [
       "win32",
       "arm64",
       "cpu",
       "zip",
-      "llama-b10472-bin-win-cpu-arm64.zip",
-      "6de7a00ad19fa3c5a772575d8a4fc75b265fcc2b875a2206b437af7d925b29b1",
+      "llama-b10488-bin-win-cpu-arm64.zip",
+      "97a883831728862568a0e7e38380e7a179b6bcb292167f648a5598586dd65635",
     ],
     [
       "win32",
       "x64",
       "cpu",
       "zip",
-      "llama-b10472-bin-win-cpu-x64.zip",
-      "ef495329c85c171991972fd3226a179c1900368cab66e2ebba8b21a7471a74e5",
+      "llama-b10488-bin-win-cpu-x64.zip",
+      "6c938f6d79aac96cb90fda673aade20cff9b1b6c1e97de04f4d5d60bca107082",
     ],
   ] as const)(
     "selects the pinned %s/%s asset",
@@ -123,10 +123,13 @@ describe("managed llama-server", () => {
 
     try {
       await prepareManagedLlamaServer({
-        chatModelId: "chat-model",
-        chatModelPath: "/models/chat.gguf",
-        contextSize: 8192,
-        maxTokens: 2048,
+        chatModel: {
+          mode: "configure",
+          id: "chat-model",
+          path: "/models/chat.gguf",
+          contextSize: 8192,
+          maxTokens: 2048,
+        },
         embeddingModelIsDefault: true,
         embeddingModelPath: "/models/embedding.gguf",
         port: 19_432,
@@ -157,7 +160,13 @@ describe("managed llama-server", () => {
     });
 
     try {
+      await fs.writeFile(
+        presetPath,
+        "version = 1\n\n[stale-chat]\nmodel = /models/stale-chat.gguf\n\n" +
+          "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/old-embedding.gguf\nembedding = true\n",
+      );
       await prepareManagedLlamaServer({
+        chatModel: { mode: "remove" },
         embeddingModelPath: "/models/custom-embedding.gguf",
         port: 19_432,
       });
@@ -194,6 +203,7 @@ describe("managed llama-server", () => {
       ]);
       await Promise.all([
         prepareManagedLlamaServer({
+          chatModel: { mode: "preserve" },
           embeddingModelPath,
           port: 19_434,
         }),

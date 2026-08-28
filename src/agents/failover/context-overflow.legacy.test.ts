@@ -89,6 +89,9 @@ describe("isContextOverflowError", () => {
       "This request exceeds the model's maximum context length",
       "LLM request rejected: max_tokens would exceed context window",
       "input length would exceed context budget for this model",
+      "The input (263000 tokens) is longer than the model's context length (262144 tokens).",
+      "The input (263,000 tokens) is longer than the model's context length (262,144 tokens).",
+      "The input (1 token) is longer than the model's context length (1 token).",
     ];
     for (const sample of samples) {
       expect(isContextOverflowError(sample)).toBe(true);
@@ -139,10 +142,16 @@ describe("isLikelyContextOverflowError", () => {
       "Model context window is 128k tokens, you requested 256k tokens",
       "Context window exceeded: requested 12000 tokens",
       "Prompt too large for this model",
+      "The input (263000 tokens) is longer than the model's context length (262144 tokens).",
     ];
     for (const sample of samples) {
       expect(isLikelyContextOverflowError(sample)).toBe(true);
     }
+    expect(
+      classifyFailoverReason(
+        "The input (263000 tokens) is longer than the model's context length (262144 tokens).",
+      ),
+    ).toBe("context_overflow");
   });
 
   it("excludes context window too small errors", () => {
@@ -165,6 +174,7 @@ describe("isLikelyContextOverflowError", () => {
       "This request would exceed your account's rate limit",
       "429 Too Many Requests: request exceeds rate limit",
       "AWS Bedrock: Too many tokens per day. Please try again tomorrow.",
+      "Rate limit exceeded: The input (263000 tokens) is longer than the model's context length (262144 tokens).",
     ];
     for (const sample of samples) {
       expect(isLikelyContextOverflowError(sample)).toBe(false);
@@ -182,6 +192,7 @@ describe("isLikelyContextOverflowError", () => {
       "402 Payment Required: request token limit exceeded for this billing plan",
       "insufficient credits: request size exceeds your current plan limits",
       "Your credit balance is too low. Maximum request token limit exceeded.",
+      "402 Payment Required: The input (263000 tokens) is longer than the model's context length (262144 tokens).",
     ];
     for (const sample of samples) {
       expect(isBillingErrorMessage(sample)).toBe(true);

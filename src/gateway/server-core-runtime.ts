@@ -6,8 +6,6 @@ import {
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
 import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
@@ -152,18 +150,21 @@ export async function startGatewayCoreRuntime(input: {
     broadcastPluginEvent,
     activateRuntimeSecrets,
   } = runtime;
-  let currentPluginMetadataSnapshot = runtime.pluginMetadataSnapshot;
+  const pluginMetadataSnapshot = runtime.pluginMetadataSnapshot;
   if (desktopSessionRegistry) {
     kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
   }
   const secretEgressProxy =
     cfgAtStart.secrets?.egressProxy?.enabled === true
       ? await import("../secrets/egress-proxy/runtime.js").then((egressRuntime) =>
-          egressRuntime.startGatewaySecretEgressProxy(
-            cfgAtStart.secrets?.egressProxy?.bypassHosts
+          egressRuntime.startGatewaySecretEgressProxy({
+            ...(cfgAtStart.secrets?.egressProxy?.allowedHosts !== undefined
+              ? { allowedHosts: cfgAtStart.secrets.egressProxy.allowedHosts }
+              : {}),
+            ...(cfgAtStart.secrets?.egressProxy?.bypassHosts
               ? { bypassHosts: cfgAtStart.secrets.egressProxy.bypassHosts }
-              : {},
-          ),
+              : {}),
+          }),
         )
       : undefined;
   if (secretEgressProxy) {
@@ -276,6 +277,7 @@ export async function startGatewayCoreRuntime(input: {
 
   const {
     execApprovalManager,
+    questionManager,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest,
     pluginApprovalIosPushDelivery,
@@ -292,6 +294,7 @@ export async function startGatewayCoreRuntime(input: {
       ...createGatewayAuxHandlers({
         log,
         chatAbortControllers,
+        hasRunAbortMarker: (runId) => chatRunState.hasAbortMarker(runId),
         activateRuntimeSecrets,
         sharedGatewaySessionGenerationState,
         resolveSharedGatewaySessionGenerationForConfig,
@@ -498,6 +501,8 @@ export async function startGatewayCoreRuntime(input: {
       runtimeConfig: params.nextConfig,
       activationSourceConfig: params.sourceConfig,
       env: params.env,
+      manifestRegistry: pluginMetadataSnapshot?.manifestRegistry,
+      discovery: pluginMetadataSnapshot?.discovery,
       ambientEnvTriggers,
     });
     const nextPluginLookUpTable = loadPluginLookUpTable({
@@ -505,6 +510,7 @@ export async function startGatewayCoreRuntime(input: {
       workspaceDir: pluginWorkspaceDir,
       env: params.env,
       activationSourceConfig: params.sourceConfig,
+      metadataSnapshot: pluginMetadataSnapshot,
       // Workers can be created after startup; reload planning needs the live durable set.
       workerProviderIds: workerEnvironmentStartup?.listDurableProviderIds() ?? [],
       ambientEnvTriggers,
@@ -587,22 +593,10 @@ export async function startGatewayCoreRuntime(input: {
             hostServices: pluginHostServices,
             baseMethods,
             pluginLookUpTable: nextPluginLookUpTable,
+            pluginMetadataSnapshot,
             ambientEnvTriggers,
             resolveGatewayContext: resolvePluginGatewayContext,
           });
-          const nextPluginMetadataSnapshot = completePluginMetadataSnapshot({
-            snapshot: nextPluginLookUpTable,
-            config: params.sourceConfig,
-            env: params.env,
-            workspaceDir: pluginWorkspaceDir,
-          });
-          setCurrentPluginMetadataSnapshot(nextPluginMetadataSnapshot, {
-            config: params.sourceConfig,
-            compatibleConfigs: [params.nextConfig],
-            env: params.env,
-            workspaceDir: pluginWorkspaceDir,
-          });
-          currentPluginMetadataSnapshot = nextPluginMetadataSnapshot;
           replaceAttachedPluginRuntime(loaded);
         }) ||
         !loaded
@@ -661,6 +655,7 @@ export async function startGatewayCoreRuntime(input: {
     sessionObserver,
     approvalSessionEvents,
     execApprovalManager,
+    questionManager,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest,
     pluginApprovalIosPushDelivery,
@@ -675,6 +670,6 @@ export async function startGatewayCoreRuntime(input: {
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog,
-    getPluginMetadataSnapshot: () => currentPluginMetadataSnapshot,
+    getPluginMetadataSnapshot: () => pluginMetadataSnapshot,
   };
 }

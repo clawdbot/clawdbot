@@ -5,8 +5,12 @@ import {
   type AgentCredentialMap,
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import {
+  setPreparedModelFullCatalogAuth,
+  setPreparedModelRuntimeAuthStore,
+} from "../../agents/prepared-model-runtime-auth.js";
+import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createGatewayChatMetadataRuntime } from "./chat-metadata-runtime.js";
@@ -80,11 +84,18 @@ function createHarness(
     async ({
       facts,
     }: {
-      facts: { authStore: AuthProfileStore; owner: PreparedModelRuntimeSnapshot };
-    }) => ({
-      modelCatalog: facts.owner.modelCatalog.entries,
-      models: facts.owner.modelCatalog.entries,
-    }),
+      facts: {
+        authStore: AuthProfileStore;
+        modelCatalog: ModelCatalogSnapshot;
+        owner: PreparedModelRuntimeSnapshot;
+      };
+    }) => {
+      const modelCatalog = facts.modelCatalog;
+      return {
+        modelCatalog: modelCatalog.entries,
+        models: modelCatalog.entries,
+      };
+    },
   );
   const context = {
     getRuntimeConfig: () => config,
@@ -479,6 +490,91 @@ describe("gateway chat metadata runtime", () => {
       models: [expect.objectContaining({ id: "gpt-5.6-sol", available: true })],
     });
     expect(loadFullModelCatalog).not.toHaveBeenCalled();
+  });
+
+  test("adopts discovered wildcard models without restarting provider discovery", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: { "openai/*": {}, "openai/gpt-5.6-sol": {} },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } satisfies OpenClawConfig;
+    const credentials: AgentCredentialMap = {
+      openai: {
+        type: "oauth",
+        access: "prepared-access",
+        refresh: "prepared-refresh",
+        expires: Date.now() + 30 * 60_000,
+      },
+    };
+    const harness = createHarness(config, { useDefaultProjection: true });
+    const owner = createOwner(
+      config,
+      "gpt-5.6-sol",
+      credentials,
+      "openai",
+      "openai-chatgpt-responses",
+    );
+    const preparedAuthStore: AuthProfileStore = {
+      version: 1,
+      profiles: { "openai:prepared": { ...credentials.openai!, provider: "openai" } },
+    };
+    harness.setAuthStore(preparedAuthStore);
+    const dynamicModel = {
+      id: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      provider: "openai",
+      api: "openai-chatgpt-responses" as const,
+    };
+    const fullCatalog = markPreparedModelCatalogFull({
+      ...owner.modelCatalog,
+      entries: [...owner.modelCatalog.entries, dynamicModel],
+      routeVariants: [...owner.modelCatalog.routeVariants, dynamicModel],
+    });
+    setPreparedModelFullCatalogAuth(fullCatalog, {
+      authStore: preparedAuthStore,
+      authModes: owner.authModes,
+    });
+    let completedCatalog: ModelCatalogSnapshot | undefined;
+    const generationOwner = {
+      ...owner,
+      readFullModelCatalog: () => completedCatalog,
+      loadFullModelCatalog: vi.fn(async () => {
+        completedCatalog = fullCatalog;
+        return fullCatalog;
+      }),
+    };
+    harness.setOwner(generationOwner);
+
+    await harness.runtime.refresh();
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "gpt-5.6-sol", available: true })],
+    });
+
+    await generationOwner.loadFullModelCatalog();
+    await harness.runtime.refresh();
+
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: expect.arrayContaining([
+        expect.objectContaining({ id: "gpt-5.6-sol", available: true }),
+        expect.objectContaining({ id: "gpt-5.6-luna", available: true }),
+      ]),
+    });
+    expect(generationOwner.loadFullModelCatalog).toHaveBeenCalledOnce();
+  });
+
+  test("rejects a completed catalog without its matching prepared auth generation", async () => {
+    const harness = createHarness();
+    const owner = harness.getPreparedOwner()!;
+    const unpairedCatalog = markPreparedModelCatalogFull({ ...owner.modelCatalog });
+    harness.setOwner({ ...owner, readFullModelCatalog: () => unpairedCatalog });
+
+    await expect(harness.runtime.refresh()).rejects.toThrow(
+      "prepared full model catalog omitted its auth generation",
+    );
   });
 
   test("retains a generation while auth store revisions are unchanged", async () => {

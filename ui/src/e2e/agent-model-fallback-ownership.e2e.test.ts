@@ -1,4 +1,6 @@
 // Real browser proof that agent model fallbacks follow the Gateway's ownership contract.
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -11,6 +13,9 @@ const suite = createControlUiE2eSuite({
 
 const primaryModel = "openai/gpt-5.4";
 const inheritedFallback = "anthropic/claude-sonnet-4-6";
+const writerWorkspace = "/tmp/agents/writer";
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const proofDir = path.resolve(".artifacts/control-ui-e2e/agent-context-ownership");
 
 suite.define(() => {
   it.each([
@@ -39,6 +44,11 @@ suite.define(() => {
       model: { primary: primaryModel, fallbacks: ["google/gemini-3-pro"] },
       expectedFallbacks: ["google/gemini-3-pro"],
     },
+    {
+      name: "combines an inherited primary with agent-only fallback configuration",
+      model: { fallbacks: ["google/gemini-3-pro"] },
+      expectedFallbacks: ["google/gemini-3-pro"],
+    },
   ])("$name", async ({ model, expectedFallbacks }) => {
     await suite.withPage(
       {
@@ -49,7 +59,10 @@ suite.define(() => {
       async ({ page }) => {
         const config = {
           agents: {
-            defaults: { model: { primary: primaryModel, fallbacks: [inheritedFallback] } },
+            defaults: {
+              workspace: "/tmp/agents",
+              model: { primary: primaryModel, fallbacks: [inheritedFallback] },
+            },
             entries: {
               main: { default: true },
               writer: model === undefined ? {} : { model },
@@ -64,7 +77,13 @@ suite.define(() => {
               scope: "agent",
               agents: [
                 { id: "main", identity: { name: "Main" }, name: "Main" },
-                { id: "writer", identity: { name: "Writer" }, name: "Writer" },
+                {
+                  id: "writer",
+                  identity: { name: "Writer" },
+                  name: "Writer",
+                  workspace: writerWorkspace,
+                  model: { primary: primaryModel, fallbacks: expectedFallbacks },
+                },
               ],
             },
             "config.get": {
@@ -99,6 +118,30 @@ suite.define(() => {
         await expect
           .poll(() => new URL(page.url()).pathname)
           .toBe("/settings/agents/writer/overview");
+
+        if (captureUiProof && model && !("primary" in Object(model))) {
+          await mkdir(proofDir, { recursive: true });
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(
+              proofDir,
+              `${process.env.OPENCLAW_UI_PROOF_LABEL ?? "agent-context"}.png`,
+            ),
+          });
+        }
+
+        await expect
+          .poll(() => page.locator(".workspace-link").textContent())
+          .toContain(writerWorkspace);
+        const modelDescription = page
+          .locator(".settings-kv dt")
+          .filter({ hasText: "Primary Model" })
+          .locator("xpath=following-sibling::dd[1]");
+        const displayedModel = expectedFallbacks.length
+          ? `${primaryModel} (+${expectedFallbacks.length} fallback)`
+          : primaryModel;
+        await expect.poll(() => modelDescription.textContent()).toContain(displayedModel);
 
         const fallbackInput = page.locator(".agent-chip-input");
         await fallbackInput.waitFor({ timeout: 10_000 });

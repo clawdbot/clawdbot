@@ -17,11 +17,15 @@ import {
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
 } from "../../scripts/lib/extension-test-plan.mts";
-import { hasImportGraphImpactOnTargets } from "../../scripts/test-projects.test-support.mts";
+import {
+  hasImportGraphImpactOnTargets,
+  resolveChangedTestTargetPlan,
+} from "../../scripts/test-projects.test-support.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 
 const CODEX_TEST_PROCESS_FILE_LIMIT = 12;
+const githubActivityHelper = ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh";
 
 function expectBoundedCodexFallback(
   shards: ReturnType<typeof createChangedExtensionFallbackShards>,
@@ -80,14 +84,26 @@ it.each([
 });
 
 describe("CI changed Node test plan", () => {
-  it("routes Control UI style changes through source-scanning policy tests", () => {
-    const shards = createChangedNodeTestShards(["ui/src/styles/chat/layout.css"]);
+  it.each([
+    {
+      source: "ui/src/styles/chat/layout.css",
+      targets: [
+        "ui/src/styles/base-theme-tokens.node.test.ts",
+        "ui/src/styles/cursor-policy.node.test.ts",
+      ],
+    },
+    {
+      source: "ui/public/themes/tide.css",
+      targets: [
+        "ui/src/styles/base-theme-tokens.node.test.ts",
+        "ui/src/styles/base-theme-contrast.node.test.ts",
+      ],
+    },
+  ])("routes $source through source-scanning policy tests", ({ source, targets: expected }) => {
+    const shards = createChangedNodeTestShards([source]);
     const targets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
 
-    expect(targets).toEqual([
-      "ui/src/styles/base-theme-tokens.node.test.ts",
-      "ui/src/styles/cursor-policy.node.test.ts",
-    ]);
+    expect(targets).toEqual(expected);
   });
 
   it("routes cron alert sanitization changes through alert policy suites", () => {
@@ -391,6 +407,42 @@ describe("CI changed Node test plan", () => {
   });
 
   it.each([
+    { name: "helper alone", changedPaths: [githubActivityHelper] },
+    {
+      name: "helper trio",
+      changedPaths: [
+        githubActivityHelper,
+        ".agents/skills/openclaw-pr-maintainer/SKILL.md",
+        "test/scripts/github-activity-helper.test.ts",
+      ],
+    },
+  ])(
+    "keeps hidden maintainer helper targets and compact core fallback for $name",
+    ({ changedPaths }) => {
+      expect(hasCoreExtensionImpact(changedPaths)).toBe(false);
+      expect(createChangedExtensionFallbackShards(changedPaths)).toEqual([]);
+      expect(resolveChangedTestTargetPlan(changedPaths, { broad: true })).toMatchObject({
+        mode: "targets",
+        targets: expect.arrayContaining(["test/scripts/github-activity-helper.test.ts"]),
+      });
+      expect(createChangedNodeTestShards(changedPaths)).toBeNull();
+    },
+  );
+
+  it.each([
+    "src/plugin-sdk/core.ts",
+    ".agents/skills/openclaw-pr-maintainer/scripts/unknown-helper.sh",
+  ])(
+    "retains all extension configs for the hidden maintainer helper mixed with %s",
+    (changedPath) => {
+      const paths = [githubActivityHelper, changedPath];
+      expect(hasCoreExtensionImpact(paths)).toBe(true);
+      expect(createChangedNodeTestShards(paths)).toBeNull();
+      expectAllExtensionConfigs(createChangedExtensionFallbackShards(paths));
+    },
+  );
+
+  it.each([
     {
       changedPath: "extensions/browser/src/browser/cdp.helpers.test.ts",
       config: "test/vitest/vitest.extension-browser.config.ts",
@@ -488,6 +540,17 @@ describe("CI changed Node test plan", () => {
         configs: ["test/vitest/vitest.extension-qa.config.ts"],
         pretestBuildMode: "private-qa",
       }),
+    ]);
+  });
+
+  it("routes lifecycle edits to the prepared QA config without losing boundary coverage", () => {
+    const target = "extensions/qa-lab/src/suite-process-lifecycle.test.ts";
+    expect(createChangedNodeTestShards([target])).toEqual([
+      expect.objectContaining({
+        configs: ["test/vitest/vitest.extension-qa.config.ts"],
+        pretestBuildMode: "private-qa",
+      }),
+      expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
     ]);
   });
 

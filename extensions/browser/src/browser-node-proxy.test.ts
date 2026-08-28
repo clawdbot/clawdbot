@@ -50,6 +50,7 @@ vi.mock("./browser-tool.runtime.js", () => runtimeMocks);
 vi.mock("./browser-proxy-upload.js", () => uploadMocks);
 
 import { createBrowserNodeProxyRequest } from "./browser-node-proxy.js";
+import { BrowserServiceError } from "./browser/client-fetch.js";
 
 function createSessionProxy() {
   return createBrowserNodeProxyRequest({
@@ -84,6 +85,38 @@ beforeEach(() => {
 });
 
 describe("Browser node proxy nested watchdogs", () => {
+  it.each([
+    {
+      code: "ACT_EVALUATE_DISABLED",
+      expected: { code: "ACT_EVALUATE_DISABLED", unrecognizedCode: undefined },
+    },
+    {
+      code: "ACT_FUTURE_CODE",
+      expected: { code: undefined, unrecognizedCode: true },
+    },
+  ])("preserves the bounded action-code state for $code", async ({ code, expected }) => {
+    runtimeMocks.callGatewayTool.mockResolvedValueOnce({
+      payload: {
+        error: {
+          status: 403,
+          body: { error: "evaluation disabled", code },
+        },
+      },
+    } as unknown as BrowserNodeResponse);
+
+    const error = await createSessionProxy()({ method: "POST", path: "/act" }).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(BrowserServiceError);
+    expect(error).toMatchObject({
+      name: "BrowserServiceError",
+      message: "evaluation disabled",
+      status: 403,
+      ...expected,
+    });
+  });
+
   it("keeps a requested action inside separate node and Gateway watchdogs", async () => {
     const signal = new AbortController().signal;
 

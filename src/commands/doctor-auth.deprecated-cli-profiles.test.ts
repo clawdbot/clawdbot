@@ -289,6 +289,7 @@ describe("maybeRepairLegacyOAuthProfileIds", () => {
     expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.agentRuntime).toEqual({
       id: "claude-cli",
     });
+    expect(providerPolicyMocks.applyConfigDefaults).toHaveBeenCalledOnce();
     expect(next.models?.providers?.anthropic?.apiKey).toBeUndefined();
     expect(result.retiredProfileCleanupPlans).toContainEqual({
       agentDir: undefined,
@@ -323,6 +324,7 @@ describe("maybeRepairLegacyOAuthProfileIds", () => {
 
     expect(next.models?.providers?.anthropic?.apiKey).toBeUndefined();
     expect(retiredProfileCleanupPlans).toEqual([]);
+    expect(providerPolicyMocks.applyConfigDefaults).not.toHaveBeenCalled();
   });
 
   it("removes a retired profile from a secondary agent store", async () => {
@@ -356,6 +358,42 @@ describe("maybeRepairLegacyOAuthProfileIds", () => {
 
     expect(result.retiredProfileCleanupPlans).toContainEqual({
       agentDir: secondaryAgentDir,
+      profileIds: ["anthropic:claude-cli"],
+    });
+  });
+
+  it("repairs selected provider routing for a store-only retired profile", async () => {
+    authProfileStoreMock.store = {
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "copied-native-access",
+          refresh: "copied-native-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [],
+        deprecatedProfileIds: ["anthropic:claude-cli"],
+      },
+    ]);
+
+    const result = await maybeRepairLegacyOAuthProfileIds(
+      {
+        agents: { defaults: { model: { primary: "claude-cli/claude-sonnet-4-6" } } },
+      } as OpenClawConfig,
+      makePrompter(true),
+    );
+
+    expect(providerPolicyMocks.applyConfigDefaults).toHaveBeenCalledOnce();
+    expect(result.retiredProfileCleanupPlans).toContainEqual({
+      agentDir: undefined,
       profileIds: ["anthropic:claude-cli"],
     });
   });

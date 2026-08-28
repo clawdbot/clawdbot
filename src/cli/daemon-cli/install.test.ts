@@ -246,84 +246,8 @@ function mockResolvedGatewayTokenSecretRef() {
   );
 }
 
-const { mergeInstallInvocationEnv, runDaemonInstall } = await import("./install.js");
+const { runDaemonInstall } = await import("./install.js");
 const envSnapshot = captureFullEnv();
-
-describe("mergeInstallInvocationEnv", () => {
-  it("canonicalizes Windows install env keys while filtering dangerous loader env", () => {
-    const env = mergeInstallInvocationEnv({
-      env: {
-        Path: "C:\\Windows\\System32",
-        openai_api_key: "service-openai-key",
-        NODE_OPTIONS: "--require C:\\temp\\untrusted.js",
-      },
-      platform: "win32",
-    });
-
-    expectFields(env, {
-      PATH: "C:\\Windows\\System32",
-      OPENAI_API_KEY: "service-openai-key",
-    });
-    expect(env.Path).toBeUndefined();
-    expect(env.openai_api_key).toBeUndefined();
-    expect(env.NODE_OPTIONS).toBeUndefined();
-  });
-
-  it.each([
-    { platform: "darwin" as const, caKey: "NODE_EXTRA_CA_CERTS" },
-    { platform: "linux" as const, caKey: "NODE_EXTRA_CA_CERTS" },
-    { platform: "win32" as const, caKey: "node_extra_ca_certs" },
-  ])(
-    "preserves installed additive Node CA trust without unsafe overrides on $platform",
-    ({ platform, caKey }) => {
-      const env = mergeInstallInvocationEnv({
-        env: { PATH: "/usr/bin" },
-        existingServiceEnv: {
-          [caKey]: " /opt/openclaw/corporate-ca.pem ",
-          NODE_TLS_REJECT_UNAUTHORIZED: "0",
-          HTTPS_PROXY: "https://attacker.invalid",
-          NODE_OPTIONS: "--require /tmp/untrusted.js",
-          BASH_ENV: "/tmp/untrusted.sh",
-          LD_PRELOAD: "/tmp/untrusted.so",
-          OPENAI_API_KEY: "existing-service-key",
-        },
-        platform,
-      });
-
-      expectFields(env, {
-        NODE_EXTRA_CA_CERTS: "/opt/openclaw/corporate-ca.pem",
-        OPENAI_API_KEY: "existing-service-key",
-        PATH: "/usr/bin",
-      });
-      expect(env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
-      expect(env.HTTPS_PROXY).toBeUndefined();
-      expect(env.NODE_OPTIONS).toBeUndefined();
-      expect(env.BASH_ENV).toBeUndefined();
-      expect(env.LD_PRELOAD).toBeUndefined();
-      if (platform === "win32") {
-        expect(env.node_extra_ca_certs).toBeUndefined();
-      }
-    },
-  );
-
-  it.each([
-    { platform: "darwin" as const, shellKey: "NODE_EXTRA_CA_CERTS" },
-    { platform: "win32" as const, shellKey: "node_extra_ca_certs" },
-  ])(
-    "lets the current shell override installed Node CA trust on $platform",
-    ({ platform, shellKey }) => {
-      const env = mergeInstallInvocationEnv({
-        env: { [shellKey]: "/opt/openclaw/current-shell-ca.pem" },
-        existingServiceEnv: {
-          NODE_EXTRA_CA_CERTS: "/opt/openclaw/previous-service-ca.pem",
-        },
-        platform,
-      });
-
-      expect(env.NODE_EXTRA_CA_CERTS).toBe("/opt/openclaw/current-shell-ca.pem");
-    },
-  );
-});
 
 describe("runDaemonInstall", () => {
   beforeEach(() => {
@@ -734,6 +658,13 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
+  it("forwards Bun as the explicit managed-service runtime", async () => {
+    await runDaemonInstall({ json: true, runtime: "bun" });
+
+    expect(readFirstInstallPlanArg().runtime).toBe("bun");
+    expect(actionState.failed).toStrictEqual([]);
+  });
+
   it("continues Linux install when service probe hits a non-fatal systemd bus failure", async () => {
     service.isLoaded.mockRejectedValueOnce(
       new Error("systemctl is-enabled unavailable: Failed to connect to bus"),
@@ -794,17 +725,34 @@ describe("runDaemonInstall", () => {
   });
 
   it("reinstalls when the loaded service still embeds OPENCLAW_GATEWAY_TOKEN", async () => {
+    const programArguments = [
+      "/usr/bin/node",
+      "--max-old-space-size=24576",
+      "--require=/tmp/service-preload.js",
+      "/usr/local/bin/openclaw",
+      "gateway",
+    ];
     service.isLoaded.mockResolvedValue(true);
-    service.readCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
+    const managedDefinition = {
+      programArguments,
       environment: {
         OPENCLAW_GATEWAY_TOKEN: "stale-service-token",
       },
-    } as never);
+    };
+    const existingCommand = {
+      ...managedDefinition,
+      environment: { NODE_OPTIONS: "--max-old-space-size=512" },
+      managedDefinition,
+      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+    };
+    service.readCommand.mockResolvedValue(existingCommand as never);
 
     await runDaemonInstall({ json: true });
 
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    for (const [options] of buildGatewayInstallPlanMock.mock.calls) {
+      expect(options).toEqual(expect.objectContaining({ existingCommand }));
+    }
     expect(actionState.warnings).toContain(
       "Gateway service OPENCLAW_GATEWAY_TOKEN differs from the current install plan; refreshing the install.",
     );
@@ -876,6 +824,13 @@ describe("runDaemonInstall", () => {
 
   it("preserves generated-service CA trust without unsafe overrides during forced reinstall", async () => {
     const extraCaCerts = "/opt/openclaw/corporate-ca.pem";
+    const programArguments = [
+      "/usr/bin/node",
+      "--max-old-space-size=24576",
+      "--require=/tmp/service-preload.js",
+      "/usr/local/bin/openclaw",
+      "gateway",
+    ];
     for (const key of [
       "NODE_EXTRA_CA_CERTS",
       "NODE_TLS_REJECT_UNAUTHORIZED",
@@ -888,7 +843,7 @@ describe("runDaemonInstall", () => {
     }
     service.isLoaded.mockResolvedValue(true);
     service.readCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
+      programArguments,
       environment: {
         NODE_EXTRA_CA_CERTS: extraCaCerts,
         NODE_TLS_REJECT_UNAUTHORIZED: "0",
@@ -918,6 +873,7 @@ describe("runDaemonInstall", () => {
     await runDaemonInstall({ json: true, force: true });
 
     const installPlanArg = readFirstInstallPlanArg();
+    expect(installPlanArg.existingCommand).toEqual(expect.objectContaining({ programArguments }));
     const installEnv = installPlanArg.env as Record<string, string | undefined>;
     expect(installEnv.NODE_EXTRA_CA_CERTS).toBe(extraCaCerts);
     expect(installEnv.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();

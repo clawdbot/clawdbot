@@ -218,6 +218,97 @@ describe("agentLoop EventStream failures", () => {
   });
 });
 
+describe("public runner context isolation", () => {
+  function createAssistantReplyStream(): ReturnType<StreamFn> {
+    const stream = createAssistantMessageEventStream();
+    queueMicrotask(() => {
+      stream.push({
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "new reply" }],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: TEST_USAGE,
+          stopReason: "stop",
+          timestamp: 2,
+        },
+      });
+      stream.end();
+    });
+    return stream;
+  }
+
+  async function expectCallerMessagesUnchanged(
+    context: AgentContext,
+    run: (emit: (event: AgentEvent) => void) => Promise<AgentMessage[]>,
+  ): Promise<void> {
+    const originalMessages = context.messages;
+    const originalSnapshot = structuredClone(context.messages);
+    const events: AgentEvent[] = [];
+
+    const messages = await run((event) => {
+      events.push(event);
+    });
+
+    expect(context.messages).toBe(originalMessages);
+    expect(context.messages).toEqual(originalSnapshot);
+    expect(messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "new reply" }],
+      }),
+    ]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "message_end",
+          message: expect.objectContaining({
+            role: "assistant",
+            content: [{ type: "text", text: "new reply" }],
+          }),
+        }),
+      ]),
+    );
+  }
+
+  it("keeps caller messages isolated for empty-prompt runs", async () => {
+    const context: AgentContext = {
+      systemPrompt: "",
+      messages: [{ role: "user", content: "existing prompt", timestamp: 1 }],
+    };
+
+    await expectCallerMessagesUnchanged(context, (emit) =>
+      runAgentLoop([], context, config, emit, undefined, async () => createAssistantReplyStream()),
+    );
+  });
+
+  it("keeps caller messages isolated for continuations", async () => {
+    const context: AgentContext = {
+      systemPrompt: "",
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call-ready",
+          toolName: "read",
+          content: [{ type: "text", text: "ready" }],
+          details: {},
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    };
+
+    await expectCallerMessagesUnchanged(context, (emit) =>
+      runAgentLoopContinue(context, config, emit, undefined, async () =>
+        createAssistantReplyStream(),
+      ),
+    );
+  });
+});
+
 describe("agentLoop continuation guards", () => {
   const assistantTailContext: AgentContext = {
     systemPrompt: "",
@@ -1036,6 +1127,111 @@ describe("agentLoop tool termination", () => {
     expect(skippedEnd).not.toHaveProperty("errorKind");
   });
 
+  it("restores drained steering in order when turn_end aborts before injection", async () => {
+    const firstReleased = createDeferred();
+    const firstStarted = createDeferred();
+    const secondExecute = vi.fn(async () => ({ content: [], details: {} }));
+    const requestMessages: Message[][] = [];
+    const agent = new Agent({
+      initialState: {
+        model,
+        tools: [
+          {
+            ...makeTool("first", []),
+            execute: async () => {
+              firstStarted.resolve();
+              await firstReleased.promise;
+              return { content: [{ type: "text", text: "first result" }], details: {} };
+            },
+          },
+          { ...makeTool("second", []), execute: secondExecute },
+        ],
+      },
+      streamFn: createTurnSequenceStream(
+        [
+          [
+            { type: "toolCall", id: "call-first", name: "first", arguments: {} },
+            { type: "toolCall", id: "call-second", name: "second", arguments: {} },
+          ],
+          [{ type: "text", text: "handled steering" }],
+        ],
+        requestMessages,
+      ),
+      steeringMode: "all",
+      toolExecution: "sequential",
+    });
+    agent.subscribe((event) => {
+      if (event.type === "turn_end" && event.toolResults.length > 0) {
+        agent.abort();
+      }
+    });
+    const firstSteer = { role: "user" as const, content: "first steer", timestamp: 2 };
+    const secondSteer = { role: "user" as const, content: "second steer", timestamp: 3 };
+
+    const run = agent.prompt("start");
+    await firstStarted.promise;
+    agent.steer(firstSteer);
+    agent.steer(secondSteer);
+    firstReleased.resolve();
+    await run;
+
+    expect(secondExecute).not.toHaveBeenCalled();
+    expect(agent.state.messages).not.toContain(firstSteer);
+    expect(agent.state.messages).not.toContain(secondSteer);
+    expect(agent.hasQueuedMessages()).toBe(true);
+
+    await agent.prompt("again");
+
+    expect(requestMessages).toHaveLength(2);
+    expect(requestMessages[1]?.slice(-2)).toEqual([firstSteer, secondSteer]);
+    expect(agent.hasQueuedMessages()).toBe(false);
+  });
+
+  it("restores drained follow-ups to their deferred queue in order", async () => {
+    const requestMessages: Message[][] = [];
+    const agent = new Agent({
+      initialState: {
+        model,
+        messages: [makeAssistantMessage([{ type: "text", text: "ready" }])],
+      },
+      streamFn: createTurnSequenceStream(
+        [
+          [{ type: "text", text: "new prompt response" }],
+          [{ type: "text", text: "follow-up response" }],
+        ],
+        requestMessages,
+      ),
+      followUpMode: "all",
+    });
+    const firstFollowUp = { role: "user" as const, content: "first follow-up", timestamp: 2 };
+    const secondFollowUp = { role: "user" as const, content: "second follow-up", timestamp: 3 };
+    agent.followUp(firstFollowUp);
+    agent.followUp(secondFollowUp);
+    let abortBeforeInjection = true;
+    agent.subscribe((event) => {
+      if (event.type !== "agent_start" || !abortBeforeInjection) {
+        return;
+      }
+      abortBeforeInjection = false;
+      const error = new Error("abort before queued prompt injection");
+      agent.abort(error);
+      throw error;
+    });
+
+    await agent.continue();
+
+    expect(requestMessages).toHaveLength(0);
+    expect(agent.hasQueuedMessages()).toBe(true);
+
+    await agent.prompt("again");
+
+    expect(requestMessages).toHaveLength(2);
+    expect(requestMessages[0]).not.toContain(firstFollowUp);
+    expect(requestMessages[0]).not.toContain(secondFollowUp);
+    expect(requestMessages[1]?.slice(-2)).toEqual([firstFollowUp, secondFollowUp]);
+    expect(agent.hasQueuedMessages()).toBe(false);
+  });
+
   it("uses a private synchronous steer at the scheduler without invoking the public fallback", async () => {
     const steer = { role: "user" as const, content: "redirect", timestamp: 2 };
     let steerReady = false;
@@ -1643,44 +1839,223 @@ describe("agentLoop tool termination", () => {
     expect(releaseSkippedCalls).not.toHaveBeenCalled();
   });
 
-  it("does not launch prepared tools when the admission commit fails", async () => {
-    const execute = vi.fn(async () => ({ content: [], details: {} }));
-    const streamFn = createTurnSequenceStream(
-      [[{ type: "toolCall", id: "commit-failure", name: "side-effect", arguments: {} }]],
-      [],
-    );
+  it.each(["sequential", "parallel"] as const)(
+    "pairs every tool lifecycle before rejecting a %s admission commit failure",
+    async (toolExecution) => {
+      const firstExecute = vi.fn(async () => ({ content: [], details: { executed: "first" } }));
+      const secondExecute = vi.fn(async () => ({ content: [], details: { executed: "second" } }));
+      const thirdExecute = vi.fn(async () => ({ content: [], details: { executed: "third" } }));
+      const commitError = new Error("private admission details must not reach tool results");
+      const releaseSkippedCalls = vi.fn();
+      const afterToolOutcome = vi.fn(async () => undefined);
+      const events: AgentEvent[] = [];
+
+      await expect(
+        runAgentLoop(
+          [{ role: "user", content: "run", timestamp: 1 }],
+          {
+            systemPrompt: "",
+            messages: [],
+            tools: [
+              { ...makeTool("first", []), execute: firstExecute },
+              { ...makeTool("second", []), execute: secondExecute },
+              { ...makeTool("third", []), execute: thirdExecute },
+            ],
+          },
+          {
+            ...config,
+            toolExecution,
+            afterToolOutcome,
+            beforeToolBatch: async () =>
+              attachInternalToolBatchLifecycle(
+                {},
+                {
+                  commitReadyCalls: (calls) => {
+                    if (calls.some((call) => call.toolCallId === "commit-second")) {
+                      throw commitError;
+                    }
+                  },
+                  releaseSkippedCalls,
+                },
+              ),
+          },
+          (event) => {
+            events.push(event);
+          },
+          undefined,
+          createTurnSequenceStream([
+            [
+              { type: "toolCall", id: "commit-first", name: "first", arguments: {} },
+              { type: "toolCall", id: "commit-second", name: "second", arguments: {} },
+              { type: "toolCall", id: "commit-third", name: "third", arguments: {} },
+            ],
+          ]),
+        ),
+      ).rejects.toBe(commitError);
+
+      expect(firstExecute).toHaveBeenCalledOnce();
+      expect(secondExecute).not.toHaveBeenCalled();
+      expect(thirdExecute).not.toHaveBeenCalled();
+      expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith([
+        "commit-second",
+        "commit-third",
+      ]);
+      expect(
+        events
+          .filter((event) => event.type === "tool_execution_start")
+          .map((event) => event.toolCallId),
+      ).toEqual(["commit-first", "commit-second", "commit-third"]);
+      const toolEnds = events
+        .filter((event) => event.type === "tool_execution_end")
+        .map((event) => ({ id: event.toolCallId, started: event.executionStarted }));
+      expect(toolEnds).toHaveLength(3);
+      expect(toolEnds).toEqual(
+        expect.arrayContaining([
+          { id: "commit-first", started: true },
+          { id: "commit-second", started: false },
+          { id: "commit-third", started: false },
+        ]),
+      );
+      const toolResults = events
+        .filter(
+          (
+            event,
+          ): event is Extract<AgentEvent, { type: "message_end" }> & {
+            message: { role: "toolResult" };
+          } => event.type === "message_end" && event.message.role === "toolResult",
+        )
+        .map((event) => event.message);
+      expect(toolResults.map((message) => message.toolCallId)).toEqual([
+        "commit-first",
+        "commit-second",
+        "commit-third",
+      ]);
+      for (const toolResult of toolResults.slice(1)) {
+        expect(toolResult).toMatchObject({
+          isError: true,
+          content: [{ type: "text", text: "Tool execution was blocked before launch." }],
+          details: { status: "blocked", deniedReason: "tool-admission" },
+        });
+        expect(JSON.stringify(toolResult)).not.toContain(commitError.message);
+      }
+      expect(afterToolOutcome).toHaveBeenCalledTimes(3);
+      for (const toolCallId of ["commit-second", "commit-third"]) {
+        expect(afterToolOutcome).toHaveBeenCalledWith(
+          expect.objectContaining({
+            executionStarted: false,
+            toolCall: expect.objectContaining({ id: toolCallId }),
+          }),
+          undefined,
+        );
+      }
+      expect(events.filter((event) => event.type === "turn_end")).toEqual([
+        expect.objectContaining({
+          message: expect.objectContaining({ role: "assistant", stopReason: "toolUse" }),
+          toolResults,
+        }),
+      ]);
+    },
+  );
+
+  it("keeps Agent active until started parallel work settles after a later commit failure", async () => {
+    const firstStarted = createDeferred();
+    const releaseFirst = createDeferred();
+    const secondCommitAttempted = createDeferred();
+    const secondExecute = vi.fn(async () => ({ content: [], details: {} }));
     const commitError = new Error("admission commit failed");
     const releaseSkippedCalls = vi.fn();
-
-    await expect(
-      runAgentLoop(
-        [{ role: "user", content: "run", timestamp: 1 }],
-        {
-          systemPrompt: "",
-          messages: [],
-          tools: [{ ...makeTool("side-effect", []), execute }],
+    const events: AgentEvent[] = [];
+    let providerCalls = 0;
+    let agentEnded = false;
+    const agent = new Agent({
+      initialState: {
+        model,
+        tools: [
+          {
+            ...makeTool("first", []),
+            execute: async () => {
+              firstStarted.resolve();
+              await releaseFirst.promise;
+              return { content: [], details: { executed: "first" } };
+            },
+          },
+          { ...makeTool("second", []), execute: secondExecute },
+        ],
+      },
+      toolExecution: "parallel",
+      streamFn: createTurnSequenceStream(
+        [
+          [
+            { type: "toolCall", id: "idle-first", name: "first", arguments: {} },
+            { type: "toolCall", id: "idle-second", name: "second", arguments: {} },
+          ],
+        ],
+        [],
+        () => {
+          providerCalls += 1;
         },
-        {
-          ...config,
-          toolExecution: "parallel",
-          beforeToolBatch: async () =>
-            attachInternalToolBatchLifecycle(
-              {},
-              {
-                commitReadyCalls: () => {
-                  throw commitError;
-                },
-                releaseSkippedCalls,
-              },
-            ),
-        },
-        () => {},
-        undefined,
-        streamFn,
       ),
-    ).rejects.toBe(commitError);
-    expect(execute).not.toHaveBeenCalled();
-    expect(releaseSkippedCalls).not.toHaveBeenCalled();
+    });
+    setInternalBeforeToolBatch(agent, async () =>
+      attachInternalToolBatchLifecycle(
+        {},
+        {
+          commitReadyCalls: (calls) => {
+            if (calls.some((call) => call.toolCallId === "idle-second")) {
+              secondCommitAttempted.resolve();
+              throw commitError;
+            }
+          },
+          releaseSkippedCalls,
+        },
+      ),
+    );
+    agent.subscribe((event) => {
+      events.push(event);
+      agentEnded ||= event.type === "agent_end";
+    });
+
+    const prompt = agent.prompt("run");
+    await firstStarted.promise;
+    await secondCommitAttempted.promise;
+    try {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      expect(agentEnded).toBe(false);
+      expect(agent.state.isStreaming).toBe(true);
+    } finally {
+      releaseFirst.resolve();
+    }
+    await prompt;
+
+    expect(providerCalls).toBe(1);
+    expect(secondExecute).not.toHaveBeenCalled();
+    expect(releaseSkippedCalls).toHaveBeenCalledWith(["idle-second"]);
+    expect(agent.state.messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "toolResult",
+      "assistant",
+    ]);
+    const toolUseTurnEnd = events.findIndex(
+      (event) =>
+        event.type === "turn_end" &&
+        event.message.role === "assistant" &&
+        event.message.stopReason === "toolUse",
+    );
+    const failureTurnEnd = events.findIndex(
+      (event) =>
+        event.type === "turn_end" &&
+        event.message.role === "assistant" &&
+        event.message.stopReason === "error",
+    );
+    const agentEnd = events.findIndex((event) => event.type === "agent_end");
+    expect(toolUseTurnEnd).toBeGreaterThanOrEqual(0);
+    expect(failureTurnEnd).toBeGreaterThan(toolUseTurnEnd);
+    expect(agentEnd).toBeGreaterThan(failureTurnEnd);
+    expect(events.slice(agentEnd + 1)).toEqual([]);
   });
 
   it("gives the model one recovery turn with the normal tool catalog", async () => {
@@ -3359,7 +3734,7 @@ describe("agentLoop thinking state", () => {
       name: "disables reasoning after leaving Fable",
       initialModel: { ...model, id: "claude-fable-5", thinkingLevelMap: { off: "low" } },
       nextModel: model,
-      expected: ["low", undefined],
+      expected: ["low", "off"],
     },
     {
       name: "uses Fable's low fallback after entering Fable",

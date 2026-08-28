@@ -12,6 +12,10 @@ describe("skill authoring standards", () => {
     expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("2–4 words");
     expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("completion criterion");
     expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("one source per meaning");
+    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain(
+      "every step comes from the observed trajectory or the existing skill",
+    );
+    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("never invent flags, commands, paths, APIs");
     expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("never the failed attempts");
   });
 

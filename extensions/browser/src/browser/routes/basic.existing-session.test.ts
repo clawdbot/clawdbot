@@ -1,5 +1,6 @@
 // Browser tests cover basic.existing session plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import chromeExtensionManifest from "../../../chrome-extension/manifest.json" with { type: "json" };
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const { inspectChromeGraphicsDiagnosticsMock } = vi.hoisted(() => ({
@@ -32,6 +33,8 @@ function createExistingSessionProfileState(params?: {
     options?: { ephemeral?: boolean; signal?: AbortSignal },
   ) => Promise<boolean>;
 }) {
+  const isTransportAvailable = params?.isTransportAvailable ?? (async () => true);
+  const isReachable = params?.isReachable ?? (async () => true);
   return {
     resolved: {
       enabled: true,
@@ -54,8 +57,27 @@ function createExistingSessionProfileState(params?: {
           attachOnly: true,
         },
         isHttpReachable: params?.isHttpReachable ?? (async () => true),
-        isTransportAvailable: params?.isTransportAvailable ?? (async () => true),
-        isReachable: params?.isReachable ?? (async () => true),
+        isTransportAvailable: async (
+          timeoutMs?: number,
+          signal?: AbortSignal,
+          pageProbe?: { timeoutMs?: () => number; onResult: (tabCount: number | null) => void },
+        ) => {
+          const available = await isTransportAvailable(timeoutMs, signal);
+          if (available && pageProbe) {
+            try {
+              const ready = await isReachable(pageProbe.timeoutMs?.() ?? timeoutMs, {
+                ephemeral: true,
+                signal,
+              });
+              pageProbe.onResult(ready ? 1 : null);
+            } catch {
+              signal?.throwIfAborted();
+              pageProbe.onResult(null);
+            }
+          }
+          return available;
+        },
+        isReachable,
       }) as never,
   };
 }
@@ -191,6 +213,43 @@ function responseBodyRecord(response: { body: unknown }): Record<string, unknown
 describe("basic browser routes", () => {
   beforeEach(() => {
     inspectChromeGraphicsDiagnosticsMock.mockReset();
+  });
+
+  it("reports version drift only from the selected extension profile owner", async () => {
+    const outdatedVersion = chromeExtensionManifest.version === "2.0.0" ? "1.0.0" : "2.0.0";
+    const state = {
+      ...createManagedProfileState(
+        { name: "chrome", driver: "extension", attachOnly: true },
+        {
+          isHttpReachable: async () => true,
+          isTransportAvailable: async () => true,
+        },
+      ),
+      extensionRelays: new Map([
+        ["chrome", { bridge: { identity: { extensionVersion: outdatedVersion } } }],
+        ["other", { bridge: { identity: { extensionVersion: chromeExtensionManifest.version } } }],
+      ]),
+    };
+
+    const response = await callBasicRouteWithState({
+      route: "/doctor",
+      query: { profile: "chrome" },
+      state,
+    });
+    const report = responseBodyRecord(response);
+    expect(response.statusCode).toBe(200);
+    expect(report.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "extension-version",
+          status: "warn",
+          summary: expect.stringContaining(
+            `running ${outdatedVersion}; bundled ${chromeExtensionManifest.version}`,
+          ),
+        }),
+      ]),
+    );
+    expect(report.status).not.toHaveProperty("chromeExtension");
   });
 
   it("releases the doctor transaction, restarts once, and retries the live probe", async () => {

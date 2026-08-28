@@ -64,7 +64,7 @@ repos:
         name: skills python tests
         entry: pytest -q -c skills/pyproject.toml skills
         language: python
-        additional_dependencies: ["pytest>=8,<9"]
+        additional_dependencies: ["pytest>=9,<10"]
         pass_filenames: false
         files: "^skills/.*\\.py$"
 

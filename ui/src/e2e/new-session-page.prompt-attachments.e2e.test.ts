@@ -55,7 +55,7 @@ suite.define(() => {
       const firstMessage = firstPage.locator(".new-session-page__message");
       await firstMessage.fill("restore this prompt after restart");
       await pastePng(firstMessage);
-      await firstPage.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await firstPage.locator('.chat-attachment-thumb img[alt="pixel.png"]').waitFor();
       const incognito = firstPage.getByRole("switch", { name: "Incognito" });
       await incognito.click();
       await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("true");
@@ -226,6 +226,7 @@ suite.define(() => {
 
   it("pastes an image into the draft and forwards it with the initial turn", async () => {
     await withNewSessionPage(async (page) => {
+      await page.setViewportSize({ width: 393, height: 852 });
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "sessions.create": { key: "agent:main:image-draft", runStarted: true },
@@ -236,7 +237,8 @@ suite.define(() => {
       await message.waitFor();
       await pastePng(message);
 
-      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await page.getByRole("img", { name: "pixel.png" }).waitFor();
+      await captureUiProof(page, "mobile-composer-new-session-attachment.png");
       await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
@@ -268,7 +270,7 @@ suite.define(() => {
         .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
 
       const attachment = page.locator(".chat-attachment-thumb");
-      const preview = attachment.locator('img[alt="Attachment preview"]');
+      const preview = attachment.getByRole("img", { name: "favicon-32.png" });
       const previewButton = page.getByRole("button", { name: "Open image favicon-32.png" });
       await preview.waitFor({ state: "visible" });
       await expect.poll(() => preview.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
@@ -277,7 +279,8 @@ suite.define(() => {
       const lightbox = page.locator("openclaw-image-lightbox");
       const dialog = page.getByRole("dialog", { name: "Image preview: favicon-32.png" });
       await dialog.waitFor({ state: "visible" });
-      await expect(lightbox.getAttribute("title")).resolves.toBe("favicon-32.png");
+      await expect(lightbox.getAttribute("title")).resolves.toBeNull();
+      await page.getByAltText("favicon-32.png").last().waitFor({ state: "visible" });
       await captureUiProof(page, "new-session-picked-image-lightbox.png");
       await page.keyboard.press("Escape");
       await lightbox.waitFor({ state: "detached" });
@@ -307,7 +310,7 @@ suite.define(() => {
       await expect.poll(() => previewButton.locator("img").getAttribute("src")).toMatch(/^blob:/u);
       await previewButton.click();
       await page.getByRole("dialog", { name: "Image preview: untrusted.svg" }).waitFor();
-      await expect(page.getByRole("link", { name: "Open original" }).count()).resolves.toBe(0);
+      await expect(page.getByRole("link", { name: "Open in new tab" }).count()).resolves.toBe(0);
       await captureUiProof(page, "new-session-svg-lightbox.png");
     });
   });
@@ -567,7 +570,7 @@ suite.define(() => {
         finish();
       });
 
-      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await page.getByRole("img", { name: "pixel.png" }).waitFor();
       await expect.poll(() => submit.isEnabled()).toBe(true);
       await submit.click();
       const create = await gateway.waitForRequest("sessions.create");

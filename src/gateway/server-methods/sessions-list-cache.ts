@@ -116,28 +116,15 @@ function matchesSessionListFence(value: SessionListFence, fence: SessionListFenc
   );
 }
 
-function sessionListVisibilityIdentity(
-  client: GatewayClient | null,
-  config: OpenClawConfig,
-): string {
-  if (isGatewayAdmin(client)) {
-    return "admin";
-  }
-  const profileId = gatewayClientSessionCreator(client)?.id;
-  if (!profileId) {
-    return "anonymous";
-  }
-  const sessionPolicy = operatorSessionCap(client, config);
-  return sessionPolicy ? `profile:${profileId}:sessions:${sessionPolicy}` : `profile:${profileId}`;
-}
-
 function sessionListWorkKey(
   params: SessionsListParams,
   client: GatewayClient | null,
   config: OpenClawConfig,
 ): string {
   return JSON.stringify([
-    sessionListVisibilityIdentity(client, config),
+    // Admin visibility is global, but owner-first and involving-me rows remain viewer-specific.
+    gatewayClientSessionCreator(client)?.id ?? null,
+    isGatewayAdmin(client) ? "admin" : (operatorSessionCap(client, config) ?? null),
     Object.entries(params).toSorted(([left], [right]) => left.localeCompare(right)),
   ]);
 }

@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { importCustomThemeFromUrl } from "../app/custom-theme.ts";
+import { importCustomThemeFromUrl } from "../pages/config/custom-theme-import.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
@@ -777,9 +777,10 @@ suite.define(() => {
     }
   });
 
-  it("announces a failed custom-theme import", async () => {
+  it("announces a failed custom-theme import, then persists a successful retry across reload", async () => {
     await suite.withPage(
       {
+        colorScheme: "dark",
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1440 },
@@ -788,10 +789,16 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "config.get": configResponse({}, "custom-theme-invalid-1"),
+            "config.patch": { ok: true },
           },
         });
         await page.route("https://tweakcn.com/r/themes/network-failure", async (route) => {
           await route.fulfill({ status: 503 });
+        });
+        let successfulImports = 0;
+        await page.route("https://tweakcn.com/r/themes/retry-theme", async (route) => {
+          successfulImports += 1;
+          await route.fulfill({ json: createTweakcnThemePayload() });
         });
 
         const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
@@ -809,6 +816,40 @@ suite.define(() => {
           .toBe("tweakcn import failed (503).");
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         await captureViewport(page, "07-custom-theme-import-error-announced.png");
+
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse({ theme: "custom" }, "custom-theme-imported-2"),
+        );
+        await importer.locator("input").fill("https://tweakcn.com/themes/retry-theme");
+        await importer.locator("button.primary").click();
+        await expect.poll(() => importer.getByRole("status").textContent()).toContain("Imported");
+        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("custom");
+        const importedSettings = await readPersistedSettings(page);
+        expect(importedSettings).toMatchObject({
+          customTheme: { themeId: "retry-theme", label: "Light Green" },
+          theme: "custom",
+        });
+        const importedAccent = await readAccentPresentation(page);
+        expect(importedAccent.accent).toBe(createTweakcnThemePayload().cssVars.dark.accent);
+        await waitForRequestCount(gateway, "config.patch", 1);
+        const [themePatch] = await gateway.getRequests("config.patch");
+        expect(patchPrefs(themePatch!)).toEqual({ theme: "custom" });
+        await captureViewport(page, "08-custom-theme-imported.png");
+
+        await page.reload();
+        await waitForControlUiSettingsTakeover(page);
+        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("custom");
+        await expect
+          .poll(() => importer.locator(".settings-theme-import__meta-value").textContent())
+          .toContain("Light Green");
+        expect((await readPersistedSettings(page)).customTheme).toEqual(
+          importedSettings.customTheme,
+        );
+        expect(await readAccentPresentation(page)).toEqual(importedAccent);
+        expect(successfulImports).toBe(1);
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        await captureViewport(page, "09-custom-theme-reloaded.png");
       },
     );
   });

@@ -1,5 +1,13 @@
 // Matrix plugin module implements tool actions behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import {
+  createActionGate,
+  jsonResult,
+  readPositiveIntegerParam,
+  readReactionParams,
+  readStringArrayParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/channel-actions";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import {
@@ -39,14 +47,6 @@ import { withAuthorizedMatrixReadTarget, type MatrixReadContext } from "./matrix
 import type { MatrixClient } from "./matrix/sdk.js";
 import { reactMatrixMessage } from "./matrix/send.js";
 import { applyMatrixProfileUpdate } from "./profile-update.js";
-import {
-  createActionGate,
-  jsonResult,
-  readPositiveIntegerParam,
-  readReactionParams,
-  readStringArrayParam,
-  readStringParam,
-} from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 const messageActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);

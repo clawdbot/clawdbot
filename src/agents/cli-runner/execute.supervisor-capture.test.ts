@@ -130,7 +130,6 @@ function buildPreparedCliRunContext(params: {
     systemPrompt: "system",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     claudeSkillsPluginArgs: [],
-    bootstrapPromptWarningLines: [],
     authEpochVersion: 2,
   };
 }
@@ -170,7 +169,6 @@ describe("executePreparedCliRun supervisor output capture", () => {
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.params.prompt = "/compact";
     context.params.controlOperation = "compact";
-    context.bootstrapPromptWarningLines = ["must not decorate the control command"];
     context.backendResolved.textTransforms = { input: [{ from: "/compact", to: "mutated" }] };
     context.backendResolved.manualCompaction = {
       input: "arg",

@@ -210,6 +210,7 @@ export async function buildMessagePayload(params: {
   const normalizedMediaUrls = await normalizeSandboxMediaList({
     values: mergedMediaUrls,
     sandboxRoot: input.sandboxRoot,
+    sandboxContainerWorkdir: input.sandboxContainerWorkdir,
   });
   mergedMediaUrls.length = 0;
   mergedMediaUrls.push(...normalizedMediaUrls);
@@ -461,7 +462,13 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       return;
     }
     outboundRoutePersisted = true;
-    await ensureOutboundSessionEntry({ cfg, channel, accountId, route: outboundRoute });
+    await ensureOutboundSessionEntry({
+      cfg,
+      channel,
+      accountId,
+      route: outboundRoute,
+      sourceSessionKey: input.sessionKey,
+    });
   };
   throwIfAborted(abortSignal);
 

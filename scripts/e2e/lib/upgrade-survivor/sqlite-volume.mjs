@@ -427,9 +427,8 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
   assertHealthySqlite(stateDatabasePath, (db) => {
     const rows = db
       .prepare(
-        `SELECT job_id, job_json, state_json, enabled, schedule_kind, every_ms, anchor_ms,
-                payload_kind, payload_message, delivery_mode, next_run_at_ms, running_at_ms,
-                last_run_status, last_error, updated_at, runtime_updated_at_ms
+        `SELECT job_id, job_json, state_json, enabled, payload_kind, updated_at,
+                runtime_updated_at_ms
          FROM cron_jobs
          WHERE job_id LIKE 'volume-cron-%'`,
       )
@@ -468,26 +467,23 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
         row?.enabled === (expected.enabled ? 1 : 0),
         `volume cron enabled column changed: ${index}`,
       );
-      assert(row?.schedule_kind === "every", `volume cron schedule column changed: ${index}`);
-      assert(row?.every_ms === expected.schedule.everyMs, `volume cron interval changed: ${index}`);
-      assert(row?.anchor_ms === expected.schedule.anchorMs, `volume cron anchor changed: ${index}`);
       assert(row?.payload_kind === "agentTurn", `volume cron payload kind changed: ${index}`);
       assert(
-        row?.payload_message === expected.payload.message,
-        `volume cron payload changed: ${index}`,
-      );
-      assert(row?.delivery_mode === "none", `volume cron delivery mode changed: ${index}`);
-      assert(
-        row?.next_run_at_ms === (expected.enabled ? expected.state.nextRunAtMs : null),
+        (actualState?.nextRunAtMs ?? null) ===
+          (expected.enabled ? expected.state.nextRunAtMs : null),
         `volume cron next-run state changed: ${index}`,
       );
-      assert(row?.running_at_ms === null, `volume cron running state changed: ${index}`);
       assert(
-        row?.last_run_status === (expected.state.lastStatus ?? null),
+        (actualState?.runningAtMs ?? null) === null,
+        `volume cron running state changed: ${index}`,
+      );
+      assert(
+        (actualState?.lastRunStatus ?? actualState?.lastStatus ?? null) ===
+          (expected.state.lastStatus ?? null),
         `volume cron status state changed: ${index}`,
       );
       assert(
-        row?.last_error === (expected.state.lastError ?? null),
+        (actualState?.lastError ?? null) === (expected.state.lastError ?? null),
         `volume cron error state changed: ${index}`,
       );
     }

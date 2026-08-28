@@ -99,6 +99,33 @@ describe("formatMessageCliText displayLimit", () => {
     expect(out).not.toContain("search-15");
   });
 
+  it.each([
+    { displayLimit: 1, expectedRows: 1 },
+    { displayLimit: 75, expectedRows: 75 },
+    { displayLimit: undefined, expectedRows: 50 },
+  ])(
+    "renders $expectedRows reaction rows for displayLimit $displayLimit",
+    ({ displayLimit, expectedRows }) => {
+      const reactions = Array.from({ length: 80 }, (_, index) => ({
+        name: `reaction-${String(index).padStart(2, "0")}`,
+        count: index + 1,
+      }));
+      const result = {
+        kind: "action",
+        channel: "matrix",
+        action: "reactions",
+        handledBy: "plugin",
+        payload: { reactions },
+        dryRun: false,
+      } satisfies MessageActionResult;
+
+      const output = textJoined(formatMessageCliText(result, { displayLimit }));
+
+      expect(output).toContain(`reaction-${String(expectedRows - 1).padStart(2, "0")}`);
+      expect(output).not.toContain(`reaction-${String(expectedRows).padStart(2, "0")}`);
+    },
+  );
+
   it.each([0, 1])(
     "renders an explicit outcome for a search with no results (total: %i)",
     (totalResults) => {
@@ -265,6 +292,41 @@ describe("formatMessageCliText send results", () => {
       }
     },
   );
+});
+
+describe("formatMessageCliText provider-reported failures", () => {
+  it.each([
+    ["disabled reaction", "react", { ok: false, hint: "Reactions are disabled." }, "disabled"],
+    [
+      "rejected added reaction",
+      "react",
+      { ok: false, warning: "Unavailable", added: "✅" },
+      "Unavailable",
+    ],
+    [
+      "rejected delete",
+      "delete",
+      { ok: false, deleted: false, warning: "Not deleted" },
+      "Not deleted",
+    ],
+    ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, "Poll rejected"],
+    ["rejected send", "send", { ok: false, error: "Message rejected" }, "Message rejected"],
+  ] as const)("reports %s without claiming success", (_name, action, payload, expected) => {
+    const result = {
+      kind: action === "send" || action === "poll" ? action : "action",
+      channel: "telegram",
+      action,
+      to: "123",
+      handledBy: "plugin",
+      payload,
+      dryRun: false,
+    } as MessageActionResult;
+
+    const output = textJoined(formatMessageCliText(result));
+
+    expect(output).toContain(expected);
+    expect(output).not.toContain("✅");
+  });
 });
 
 describe("formatMessageCliText poll results", () => {

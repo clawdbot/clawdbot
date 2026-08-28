@@ -20,6 +20,9 @@ NODE_DEFAULT_MAJOR=26
 # Homebrew ships the current Node line as plain "node" (no versioned node@26
 # formula exists); versioned formulas only cover LTS lines like node@24.
 NODE_BREW_FORMULA="node"
+# Linux package repositories can publish builds ahead of the Node release line.
+# Provision the supported LTS line there so a fresh install never receives a prerelease runtime.
+NODE_LINUX_DEFAULT_MAJOR=24
 NODE_MIN_MAJOR=22
 NODE_22_MIN_MINOR=22
 NODE_22_MIN_PATCH=3
@@ -1385,8 +1388,8 @@ DRY_RUN=${OPENCLAW_DRY_RUN:-0}
 INSTALL_METHOD=${OPENCLAW_INSTALL_METHOD:-}
 OPENCLAW_VERSION=${OPENCLAW_VERSION:-latest}
 USE_BETA=${OPENCLAW_BETA:-0}
-GIT_DIR_DEFAULT="$(resolve_openclaw_effective_home)/openclaw"
-GIT_DIR=${OPENCLAW_GIT_DIR:-$GIT_DIR_DEFAULT}
+GIT_DIR=${OPENCLAW_GIT_DIR:-"$(resolve_openclaw_effective_home)/openclaw"}
+GIT_DIR_EXPLICIT=${OPENCLAW_GIT_DIR:+1}
 GIT_UPDATE=${OPENCLAW_GIT_UPDATE:-1}
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 NPM_SILENT_FLAG="--silent"
@@ -1504,6 +1507,7 @@ parse_args() {
                     return 2
                 fi
                 GIT_DIR="$2"
+                GIT_DIR_EXPLICIT=${2:+1}
                 shift 2
                 ;;
             --no-git-update)
@@ -2276,7 +2280,7 @@ install_node() {
         ui_info "Installing Node.js via NodeSource"
         if command -v apt-get &> /dev/null; then
             local tmp setup_url
-            setup_url="https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x"
+            setup_url="https://deb.nodesource.com/setup_${NODE_LINUX_DEFAULT_MAJOR}.x"
             mktempfile tmp
             run_required_step "Downloading NodeSource setup script" download_validated_script "$setup_url" "$tmp"
             if is_root; then
@@ -2288,7 +2292,7 @@ install_node() {
             fi
         elif command -v dnf &> /dev/null; then
             local tmp setup_url
-            setup_url="https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x"
+            setup_url="https://rpm.nodesource.com/setup_${NODE_LINUX_DEFAULT_MAJOR}.x"
             mktempfile tmp
             run_required_step "Downloading NodeSource setup script" download_validated_script "$setup_url" "$tmp"
             if is_root; then
@@ -2300,7 +2304,7 @@ install_node() {
             fi
         elif command -v yum &> /dev/null; then
             local tmp setup_url
-            setup_url="https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x"
+            setup_url="https://rpm.nodesource.com/setup_${NODE_LINUX_DEFAULT_MAJOR}.x"
             mktempfile tmp
             run_required_step "Downloading NodeSource setup script" download_validated_script "$setup_url" "$tmp"
             if is_root; then
@@ -3590,15 +3594,9 @@ refresh_gateway_service_if_loaded() {
         return 0
     fi
 
-    if run_quiet_step "Restarting gateway service" "$claw" gateway restart; then
-        ui_success "Gateway service restarted"
-    else
-        local user_claw
-        user_claw="$(openclaw_command_for_user "$claw")"
-        ui_warn "Gateway service restart failed; continuing. Run: ${user_claw} gateway restart"
-        return 0
-    fi
-
+    # `gateway install --force` activates the replacement service. Keep the
+    # explicit lifecycle restart in the finalization phase so doctor/plugin
+    # changes can still be applied without restarting twice here.
     run_quiet_step "Probing gateway service" "$claw" gateway status --deep || true
 }
 
@@ -3774,12 +3772,11 @@ main() {
             had_npm_owner=true
         fi
 
-        local repo_dir="$GIT_DIR"
-        if [[ -n "$detected_checkout" ]]; then
-            repo_dir="$detected_checkout"
+        final_git_dir="$GIT_DIR"
+        if [[ -z "$GIT_DIR_EXPLICIT" && -n "$detected_checkout" ]]; then
+            final_git_dir="$detected_checkout"
         fi
-        final_git_dir="$repo_dir"
-        install_openclaw_from_git "$repo_dir"
+        install_openclaw_from_git "$final_git_dir"
         if [[ "$had_npm_owner" == "true" ]]; then
             retire_npm_owner_after_git_install || return $?
         fi

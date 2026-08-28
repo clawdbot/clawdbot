@@ -837,6 +837,7 @@ class ChatControllerTranscriptCacheTest {
                 "archived": false,
                 "unread": true,
                 "lastReadAt": 10,
+                "markedUnreadAt": 15,
                 "lastActivityAt": 20
               }]
             }
@@ -854,6 +855,7 @@ class ChatControllerTranscriptCacheTest {
       assertEquals(false, session.archived)
       assertEquals(true, session.unread)
       assertEquals(10L, session.lastReadAt)
+      assertEquals(15L, session.markedUnreadAt)
       assertEquals(20L, session.lastActivityAt)
     }
 

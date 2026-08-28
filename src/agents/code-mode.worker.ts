@@ -152,9 +152,9 @@ async function createVm(params: {
   config: CodeModeConfig;
   pendingRequests: PendingBridgeRequest[];
 }): Promise<VmRun> {
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   let timedOut = false;
-  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
+  const deadlineReached = () => performance.now() - startedAt >= params.config.timeoutMs;
   const vm = await QuickJS.create({
     wasm: params.wasmModule,
     memoryLimit: params.config.memoryLimitBytes,
@@ -200,9 +200,9 @@ async function restoreVm(params: {
   config: CodeModeConfig;
   pendingRequests: PendingBridgeRequest[];
 }): Promise<VmRun> {
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   let timedOut = false;
-  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
+  const deadlineReached = () => performance.now() - startedAt >= params.config.timeoutMs;
   const snapshot = QuickJS.deserializeSnapshot(params.snapshotBytes);
   const vm = await QuickJS.restore(snapshot, {
     wasm: params.wasmModule,

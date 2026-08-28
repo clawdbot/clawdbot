@@ -1,15 +1,19 @@
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   getPreparedRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshotRevision,
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import {
   getPublishedPreparedModelCatalogOwnerSnapshot,
   type GetPublishedPreparedModelCatalogOwnerParams,
 } from "../../agents/prepared-model-catalog.js";
-import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepared-model-runtime-auth.js";
+import {
+  getPreparedModelFullCatalogAuth,
+  getPreparedModelRuntimeAuthMaterializations,
+} from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
@@ -35,7 +39,9 @@ type PreparedAgentFacts = {
   agentId: string;
   owner: PreparedModelRuntimeSnapshot;
   authStore: AuthProfileStore;
+  authModes: PreparedAgentCredentialModes;
   authStoreRevision: string;
+  modelCatalog: ModelCatalogSnapshot;
   skillsVersion: number;
 };
 
@@ -130,14 +136,24 @@ function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerati
       );
     }
     const workspaceDir = owner.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId);
+    const fullModelCatalog = owner.readFullModelCatalog?.();
+    const fullCatalogAuth = fullModelCatalog
+      ? getPreparedModelFullCatalogAuth(fullModelCatalog)
+      : undefined;
+    if (fullModelCatalog && !fullCatalogAuth) {
+      throw new Error("prepared full model catalog omitted its auth generation");
+    }
     return {
       agentId,
       owner,
-      authStore: deps.getPreparedAuthStore(owner.agentDir, owner.inheritedAuthDir) ?? {
-        version: 1,
-        profiles: {},
-      },
+      authStore: fullCatalogAuth?.authStore ??
+        deps.getPreparedAuthStore(owner.agentDir, owner.inheritedAuthDir) ?? {
+          version: 1,
+          profiles: {},
+        },
+      authModes: fullCatalogAuth?.authModes ?? owner.authModes,
       authStoreRevision: `${deps.getAuthStoreRevision(owner.agentDir)}:${deps.getAuthStoreRevision(owner.inheritedAuthDir)}`,
+      modelCatalog: fullModelCatalog ?? owner.modelCatalog,
       skillsVersion: deps.getSkillsVersion(workspaceDir),
     };
   });
@@ -166,6 +182,7 @@ function generationFactsMatch(
       candidate?.agentId === agent.agentId &&
       candidate.owner === agent.owner &&
       candidate.authStoreRevision === agent.authStoreRevision &&
+      candidate.modelCatalog === agent.modelCatalog &&
       candidate.skillsVersion === agent.skillsVersion
     );
   });
@@ -220,7 +237,7 @@ async function defaultBuildProjection(params: {
     await import("./models-list-result.js");
   // Chat metadata must stay on process-published facts. Live discovery belongs to explicit
   // models.list control-plane reads so a slow provider cannot delay chat startup.
-  const snapshot = params.facts.owner.modelCatalog;
+  const snapshot = params.facts.modelCatalog;
   const projector = createGatewayAgentModelCatalogProjector({
     cfg: params.facts.owner.config,
     agentId: params.facts.agentId,
@@ -228,7 +245,7 @@ async function defaultBuildProjection(params: {
     metadataSnapshot: params.facts.owner.metadataSnapshot,
     preparedAuthStore: params.facts.authStore,
     // The owner records usable auth at discovery; metadata must share that exact generation fact.
-    preparedRuntimeAuthModes: params.facts.owner.authModes,
+    preparedRuntimeAuthModes: params.facts.authModes,
     preparedRuntimeAuthMaterializations: getPreparedModelRuntimeAuthMaterializations(
       params.facts.owner,
     ),

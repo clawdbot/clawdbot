@@ -116,7 +116,7 @@ test("reconciling the same sessions.changed twice keeps result identity on the s
   expect(second.result).toBe(first.result);
 });
 
-test("sessions.changed deletes every null-tombstoned field, not a hand-kept list", () => {
+test("sessions.changed deletes every nested null tombstone, not a hand-kept list", () => {
   // The gateway tombstones more fields than the old per-field cascade knew
   // about; these five leaked literal null into rows typed optional-not-null.
   const result: SessionsListResult = {
@@ -130,9 +130,19 @@ test("sessions.changed deletes every null-tombstoned field, not a hand-kept list
         kind: "direct",
         updatedAt: 1,
         toolOverrides: { profile: "coding" },
+        agentStatus: { state: "needs_attention", message: "Reply requested" },
+        observerDigest: {
+          agentId: "main",
+          runId: "run-stale",
+          headline: "Waiting",
+          health: "needs_attention",
+          updatedAt: 1,
+          revision: 1,
+        },
         controlOwnerSessionKey: "agent:main:owner",
         restartRecoveryStatus: "pending",
         goal: "ship it",
+        modelOverrideSource: "user",
       } as never,
     ],
   };
@@ -140,18 +150,25 @@ test("sessions.changed deletes every null-tombstoned field, not a hand-kept list
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: "agent:main:main",
     reason: "patch",
-    updatedAt: 2,
-    toolOverrides: null,
-    observerDigest: null,
-    controlOwnerSessionKey: null,
-    restartRecoveryStatus: null,
-    goal: null,
+    session: {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 2,
+      toolOverrides: null,
+      agentStatus: null,
+      observerDigest: null,
+      controlOwnerSessionKey: null,
+      restartRecoveryStatus: null,
+      goal: null,
+      modelOverrideSource: null,
+    },
   } as never);
 
   expect(reconciled.applied).toBe(true);
   const row = reconciled.result?.sessions[0] as Record<string, unknown> | undefined;
   for (const field of [
     "toolOverrides",
+    "agentStatus",
     "observerDigest",
     "controlOwnerSessionKey",
     "restartRecoveryStatus",
@@ -161,6 +178,10 @@ test("sessions.changed deletes every null-tombstoned field, not a hand-kept list
   }
   // updatedAt stays legitimately nullable and must not be deleted by the loop.
   expect(row?.updatedAt).toBe(2);
+  // Clearing a pin means the gateway confirmed inheritance. Deleting that null would
+  // make the row indistinguishable from a gateway too old to report provenance, and
+  // the picker would keep showing the cleared pin.
+  expect(row?.modelOverrideSource).toBeNull();
 });
 
 test("sessions.changed clears exact run ids only for an explicit tombstone", () => {
@@ -291,6 +312,87 @@ test("sessions.changed applies reassignment and invalidates the complete owner f
     assignedAt: 2,
   });
   expect(reconciled.result?.owners).toBeUndefined();
+});
+
+test("ownerless raw-global events invalidate without contaminating the selected agent row", () => {
+  const researchOwner = { type: "agent" as const, id: "research", label: "Research" };
+  const result = buildResult([
+    {
+      key: "global",
+      kind: "global",
+      updatedAt: 1,
+      owner: { actor: researchOwner },
+      model: "research-model",
+      status: "done",
+      hasActiveRun: false,
+      activeRunIds: [],
+    },
+  ]);
+  const payload = {
+    sessionKey: "global",
+    reason: "updated",
+    updatedAt: 2,
+    owner: { actor: { type: "agent", id: "ops", label: "Ops" } },
+    model: "ops-model",
+    status: "running",
+    hasActiveRun: true,
+    activeRunIds: ["ops-run"],
+    inputTokens: 42,
+  };
+
+  const invalidated = reconcileSessionChanged(result, payload, {
+    resultAgentId: "research",
+    selectedGlobalAgentId: "research",
+  });
+
+  expect(invalidated.applied).toBe(false);
+  expect(invalidated.result).toBe(result);
+  expect(invalidated.row).toBeUndefined();
+
+  const mainResult = buildResult([{ key: "main", kind: "direct", updatedAt: 1, status: "done" }]);
+  const invalidatedMain = reconcileSessionChanged(
+    mainResult,
+    { sessionKey: "main", reason: "delete", ts: 2 },
+    { resultAgentId: "main", selectedGlobalAgentId: "main" },
+  );
+  expect(invalidatedMain.applied).toBe(false);
+  expect(invalidatedMain.result).toBe(mainResult);
+
+  const ownerlessMain = reconcileSessionChanged(
+    mainResult,
+    {
+      sessionKey: "main",
+      activeRunIds: ["main-run"],
+      hasActiveRun: true,
+      status: "running",
+      updatedAt: 2,
+    },
+    { resultAgentId: "main", selectedGlobalAgentId: "main" },
+  );
+  expect(ownerlessMain.applied).toBe(true);
+  expect(ownerlessMain.row).toMatchObject({
+    key: "main",
+    activeRunIds: ["main-run"],
+    hasActiveRun: true,
+    status: "running",
+  });
+  expect(ownerlessMain.row).not.toHaveProperty("agentId");
+
+  const explicit = reconcileSessionChanged(
+    result,
+    { ...payload, agentId: "research" },
+    {
+      resultAgentId: "research",
+      selectedGlobalAgentId: "research",
+    },
+  );
+  expect(explicit.applied).toBe(true);
+  expect(explicit.row).toMatchObject({
+    owner: { actor: { id: "ops" } },
+    model: "ops-model",
+    status: "running",
+    activeRunIds: ["ops-run"],
+  });
 });
 
 describe("reconcileSessionChanged", () => {

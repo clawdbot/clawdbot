@@ -37,7 +37,7 @@ function renderViewerAvatar(view: IdentityAvatarView) {
   return html`${renderIdentityAvatarImage({ view, fallbackSelector: ".viewer-avatar" })}${fallback}`;
 }
 
-export type ViewerAvatarVariant = "session" | "footer" | "profile";
+type ViewerAvatarVariant = "session" | "footer" | "profile";
 
 class ViewerAvatar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) user: PresenceViewer | null = null;

@@ -261,17 +261,17 @@ describe("PluginsPage", () => {
     } satisfies PluginInstallRequest;
     page.messages["plugin:workboard"] = { kind: "success", text: "Unrelated message." };
 
-    await page.install(catalogRequest, installIdentity);
+    await page.consentController.install(catalogRequest, installIdentity);
     expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
       "Review this plugin (1).",
     );
 
-    await page.install(searchRequest, installIdentity);
+    await page.consentController.install(searchRequest, installIdentity);
     expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
       "Review this plugin (2).",
     );
 
-    await page.install(
+    await page.consentController.install(
       { ...searchRequest, acknowledgeInstallPolicyWarning: true },
       installIdentity,
     );
@@ -497,7 +497,7 @@ describe("PluginsPage", () => {
       runtimeConfig.patchForm(["pending"], true);
 
       if (action === "install") {
-        await page.install(
+        await page.consentController.install(
           {
             source: "clawhub",
             packageName: "example-plugin",

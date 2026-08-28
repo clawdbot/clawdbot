@@ -24,6 +24,7 @@ import {
   reorderPanel,
   setSidebarDock,
   setSidebarExpanded,
+  setSidebarOpen,
   sidebarDock,
   type SidebarLayout,
   type SidebarSlotId,
@@ -197,6 +198,16 @@ export function resolveSidebarLayoutForBoard(params: {
       : null;
   if (!chatSide) {
     layout = closeSlot(layout, "chat");
+    if (
+      params.board.hasBoard &&
+      params.board.face === "dashboard" &&
+      params.board.dock === "hidden" &&
+      params.board.provider.canMutate
+    ) {
+      // Dashboard is the board-only mode. Preserve the stored tabs for the
+      // next explicit Split transition, but never render them over the board.
+      layout = setSidebarOpen(layout, false);
+    }
     return fitSidebarLayout(layout, params.paneWidth) ?? layout;
   }
   const explicitlyClosed = layout.columns.length > 0 && layout.open === false;

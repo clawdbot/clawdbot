@@ -136,9 +136,9 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
       gateway.token,
       "--json",
       "--limit",
-      "2",
+      "200",
       "--max-bytes",
-      "4096",
+      "250000",
     ]);
     const cliRecords = cliJson
       .trim()

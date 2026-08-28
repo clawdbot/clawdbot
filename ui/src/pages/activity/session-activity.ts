@@ -1,5 +1,7 @@
+import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { ACTIVITY_PERSON_PARAM } from "../../app-route-paths.ts";
+import { readAvatarGatewayContext } from "../../lib/identity-avatar.ts";
 import {
   presenceViewerLabel,
   projectPresencePayload,
@@ -92,10 +94,16 @@ function sessionActors(row: GatewaySessionRow) {
 
 export function sessionActivityOwner(row: GatewaySessionRow): PresenceViewer {
   const actor = row.owner?.actor ?? row.createdActor;
+  const agentId = normalized(row.agentId);
+  const { resourceBasePath } = readAvatarGatewayContext();
   return {
-    id: normalized(actor?.id) ?? normalized(row.agentId) ?? "system",
-    name: normalized(actor?.label) ?? normalized(row.agentId),
-    avatarUrl: normalized(actor?.avatarUrl),
+    id: normalized(actor?.id) ?? agentId ?? "system",
+    name: normalized(actor?.label) ?? agentId,
+    avatarUrl: actor
+      ? normalized(actor.avatarUrl)
+      : agentId
+        ? buildControlUiResourcePath("agentAvatar", resourceBasePath, agentId)
+        : undefined,
     watchedSessions: [],
   };
 }

@@ -7,13 +7,16 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { isOpenClawOrgNpmSpec, parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../../../infra/update-channels.js";
+import {
+  capturePluginCapabilityConsentHandlerErrors,
+  prepareManagedPluginArtifactConsentHandler,
+  type PluginCapabilityConsentHandler,
+} from "../../../plugins/capability-consent.js";
+import { isUnavailableClawHubTarget } from "../../../plugins/clawhub-error-codes.js";
 import { buildClawHubPluginInstallRecordFields } from "../../../plugins/clawhub-install-records.js";
+import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../../plugins/clawhub.js";
 import {
-  CLAWHUB_INSTALL_ERROR_CODE,
-  installPluginFromClawHub,
-  type ClawHubRiskAcknowledgementRequest,
-} from "../../../plugins/clawhub.js";
-import {
+  installWithChannelFallback,
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "../../../plugins/install-channel-specs.js";
@@ -22,11 +25,13 @@ import {
   resolveDefaultPluginNpmDir,
   resolvePluginInstallDir,
 } from "../../../plugins/install-paths.js";
+import { isUnavailableNpmTarget } from "../../../plugins/install-types.js";
 import { installPluginFromNpmSpec } from "../../../plugins/install.js";
 import {
   buildNpmResolutionInstallFields,
   resolveNpmInstallRecordSpec,
 } from "../../../plugins/installs.js";
+import { ManagedPluginLifecycleError } from "../../../plugins/management-lifecycle-error.js";
 import { isClawHubTrustSkippedOutcome } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
@@ -52,25 +57,6 @@ function shouldFallbackClawHubToNpm(params: {
   );
 }
 
-export function appendClawHubRiskAcknowledgementGuidance(params: {
-  message: string;
-  spec: string | undefined;
-}): string {
-  if (!params.spec || !params.message.includes("--acknowledge-clawhub-risk")) {
-    return params.message;
-  }
-  const sanitizedSpec = sanitizeTerminalText(params.spec);
-  const shellSpec = shellQuotePosixArg(sanitizedSpec);
-  return `${params.message} To review and acknowledge this ClawHub package, run \`openclaw plugins install ${shellSpec} --acknowledge-clawhub-risk\` from a trusted shell, then rerun repair.`;
-}
-
-function shellQuotePosixArg(value: string): string {
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/u.test(value)) {
-    return value;
-  }
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
 export function isActionableClawHubSkippedOutcome(outcome: {
   status: string;
   code?: string;
@@ -79,26 +65,8 @@ export function isActionableClawHubSkippedOutcome(outcome: {
 }
 
 export function isClawHubReviewNotice(message: string): boolean {
-  const trimmed = stripAnsi(message).trimStart();
-  return (
-    trimmed.startsWith("╭─ REVIEW RECOMMENDED - ClawHub ") ||
-    trimmed.startsWith("╭─ WARNING - ClawHub found security risks ")
-  );
-}
-
-export function recordClawHubInstallSpec(
-  record: PluginInstallRecord | undefined,
-): string | undefined {
-  if (!record || record.source !== "clawhub") {
-    return undefined;
-  }
-  if (record.spec) {
-    return record.spec;
-  }
-  if (record.clawhubPackage) {
-    return `clawhub:${record.clawhubPackage}`;
-  }
-  return undefined;
+  const audit = stripAnsi(message);
+  return audit.includes("ClawHub Security Audit") && audit.includes("Outcome: Review");
 }
 
 type InstallCandidateRepairReason = "stale-version-bound-runtime";
@@ -122,8 +90,7 @@ export async function installCandidate(params: {
   mode?: "install" | "update";
   preferNpm?: boolean;
   repairReason?: InstallCandidateRepairReason;
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<{
   records: Record<string, PluginInstallRecord>;
   changes: string[];
@@ -131,10 +98,39 @@ export async function installCandidate(params: {
   warnings: string[];
   failedPluginId?: string;
 }> {
+  const consent = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
+  try {
+    const result = await installCandidatePackage({
+      ...params,
+      onCapabilityConsent: consent.onCapabilityConsent,
+    });
+    consent.rethrowCallbackError();
+    return result;
+  } catch (error) {
+    consent.rethrowCallbackError();
+    if (!(error instanceof ManagedPluginLifecycleError)) {
+      throw error;
+    }
+    return {
+      records: params.records,
+      changes: [],
+      notices: [],
+      warnings: [sanitizeTerminalText(error.message)],
+      failedPluginId: params.candidate.pluginId,
+    };
+  }
+}
+
+async function installCandidatePackage(
+  params: Parameters<typeof installCandidate>[0],
+): ReturnType<typeof installCandidate> {
   const { candidate } = params;
   const extensionsDir = resolveDefaultPluginExtensionsDir(params.env);
   const changes: string[] = [];
   const warnings: string[] = [];
+  // A channel fallback changes which artifact the operator gets, so it must stay
+  // visible on the success path instead of being dropped with the attempt log.
+  const channelNotices: string[] = [];
   const clawhubSpecs = candidate.clawhubSpec
     ? resolveClawHubInstallSpecsForUpdateChannel({
         spec: candidate.clawhubSpec,
@@ -154,6 +150,16 @@ export async function installCandidate(params: {
     : null;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? candidate.clawhubSpec;
   const npmInstallSpec = npmSpecs?.installSpec ?? candidate.npmSpec;
+  const prepareConsent = (source: "npm" | "clawhub", spec: string) =>
+    prepareManagedPluginArtifactConsentHandler({
+      config: params.config,
+      env: params.env,
+      source,
+      spec,
+      previousRecords: params.records,
+      expectedIntegrity: candidate.expectedIntegrity,
+      onCapabilityConsent: params.onCapabilityConsent,
+    });
   const npmDir = resolveDefaultPluginNpmDir(params.env);
   const existingClawHubPackagePath = clawhubInstallSpec
     ? resolveExistingCandidateClawHubPackagePath({
@@ -174,8 +180,15 @@ export async function installCandidate(params: {
     params.mode !== "update" &&
     isPostCoreConvergencePass(params.env)
   ) {
+    const capabilityConsent = await prepareConsent("npm", npmInstallSpec);
+    await capabilityConsent.onBeforePluginArtifactCommit({
+      pluginId: candidate.pluginId,
+      stagedArtifactDir: existingNpmPackagePath,
+      mode: "install",
+    });
     return await adoptExistingNpmPackage({
       candidate,
+      capabilityConsent,
       records: params.records,
       npmInstallSpec,
       npmRecordSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
@@ -190,32 +203,46 @@ export async function installCandidate(params: {
     !(params.preferNpm && npmInstallSpec) &&
     candidate.defaultChoice !== "npm";
   if (shouldTryClawHub) {
-    const clawhubInstallSpecLabel = sanitizeTerminalText(clawhubInstallSpec);
-    const clawhubResult = await installPluginFromClawHub({
-      spec: clawhubInstallSpec,
-      config: params.config,
-      extensionsDir,
-      env: params.env,
-      expectedPluginId: candidate.pluginId,
-      mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
-      logger: {
-        terminalLinks: false,
-        warn: (message) => warnings.push(stripAnsi(message)),
+    let usedClawHubSpec = clawhubInstallSpec;
+    const { result: clawhubResult, capabilityConsent } = await installWithChannelFallback({
+      installSpec: clawhubInstallSpec,
+      // An integrity pin identifies one exact artifact, so it outranks the channel.
+      ...(candidate.expectedIntegrity ? {} : { fallbackSpec: clawhubSpecs?.fallbackSpec }),
+      install: async (spec) => {
+        usedClawHubSpec = spec;
+        const attemptConsent = await prepareConsent("clawhub", spec);
+        const result = await installPluginFromClawHub({
+          spec,
+          config: params.config,
+          extensionsDir,
+          env: params.env,
+          expectedPluginId: candidate.pluginId,
+          onBeforePluginArtifactCommit: attemptConsent.onBeforePluginArtifactCommit,
+          mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
+          logger: {
+            terminalLinks: false,
+            warn: (message) => warnings.push(stripAnsi(message)),
+          },
+        });
+        return { result, capabilityConsent: attemptConsent };
       },
-      ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-      ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
+      isRetryable: (attempt) => !attempt.result.ok && isUnavailableClawHubTarget(attempt.result),
+      onFallback: (message) => {
+        channelNotices.push(message);
+      },
     });
+    const clawhubInstallSpecLabel = sanitizeTerminalText(usedClawHubSpec);
     if (clawhubResult.ok) {
       const pluginId = clawhubResult.pluginId;
       return {
         records: {
           ...params.records,
-          [pluginId]: {
+          [pluginId]: capabilityConsent.applyAcceptedSurface(pluginId, {
             ...buildClawHubPluginInstallRecordFields(clawhubResult.clawhub),
             spec: clawhubSpecs?.recordSpec ?? clawhubInstallSpec,
             installPath: clawhubResult.targetDir,
             installedAt: new Date().toISOString(),
-          },
+          }),
         },
         changes: [
           formatInstalledConfiguredPluginChange({
@@ -224,7 +251,7 @@ export async function installCandidate(params: {
             repairReason: params.repairReason,
           }),
         ],
-        notices: warnings,
+        notices: [...channelNotices, ...warnings],
         warnings: [],
       };
     }
@@ -237,13 +264,7 @@ export async function installCandidate(params: {
         records: params.records,
         changes: [],
         notices: [],
-        warnings: [
-          ...warnings,
-          appendClawHubRiskAcknowledgementGuidance({
-            message: failure,
-            spec: clawhubInstallSpec,
-          }),
-        ],
+        warnings: [...warnings, failure],
         failedPluginId: candidate.pluginId,
       };
     }
@@ -265,32 +286,41 @@ export async function installCandidate(params: {
     };
   }
   const npmInstallMode = params.mode === "update" || existingNpmPackagePath ? "update" : "install";
-  let result = await installPluginFromNpmSpec({
-    spec: npmInstallSpec,
-    config: params.config,
-    extensionsDir,
-    npmDir,
-    expectedPluginId: candidate.pluginId,
-    expectedIntegrity: candidate.expectedIntegrity,
-    ...(candidate.trustedSourceLinkedOfficialInstall
-      ? { trustedSourceLinkedOfficialInstall: true }
-      : {}),
-    mode: npmInstallMode,
-  });
-  if (!result.ok && npmInstallMode === "install" && isPluginAlreadyExistsError(result.error)) {
-    result = await installPluginFromNpmSpec({
-      spec: npmInstallSpec,
+  const runNpmInstall = async (spec: string, mode: "install" | "update") => {
+    const capabilityConsent = await prepareConsent("npm", spec);
+    const result = await installPluginFromNpmSpec({
+      spec,
       config: params.config,
       extensionsDir,
       npmDir,
       expectedPluginId: candidate.pluginId,
       expectedIntegrity: candidate.expectedIntegrity,
+      onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
       ...(candidate.trustedSourceLinkedOfficialInstall
         ? { trustedSourceLinkedOfficialInstall: true }
         : {}),
-      mode: "update",
+      mode,
     });
-  }
+    return { result, capabilityConsent };
+  };
+  const installOnce = async (spec: string) => {
+    const attempt = await runNpmInstall(spec, npmInstallMode);
+    return !attempt.result.ok &&
+      npmInstallMode === "install" &&
+      isPluginAlreadyExistsError(attempt.result.error)
+      ? await runNpmInstall(spec, "update")
+      : attempt;
+  };
+  const { result, capabilityConsent } = await installWithChannelFallback({
+    installSpec: npmInstallSpec,
+    // An integrity pin identifies one exact artifact, so it outranks the channel.
+    ...(candidate.expectedIntegrity ? {} : { fallbackSpec: npmSpecs?.fallbackSpec }),
+    install: installOnce,
+    isRetryable: (attempt) => !attempt.result.ok && isUnavailableNpmTarget(attempt.result),
+    onFallback: (message) => {
+      channelNotices.push(message);
+    },
+  });
   if (!result.ok) {
     return {
       records: params.records,
@@ -298,6 +328,7 @@ export async function installCandidate(params: {
       notices: [],
       warnings: [
         ...warnings,
+        ...channelNotices,
         `Failed to install missing configured plugin "${candidate.pluginId}" from ${npmInstallSpec}: ${result.error}`,
       ],
       failedPluginId: candidate.pluginId,
@@ -307,7 +338,7 @@ export async function installCandidate(params: {
   return {
     records: {
       ...params.records,
-      [pluginId]: {
+      [pluginId]: capabilityConsent.applyAcceptedSurface(pluginId, {
         source: "npm",
         spec: resolveNpmInstallRecordSpec({
           requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
@@ -318,7 +349,7 @@ export async function installCandidate(params: {
         version: result.version,
         installedAt: new Date().toISOString(),
         ...buildNpmResolutionInstallFields(result.npmResolution),
-      },
+      }),
     },
     changes: [
       ...changes,
@@ -328,7 +359,7 @@ export async function installCandidate(params: {
         repairReason: params.repairReason,
       }),
     ],
-    notices: [],
+    notices: channelNotices,
     warnings: [],
   };
 }
@@ -388,6 +419,7 @@ async function readNpmPackageVersion(packagePath: string): Promise<string | unde
 
 async function adoptExistingNpmPackage(params: {
   candidate: DownloadableInstallCandidate;
+  capabilityConsent: Awaited<ReturnType<typeof prepareManagedPluginArtifactConsentHandler>>;
   records: Record<string, PluginInstallRecord>;
   npmInstallSpec: string;
   npmRecordSpec: string;
@@ -411,20 +443,23 @@ async function adoptExistingNpmPackage(params: {
   return {
     records: {
       ...params.records,
-      [params.candidate.pluginId]: {
-        source: "npm",
-        spec: resolveNpmInstallRecordSpec({
-          requestedSpec: params.npmRecordSpec,
-          resolution: npmResolution,
-          pinResolvedRegistrySpec: params.pinResolvedRegistrySpec,
-        }),
-        installPath: params.packagePath,
-        installedAt: new Date().toISOString(),
-        version: params.version,
-        resolvedVersion: params.version,
-        ...(npmName ? { resolvedName: npmName } : {}),
-        ...(npmResolution ? { resolvedSpec: npmResolution.resolvedSpec } : {}),
-      },
+      [params.candidate.pluginId]: params.capabilityConsent.applyAcceptedSurface(
+        params.candidate.pluginId,
+        {
+          source: "npm",
+          spec: resolveNpmInstallRecordSpec({
+            requestedSpec: params.npmRecordSpec,
+            resolution: npmResolution,
+            pinResolvedRegistrySpec: params.pinResolvedRegistrySpec,
+          }),
+          installPath: params.packagePath,
+          installedAt: new Date().toISOString(),
+          version: params.version,
+          resolvedVersion: params.version,
+          ...(npmName ? { resolvedName: npmName } : {}),
+          ...(npmResolution ? { resolvedSpec: npmResolution.resolvedSpec } : {}),
+        },
+      ),
     },
     changes: [
       `Repaired missing configured plugin "${params.candidate.pluginId}" from existing npm payload ${params.npmInstallSpec}.`,

@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -63,7 +64,7 @@ describe("groupSidebarSessionRows", () => {
     expect(sections[3]?.rows.map((item) => item.key)).toEqual(["acp-1"]);
   });
 
-  it("keeps the kind-based zones split when grouping is none", () => {
+  it("flattens the kind-based zones into one list when grouping is none", () => {
     const sections = groupSidebarSessionRows(
       [
         { ...row({ key: "tg" }), channel: "telegram", channelSession: true },
@@ -73,13 +74,72 @@ describe("groupSidebarSessionRows", () => {
       ],
       { grouping: "none" },
     );
+    expect(sections.map((section) => section.id)).toEqual(["pinned", "ungrouped", "work"]);
+    expect(sections[1]?.rows.map((item) => item.key)).toEqual(["tg", "wt", "grp"]);
+    expect(sections[2]?.rows).toEqual([]);
+  });
+
+  it("buckets rows by work checkout and leaves checkout-less rows in their smart zones", () => {
+    const openclaw = { name: "openclaw", path: "/repos/openclaw" };
+    const sections = groupSidebarSessionRows(
+      [
+        { ...row({ key: "z-1" }), workContext: { name: "zulu", path: "/repos/zulu" } },
+        { ...row({ key: "oc-1" }), workContext: openclaw, workSession: true },
+        row({ key: "thread" }),
+        // Same basename, different checkout: the path keeps the sections apart.
+        { ...row({ key: "fork-1" }), workContext: { name: "openclaw", path: "/forks/openclaw" } },
+        row({ key: "grp", kind: "group" }),
+        { ...row({ key: "no-repo" }), workSession: true },
+        { ...row({ key: "oc-2", category: "Ignored" }), workContext: openclaw },
+        // Worktree checkouts fold into their origin repo's section.
+        {
+          ...row({ key: "oc-wt" }),
+          workContext: { name: "c7c338", path: "/repos/openclaw/.claude/worktrees/c7c338" },
+        },
+        // A trailing separator must not mint a second identical section.
+        {
+          ...row({ key: "oc-slash" }),
+          workContext: { name: "openclaw", path: "/repos/openclaw/" },
+        },
+        { ...row({ key: "pin", pinned: true }), workContext: openclaw },
+      ],
+      { grouping: "project", knownGroups: ["Ignored"] },
+    );
+
     expect(sections.map((section) => section.id)).toEqual([
       "pinned",
+      "project:/forks/openclaw",
+      "project:/repos/openclaw",
+      "project:/repos/zulu",
       "ungrouped",
       "groups",
       "work",
     ]);
-    expect(sections[1]?.rows.map((item) => item.key)).toEqual(["tg"]);
+    expect(sections[2]?.project).toEqual(openclaw);
+    expect(sections[2]?.rows.map((item) => item.key)).toEqual([
+      "oc-1",
+      "oc-2",
+      "oc-wt",
+      "oc-slash",
+    ]);
+    expect(sections[4]?.rows.map((item) => item.key)).toEqual(["thread"]);
+    expect(sections[5]?.rows.map((item) => item.key)).toEqual(["grp"]);
+    expect(sections[6]?.rows.map((item) => item.key)).toEqual(["no-repo"]);
+  });
+
+  it("keeps project sections ahead of the stored zone order", () => {
+    const sections = groupSidebarSessionRows(
+      [
+        { ...row({ key: "oc" }), workContext: { name: "openclaw", path: "/repos/openclaw" } },
+        row({ key: "thread" }),
+      ],
+      { grouping: "project", sectionOrder: ["work", "ungrouped"] },
+    );
+    expect(sections.map((section) => section.id)).toEqual([
+      "project:/repos/openclaw",
+      "work",
+      "ungrouped",
+    ]);
   });
 
   it("orders owner sections before stored zones and leaves ownerless rows in their smart zones", () => {
@@ -367,6 +427,7 @@ describe("normalizeSidebarSessionsGrouping", () => {
   it("accepts supported modes and falls back to category grouping", () => {
     expect(normalizeSidebarSessionsGrouping("none")).toBe("none");
     expect(normalizeSidebarSessionsGrouping("person")).toBe("person");
+    expect(normalizeSidebarSessionsGrouping("project")).toBe("project");
     expect(normalizeSidebarSessionsGrouping("category")).toBe("category");
     expect(normalizeSidebarSessionsGrouping(null)).toBe("category");
     expect(normalizeSidebarSessionsGrouping("bogus")).toBe("category");
@@ -377,6 +438,7 @@ type ZoneRowExtras = {
   workSession?: boolean;
   acpSession?: boolean;
   channelSession?: boolean;
+  workContext?: { name: string; path: string };
 };
 
 function row(
@@ -400,6 +462,53 @@ describe("normalizeSessionsGroupBy", () => {
 });
 
 describe("groupSessionRows", () => {
+  it.each(["UTC", "America/Los_Angeles", "America/Santiago"])(
+    "groups complete local calendar days in %s",
+    (timeZone) => {
+      // Worker-thread TZ mutations do not reliably change V8's timezone. Start a
+      // process in the requested zone so real calendar/DST behavior owns the proof.
+      const output = execFileSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "--eval",
+          `
+          import { groupSessionRows } from ${JSON.stringify(new URL("./grouping.ts", import.meta.url).href)};
+          const dates = [[2026, 0, 1], [2026, 2, 9], [2026, 10, 2], [2026, 8, 6], [2026, 8, 7]];
+          const results = dates.map(([year, month, day]) => {
+            const at = (daysAgo, hour = 0, minute = 0) =>
+              new Date(year, month, day - daysAgo, hour, minute).getTime();
+            const rows = [
+              ["today", at(0)], ["yesterday", at(1)],
+              ["two-days-ago", at(2, 23, 59)], ["six-days-ago", at(6)],
+              ["older", at(7, 23, 59)], ["unknown", null],
+            ].map(([key, updatedAt]) => ({ key, updatedAt, kind: "direct" }));
+            return groupSessionRows({ mode: "date", now: at(0, 12), rows })
+              .map((group) => [group.id, group.rows.map((row) => row.key)]);
+          });
+          process.stdout.write(JSON.stringify(results));
+        `,
+        ],
+        {
+          cwd: new URL("../../../../", import.meta.url),
+          env: { ...process.env, TZ: timeZone },
+          encoding: "utf8",
+          timeout: 10_000,
+        },
+      );
+      const expected = [
+        ["today", ["today"]],
+        ["yesterday", ["yesterday"]],
+        ["week", ["two-days-ago", "six-days-ago"]],
+        ["older", ["older"]],
+        [UNGROUPED_ID, ["unknown"]],
+      ];
+      expect(JSON.parse(output)).toEqual(Array.from({ length: 5 }, () => expected));
+    },
+  );
+
   it("keeps known categories in order, appends extras, and puts ungrouped last", () => {
     const rows = [
       row({ key: "a", category: "Zulu" }),

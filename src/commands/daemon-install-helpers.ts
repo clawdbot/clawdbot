@@ -29,7 +29,11 @@ import {
   readManagedServiceEnvKeysFromEnvironment,
 } from "../daemon/service-managed-env.js";
 import { isNonMinimalServicePathEntry } from "../daemon/service-path-policy.js";
-import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
+import {
+  resolveManagedGatewayServiceCommand,
+  type GatewayServiceCommandConfig,
+  type GatewayServiceEnvironmentValueSource,
+} from "../daemon/service-types.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -803,8 +807,9 @@ export async function buildGatewayInstallPlan(params: {
   port: number;
   runtime: GatewayDaemonRuntime;
   existingEnvironment?: Record<string, string | undefined>;
+  existingCommand?: GatewayServiceCommandConfig | null;
   devMode?: boolean;
-  nodePath?: string;
+  runtimePath?: string;
   wrapperPath?: string;
   platform?: NodeJS.Platform;
   warn?: DaemonInstallWarnFn;
@@ -817,11 +822,11 @@ export async function buildGatewayInstallPlan(params: {
   >;
 }): Promise<GatewayInstallPlan> {
   const platform = params.platform ?? process.platform;
-  const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
+  const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
     runtime: params.runtime,
     devMode: params.devMode,
-    nodePath: params.nodePath,
+    runtimePath: params.runtimePath,
   });
   const wrapperInput = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
   const wrapperPointsAtWindowsTaskScript =
@@ -844,8 +849,10 @@ export async function buildGatewayInstallPlan(params: {
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
     dev: devMode,
-    nodePath,
+    runtime: params.runtime,
+    runtimePath,
     wrapperPath,
+    ...(params.existingCommand ? { existingCommand: params.existingCommand } : {}),
   });
   await emitDaemonInstallRuntimeWarning({
     env: params.env,
@@ -857,14 +864,16 @@ export async function buildGatewayInstallPlan(params: {
   const serviceEnvironment = buildServiceEnvironment({
     env: serviceInputEnv,
     port: params.port,
-    existingNodeOptions: params.existingEnvironment?.NODE_OPTIONS,
+    runtime: params.runtime,
+    existingNodeOptions: resolveManagedGatewayServiceCommand(params.existingCommand)?.environment
+      ?.NODE_OPTIONS,
     launchdLabel:
       platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(serviceInputEnv.OPENCLAW_PROFILE)
         : undefined,
     platform,
     extraPathDirs: resolveDaemonServicePathDirs({
-      nodePath,
+      runtimePath,
       env: serviceInputEnv,
       platform,
     }),

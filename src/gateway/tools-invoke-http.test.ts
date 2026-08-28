@@ -9,7 +9,9 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
+import type { ExecSessionDefaults } from "../agents/exec-defaults.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -253,6 +255,8 @@ vi.mock("../agents/openclaw-tools.js", async () => {
           agentSessionKey:
             typeof ctx.agentSessionKey === "string" ? ctx.agentSessionKey : undefined,
           sessionId: typeof ctx.sessionId === "string" ? ctx.sessionId : undefined,
+          config: ctx.config as OpenClawConfig | undefined,
+          execSession: (ctx.execSession as ExecSessionDefaults | undefined) ?? {},
         }),
       ];
     },
@@ -469,6 +473,7 @@ const invokeToolsRpc = async (
     hasAvatar: boolean;
     updatedAt: number;
   },
+  internal?: { operatorRoleActor?: { kind: "system" } | { kind: "operator"; profileId: string } },
 ) => {
   const respond = vi.fn();
   await expectDefined(
@@ -480,6 +485,7 @@ const invokeToolsRpc = async (
     context: { getRuntimeConfig: () => cfg } as never,
     client: {
       ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+      ...(internal ? { internal } : {}),
       connect: {
         role: "operator",
         scopes,
@@ -565,6 +571,50 @@ describe("POST /tools/invoke", () => {
         },
       });
       expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
+    });
+  });
+
+  it("preserves host-minted system authority for a shared-secret caller under roles", async () => {
+    await withOpenClawTestState({ label: "tools-invoke-system-authority" }, async () => {
+      const owner = ensureProfileForEmail("sysauth-owner@example.test");
+      const sessionKey = "agent:main:sysauth-primary";
+      const entry = {
+        sessionId: "sysauth-primary-session",
+        updatedAt: 1,
+        visibility: "shared" as const,
+        createdActor: { type: "human" as const, id: owner.id },
+      };
+      await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+      sessionEntries.set(sessionKey, entry);
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["agents_list"] } }] },
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "view" },
+                agents: ["guest-agent"],
+                scopes: ["operator.write"],
+              },
+            },
+          },
+        },
+      };
+
+      // Shared-secret operator owners have no durable profile; connect mints system
+      // authority on the connection. Dispatch must carry that fact forward instead of
+      // re-deriving ownership from scopes, or the caller is denied its own agent.
+      const call = await invokeToolsRpc(
+        { name: "agents_list", args: {}, sessionKey },
+        ["operator.write"],
+        undefined,
+        undefined,
+        undefined,
+        { operatorRoleActor: { kind: "system" } },
+      );
+
+      expect(call?.[1]).toMatchObject({ ok: true, toolName: "agents_list" });
     });
   });
 
@@ -1410,20 +1460,28 @@ describe("tools.invoke Gateway RPC", () => {
     expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("delegated");
   });
 
-  it("opens terminal against the current persisted session generation", async () => {
+  it("limits terminal controls and execution denial to the current persisted session generation", async () => {
     setMainAllowedTools({ allow: ["terminal"], gatewayAllow: ["terminal"] });
+    cfg = { ...cfg, tools: { exec: { mode: "deny" } } };
     const sessionKey = "agent:main:main";
     sessionEntries.set(sessionKey, { sessionId: "S2" });
-    const ptys = [makeFakePty(), makeFakePty()];
+    const oldPty = makeFakePty();
+    const currentPty = makeFakePty();
+    const ptys = [oldPty, currentPty];
+    const spawn = vi.fn(async () => ptys.shift() ?? makeFakePty());
     const manager = new TerminalSessionManager({
       emit: vi.fn(),
-      spawn: async () => ptys.shift() ?? makeFakePty(),
+      spawn,
     });
     const oldOwner = agentTerminalOwner(sessionKey, "S1");
+    const currentOwner = agentTerminalOwner(sessionKey, "S2");
     const oldSession = await manager.open(baseOpenRequest({ owner: oldOwner }));
-    if (!oldSession.ok) {
-      throw new Error("expected old terminal session");
+    const currentSession = await manager.open(baseOpenRequest({ owner: currentOwner }));
+    if (!oldSession.ok || !currentSession.ok) {
+      throw new Error("expected operator-opened terminal sessions");
     }
+    oldPty.emitData("stale session output\n");
+    currentPty.emitData("current session output\n");
     const context = {
       terminalSessions: manager,
       isTerminalEnabled: () => true,
@@ -1434,39 +1492,55 @@ describe("tools.invoke Gateway RPC", () => {
     } as never;
 
     try {
-      const call = await withPluginRuntimeGatewayRequestScope(
-        { context, isWebchatConnect: () => false },
-        () =>
-          invokeToolsRpc({ name: "terminal", args: { action: "open" }, sessionKey: "main" }, [
-            "operator.admin",
-          ]),
-      );
-      expect(call?.[1]?.ok).toBe(true);
+      const invokeTerminal = (args: Record<string, unknown>) =>
+        withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
+          invokeToolsRpc({ name: "terminal", args, sessionKey: "main" }, ["operator.admin"]),
+        );
+      const listed = await invokeTerminal({ action: "list" });
+      expect(listed?.[1]?.ok).toBe(true);
       expect(lastCreateOpenClawToolsContext?.sessionId).toBe("S2");
-      const opened = call?.[1]?.output as { details?: { sessionId?: string } } | undefined;
-      const openedSessionId = opened?.details?.sessionId;
-      expect(openedSessionId).toEqual(expect.any(String));
-      if (!openedSessionId) {
-        throw new Error("expected opened terminal session id");
-      }
-      const currentOwner = agentTerminalOwner(sessionKey, "S2");
-      expect(manager.listAgent(currentOwner).map((entry) => entry.sessionId)).toEqual([
-        openedSessionId,
-      ]);
-      expect(manager.writeAgent(oldOwner, openedSessionId, "stale")).toEqual({
-        ok: false,
-        code: "session_unavailable",
+      expect(listed?.[1]?.output).toMatchObject({
+        details: { sessions: [expect.objectContaining({ sessionId: currentSession.sessionId })] },
       });
-      expect(manager.writeAgent(currentOwner, openedSessionId, "current")).toEqual({ ok: true });
+      const read = await invokeTerminal({ action: "read", sessionId: currentSession.sessionId });
+      expect(read?.[1]?.output).toMatchObject({
+        details: { sessionId: currentSession.sessionId, text: "current session output\n" },
+      });
+      const stale = await invokeTerminal({ action: "read", sessionId: oldSession.sessionId });
+      expect(stale?.[1]).toMatchObject({
+        ok: false,
+        error: { message: expect.stringContaining("Terminal session unavailable") },
+      });
+      const resized = await invokeTerminal({
+        action: "resize",
+        sessionId: currentSession.sessionId,
+        cols: 120,
+        rows: 40,
+      });
+      expect(resized?.[1]?.output).toMatchObject({ details: { ok: true } });
+      expect(currentPty.resizes).toEqual([[120, 40]]);
+
+      spawn.mockClear();
+      const opened = await invokeTerminal({ action: "open" });
+      expect(opened?.[1]).toMatchObject({
+        ok: false,
+        error: { message: expect.stringContaining("terminal action unavailable") },
+      });
+      const input = await invokeTerminal({
+        action: "input",
+        sessionId: currentSession.sessionId,
+        data: "unsafe\r",
+      });
+      expect(input?.[1]).toMatchObject({
+        ok: false,
+        error: { message: expect.stringContaining("Terminal input denied by execution policy") },
+      });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(oldPty.writes).toEqual([]);
+      expect(currentPty.writes).toEqual([]);
 
       sessionEntries.delete(sessionKey);
-      const missing = await withPluginRuntimeGatewayRequestScope(
-        { context, isWebchatConnect: () => false },
-        () =>
-          invokeToolsRpc({ name: "terminal", args: { action: "open" }, sessionKey: "main" }, [
-            "operator.admin",
-          ]),
-      );
+      const missing = await invokeTerminal({ action: "list" });
       expect(missing?.[1]).toMatchObject({
         ok: false,
         error: { message: "agent session id required" },

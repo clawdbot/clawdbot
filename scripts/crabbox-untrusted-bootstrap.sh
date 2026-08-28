@@ -67,19 +67,28 @@ trap cleanup EXIT
   /usr/bin/grep "  ${archive}\$" SHASUMS256.txt | /usr/bin/sha256sum -c -
 )
 
-sudo /bin/rm -rf -- "$install_root" "$corepack_home"
-sudo /usr/bin/mkdir -p "$install_root" "$corepack_home"
-sudo /usr/bin/tar -xJf "$tmp_dir/$archive" -C "$install_root" --strip-components=1
-sudo /usr/bin/env \
+# Only public toolchain artifacts need shared access; keep caller state private.
+sudo /bin/bash -s -- "$install_root" "$corepack_home" "$tmp_dir/$archive" "$pnpm_spec" <<'INSTALL'
+set -euo pipefail
+umask 022
+install_root="$1"
+corepack_home="$2"
+archive_path="$3"
+pnpm_spec="$4"
+/bin/rm -rf -- "$install_root" "$corepack_home"
+/usr/bin/mkdir -p "$install_root" "$corepack_home"
+/usr/bin/tar -xJf "$archive_path" -C "$install_root" --strip-components=1
+/usr/bin/env \
   COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   COREPACK_HOME="$corepack_home" \
   PATH="$install_root/bin:/usr/bin:/bin" \
   "$install_root/bin/corepack" enable --install-directory "$install_root/bin"
-sudo /usr/bin/env \
+/usr/bin/env \
   COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   COREPACK_HOME="$corepack_home" \
   PATH="$install_root/bin:/usr/bin:/bin" \
   "$install_root/bin/corepack" prepare "$pnpm_spec" --activate
+INSTALL
 
 for tool in node npm npx corepack pnpm pnpx; do
   if [[ -e "$install_root/bin/$tool" ]]; then

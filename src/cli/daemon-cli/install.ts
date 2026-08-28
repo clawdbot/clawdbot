@@ -179,7 +179,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
   const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node"; Bun lacks the required node:sqlite API)');
+    fail('Invalid --runtime (use "node" or "bun")');
     return;
   }
   let wrapperPath: string | undefined;
@@ -268,7 +268,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   if (loaded) {
     if (!opts.force) {
       const autoRefreshMessage = await getGatewayServiceAutoRefreshMessage({
-        currentCommand: existingManagedCommand,
+        currentCommand: existingServiceCommand,
         env: process.env,
         installEnv,
         port,
@@ -330,6 +330,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       port,
       runtime: runtimeRaw,
       wrapperPath,
+      existingCommand: existingServiceCommand,
       existingEnvironment: existingServiceEnv,
       existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
       warn: (message) => {
@@ -381,7 +382,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
   config: OpenClawConfig;
 }): Promise<string | undefined> {
   try {
-    const currentCommand = params.currentCommand;
+    const currentCommand = resolveManagedGatewayServiceCommand(params.currentCommand);
     if (!currentCommand) {
       return undefined;
     }
@@ -392,6 +393,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         port: params.port,
         runtime: params.runtime,
         wrapperPath: params.wrapperPath,
+        existingCommand: params.currentCommand,
         existingEnvironment: params.existingEnvironment,
         existingEnvironmentValueSources: params.existingEnvironmentValueSources,
         warn: () => undefined,
@@ -413,6 +415,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         port: params.port,
         runtime: params.runtime,
         wrapperPath: params.wrapperPath,
+        existingCommand: params.currentCommand,
         existingEnvironment: params.existingEnvironment,
         existingEnvironmentValueSources: params.existingEnvironmentValueSources,
         warn: () => undefined,

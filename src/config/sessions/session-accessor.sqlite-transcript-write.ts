@@ -2,7 +2,6 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
-  runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { clearAllCliSessions } from "./cli-session-binding.js";
@@ -17,11 +16,11 @@ import type {
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
+import { runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction } from "./session-accessor.sqlite-deletion.js";
+import { assertSessionEntrySelectionUnchanged } from "./session-accessor.sqlite-entry-equality.js";
 import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
-  assertSessionEntrySelectionUnchanged,
   collectSessionEntryLookupKeys,
-  deleteLegacySessionEntryRows,
   readSessionEntryRow,
   readSessionEntrySelectionSnapshot,
   readSessionIdentitySnapshot,
@@ -373,8 +372,11 @@ export async function appendExpectedSessionTranscriptTurn(
     sessionId: options.expectedSessionId,
   });
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const preparedEntry = readSessionEntryRow(database, resolved.sessionKey);
+    // openclaw-agent-db.ts cache rule: LRU can close idle handles during shouldAppend awaits.
+    const preparedEntry = readSessionEntryRow(
+      openOpenClawAgentDatabase(toDatabaseOptions(resolved)),
+      resolved.sessionKey,
+    );
     if (!sessionMatchesExpectedTranscriptTurn(preparedEntry, options)) {
       return sqliteSessionTranscriptTurnRebound(preparedEntry, options.sessionFile);
     }
@@ -445,7 +447,6 @@ export async function appendExpectedSessionTranscriptTurn(
         const identityKeys = collectSessionEntryLookupKeys(transactionDb, resolved.sessionKey);
         previousIdentity = readSessionIdentitySnapshot(transactionDb, identityKeys);
         writeSessionEntry(transactionDb, resolved.sessionKey, next);
-        deleteLegacySessionEntryRows(transactionDb, fresh.legacyKeys, resolved.sessionKey);
         currentIdentity = readSessionIdentitySnapshot(transactionDb, identityKeys);
       }
       result = {
@@ -545,16 +546,20 @@ export async function withTranscriptWriteLock<T>(
   run: (context: SqliteTranscriptWriteLockContext) => Promise<T> | T,
 ): Promise<T> {
   const resolved = resolveSqliteTranscriptScope(scope);
+  const databaseOptions = toDatabaseOptions(resolved);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     let transcriptSnapshot: SqliteTranscriptSnapshotState | undefined;
     return await run({
       readEvents: async () => {
+        // openclaw-agent-db.ts cache rule: LRU eviction closes idle handles across caller awaits.
+        const database = openOpenClawAgentDatabase(databaseOptions);
         const snapshot = readTranscriptSnapshot(database, resolved.sessionId);
         transcriptSnapshot = { kind: "current", rows: snapshot.rows };
         return snapshot.events;
       },
-      readMessageFacts: async (params) => readTranscriptMirrorFacts(database, resolved, params),
+      // openclaw-agent-db.ts cache rule: never retain a handle across caller awaits; LRU may close it.
+      readMessageFacts: async (params) =>
+        readTranscriptMirrorFacts(openOpenClawAgentDatabase(databaseOptions), resolved, params),
       replaceEvents: async (events) => {
         if (transcriptSnapshot?.kind === "stale") {
           throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
@@ -572,7 +577,7 @@ export async function withTranscriptWriteLock<T>(
           }
           replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, events);
           return readTranscriptEventRows(writeDatabase, resolved.sessionId);
-        }, toDatabaseOptions(resolved));
+        }, databaseOptions);
         transcriptSnapshot = { kind: "current", rows: nextSnapshot };
       },
       appendMessage: async (options) => {
@@ -597,7 +602,7 @@ export async function withTranscriptWriteLock<T>(
                 }
               : { kind: "stale" };
           }
-        }, toDatabaseOptions(resolved));
+        }, databaseOptions);
         transcriptSnapshot = nextSnapshotState;
         return result as TranscriptMessageAppendResult<typeof options.message> | undefined;
       },
@@ -614,7 +619,7 @@ export async function withTranscriptWriteLock<T>(
             );
             messageSeq = readCommittedTranscriptMessageSequence(result);
           }
-        }, toDatabaseOptions(resolved));
+        }, databaseOptions);
         return {
           ...(messageSeq !== undefined ? { messageSeq } : {}),
           result: result as TranscriptMessageAppendResult<typeof options.message> | undefined,

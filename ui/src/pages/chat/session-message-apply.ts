@@ -141,15 +141,12 @@ export function applySessionMessagePayload(
   if (incoming.role === "assistant" && projection.messages.includes(message)) {
     prunePersistedAssistantStreamSegments(state, message);
     if (assistantOwnerRunId) {
-      if (
-        runActive === false ||
-        (state.chatStream !== null && assistantMessageReplacesCurrentStream(state, message))
-      ) {
+      if (runActive === false) {
         state.chatStream = null;
         state.chatStreamStartedAt = null;
-      }
-      if (runActive === false) {
         maybeResetToolStreamRun(state, assistantOwnerRunId);
+      } else if (assistantMessageReplacesCurrentStream(state, message)) {
+        rolloverChatStream(state, { runId: assistantOwnerRunId, persisted: true });
       }
     }
   }
@@ -160,7 +157,7 @@ export function applySessionMessagePayload(
     : null;
   if (
     incoming.role === "user" &&
-    runActive === true &&
+    (runActive === true || (runActive === undefined && currentRunId === steerTargetRunId)) &&
     incoming.runId &&
     steerTargetRunId &&
     (!currentRunId || currentRunId === steerTargetRunId || currentRunId === incoming.runId) &&

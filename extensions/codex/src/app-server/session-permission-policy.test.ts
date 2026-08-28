@@ -7,6 +7,7 @@ import {
 } from "./session-permission-policy.js";
 
 const pluginConfig: CodexPluginConfig = {};
+const defaultRoot = "/workspace";
 
 function appServer(): CodexAppServerRuntimeOptions {
   return {
@@ -54,6 +55,7 @@ describe("Codex session permission policy", () => {
       appServer: appServer(),
       permissionMode: expected.mode,
       sessionRoot: "/workspace/project",
+      defaultRoot,
       pluginConfig,
       canUseAutoReview: true,
     });
@@ -72,6 +74,7 @@ describe("Codex session permission policy", () => {
         appServer: appServer(),
         permissionMode: "workspace",
         sessionRoot: "/workspace/project",
+        defaultRoot,
         pluginConfig,
         canUseAutoReview: false,
       }).approvalsReviewer,
@@ -83,6 +86,7 @@ describe("Codex session permission policy", () => {
       appServer: appServer(),
       permissionMode: "full",
       sessionRoot: "/workspace/project",
+      defaultRoot,
       pluginConfig,
       canUseAutoReview: true,
       requirementsToml: [
@@ -115,6 +119,7 @@ describe("Codex session permission policy", () => {
       appServer: appServer(),
       permissionMode: expected.mode,
       sessionRoot: "/workspace/project",
+      defaultRoot,
       pluginConfig,
       canUseAutoReview: true,
       requirementsToml: `allowed_approval_policies = [${expected.policies
@@ -152,6 +157,7 @@ describe("Codex session permission policy", () => {
         appServer: appServer(),
         permissionMode: params.mode,
         sessionRoot: "/workspace/project",
+        defaultRoot,
         pluginConfig,
         canUseAutoReview: true,
         requirementsToml: `allowed_sandbox_modes = ["${params.allowedSandbox}"]`,
@@ -167,6 +173,7 @@ describe("Codex session permission policy", () => {
         appServer: appServer(),
         permissionMode: "guarded",
         sessionRoot: "/workspace/project",
+        defaultRoot,
         pluginConfig,
         canUseAutoReview: true,
         requirementsToml: 'allowed_sandbox_modes = ["read-only"]',
@@ -179,6 +186,7 @@ describe("Codex session permission policy", () => {
       appServer: appServer(),
       permissionMode: "guarded",
       sessionRoot: "/workspace/project",
+      defaultRoot,
       pluginConfig,
       canUseAutoReview: true,
       execMode: "deny",
@@ -230,6 +238,7 @@ describe("Codex session permission policy", () => {
           appServer: { ...appServer(), ...runtime },
           permissionMode: requested,
           sessionRoot: "/workspace/project",
+          defaultRoot,
         }),
       ).toEqual({ mode: effective, root: "/workspace/project", execMode });
     },
@@ -243,6 +252,7 @@ describe("Codex session permission policy", () => {
           appServer: { ...appServer(), approvalPolicy: "untrusted" },
           permissionMode,
           sessionRoot: "/workspace/project",
+          defaultRoot,
           pluginConfig,
           canUseAutoReview: true,
           execMode: "ask",
@@ -257,6 +267,7 @@ describe("Codex session permission policy", () => {
         appServer: { ...appServer(), approvalPolicy: "untrusted" },
         permissionMode: "guarded",
         sessionRoot: "/workspace/project",
+        defaultRoot,
         pluginConfig,
         canUseAutoReview: true,
         execMode: "ask",
@@ -271,6 +282,7 @@ describe("Codex session permission policy", () => {
         appServer: appServer(),
         permissionMode: "guarded",
         sessionRoot: "/workspace/project",
+        defaultRoot,
         pluginConfig,
         canUseAutoReview: true,
         requirementsToml: [
@@ -287,6 +299,7 @@ describe("Codex session permission policy", () => {
       resolveCodexSessionPermissionCwd({
         permissionMode: "workspace",
         sessionRoot: "/workspace/project",
+        defaultRoot,
         requestedCwd: "/workspace/project/packages/app",
         fallbackCwd: "/workspace",
       }),
@@ -295,9 +308,45 @@ describe("Codex session permission policy", () => {
       resolveCodexSessionPermissionCwd({
         permissionMode: "workspace",
         sessionRoot: "/workspace/project",
+        defaultRoot,
         requestedCwd: "/workspace/other",
         fallbackCwd: "/workspace",
       }),
     ).toBe("/workspace/project");
+  });
+
+  it("uses the agent workspace for rootless policies and clamps requested cwd to it", () => {
+    const runtime = applyCodexSessionPermissionPolicy({
+      appServer: appServer(),
+      permissionMode: "workspace",
+      defaultRoot,
+      pluginConfig,
+      canUseAutoReview: true,
+    });
+
+    expect(runtime).toMatchObject({ sessionRoot: defaultRoot, sandbox: "workspace-write" });
+    expect(
+      resolveCodexEffectiveSessionPermissionPolicy({
+        appServer: runtime,
+        permissionMode: "workspace",
+        defaultRoot,
+      }),
+    ).toEqual({ mode: "workspace", root: defaultRoot, execMode: "auto" });
+    expect(
+      resolveCodexSessionPermissionCwd({
+        permissionMode: "workspace",
+        defaultRoot,
+        requestedCwd: "/workspace/packages/app",
+        fallbackCwd: "/outside",
+      }),
+    ).toBe("/workspace/packages/app");
+    expect(
+      resolveCodexSessionPermissionCwd({
+        permissionMode: "workspace",
+        defaultRoot,
+        requestedCwd: "/outside",
+        fallbackCwd: "/outside",
+      }),
+    ).toBe(defaultRoot);
   });
 });

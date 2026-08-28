@@ -158,6 +158,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     getActiveSession: () => ({ id: "session-1", file: "/tmp/session-1.jsonl" }),
     prepareCurrentTranscriptRetry: vi.fn(),
     prepareCompactedTranscriptRetry: vi.fn(async () => {}),
+    markOwnedTranscriptRetry: vi.fn(),
     armPostCompactionGuard: vi.fn(),
     ...overrides,
     attempt,
@@ -500,11 +501,15 @@ describe("recoverEmbeddedRunOverflow", () => {
   });
 
   it("forwards preflight prompt estimates into synthetic overflow compaction", async () => {
+    const promptError = overflowError();
     const result = await recoverEmbeddedRunOverflow(
       makeInput({
+        promptError,
         attempt: {
+          terminal: { kind: "failed", source: "precheck", error: promptError },
           preflightRecovery: {
             route: "compact_then_truncate",
+            source: "mid-turn",
             estimatedPromptTokens: 268_138,
             promptBudgetBeforeReserve: 241_616,
             overflowTokens: 26_522,
@@ -516,9 +521,63 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(result).toEqual({ action: "retry" });
     expect(mocks.compact).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ currentTokenCount: 268_138, trigger: "overflow" }),
+      expect.objectContaining({
+        tokenBudget: 241_616,
+        currentTokenCount: 268_138,
+        trigger: "overflow",
+      }),
     );
   });
+
+  it("keeps the raw budget for provider overflow with preflight metadata", async () => {
+    const result = await recoverEmbeddedRunOverflow(
+      makeInput({
+        attempt: {
+          preflightRecovery: {
+            route: "compact_then_truncate",
+            source: "mid-turn",
+            estimatedPromptTokens: 268_138,
+            promptBudgetBeforeReserve: 241_616,
+            overflowTokens: 26_522,
+          },
+        },
+      }),
+    );
+
+    expect(result).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tokenBudget: 200_000 }),
+    );
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "keeps the raw budget for an invalid preflight budget of %s",
+    async (promptBudgetBeforeReserve) => {
+      const promptError = overflowError();
+      const result = await recoverEmbeddedRunOverflow(
+        makeInput({
+          promptError,
+          attempt: {
+            terminal: { kind: "failed", source: "precheck", error: promptError },
+            preflightRecovery: {
+              route: "compact_only",
+              source: "mid-turn",
+              estimatedPromptTokens: 268_138,
+              promptBudgetBeforeReserve,
+              overflowTokens: 26_522,
+            },
+          },
+        }),
+      );
+
+      expect(result).toEqual({ action: "retry" });
+      expect(mocks.compact).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ tokenBudget: 200_000 }),
+      );
+    },
+  );
 
   it("uses the minimally over-budget count for unparseable overflow text", async () => {
     const result = await recoverEmbeddedRunOverflow(
@@ -534,12 +593,12 @@ describe("recoverEmbeddedRunOverflow", () => {
 
   it("does not reset the overflow-compaction budget after an in-attempt compaction", async () => {
     const state = createEmbeddedRunContextRecoveryState();
-    const result = await recoverEmbeddedRunOverflow(
-      makeInput({ state, attemptCompactionCount: 1 }),
-    );
+    const input = makeInput({ state, attemptCompactionCount: 1 });
+    const result = await recoverEmbeddedRunOverflow(input);
 
     expect(result).toEqual({ action: "retry" });
     expect(state.overflowCompactionAttempts).toBe(1);
+    expect(input.markOwnedTranscriptRetry).toHaveBeenCalledOnce();
     expect(mocks.compact).not.toHaveBeenCalled();
   });
 

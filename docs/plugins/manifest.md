@@ -35,6 +35,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 - static capability-ownership snapshots (`contracts`)
 - dashboard widget data bindings and action verbs
 - static MCP servers that should exist while the plugin is enabled
+- durable and regenerable state- or agent-relative backup resources
 - QA runner metadata the shared `openclaw qa` host can inspect
 - channel-specific config metadata merged into catalog and validation surfaces
 
@@ -163,6 +164,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `providerAuthAliases`                | No       | `Record<string, string>`     | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                                                                                                                                                                                                       |
 | `providerAuthChoices`                | No       | `object[]`                   | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                                                                                                                                                                                                    |
 | `activation`                         | No       | `object`                     | Cheap activation planner metadata for startup, provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                                                                                                                                                                                    |
+| `backupResources`                    | No       | `object[]`                   | Manifest-owned durable or regenerable state- or agent-relative backup resources. Applied only for effectively activated, loadable plugins without executing their runtime. See [backupResources reference](#backupresources-reference).                                                                                                                                                          |
 | `setup`                              | No       | `object`                     | Cheap setup/onboarding descriptors that discovery and setup surfaces can inspect without loading plugin runtime.                                                                                                                                                                                                                                                                                 |
 | `doctorContract`                     | No       | `object`                     | Declares which dynamic doctor-contract surfaces the plugin artifact exports so doctor loads only relevant modules.                                                                                                                                                                                                                                                                               |
 | `sessionRouteStateOwners`            | No       | `object[]`                   | Static session-route ownership for doctor cleanup. Each entry declares an `id`, `label`, and optional `providerIds`, `runtimeIds`, `cliSessionKeys`, and `authProfilePrefixes`.                                                                                                                                                                                                                  |
@@ -196,6 +198,53 @@ migration window.
 Set `doctorContract.configRepair: true` when the doctor-contract module exports
 non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
 both. One declaration covers the complete config-repair artifact.
+
+## backupResources reference
+
+Use `backupResources` to declare plugin-owned durable data that backups must
+include, or generated data that OpenClaw can safely omit and regenerate after
+restore. The backup planner reads this metadata without loading plugin runtime
+or modifying plugin files. Only effectively activated, loadable plugins
+contribute resources; disabled or unloadable plugins cannot exclude data.
+
+```json
+{
+  "backupResources": [
+    {
+      "disposition": "include",
+      "scope": "state",
+      "relativePath": "example-plugin/durable-state"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "example-plugin/generated-cache"
+    }
+  ]
+}
+```
+
+Each entry is a closed object with exactly these fields:
+
+| Field          | Required | Type                         | What it means                                                                          |
+| -------------- | -------- | ---------------------------- | -------------------------------------------------------------------------------------- |
+| `disposition`  | Yes      | `"include" \| "regenerable"` | Protect durable data from exclusion, or identify data that can be omitted and rebuilt. |
+| `scope`        | Yes      | `"state" \| "agent"`         | Resolve the resource under the state directory or each configured agent directory.     |
+| `relativePath` | Yes      | `string`                     | Strict relative POSIX path contained by the selected scope's authoritative root.       |
+
+Plugin identity and its trusted root come from manifest discovery; resource
+entries cannot declare or override an owner. `relativePath` must not be empty
+or absolute and must not contain backslashes, NULs, empty path segments, `.`,
+`..`, Windows drive or UNC prefixes, URI-like values, or any path that escapes
+its selected anchor. Invalid entries are rejected rather than normalized.
+
+The planner deduplicates resources deterministically. A narrower `regenerable`
+declaration wins over a broad configured state or agent root. Among plugin
+resource declarations, only an explicit nested `include` protects a descendant
+and keeps its excluded ancestors traversable. Explicit config, credentials,
+workspace, and nested agent paths also remain protected. Omit only data the
+plugin can recreate.
+`openclaw backup create --only-config` does not inspect plugin backup metadata.
 
 ## MCP server reference
 
@@ -466,6 +515,8 @@ The manifest row is the canonical help text. Register the same command at runtim
 ## commandAliases reference
 
 Use `commandAliases` when a plugin owns a runtime command name that users may mistakenly put in `plugins.allow` or try to run as a root CLI command. OpenClaw uses this metadata for diagnostics without importing plugin runtime code.
+
+If a plugin fails to load, invoking its declared `runtime-slash` command in chat returns the plugin name, a short failure reason, and recovery guidance (`openclaw doctor` and gateway logs). Unknown commands and commands belonging to intentionally disabled plugins keep their normal handling; manifest ownership alone does not make a command executable.
 
 ```json
 {
@@ -804,6 +855,10 @@ Each `dangerousFlags` entry supports:
 | `bundledDefaultEnabled` | No       | `boolean`  | Override bundled-plugin default enablement when deciding whether this SecretRef surface is active. Use this when the plugin is bundled but the surface should stay inactive until explicitly enabled in config.                                                                                                                                            |
 | `paths`                 | Yes      | `object[]` | Secret-shaped config paths, each with `path` (dot-separated, relative to `plugins.entries.<id>.config`, supports `*` wildcards), optional `expected` (currently only `"string"`), and optional `ownerKind` (currently only `"route"`). A declared owner isolates only that exact matched path when resolution fails; its owner id is the full config path. |
 
+For plugins declaring `secretInputs`, `configSchema` validates the pre-resolution source config paired with the runtime config. A valid SecretRef is not rejected because its resolved credential is a string with a different shape. Invalid plaintext source values still fail validation. Runtime loading, CLI registration, and root command discovery use the same rule; plugins receive resolved values with defaults selected from the source config, without changing either input.
+
+Concrete paths preserve literal record keys and array indices: `headers["X.Trace"]` remains distinct from `headers.X.Trace`, and record key `["0"]` remains distinct from array index `[0]`. Plugin IDs containing dots are quoted the same way, such as `plugins.entries["example.plugin"].config.headers["X.Trace"]`.
+
 ## mediaUnderstandingProviderMetadata reference
 
 Use `mediaUnderstandingProviderMetadata` when a media-understanding provider has default models, auto-auth fallback priority, or native document support that generic core helpers need before runtime loads. Keys must also be declared in `contracts.mediaUnderstandingProviders`.
@@ -1071,6 +1126,8 @@ Suppression fields:
 `upstreamModel` marks a row that serves the same upstream model as a row in another bundled catalog under a different name, for example a subscription endpoint next to the vendor's API endpoint. It is authoring metadata: normalization drops it, and a contract test uses it to keep capability flags such as `compat.codeMode` from drifting between catalogs that ship the same model. Most rows need no marker, because matching ignores a leading vendor namespace and casing: `moonshotai/kimi-k3` and `zai-org/GLM-5.2` already match the first-party `kimi-k3` and `glm-5.2` rows. Reach for `upstreamModel` only when the vendor's own names genuinely differ. See [Code mode](/tools/code-mode#models-shipped-by-more-than-one-provider).
 
 Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `refreshable` when manifest rows are useful listable seeds or supplements but a refresh/cache can add more rows later; refreshable rows are not authoritative by themselves. Use `runtime` when OpenClaw must load provider runtime to know the list.
+
+Capabilities belong to the declared API and base URL, not only the provider/model id. When model listing enriches a cached row, it uses manifest capabilities only for a matching route; a custom endpoint must supply its own limits and capabilities.
 
 ## modelIdNormalization reference
 

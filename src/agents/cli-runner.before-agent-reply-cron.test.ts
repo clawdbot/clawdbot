@@ -151,7 +151,6 @@ function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
     normalizedModel: params.model,
     systemPrompt: "",
     systemPromptReport: {},
-    bootstrapPromptWarningLines: [],
     authEpochVersion: 0,
     backendResolved: {},
     preparedBackend: { backend: { sessionMode: "none" } },

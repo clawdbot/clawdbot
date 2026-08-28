@@ -221,11 +221,11 @@ private object SystemContactsDataSource : ContactsDataSource {
     val phones = loadPhones(resolver, contactId)
     val emails = loadEmails(resolver, contactId)
     val displayName =
-      when {
-        !nameRow.displayName.isNullOrEmpty() -> nameRow.displayName
-        !fallbackDisplayName.isNullOrEmpty() -> fallbackDisplayName
-        else -> listOfNotNull(nameRow.givenName, nameRow.familyName).joinToString(" ").trim()
-      }.ifEmpty { "(unnamed)" }
+      (nameRow.displayName ?: fallbackDisplayName).ifEmpty {
+        listOfNotNull(nameRow.givenName, nameRow.familyName).joinToString(" ").ifEmpty {
+          organization ?: phones.firstOrNull() ?: emails.firstOrNull() ?: "(unnamed)"
+        }
+      }
     return ContactRecord(
       identifier = contactId.toString(),
       displayName = displayName,

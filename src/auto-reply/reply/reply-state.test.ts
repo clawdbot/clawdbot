@@ -25,6 +25,7 @@ import {
 import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
+  resolveMemoryFlushThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -287,6 +288,63 @@ describe("shouldRunMemoryFlush", () => {
       }),
     ).toBe(false);
   });
+
+  it("preserves thresholds supplied by external memory providers", () => {
+    expect(
+      resolveMemoryFlushThreshold({
+        contextWindowTokens: 100,
+        reserveTokensFloor: 10,
+        softThresholdTokens: 80,
+      }),
+    ).toBe(10);
+
+    const disabled = {
+      entry: { totalTokens: 8_000, totalTokensFresh: true, totalTokensVersion: 1 as const },
+      contextWindowTokens: 32_000,
+      reserveTokensFloor: 50_000,
+      softThresholdTokens: 4_000,
+    };
+    expect(shouldRunMemoryFlush(disabled)).toBe(false);
+    expect(shouldRunPreflightCompaction(disabled)).toBe(false);
+  });
+
+  it.each([
+    [8_000, 4_000, 2_000, 2_000],
+    [16_000, 8_000, 4_000, 4_000],
+    [24_000, 16_000, 4_000, 4_000],
+    [32_000, 20_000, 4_000, 8_000],
+    [128_000, 20_000, 4_000, 104_000],
+    [200_000, 20_000, 4_000, 176_000],
+  ])(
+    "preserves a usable %i-token model window with provider-owned maintenance budgets",
+    (contextWindowTokens, reserveTokensFloor, softThresholdTokens, threshold) => {
+      const params = {
+        contextWindowTokens,
+        reserveTokensFloor,
+        softThresholdTokens,
+      };
+
+      expect(resolveMemoryFlushThreshold(params)).toBe(threshold);
+      expect(
+        shouldRunMemoryFlush({
+          ...params,
+          entry: { totalTokens: threshold, totalTokensFresh: true, totalTokensVersion: 1 },
+        }),
+      ).toBe(true);
+      expect(
+        shouldRunPreflightCompaction({
+          ...params,
+          entry: { totalTokens: threshold - 1, totalTokensFresh: true, totalTokensVersion: 1 },
+        }),
+      ).toBe(false);
+      expect(
+        shouldRunPreflightCompaction({
+          ...params,
+          entry: { totalTokens: threshold, totalTokensFresh: true, totalTokensVersion: 1 },
+        }),
+      ).toBe(true);
+    },
+  );
 
   it("skips when under threshold", () => {
     expect(

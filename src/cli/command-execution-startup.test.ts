@@ -91,6 +91,18 @@ describe("command-execution-startup", () => {
     }
   });
 
+  it("keeps plain machine stdout clean without treating the command as JSON", () => {
+    const startupPolicy = mod.resolveCliExecutionStartupContext({
+      argv: ["node", "openclaw", "models", "aliases", "list", "--plain"],
+      jsonOutputMode: false,
+      machineOutputMode: true,
+      env: {},
+    }).startupPolicy;
+
+    expect(startupPolicy.suppressDoctorStdout).toBe(true);
+    expect(startupPolicy.hideBanner).toBe(true);
+  });
+
   it("skips local plugin bootstrap for JSON gateway agent calls", () => {
     expect(
       mod.resolveCliExecutionStartupContext({

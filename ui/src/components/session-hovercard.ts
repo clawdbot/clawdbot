@@ -489,7 +489,14 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
       : nothing}
     ${input.progressCard
       ? html`<footer class="session-hovercard__section session-hovercard__progress-footer">
-          ${renderSessionProgressCard(input.progressCard, "hovercard")}
+          ${renderSessionProgressCard(
+            input.progressCard,
+            "hovercard",
+            undefined,
+            input.row?.status,
+            input.row?.startedAt,
+            input.row?.endedAt,
+          )}
         </footer>`
       : nothing}
   </div>`;

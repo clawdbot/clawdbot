@@ -1,5 +1,4 @@
 // Maintains plugin manifest lookup tables for discovery and runtime planning.
-import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -18,52 +17,31 @@ import {
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
 import { normalizePluginsConfigWithResolver } from "./config-policy.js";
+import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 import {
   discoverOpenClawPlugins,
   type PluginCandidate,
   type PluginDiscoveryResult,
 } from "./discovery.js";
-import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
-import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type {
-  PluginBundleFormat,
-  PluginConfigUiHint,
-  PluginDiagnostic,
-  PluginFormat,
-  PluginManifestDoctorContract,
-} from "./manifest-types.js";
+  BundledChannelConfigCollector,
+  PluginManifestRecord,
+  PluginManifestRegistry,
+} from "./manifest-registry.types.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   isCoreReservedPluginId,
   loadPluginManifest,
   PLUGIN_MANIFEST_FILENAME,
   type OpenClawPackageManifest,
-  type PluginManifestActivation,
   type PluginManifestCatalog,
-  type PluginManifestConfigContracts,
   type PluginManifest,
-  type PluginManifestCapabilityProviderMetadata,
-  type PluginManifestChannelCommandDefaults,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
-  type PluginManifestDashboard,
-  type PluginManifestMediaUnderstandingProviderMetadata,
-  type PluginManifestMcpServer,
-  type PluginManifestModelCatalog,
-  type PluginManifestModelIdNormalization,
-  type PluginManifestModelPricing,
-  type PluginManifestModelSupport,
-  type PluginManifestProviderEndpoint,
-  type PluginManifestProviderRequest,
-  type PluginManifestQaRunner,
-  type PluginManifestSecretProviderIntegration,
-  type PluginManifestSetup,
-  type PluginManifestToolMetadata,
-  type PluginPackageChannel,
-  type PluginPackageInstall,
   normalizeManifestChannelCommandDefaults,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
@@ -75,19 +53,30 @@ import {
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
 import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
-import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
-import type { PluginKind } from "./plugin-kind.types.js";
+import { isPathInside } from "./path-safety.js";
+import {
+  pluginCacheExistsSync,
+  pluginCacheRealpathSync,
+  pluginCacheStatSync,
+  readPluginCacheFile,
+} from "./plugin-cache-files.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
-import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
+
+export type {
+  BundledChannelConfigCollector,
+  PluginManifestContractListKey,
+  PluginManifestRecord,
+  PluginManifestRegistry,
+} from "./manifest-registry.types.js";
 
 function resolvePluginSourcePath(sourcePath: string): string {
-  if (fs.existsSync(sourcePath)) {
+  if (pluginCacheExistsSync(sourcePath)) {
     return sourcePath;
   }
   if (sourcePath.endsWith(".ts")) {
     const jsPath = sourcePath.slice(0, -3) + ".js";
-    if (fs.existsSync(jsPath)) {
+    if (pluginCacheExistsSync(jsPath)) {
       return jsPath;
     }
   }
@@ -98,7 +87,6 @@ function isPluginRootPath(params: {
   rootPath: string;
   targetPath: string;
   rootRealPath: string;
-  realpathCache: Map<string, string>;
   rejectHardlinks?: boolean;
   targetMustExist?: boolean;
 }): boolean {
@@ -107,7 +95,7 @@ function isPluginRootPath(params: {
   if (!isPathInside(resolvedRootPath, resolvedTargetPath)) {
     return false;
   }
-  const targetRealPath = safeRealpathSync(resolvedTargetPath, params.realpathCache);
+  const targetRealPath = pluginCacheRealpathSync(resolvedTargetPath);
   if (!targetRealPath) {
     return params.targetMustExist !== true;
   }
@@ -115,7 +103,7 @@ function isPluginRootPath(params: {
     return false;
   }
   if (params.rejectHardlinks === true) {
-    const targetStat = safeStatSync(resolvedTargetPath);
+    const targetStat = pluginCacheStatSync(resolvedTargetPath);
     if (!targetStat || targetStat.nlink > 1) {
       return false;
     }
@@ -131,7 +119,6 @@ function resolveManifestPluginSourcePath(params: {
   entry: string;
   rejectHardlinks: boolean;
   diagnostics: PluginDiagnostic[];
-  realpathCache: Map<string, string>;
 }): string | undefined {
   const pushDiagnostic = () => {
     params.diagnostics.push({
@@ -148,16 +135,15 @@ function resolveManifestPluginSourcePath(params: {
   }
 
   const rootPath = path.resolve(params.rootDir);
-  const rootRealPath = safeRealpathSync(rootPath, params.realpathCache) ?? rootPath;
+  const rootRealPath = pluginCacheRealpathSync(rootPath) ?? rootPath;
   const sourcePath = path.resolve(rootPath, params.entry);
   if (
     !isPluginRootPath({
       rootPath,
       targetPath: sourcePath,
       rootRealPath,
-      realpathCache: params.realpathCache,
       rejectHardlinks: params.rejectHardlinks,
-      targetMustExist: fs.existsSync(sourcePath),
+      targetMustExist: pluginCacheExistsSync(sourcePath),
     })
   ) {
     pushDiagnostic();
@@ -170,9 +156,8 @@ function resolveManifestPluginSourcePath(params: {
       rootPath,
       targetPath: resolvedSourcePath,
       rootRealPath,
-      realpathCache: params.realpathCache,
       rejectHardlinks: params.rejectHardlinks,
-      targetMustExist: fs.existsSync(resolvedSourcePath),
+      targetMustExist: pluginCacheExistsSync(resolvedSourcePath),
     })
   ) {
     pushDiagnostic();
@@ -180,26 +165,6 @@ function resolveManifestPluginSourcePath(params: {
   }
   return resolvedSourcePath;
 }
-
-export type PluginManifestContractListKey =
-  | "speechProviders"
-  | "externalAuthProviders"
-  | "embeddingProviders"
-  | "mediaUnderstandingProviders"
-  | "transcriptSourceProviders"
-  | "documentExtractors"
-  | "realtimeVoiceProviders"
-  | "realtimeTranscriptionProviders"
-  | "imageGenerationProviders"
-  | "videoGenerationProviders"
-  | "musicGenerationProviders"
-  | "webContentExtractors"
-  | "webFetchProviders"
-  | "webSearchProviders"
-  | "workerProviders"
-  | "usageProviders"
-  | "migrationProviders"
-  | "gatewayMethodDispatch";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
@@ -214,98 +179,6 @@ const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   global: 2,
   bundled: 3,
 };
-
-export type PluginManifestRecord = {
-  id: string;
-  name?: string;
-  description?: string;
-  catalog?: PluginManifestCatalog;
-  icon?: string;
-  version?: string;
-  packageName?: string;
-  packageVersion?: string;
-  packageDescription?: string;
-  enabledByDefault?: boolean;
-  enabledByDefaultOnPlatforms?: string[];
-  autoEnableWhenConfiguredProviders?: string[];
-  legacyPluginIds?: string[];
-  format?: PluginFormat;
-  bundleFormat?: PluginBundleFormat;
-  bundleCapabilities?: string[];
-  kind?: PluginKind | PluginKind[];
-  channels: string[];
-  providers: string[];
-  providerDiscoverySource?: string;
-  modelSupport?: PluginManifestModelSupport;
-  modelCatalog?: PluginManifestModelCatalog;
-  modelPricing?: PluginManifestModelPricing;
-  modelIdNormalization?: PluginManifestModelIdNormalization;
-  providerEndpoints?: PluginManifestProviderEndpoint[];
-  providerRequest?: PluginManifestProviderRequest;
-  secretProviderIntegrations?: Record<string, PluginManifestSecretProviderIntegration>;
-  cliBackends: string[];
-  syntheticAuthRefs?: string[];
-  nonSecretAuthMarkers?: string[];
-  commandAliases?: PluginManifestCommandAlias[];
-  cliCommands?: PluginManifest["cliCommands"];
-  providerUsageAuthEnvVars?: Record<string, string[]>;
-  providerAuthAliases?: Record<string, string>;
-  providerAuthChoices?: PluginManifest["providerAuthChoices"];
-  activation?: PluginManifestActivation;
-  setup?: PluginManifestSetup;
-  doctorContract?: PluginManifestDoctorContract;
-  sessionRouteStateOwners?: DoctorSessionRouteStateOwner[];
-  packageManifest?: OpenClawPackageManifest;
-  packageDependencies?: PluginDependencySpecMap;
-  packageOptionalDependencies?: PluginDependencySpecMap;
-  packageChannel?: PluginPackageChannel;
-  packageInstall?: PluginPackageInstall;
-  trustedOfficialInstall?: boolean;
-  qaRunners?: PluginManifestQaRunner[];
-  dashboard?: PluginManifestDashboard;
-  mcpServers?: Record<string, PluginManifestMcpServer>;
-  skills: string[];
-  settingsFiles?: string[];
-  hooks: string[];
-  origin: PluginOrigin;
-  workspaceDir?: string;
-  rootDir: string;
-  source: string;
-  setupSource?: string;
-  manifestPath: string;
-  schemaCacheKey?: string;
-  configSchema?: Record<string, unknown>;
-  configUiHints?: Record<string, PluginConfigUiHint>;
-  contracts?: PluginManifestContracts;
-  mediaUnderstandingProviderMetadata?: Record<
-    string,
-    PluginManifestMediaUnderstandingProviderMetadata
-  >;
-  imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
-  videoGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
-  musicGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
-  toolMetadata?: Record<string, PluginManifestToolMetadata>;
-  configContracts?: PluginManifestConfigContracts;
-  channelConfigs?: Record<string, PluginManifestChannelConfig>;
-  channelCatalogMeta?: {
-    id: string;
-    label?: string;
-    blurb?: string;
-    preferOver?: readonly string[];
-    commands?: PluginManifestChannelCommandDefaults;
-  };
-};
-
-export type PluginManifestRegistry = {
-  plugins: PluginManifestRecord[];
-  diagnostics: PluginDiagnostic[];
-};
-
-export type BundledChannelConfigCollector = (params: {
-  pluginDir: string;
-  manifest: PluginManifest;
-  packageManifest?: OpenClawPackageManifest;
-}) => Record<string, PluginManifestChannelConfig> | undefined;
 
 function rejectCaseFoldedIdCollisions(
   records: readonly PluginManifestRecord[],
@@ -337,14 +210,6 @@ function rejectCaseFoldedIdCollisions(
     }
   }
   return records.filter((record) => !rejected.has(record));
-}
-
-function safeStatMtimeMs(filePath: string): number | null {
-  try {
-    return fs.statSync(filePath).mtimeMs;
-  } catch {
-    return null;
-  }
 }
 
 function normalizePreferredPluginIds(raw: unknown): string[] | undefined {
@@ -522,7 +387,6 @@ function buildRecord(params: {
   manifestPath: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks: boolean;
-  realpathCache: Map<string, string>;
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
@@ -562,6 +426,7 @@ function buildRecord(params: {
   );
   return {
     id: pluginId,
+    backupResources: params.manifest.backupResources,
     doctorContract: params.manifest.doctorContract,
     sessionRouteStateOwners: params.manifest.sessionRouteStateOwners,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
@@ -591,7 +456,6 @@ function buildRecord(params: {
           entry: providerSourceEntry.entry,
           rejectHardlinks: params.rejectHardlinks,
           diagnostics: params.diagnostics,
-          realpathCache: params.realpathCache,
         })
       : undefined,
     modelSupport: params.manifest.modelSupport,
@@ -823,7 +687,7 @@ function matchesInstalledPluginRecord(params: {
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     .map((entry) => {
       const resolved = resolveUserPath(entry, params.env);
-      return safeRealpathSync(resolved) ?? resolved;
+      return pluginCacheRealpathSync(resolved) ?? resolved;
     });
   // Security decisions must bind to the current install output. sourcePath can
   // legitimately identify path installs, but it can also survive a source switch.
@@ -833,7 +697,7 @@ function matchesInstalledPluginRecord(params: {
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     .map((entry) => {
       const resolved = resolveUserPath(entry, params.env);
-      return safeRealpathSync(resolved) ?? resolved;
+      return pluginCacheRealpathSync(resolved) ?? resolved;
     });
   if (candidatePaths.length === 0 || trackedPaths.length === 0) {
     return false;
@@ -1022,6 +886,14 @@ export function loadPluginManifestRegistryCore(
     discovery?: PluginDiscoveryResult;
   } = {},
 ): PluginManifestRegistry {
+  // Explicit candidates belong to startup/install inspection. Ordinary runtime
+  // readers use the boot descriptors, including when config policy changes.
+  if (!params.candidates && !params.discovery && !params.installRecords) {
+    const gatewaySnapshot = getGatewayPluginMetadataSnapshot();
+    if (gatewaySnapshot) {
+      return gatewaySnapshot.manifestRegistry;
+    }
+  }
   const config = params.config ?? {};
   const normalized = normalizePluginsConfigWithResolver(config.plugins);
   const env = params.env ?? process.env;
@@ -1051,12 +923,11 @@ export function loadPluginManifestRegistryCore(
   const candidates: PluginCandidate[] = discovery.candidates;
   const records: PluginManifestRecord[] = [];
   const seenIds = new Map<string, SeenIdEntry>();
-  const realpathCache = new Map<string, string>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
   const explicitConfiguredFileSources = new Set(
     normalized.loadPaths
       .map((loadPath) => resolveUserPath(loadPath, env))
-      .filter((loadPath) => safeStatSync(loadPath)?.isFile() === true)
+      .filter((loadPath) => pluginCacheStatSync(loadPath)?.isFile() === true)
       .map((loadPath) => path.resolve(loadPath)),
   );
 
@@ -1065,13 +936,12 @@ export function loadPluginManifestRegistryCore(
       origin: candidate.origin,
       rootDir: candidate.rootDir,
       env,
-      realpathCache,
     });
     const isBundleRecord = (candidate.format ?? "openclaw") === "bundle";
     const isManifestlessConfiguredFile =
       candidate.origin === "config" &&
       explicitConfiguredFileSources.has(path.resolve(candidate.source)) &&
-      !fs.existsSync(path.join(candidate.rootDir, PLUGIN_MANIFEST_FILENAME));
+      !pluginCacheExistsSync(path.join(candidate.rootDir, PLUGIN_MANIFEST_FILENAME));
     if (isManifestlessConfiguredFile && isCoreReservedPluginId(candidate.idHint)) {
       diagnostics.push({
         level: "error",
@@ -1113,6 +983,9 @@ export function loadPluginManifestRegistryCore(
         pluginId: candidate.diagnosticIdHint ?? candidate.idHint,
         message: manifestRes.error,
         source: manifestRes.manifestPath,
+        ...("diagnosticCode" in manifestRes && manifestRes.diagnosticCode
+          ? { code: manifestRes.diagnosticCode }
+          : {}),
       });
       continue;
     }
@@ -1178,13 +1051,16 @@ export function loadPluginManifestRegistryCore(
 
     const configSchema = "configSchema" in manifest ? manifest.configSchema : undefined;
     const schemaCacheKey = (() => {
-      if (!configSchema) {
+      if (!configSchema || isManifestlessConfiguredFile) {
         return undefined;
       }
-      const manifestMtime = safeStatMtimeMs(manifestRes.manifestPath);
-      return manifestMtime
-        ? `${manifestRes.manifestPath}:${manifestMtime}`
-        : manifestRes.manifestPath;
+      const file = readPluginCacheFile({
+        rootDir: candidate.rootDir,
+        relativePath: path.relative(candidate.rootDir, manifestRes.manifestPath),
+        rejectHardlinks,
+        maxBytes: 256 * 1024,
+      });
+      return file.ok ? `${manifestRes.manifestPath}:${file.hash}` : manifestRes.manifestPath;
     })();
 
     const record = isBundleRecord
@@ -1199,7 +1075,6 @@ export function loadPluginManifestRegistryCore(
           manifestPath: manifestRes.manifestPath,
           diagnostics,
           rejectHardlinks,
-          realpathCache,
           schemaCacheKey,
           configSchema,
           trustedOfficialInstall: isTrustedOfficialPluginInstall({
@@ -1227,8 +1102,8 @@ export function loadPluginManifestRegistryCore(
         if (samePath) {
           return true;
         }
-        const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
-        const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
+        const existingReal = pluginCacheRealpathSync(existing.candidate.rootDir);
+        const candidateReal = pluginCacheRealpathSync(candidate.rootDir);
         return Boolean(existingReal && candidateReal && existingReal === candidateReal);
       })();
       if (samePlugin) {

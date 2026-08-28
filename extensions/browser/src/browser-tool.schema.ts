@@ -65,7 +65,7 @@ const BROWSER_SNAPSHOT_REFS = ["role", "aria"] as const;
 const BROWSER_IMAGE_TYPES = ["png", "jpeg"] as const;
 
 const TAB_REFERENCE_DESCRIPTION =
-  "Tab reference. Prefer suggestedTargetId, tabId, or label from tabs output; raw CDP targetId and unique raw prefixes remain supported for compatibility.";
+  "Prefer suggestedTargetId/tabId/label; raw CDP targetId or unique prefix works.";
 
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
 // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
@@ -104,15 +104,29 @@ export function resolveBrowserToolCapabilities(params?: {
 }
 
 function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
+  const supportsBatch = capabilities.actKinds.includes("batch");
   return {
     // Common fields
     targetId: Type.Optional(Type.String({ description: TAB_REFERENCE_DESCRIPTION })),
-    ref: Type.Optional(Type.String()),
+    ref: Type.Optional(
+      Type.String({ description: "Element reference from a current-tab snapshot." }),
+    ),
     // batch - permissive children keep the provider schema flat; runtime validates each action.
-    actions: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
-    stopOnError: Type.Optional(Type.Boolean()),
+    actions: Type.Optional(
+      Type.Array(
+        Type.Object({}, { additionalProperties: true }),
+        supportsBatch ? { description: "Nested act requests for kind=batch." } : {},
+      ),
+    ),
+    stopOnError: Type.Optional(
+      Type.Boolean(
+        supportsBatch ? { description: "Stop batch at first error (default: true)." } : {},
+      ),
+    ),
     // click
-    doubleClick: Type.Optional(Type.Boolean()),
+    doubleClick: Type.Optional(
+      Type.Boolean({ description: "Double-click for kind=click or clickCoords." }),
+    ),
     button: Type.Optional(Type.String()),
     modifiers: Type.Optional(Type.Array(Type.String())),
     x: optionalFiniteNumberSchema(),
@@ -122,7 +136,11 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
     submit: Type.Optional(Type.Boolean()),
     slowly: Type.Optional(Type.Boolean()),
     // press
-    key: Type.Optional(Type.String()),
+    key: Type.Optional(
+      Type.String({
+        description: "Escape, Enter, Control+Shift+T; aliases Esc, Return, Del, Ctrl, Cmd.",
+      }),
+    ),
     delayMs: optionalNonNegativeIntegerSchema(),
     // drag
     startRef: Type.Optional(Type.String()),
@@ -152,15 +170,27 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
 /** Provider-compatible Browser tool argument schema. */
 export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
   const actProperties = createBrowserActProperties(capabilities);
-  const BrowserActSchema = Type.Object({
-    kind: stringEnum(capabilities.actKinds),
-    ...actProperties,
-  });
+  const actKindDescription = capabilities.actKinds.includes("batch")
+    ? "Browser action kind; batch runs the nested actions array."
+    : "Browser action kind.";
+  const BrowserActSchema = Type.Object(
+    {
+      kind: stringEnum(capabilities.actKinds, { description: actKindDescription }),
+      ...actProperties,
+    },
+    { description: "Preferred nested request for action=act." },
+  );
   return Type.Object({
     action: stringEnum(capabilities.actions),
     target: optionalStringEnum(BROWSER_TARGETS),
     node: Type.Optional(Type.String()),
-    profile: Type.Optional(Type.String()),
+    profile: Type.Optional(
+      Type.String({
+        description: capabilities.tabBound
+          ? "Bound browser profile selected for this run."
+          : "Browser profile name; omit to use the configured default.",
+      }),
+    ),
     browser: Type.Optional(Type.String()),
     systemProfile: Type.Optional(Type.String()),
     into: Type.Optional(Type.String()),
@@ -176,7 +206,11 @@ export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
     compact: Type.Optional(Type.Boolean()),
     depth: optionalNonNegativeIntegerSchema(),
     frame: Type.Optional(Type.String()),
-    labels: Type.Optional(Type.Boolean()),
+    labels: Type.Optional(
+      Type.Boolean({
+        description: "Overlay snapshot or screenshot with element reference labels.",
+      }),
+    ),
     urls: Type.Optional(Type.Boolean()),
     fullPage: Type.Optional(Type.Boolean()),
     path: Type.Optional(Type.String()),
@@ -189,7 +223,7 @@ export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
     accept: Type.Optional(Type.Boolean()),
     promptText: Type.Optional(Type.String()),
     // Legacy flattened act params (preferred: request={...})
-    kind: Type.Optional(stringEnum(capabilities.actKinds)),
+    kind: Type.Optional(stringEnum(capabilities.actKinds, { description: actKindDescription })),
     ...actProperties,
     request: Type.Optional(BrowserActSchema),
   });

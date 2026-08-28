@@ -2,6 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../../agents/live-test-helpers.js";
 import { resolveAgentRunSessionTarget } from "../../agents/run-session-target.js";
 import { SessionManager } from "../../agents/sessions/index.js";
+import {
+  makeAgentAssistantMessage,
+  makeAgentUserMessage,
+} from "../../agents/test-helpers/agent-message-fixtures.js";
+import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import type { Message } from "../../llm/types.js";
 import {
   createOpenClawTestState,
@@ -15,16 +20,60 @@ const LIVE =
   isLiveTestEnabled(["OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"]) &&
   Boolean(process.env.OPENAI_API_KEY?.trim());
 const describeLive = LIVE ? describe : describe.skip;
+const modelId = process.env.OPENCLAW_LIVE_SKILL_EXPERIENCE_MODEL ?? "gpt-5.6-luna";
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 let workspaceDir = "";
 
+function assistantText(text: string) {
+  return makeAgentAssistantMessage({ model: modelId, content: [{ type: "text", text }] });
+}
+
+function toolRound(
+  id: string,
+  name: string,
+  args: Record<string, unknown>,
+  text: string,
+  isError = false,
+): Message[] {
+  return [
+    makeAgentAssistantMessage({
+      model: modelId,
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id, name, arguments: args }],
+    }),
+    {
+      role: "toolResult",
+      toolCallId: id,
+      toolName: name,
+      content: [{ type: "text", text }],
+      isError,
+      timestamp: 0,
+    },
+  ];
+}
+
+beforeAll(async () => {
+  // Full home isolation: the embedded review resolves the shared-main auth
+  // store via HOME, and a real ~/.openclaw with pending doctor migration
+  // must never leak into (or fail) this live run.
+  testState = await createOpenClawTestState({
+    layout: "home",
+    prefix: "openclaw-live-skill-review-state-",
+  });
+  workspaceDir = await tempDirs.make("openclaw-live-skill-review-workspace-");
+});
+
+afterAll(async () => {
+  await testState.cleanup();
+  await tempDirs.cleanup();
+});
+
 async function candidate(
   runId: string,
-  messages: unknown[],
+  messages: Message[],
   options: { turnAborted?: boolean } = {},
 ): Promise<ExperienceReviewCandidate> {
-  const modelId = process.env.OPENCLAW_LIVE_SKILL_EXPERIENCE_MODEL ?? "gpt-5.6-luna";
   const sessionId = `live-skill-review-${runId}`;
   const sessionKey = `agent:main:${sessionId}`;
   const result: ExperienceReviewCandidate = {
@@ -36,7 +85,14 @@ async function candidate(
       workspaceDir,
       modelProviderId: "openai",
       modelId,
-      trigger: "user",
+      foregroundPromptContext: {
+        agentId: "main",
+        agentDir: workspaceDir,
+        workspaceDir,
+        cwd: workspaceDir,
+        sandboxSessionKey: sessionKey,
+        trigger: "user",
+      },
     },
     config: {
       models: {
@@ -89,22 +145,43 @@ async function candidate(
     sessionId,
     sessionKey,
   });
+  const created = await createSessionEntryWithTranscript(
+    target,
+    () => ({ ok: true, entry: { sessionId, updatedAt: Date.now() } }),
+    { cwd: workspaceDir },
+  );
+  if (!created.ok) {
+    throw new Error(`Failed to create live review session: ${created.error}`);
+  }
   for (const message of messages) {
-    SessionManager.appendMessageToTranscript(target, message as Message, { config: result.config });
+    SessionManager.appendMessageToTranscript(target, message, { config: result.config });
   }
   return result;
 }
 
+describe("skill experience review transcript fixture", () => {
+  it("persists messages through a canonical session", async () => {
+    const runId = "transcript-fixture";
+    const sessionId = `live-skill-review-${runId}`;
+    const sessionKey = `agent:main:${sessionId}`;
+    const message = makeAgentUserMessage({ content: "Review this completed task." });
+    const seeded = await candidate(runId, [message]);
+    const target = await resolveAgentRunSessionTarget({
+      agentId: "main",
+      config: seeded.config,
+      missingSessionKey: "resolve-existing",
+      sessionId,
+      sessionKey,
+    });
+
+    expect(SessionManager.open(target, workspaceDir).buildSessionContext().messages).toEqual([
+      message,
+    ]);
+  });
+});
+
 describeLive("skill experience review live OpenAI eval", () => {
   beforeAll(async () => {
-    // Full home isolation: the embedded review resolves the shared-main auth
-    // store via HOME, and a real ~/.openclaw with pending doctor migration
-    // must never leak into (or fail) this live run.
-    testState = await createOpenClawTestState({
-      layout: "home",
-      prefix: "openclaw-live-skill-review-state-",
-    });
-    workspaceDir = await tempDirs.make("openclaw-live-skill-review-workspace-");
     // Warm the plugin runtime outside the review lane: the first load compiles
     // extensions synchronously and can exceed the lane's no-progress watchdog
     // on a loaded machine.
@@ -117,66 +194,40 @@ describeLive("skill experience review live OpenAI eval", () => {
     });
   }, 600_000);
 
-  afterAll(async () => {
-    await testState.cleanup();
-    await tempDirs.cleanup();
-  });
-
   it("proposes a recovered preflight procedure but ignores routine one-off work", async () => {
-    const positiveMessages = [
-      {
-        role: "user",
+    const positiveMessages: Message[] = [
+      makeAgentUserMessage({
         content:
           "Deploy this repository from its checked-in manifest. Do not ask for values already present there.",
-      },
-      { role: "assistant", content: [{ type: "toolCall", name: "deploy", arguments: {} }] },
-      { role: "toolResult", toolName: "deploy", isError: true, content: "project required" },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", name: "deploy", arguments: { project: "app" } }],
-      },
-      { role: "toolResult", toolName: "deploy", isError: true, content: "region required" },
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", name: "deploy", arguments: { project: "app", region: "us" } },
-        ],
-      },
-      { role: "toolResult", toolName: "deploy", isError: true, content: "service required" },
-      { role: "assistant", content: "I am still guessing required fields one at a time." },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", name: "read", arguments: { path: "deploy.json" } }],
-      },
-      {
-        role: "toolResult",
-        toolName: "read",
-        content: "project=app region=us service=api health=/ready",
-      },
-      { role: "assistant", content: "The manifest contains all required deployment inputs." },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            name: "deploy",
-            arguments: { project: "app", region: "us", service: "api" },
-          },
-        ],
-      },
-      { role: "toolResult", toolName: "deploy", content: "deployed" },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", name: "fetch", arguments: { path: "/ready" } }],
-      },
-      { role: "toolResult", toolName: "fetch", content: "200 ok" },
-      { role: "assistant", content: "Deployment verified." },
-      {
-        role: "assistant",
-        content: "Next time the manifest should be read before the first deploy call.",
-      },
-      { role: "assistant", content: "That preflight would remove three failed tool rounds." },
-      { role: "assistant", content: "Done." },
+      }),
+      ...toolRound("deploy-project", "deploy", {}, "project required", true),
+      ...toolRound("deploy-region", "deploy", { project: "app" }, "region required", true),
+      ...toolRound(
+        "deploy-service",
+        "deploy",
+        { project: "app", region: "us" },
+        "service required",
+        true,
+      ),
+      assistantText("I am still guessing required fields one at a time."),
+      ...toolRound(
+        "read-manifest",
+        "read",
+        { path: "deploy.json" },
+        "project=app region=us service=api health=/ready",
+      ),
+      assistantText("The manifest contains all required deployment inputs."),
+      ...toolRound(
+        "deploy-complete",
+        "deploy",
+        { project: "app", region: "us", service: "api" },
+        "deployed",
+      ),
+      ...toolRound("fetch-health", "fetch", { path: "/ready" }, "200 ok"),
+      assistantText("Deployment verified."),
+      assistantText("Next time the manifest should be read before the first deploy call."),
+      assistantText("That preflight would remove three failed tool rounds."),
+      assistantText("Done."),
     ];
 
     const positiveCandidate = await candidate("live-positive", positiveMessages);
@@ -187,22 +238,15 @@ describeLive("skill experience review live OpenAI eval", () => {
     expect(afterPositive.proposals).toHaveLength(1);
     expect(afterPositive.proposals[0]).toMatchObject({ status: "pending" });
 
-    const negativeMessages = [
-      {
-        role: "user",
+    const negativeMessages: Message[] = [
+      makeAgentUserMessage({
         content:
           "One-time audit: check these ten unrelated opaque receipts. Policy requires one signed lookup per receipt; no batching or reuse is possible.",
-      },
-      ...Array.from({ length: 10 }, (_, index) => [
-        {
-          role: "assistant",
-          content: [
-            { type: "toolCall", name: "signed_receipt_lookup", arguments: { id: index + 1 } },
-          ],
-        },
-        { role: "toolResult", toolName: "signed_receipt_lookup", content: "valid" },
-      ]).flat(),
-      { role: "assistant", content: "All ten one-time receipts are valid." },
+      }),
+      ...Array.from({ length: 10 }, (_, index) =>
+        toolRound(`receipt-${index + 1}`, "signed_receipt_lookup", { id: index + 1 }, "valid"),
+      ).flat(),
+      assistantText("All ten one-time receipts are valid."),
     ];
 
     const negativeCandidate = await candidate("live-negative", negativeMessages);
@@ -212,46 +256,39 @@ describeLive("skill experience review live OpenAI eval", () => {
     const afterNegative = await listSkillProposals({ workspaceDir });
     expect(afterNegative.proposals).toEqual(afterPositive.proposals);
 
-    const interruptedMessages = [
-      {
-        role: "user",
+    const interruptedMessages: Message[] = [
+      makeAgentUserMessage({
         content: "Publish the package. The registry keeps rejecting the token.",
-      },
-      { role: "assistant", content: [{ type: "toolCall", name: "publish", arguments: {} }] },
-      { role: "toolResult", toolName: "publish", isError: true, content: "401 invalid token" },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", name: "publish", arguments: { retry: true } }],
-      },
-      { role: "toolResult", toolName: "publish", isError: true, content: "401 invalid token" },
-      { role: "assistant", content: "Retrying does not help; the stored scope must be wrong." },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", name: "exec", arguments: { command: "registry whoami" } }],
-      },
-      {
-        role: "toolResult",
-        toolName: "exec",
-        content: "authenticated to legacy-registry.example, expected registry.example",
-      },
-      {
-        role: "assistant",
+      }),
+      ...toolRound("publish-token", "publish", {}, "401 invalid token", true),
+      ...toolRound("publish-retry", "publish", { retry: true }, "401 invalid token", true),
+      assistantText("Retrying does not help; the stored scope must be wrong."),
+      ...toolRound(
+        "registry-whoami",
+        "exec",
+        { command: "registry whoami" },
+        "authenticated to legacy-registry.example, expected registry.example",
+      ),
+      ...toolRound(
+        "registry-login",
+        "exec",
+        { command: "registry login --host registry.example" },
+        "login ok",
+      ),
+      ...toolRound("publish-complete", "publish", {}, "published 1.2.3"),
+      assistantText("Publish verified. Moving on to the release notes."),
+      makeAgentAssistantMessage({
+        model: modelId,
+        stopReason: "toolUse",
         content: [
           {
             type: "toolCall",
-            name: "exec",
-            arguments: { command: "registry login --host registry.example" },
+            id: "read-changelog",
+            name: "read",
+            arguments: { path: "CHANGELOG.md" },
           },
         ],
-      },
-      { role: "toolResult", toolName: "exec", content: "login ok" },
-      { role: "assistant", content: [{ type: "toolCall", name: "publish", arguments: {} }] },
-      { role: "toolResult", toolName: "publish", content: "published 1.2.3" },
-      { role: "assistant", content: "Publish verified. Moving on to the release notes." },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", name: "read", arguments: { path: "CHANGELOG.md" } }],
-      },
+      }),
     ];
 
     const interruptedCandidate = await candidate("live-interrupted", interruptedMessages, {

@@ -265,6 +265,7 @@ export async function activateCodexAttemptTurn(
           runMirrorIdentityPrefix: `${activeTurnId}:`,
           config: params.config,
         });
+        activeProjector.markSteeringTranscriptPersisted();
       }
       for (const item of inboundItems) {
         const recorder = item.userTurnTranscriptRecorder;
@@ -333,6 +334,7 @@ export async function activateCodexAttemptTurn(
   const handle = {
     kind: "embedded" as const,
     runId: params.runId,
+    startedAtMs: params.startedAtMs,
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,

@@ -26,10 +26,13 @@ export function listAssignableSessionOwners(params: {
     });
   }
   for (const agent of params.agents ?? []) {
+    const owner = owners.get(agent.id);
     owners.set(agent.id, {
       type: "agent",
       id: agent.id,
       ...(agent.name ? { label: agent.name } : {}),
+      // Keep the enriched identity, with the roster name when no identity name is configured.
+      ...(owner?.type === "agent" ? owner : {}),
     });
   }
   return [...owners.values()].toSorted(

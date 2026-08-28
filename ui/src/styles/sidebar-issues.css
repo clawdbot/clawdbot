@@ -106,6 +106,17 @@
   height: 16px;
 }
 
+.sidebar-issues-panel__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: auto;
+}
+
+.sidebar-issues-panel__dismiss-shown {
+  min-height: 28px;
+}
+
 .sidebar-issues-panel__ask {
   flex: 0 0 32px;
 }
@@ -145,6 +156,16 @@
 .shell--mobile-nav .sidebar-issues-panel__list {
   padding-block-end: 58px;
   scroll-padding-block-end: 58px;
+}
+
+.shell--mobile-nav .sidebar-issues-panel__dismiss {
+  width: 40px;
+  height: 40px;
+  flex-basis: 40px;
+}
+
+.shell--mobile-nav .sidebar-issues-panel__dismiss-shown {
+  min-height: 40px;
 }
 
 /* Hub-tab strip (shared hub-tabs.css owns the tab look); this block only
@@ -475,10 +496,7 @@
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
-  opacity: 0;
-  pointer-events: none;
   transition:
-    opacity var(--duration-fast) ease,
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
 }
@@ -488,17 +506,7 @@
   height: 14px;
 }
 
-.sidebar-issues-panel__summary:focus-within .sidebar-issues-panel__dismiss {
-  opacity: 1;
-  pointer-events: auto;
-}
-
 @media (hover: hover) {
-  .sidebar-issues-panel__summary:hover .sidebar-issues-panel__dismiss {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
   .sidebar-issues-panel__dismiss:hover {
     background: var(--bg-hover);
     color: var(--text-strong);

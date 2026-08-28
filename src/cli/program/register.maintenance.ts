@@ -144,6 +144,12 @@ export function registerMaintenanceCommands(program: Command) {
           opts.json === true || !process.stdout.isTTY,
         );
       }
+      if (opts.lint !== true && hasLintOnlyDoctorOptions(opts)) {
+        return exitDoctorError(
+          "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+          opts.json === true,
+        );
+      }
       if (lintMode) {
         await runCommandWithRuntime(
           defaultRuntime,
@@ -163,12 +169,6 @@ export function registerMaintenanceCommands(program: Command) {
           (err) => exitDoctorError(formatError(err), opts.json === true || !process.stdout.isTTY),
         );
         return;
-      }
-      if (hasLintOnlyDoctorOptions(opts)) {
-        return exitDoctorError(
-          "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
-          opts.json === true,
-        );
       }
       await runCommandWithRuntime(
         defaultRuntime,

@@ -20,6 +20,9 @@ const REQUIRED_SUMMARY_SECTIONS = [
   "## Exact identifiers",
 ] as const;
 const QUALITY_PROTECTED_SECTION_START = 3;
+const PENDING_ASK_SECTION_INDEX = 3;
+const EXACT_IDENTIFIERS_SECTION_INDEX = 4;
+const MAX_PROTECTED_SECTION_CONTENT_SHARE = 0.25;
 const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, preserve literal values exactly as seen (IDs, URLs, file paths, ports, hashes, dates, times).";
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
@@ -67,6 +70,7 @@ export function buildCompactionStructureInstructions(
     ...REQUIRED_SUMMARY_SECTIONS,
     identifierSectionInstruction,
     "Do not omit unresolved asks from the user.",
+    "Record completed requests outside ## Pending user asks; list only unresolved user requests there.",
     "When prior compaction summaries are present, re-distill them with new messages and remove stale duplicate detail.",
   ].join("\n");
   const custom = customInstructions?.trim();
@@ -97,7 +101,13 @@ function hasRequiredSummarySections(summary: string): boolean {
 
 type SummaryQualityRetentionPlan = {
   minimumChars: number;
-  render: (maxChars: number) => string | null;
+  /**
+   * True when render() must rebuild even a body that fits: a strict source
+   * identifier is missing, or an audit-bearing section exceeds its share cap.
+   */
+  needsRebuild: (maxChars: number) => boolean;
+  /** Null when even the protected facts cannot fit `maxChars`. */
+  render: (maxChars: number) => { text: string; trimmed: boolean } | null;
 };
 
 function parseRequiredSummarySectionContents(summary: string): string[] | null {
@@ -120,7 +130,21 @@ function parseRequiredSummarySectionContents(summary: string): string[] | null {
   return contents.map((lines) => lines.join("\n").trim());
 }
 
-/** Plan truncation that keeps audit-required headings, pending asks, and exact identifiers. */
+function parsePendingUserAskSections(summary: string): string[] {
+  return summary
+    .split(/^## Pending user asks[ \t]*$/gmu)
+    .slice(1)
+    .map((section) => section.split(/^##[ \t]+\S.*$/mu, 1)[0]?.trim() ?? "");
+}
+
+/**
+ * Plan truncation that keeps the audit facts and lets everything else shrink.
+ * Only the headings, the bounded latest-ask context, and the audited source
+ * identifiers are untrimmable. Model-written section text — including the
+ * "## Exact identifiers" list — is optional content; protecting it verbatim let
+ * a re-distilled identifier dump grow past the whole artifact budget while the
+ * real sections were starved to empty headings.
+ */
 export function createSummaryQualityRetentionPlan(
   summary: string,
   truncatedMarker: string,
@@ -128,6 +152,7 @@ export function createSummaryQualityRetentionPlan(
     auditSummary?: string;
     identifiers: string[];
     latestAsk: string | null;
+    latestAskCompleted?: boolean;
     requiredAskContext?: string;
     identifierPolicy?: CompactionSummarizationInstructions["identifierPolicy"];
   },
@@ -138,81 +163,127 @@ export function createSummaryQualityRetentionPlan(
   }
   const enforceIdentifiers = (params.identifierPolicy ?? "strict") === "strict";
   const auditSummary = params.auditSummary ?? summary;
-  if (
-    enforceIdentifiers &&
-    params.identifiers.some((identifier) => !summaryIncludesIdentifier(auditSummary, identifier))
-  ) {
-    return null;
-  }
   if (!hasAskOverlap(auditSummary, params.latestAsk)) {
     return null;
   }
-  const pendingAsk = contents[QUALITY_PROTECTED_SECTION_START] ?? "";
   const requiredAskContext = params.requiredAskContext?.trim() ?? "";
-  const exactIdentifiers = contents[QUALITY_PROTECTED_SECTION_START + 1] ?? "";
-  const missingIdentifiers = enforceIdentifiers
-    ? params.identifiers.filter(
-        (identifier) => !summaryIncludesIdentifier(exactIdentifiers, identifier),
-      )
-    : [];
-  const protectedContents = [
-    [
-      pendingAsk,
-      requiredAskContext && !pendingAsk.includes(requiredAskContext) ? requiredAskContext : "",
-    ]
-      .filter(Boolean)
-      .join("\n"),
-    [exactIdentifiers, ...missingIdentifiers].filter(Boolean).join("\n"),
-  ];
+  const auditedIdentifiers = enforceIdentifiers ? params.identifiers : [];
   const marker = truncatedMarker.trim();
-  const protectedBlocks = REQUIRED_SUMMARY_SECTIONS.slice(QUALITY_PROTECTED_SECTION_START).map(
-    (heading, index) => {
-      const content = protectedContents[index];
+  // Protected tails render after each section's optional content so the audit
+  // facts survive regardless of how much model text the budget keeps.
+  const protectedAskSectionIndex = params.latestAskCompleted ? 0 : PENDING_ASK_SECTION_INDEX;
+  const protectedAskContext = params.latestAskCompleted
+    ? `Latest turn completed:\n${requiredAskContext}`
+    : requiredAskContext;
+  const protectedTails = REQUIRED_SUMMARY_SECTIONS.map((_, index) =>
+    index === protectedAskSectionIndex
+      ? protectedAskContext
+      : index === EXACT_IDENTIFIERS_SECTION_INDEX
+        ? auditedIdentifiers.join("\n")
+        : "",
+  );
+  const bodyHasIdentifiers = auditedIdentifiers.every((identifier) =>
+    summaryIncludesIdentifier(summary, identifier),
+  );
+  const renderSections = (sectionContents: string[]) =>
+    REQUIRED_SUMMARY_SECTIONS.map((heading, index) => {
+      const content = sectionContents[index];
       return content ? `${heading}\n${content}` : heading;
-    },
+    });
+  const joinSectionContent = (index: number, optional: string) => {
+    const tail = protectedTails[index] ?? "";
+    if (!tail) {
+      return optional;
+    }
+    if (index === PENDING_ASK_SECTION_INDEX && optional.includes(tail)) {
+      return optional;
+    }
+    if (index === EXACT_IDENTIFIERS_SECTION_INDEX) {
+      const missing = auditedIdentifiers.filter(
+        (identifier) => !summaryIncludesIdentifier(optional, identifier),
+      );
+      return [optional, ...missing].filter(Boolean).join("\n");
+    }
+    return [optional, tail].filter(Boolean).join("\n");
+  };
+  // Reserve every heading/content/tail separator up front so trimmed optional
+  // text can never push the rendered artifact past `maxChars`.
+  const minimumBlocks = REQUIRED_SUMMARY_SECTIONS.map(
+    (heading, index) => `${heading}\n\n${protectedTails[index] ?? ""}`,
   );
-  const optionalHeadings = REQUIRED_SUMMARY_SECTIONS.slice(0, QUALITY_PROTECTED_SECTION_START);
-  const optionalContents = contents.slice(0, QUALITY_PROTECTED_SECTION_START);
-  const optionalScaffolds = optionalHeadings.map((heading, index) =>
-    optionalContents[index] ? `${heading}\n` : heading,
-  );
-  const minimumSummary = [...optionalScaffolds, marker, ...protectedBlocks].join("\n\n");
+  const minimumSummary = [
+    ...minimumBlocks.slice(0, QUALITY_PROTECTED_SECTION_START),
+    marker,
+    ...minimumBlocks.slice(QUALITY_PROTECTED_SECTION_START),
+  ].join("\n\n");
+  // Audit-bearing sections (pending asks, exact identifiers) are funded first so
+  // a runaway earlier section cannot starve them, but each is hard-capped: an
+  // uncapped identifier list re-distills into the whole budget — even while the
+  // artifact still fits — and leaves every other section as a bare heading.
+  const protectedCapFor = (maxChars: number) =>
+    Math.floor(Math.max(0, maxChars - minimumSummary.length) * MAX_PROTECTED_SECTION_CONTENT_SHARE);
+  const protectedWithinCap = (maxChars: number) =>
+    contents
+      .slice(QUALITY_PROTECTED_SECTION_START)
+      .every((content) => content.length <= protectedCapFor(maxChars));
 
   return {
     minimumChars: minimumSummary.length,
+    needsRebuild: (maxChars) => !bodyHasIdentifiers || !protectedWithinCap(maxChars),
     render(maxChars) {
       const bodyHasRequiredAskContext = !requiredAskContext || summary.includes(requiredAskContext);
-      const bodyHasIdentifiers =
-        !enforceIdentifiers ||
-        params.identifiers.every((identifier) => summaryIncludesIdentifier(summary, identifier));
-      if (summary.length <= maxChars && bodyHasRequiredAskContext && bodyHasIdentifiers) {
-        return summary;
+      if (
+        summary.length <= maxChars &&
+        bodyHasRequiredAskContext &&
+        bodyHasIdentifiers &&
+        protectedWithinCap(maxChars)
+      ) {
+        return { text: summary, trimmed: false };
       }
       if (maxChars < minimumSummary.length) {
         return null;
       }
       const contentBudget = maxChars - minimumSummary.length;
-      const totalContentChars = optionalContents.reduce(
-        (total, content) => total + content.length,
+      const protectedCap = protectedCapFor(maxChars);
+      const allocations = contents.map((content, index) =>
+        index >= QUALITY_PROTECTED_SECTION_START ? Math.min(content.length, protectedCap) : 0,
+      );
+      const optionalBudget = Math.max(
         0,
+        contentBudget - allocations.reduce((total, chars) => total + chars, 0),
       );
-      const allocations = optionalContents.map((content) =>
-        totalContentChars > 0
-          ? Math.floor((contentBudget * content.length) / totalContentChars)
-          : 0,
-      );
-      let remainder = contentBudget - allocations.reduce((total, chars) => total + chars, 0);
+      const optionalContents = contents.slice(0, QUALITY_PROTECTED_SECTION_START);
+      const optionalTotal = optionalContents.reduce((total, content) => total + content.length, 0);
+      for (const [index, content] of optionalContents.entries()) {
+        allocations[index] =
+          optionalTotal > 0 ? Math.floor((optionalBudget * content.length) / optionalTotal) : 0;
+      }
+      // Surplus returns to the optional sections only; the protected caps stay
+      // hard so short decisions cannot hand the budget back to the identifier dump.
+      let remainder =
+        optionalBudget -
+        allocations
+          .slice(0, QUALITY_PROTECTED_SECTION_START)
+          .reduce((total, chars) => total + chars, 0);
       for (const [index, content] of optionalContents.entries()) {
         const allocation = allocations[index] ?? 0;
         const extra = Math.min(remainder, Math.max(0, content.length - allocation));
         allocations[index] = allocation + extra;
         remainder -= extra;
       }
-      const optionalBlocks = optionalHeadings.map((heading, index) => {
-        const content = truncateUtf16Safe(optionalContents[index] ?? "", allocations[index] ?? 0);
-        return content ? `${heading}\n${content}` : heading;
-      });
-      return [...optionalBlocks, marker, ...protectedBlocks].join("\n\n");
+      const trimmed = contents.some((content, index) => content.length > (allocations[index] ?? 0));
+      const sectionContents = contents.map((content, index) =>
+        joinSectionContent(index, truncateUtf16Safe(content, allocations[index] ?? 0)),
+      );
+      const blocks = renderSections(sectionContents);
+      return {
+        text: [
+          ...blocks.slice(0, QUALITY_PROTECTED_SECTION_START),
+          ...(trimmed ? [marker] : []),
+          ...blocks.slice(QUALITY_PROTECTED_SECTION_START),
+        ].join("\n\n"),
+        trimmed,
+      };
     },
   };
 }
@@ -270,14 +341,15 @@ function summaryIncludesIdentifier(summary: string, identifier: string): boolean
 
 /** Extracts likely exact identifiers that summaries should preserve literally. */
 export function extractOpaqueIdentifiers(text: string): string[] {
-  // Path and host/port candidates start at token boundaries so prose such as
-  // "typecheck/lint/format" is not mistaken for an absolute path.
-  const matches =
-    text.match(
-      /([A-Fa-f0-9]{8,}|https?:\/\/\S+|(?<![A-Za-z0-9._-])\/[\w.-]{2,}(?:\/[\w.-]+)+|[A-Za-z]:\\[\w\\.-]+|(?<![A-Za-z0-9._-])[A-Za-z0-9._-]+\.[A-Za-z0-9._/-]+:\d{1,5}|\b\d{6,}\b)/g,
-    ) ?? [];
+  // Decimal/scientific syntax is unambiguous numeric data, including unit suffixes. Integer tokens
+  // with letters remain opaque because the suffix may be part of an exact identifier.
   return uniqueStrings(
-    matches
+    Array.from(
+      text.matchAll(
+        /(https?:\/\/\S+|(?<![A-Za-z0-9._-])\/[\w.-]{2,}(?:\/[\w.-]+)+|[A-Za-z]:\\[\w\\.-]+|(?<![A-Za-z0-9._-])[A-Za-z0-9._-]+\.[A-Za-z0-9._/-]+:\d{1,5})|(?:(?:(?:\d+\.\d+|\.\d+)(?:[eE][+-]?\d+)?|\d+\.[eE][+-]?\d+|\d+\.?[eE][+-]\d+|(?![A-Fa-f0-9]{8,}(?![A-Fa-f0-9]))\d+\.?[eE]\d+)(?:(?=[A-Za-z]+(?![A-Za-z0-9]))(?=[A-Za-z]*[G-Zg-z])[A-Za-z]+)?(?![A-Za-z0-9])|(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*(?:[A-Fa-f0-9]{8,}|\d{6,}))([A-Za-z0-9_-]+))/g,
+      ),
+      (match) => match[1] ?? match[2] ?? "",
+    )
       .map((value) => normalizeOpaqueIdentifier(sanitizeExtractedIdentifier(value)))
       .filter((value) => value.length >= 4),
   ).slice(0, MAX_EXTRACTED_IDENTIFIERS);
@@ -335,8 +407,10 @@ function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
 export function auditSummaryQuality(params: {
   summary: string;
   structuralSummary: string;
+  completionSummary?: string;
   identifiers: string[];
   latestAsk: string | null;
+  latestAskCompleted?: boolean;
   identifierPolicy?: CompactionSummarizationInstructions["identifierPolicy"];
 }): { ok: boolean; reasons: string[] } {
   const reasons: string[] = [];
@@ -357,6 +431,14 @@ export function auditSummaryQuality(params: {
   }
   if (!hasAskOverlap(params.summary, params.latestAsk)) {
     reasons.push("latest_user_ask_not_reflected");
+  }
+  if (params.latestAskCompleted) {
+    const pendingAskSections = parsePendingUserAskSections(
+      params.completionSummary ?? params.structuralSummary,
+    );
+    if (pendingAskSections.some((pendingAsks) => hasAskOverlap(pendingAsks, params.latestAsk))) {
+      reasons.push("completed_latest_user_ask_marked_pending");
+    }
   }
   return { ok: reasons.length === 0, reasons };
 }

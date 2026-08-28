@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { takeWorkspaceHashMemo } from "../gateway/worker-environments/workspace-hash-memo.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -280,6 +281,9 @@ export class NodeWorkerWorkspaceRuntime {
   private readonly retainQueue = new KeyedAsyncQueue();
   private readonly acceptedSnapshots = new Map<string, AcceptedRetainSnapshot>();
   private readonly activeWorkspaceOperations = new Map<string, number>();
+  private readonly latestTransferredManifest = new Map<string, string>();
+  // Per-generation capture hash memo; lets upload captures skip re-hashing unchanged trees.
+  private readonly workspaceHashMemos = new Map<string, Map<string, string>>();
   private readonly deletingWorkspaceGenerations = new Set<string>();
   private readonly activeRetainProtections = new Map<string, Set<Set<string>>>();
 
@@ -530,6 +534,10 @@ export class NodeWorkerWorkspaceRuntime {
             }).finally(() => this.deletingWorkspaceGenerations.delete(candidate.generationKey))
           ) {
             deleted += 1;
+            if (parseGenerationName(path.basename(candidate.path)) !== undefined) {
+              this.latestTransferredManifest.delete(candidate.generationKey);
+              this.workspaceHashMemos.delete(candidate.generationKey);
+            }
           }
         }
         const sessionPrefix = `${params.gatewayNamespace}/${session.environmentHash}/${session.sessionHash}/`;
@@ -546,13 +554,22 @@ export class NodeWorkerWorkspaceRuntime {
           workspaceSessionKey(session.environmentHash, session.sessionHash),
         );
         if (!hasLocalProtection && retainedManifestRefs !== null) {
+          const reachable = new Set(retainedManifestRefs);
+          for (const generation of existingGenerations) {
+            const latest = this.latestTransferredManifest.get(
+              workspaceGenerationKey({ ...session, generation }),
+            );
+            if (latest) {
+              reachable.add(latest);
+            }
+          }
           const manifestRoot = path.join(session.sessionRoot, ".openclaw-worker", "manifests");
           for (const entry of await listOwnedEntries(manifestRoot)) {
             if (
               !entry.isFile() ||
               entry.isSymbolicLink() ||
               !MANIFEST_FILE_PATTERN.test(entry.name) ||
-              retainedManifestRefs?.has(`sha256:${entry.name.slice(0, -5)}`)
+              reachable.has(`sha256:${entry.name.slice(0, -5)}`)
             ) {
               continue;
             }
@@ -636,13 +653,7 @@ export class NodeWorkerWorkspaceRuntime {
         const sessionRoot = ensureContainedDirectory(environmentRoot, sessionHash);
         const workspaceName = String(input.generation);
         const workspacePath = path.join(sessionRoot, workspaceName);
-        if (input.transfer) {
-          if (input.resetWorkspace) {
-            throw new Error("INVALID_REQUEST: workspace transfer owns its atomic replacement");
-          }
-          if (!gateway?.url) {
-            throw new Error("INVALID_REQUEST: workspace transfer gateway is unavailable");
-          }
+        if (input.transfer || input.resetWorkspace) {
           try {
             const stats = fs.lstatSync(workspacePath);
             const resolved = fs.realpathSync.native(workspacePath);
@@ -658,6 +669,15 @@ export class NodeWorkerWorkspaceRuntime {
               throw error;
             }
           }
+        }
+        if (input.transfer) {
+          if (input.resetWorkspace) {
+            throw new Error("INVALID_REQUEST: workspace transfer owns its atomic replacement");
+          }
+          if (!gateway?.url) {
+            throw new Error("INVALID_REQUEST: workspace transfer gateway is unavailable");
+          }
+          const hashMemo = takeWorkspaceHashMemo(this.workspaceHashMemos, generationKey);
           const stdout = await runNodeWorkerWorkspaceTransfer({
             gatewayUrl: gateway.url,
             gatewayTlsFingerprint: gateway.tlsFingerprint,
@@ -666,8 +686,12 @@ export class NodeWorkerWorkspaceRuntime {
             workspaceDir: workspacePath,
             manifestHome: sessionRoot,
             transfer: input.transfer,
+            hashMemo,
             signal,
           });
+          // A snapshot sent before this transfer knows only the old base. Keep the latest
+          // result across command gaps; supersede it on transfer or drop it with its generation.
+          this.latestTransferredManifest.set(generationKey, stdout);
           return projectWorkspaceResult(workspacePath, {
             stdout: `${stdout}\n`,
             stderr: "",
@@ -678,21 +702,6 @@ export class NodeWorkerWorkspaceRuntime {
           });
         }
         if (input.resetWorkspace) {
-          try {
-            const stats = fs.lstatSync(workspacePath);
-            const resolved = fs.realpathSync.native(workspacePath);
-            if (
-              stats.isSymbolicLink() ||
-              !stats.isDirectory() ||
-              !isPathInside(sessionRoot, resolved)
-            ) {
-              throw new Error("INVALID_REQUEST: node worker workspace path escaped its owner root");
-            }
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-              throw error;
-            }
-          }
           // Reset never accepts a caller path: only the identity-derived workspace can be removed.
           fs.rmSync(workspacePath, { recursive: true, force: true });
         }

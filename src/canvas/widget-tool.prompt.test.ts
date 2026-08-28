@@ -10,6 +10,7 @@ describe("show_widget prompt", () => {
         properties?: {
           pin?: { description?: string };
           name?: { description?: string };
+          widget_code?: { description?: string };
         };
       }
     ).properties;
@@ -25,5 +26,8 @@ describe("show_widget prompt", () => {
     expect(pinDescription).toContain("explicit dashboard request");
     expect(pinDescription).toContain("multiple non-code visualizations");
     expect(properties?.name?.description).toMatch(/same name.*pin=true.*widget_code/i);
+    expect(properties?.widget_code?.description).toMatch(/fit.*iframe width/i);
+    expect(properties?.widget_code?.description).toMatch(/avoid fixed.*width/i);
+    expect(properties?.widget_code?.description).toMatch(/wrap or stack.*narrow/i);
   });
 });

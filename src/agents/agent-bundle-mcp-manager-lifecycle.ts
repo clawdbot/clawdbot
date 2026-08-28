@@ -29,7 +29,6 @@ type AdvertisedScopedCatalogEntry = {
 type SessionMcpRuntimeManagerStore = {
   runtimesBySessionId: Map<string, SessionMcpRuntime>;
   sessionIdBySessionKey: Map<string, string>;
-  idleTtlMsBySessionId: Map<string, number>;
   deferredRetirementSessionIds: Set<string>;
   // Reset/delete retirement survives late creation or reuse by the stopping run.
   requiredRetirementSessionIds: Set<string>;
@@ -74,7 +73,6 @@ export function createSessionMcpRuntimeManagerStore(
     // Keys are bare sessionId for static runtimes, or requester composite JSON keys.
     runtimesBySessionId: new Map<string, SessionMcpRuntime>(),
     sessionIdBySessionKey: new Map<string, string>(),
-    idleTtlMsBySessionId: new Map<string, number>(),
     deferredRetirementSessionIds: new Set<string>(),
     requiredRetirementSessionIds: new Set<string>(),
     // Manager-side only: connection hash + resolve time. Never stores raw url/headers.
@@ -188,18 +186,13 @@ export function createSessionMcpRuntimeManagerLifecycle(
     const nowMs = store.now();
     const expired: SessionMcpRuntime[] = [];
     for (const [runtimeKey, runtime] of store.runtimesBySessionId.entries()) {
-      const idleTtlMs =
-        store.idleTtlMsBySessionId.get(runtimeKey) ??
-        store.idleTtlMsBySessionId.get(runtime.sessionId) ??
-        DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
-      if (idleTtlMs <= 0 || (runtime.activeLeases ?? 0) > 0) {
+      if ((runtime.activeLeases ?? 0) > 0) {
         continue;
       }
-      if (nowMs - runtime.lastUsedAt < idleTtlMs) {
+      if (nowMs - runtime.lastUsedAt < DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS) {
         continue;
       }
       store.runtimesBySessionId.delete(runtimeKey);
-      store.idleTtlMsBySessionId.delete(runtimeKey);
       store.connectionMetaByRuntimeKey.delete(runtimeKey);
       expired.push(runtime);
     }
@@ -251,7 +244,6 @@ export function createSessionMcpRuntimeManagerLifecycle(
           return;
         }
         store.runtimesBySessionId.delete(runtimeKey);
-        store.idleTtlMsBySessionId.delete(runtimeKey);
         store.connectionMetaByRuntimeKey.delete(runtimeKey);
         await current.dispose();
       });
@@ -296,7 +288,6 @@ export function createSessionMcpRuntimeManagerLifecycle(
       runtime = await inFlight.promise.catch(() => undefined);
     }
     store.runtimesBySessionId.delete(runtimeKey);
-    store.idleTtlMsBySessionId.delete(runtimeKey);
     store.connectionMetaByRuntimeKey.delete(runtimeKey);
     if (runtime) {
       await runtime.dispose();

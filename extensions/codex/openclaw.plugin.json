@@ -1,5 +1,22 @@
 {
   "id": "codex",
+  "backupResources": [
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/tmp/arg0"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/.tmp/plugins"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/.tmp/bundled-marketplaces"
+    }
+  ],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": true

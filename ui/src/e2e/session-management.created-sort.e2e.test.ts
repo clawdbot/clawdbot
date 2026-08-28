@@ -52,6 +52,8 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const rows = page.locator(".sidebar-recent-session");
       await expect.poll(() => rows.count(), { timeout: 10_000 }).toBe(10);
+      const retainedSessionKey = olderRows[5]!.key;
+      await rows.nth(5).evaluate((row) => Reflect.set(row, "__retainedSessionRow", true));
       await captureUiProof(page, "sidebar-created-sort-before-refresh.png");
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
 
@@ -76,6 +78,11 @@ suite.define(() => {
           ),
         )
         .toEqual(expectedVisibleKeys);
+      expect(
+        await page
+          .locator(`.sidebar-recent-session[data-session-key="${retainedSessionKey}"]`)
+          .evaluate((row) => Reflect.get(row, "__retainedSessionRow")),
+      ).toBe(true);
       await captureUiProof(page, "sidebar-created-sort-after-refresh.png");
 
       expect(await rows.count()).toBe(11);

@@ -110,6 +110,7 @@ describe("runGatewayUpdate", () => {
     stableTag: string;
     uiIndexPath: string;
     onDoctor?: () => Promise<void>;
+    onBuild?: () => Promise<void>;
     onUiBuild?: (count: number) => Promise<void>;
   }) {
     const calls: string[] = [];
@@ -143,6 +144,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === "pnpm build") {
+        await params.onBuild?.();
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === "pnpm ui:build") {
@@ -2873,30 +2875,54 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(expectedInstallCommand);
   });
 
-  it("updates global bun installs when detected", async () => {
-    const bunInstall = path.join(tempDir, "bun-install");
-    await withEnvAsync({ BUN_INSTALL: bunInstall }, async () => {
-      const { pkgRoot } = await createGlobalPackageFixture(
-        path.join(bunInstall, "install", "global"),
-      );
-
-      const { calls, runCommand } = createGlobalInstallHarness({
-        pkgRoot,
-        installCommand: "bun add -g --trust openclaw@latest",
-        onInstall: async () => {
-          await writeGlobalPackageVersion(pkgRoot);
+  it.each(["present", "missing", "conflicting"] as const)(
+    "updates global bun installs with %s BUN_INSTALL ownership context",
+    async (ownerEnv) => {
+      const bunInstall = path.join(tempDir, "bun-install");
+      const unrelatedBunInstall = path.join(tempDir, "unrelated-bun");
+      const unrelatedGlobalProject = path.join(tempDir, "unrelated-global");
+      const owningBin = path.join(tempDir, "custom-bun-bin");
+      await withEnvAsync(
+        {
+          BUN_INSTALL:
+            ownerEnv === "present"
+              ? bunInstall
+              : ownerEnv === "conflicting"
+                ? unrelatedBunInstall
+                : undefined,
+          BUN_INSTALL_GLOBAL_DIR: ownerEnv === "conflicting" ? unrelatedGlobalProject : undefined,
+          BUN_INSTALL_BIN: owningBin,
         },
-      });
+        async () => {
+          const { pkgRoot } = await createGlobalPackageFixture(
+            path.join(bunInstall, "install", "global"),
+          );
 
-      const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+          const { calls, runCommand } = createGlobalInstallHarness({
+            pkgRoot,
+            npmRootOutput: path.join(tempDir, "shell", "lib", "node_modules"),
+            installCommand: "bun add -g --trust openclaw@latest",
+            onInstall: async (options) => {
+              expect(options?.env).toMatchObject({
+                BUN_INSTALL: bunInstall,
+                BUN_INSTALL_GLOBAL_DIR: path.join(bunInstall, "install", "global"),
+                BUN_INSTALL_BIN: owningBin,
+              });
+              await writeGlobalPackageVersion(pkgRoot);
+            },
+          });
 
-      expect(result.status).toBe("ok");
-      expect(result.mode).toBe("bun");
-      expect(result.before?.version).toBe("1.0.0");
-      expect(result.after?.version).toBe("2.0.0");
-      expect(calls).toContain("bun add -g --trust openclaw@latest");
-    });
-  });
+          const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+
+          expect(result.status).toBe("ok");
+          expect(result.mode).toBe("bun");
+          expect(result.before?.version).toBe("1.0.0");
+          expect(result.after?.version).toBe("2.0.0");
+          expect(calls).toContain("bun add -g --trust openclaw@latest");
+        },
+      );
+    },
+  );
 
   it("rejects git roots that are not a openclaw checkout", async () => {
     await fs.mkdir(path.join(tempDir, ".git"));
@@ -3046,6 +3072,55 @@ describe("runGatewayUpdate", () => {
         calls.lastIndexOf(`git -C ${tempDir} rev-parse HEAD`),
       );
       expect(calls.lastIndexOf("pnpm install")).toBeLessThan(calls.lastIndexOf("pnpm build"));
+    },
+  );
+
+  it("returns the build identity produced by a dev Git update build", async () => {
+    await setupGitPackageManagerFixture();
+    const buildId = "2026.8.1-target-build";
+    const { runCommand } = await createDevGitRunner({
+      onCommand: async (key) => {
+        if (key === "pnpm build") {
+          await fs.mkdir(path.join(tempDir, "dist"), { recursive: true });
+          await fs.writeFile(
+            path.join(tempDir, "dist", "build-info.json"),
+            `${JSON.stringify({ buildId })}\n`,
+            "utf8",
+          );
+        }
+        return undefined;
+      },
+    });
+
+    const result = await runWithCommand(runCommand, { channel: "dev" });
+
+    expect(result.status).toBe("ok");
+    expect(result.after?.buildId).toBe(buildId);
+  });
+
+  it.each(["stable", "beta"] as const)(
+    "does not return a build identity for a %s Git update",
+    async (channel) => {
+      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+      const uiIndexPath = await setupUiIndex();
+      const stableTag = "v1.0.1-1";
+      const buildId = "2026.8.1-channel-build";
+      const { runCommand } = await createStableTagRunner({
+        stableTag,
+        uiIndexPath,
+        onBuild: async () => {
+          await fs.writeFile(
+            path.join(tempDir, "dist", "build-info.json"),
+            `${JSON.stringify({ buildId })}\n`,
+            "utf8",
+          );
+        },
+      });
+
+      const result = await runWithCommand(runCommand, { channel });
+
+      expect(result.status).toBe("ok");
+      expect(result.after?.buildId).toBeUndefined();
     },
   );
 

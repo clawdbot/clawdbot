@@ -619,7 +619,11 @@ export async function runReplyAgent(
   } catch (error) {
     recordReplyOperationAgentTurn(
       replyOperationRunState,
-      isReplyOperationSuperseded(replyOperation) ? "superseded" : "failed",
+      isReplyOperationSuperseded(replyOperation)
+        ? "superseded"
+        : replyOperation.result?.kind === "aborted"
+          ? "cancelled"
+          : "failed",
       replyOperation,
     );
     return await handleReplyAgentRunError(error, {

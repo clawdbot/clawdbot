@@ -70,6 +70,7 @@ describe("browser action input fill command", () => {
       ],
       targetId: "tab-1",
     });
+    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 65_000 });
   });
 
   it("reports malformed fields without sending a browser request", async () => {
@@ -220,25 +221,32 @@ describe("browser action input evaluate command", () => {
       ref: "button-1",
       targetId: "tab-2",
     });
+    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 65_000 });
   });
 
-  it("passes timeout-ms through to the evaluate action and outer request", async () => {
-    const program = createActionInputProgram();
+  it.each([
+    { rawTimeout: "+030000", actionTimeoutMs: 30_000, requestTimeoutMs: 35_250 },
+    { rawTimeout: "1", actionTimeoutMs: 1, requestTimeoutMs: 5_750 },
+  ])(
+    "preserves the $rawTimeout evaluate timeout and canonical outer deadline",
+    async ({ rawTimeout, actionTimeoutMs, requestTimeoutMs }) => {
+      const program = createActionInputProgram();
 
-    await program.parseAsync(
-      ["browser", "evaluate", "--fn", "() => true", "--timeout-ms", "+030000"],
-      { from: "user" },
-    );
+      await program.parseAsync(
+        ["browser", "evaluate", "--fn", "() => true", "--timeout-ms", rawTimeout],
+        { from: "user" },
+      );
 
-    const request = mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as
-      | { body?: { timeoutMs?: number } }
-      | undefined;
-    const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
-      | { timeoutMs?: number }
-      | undefined;
-    expect(request?.body?.timeoutMs).toBe(30000);
-    expect(options?.timeoutMs).toBeGreaterThan(30000);
-  });
+      const request = mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as
+        | { body?: { timeoutMs?: number } }
+        | undefined;
+      const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
+        | { timeoutMs?: number }
+        | undefined;
+      expect(request?.body?.timeoutMs).toBe(actionTimeoutMs);
+      expect(options?.timeoutMs).toBe(requestTimeoutMs);
+    },
+  );
 
   it("rejects non-decimal evaluate timeouts before dispatch", async () => {
     const program = createActionInputProgram();

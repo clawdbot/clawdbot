@@ -650,6 +650,86 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.originatingTo).toBe("channel:B");
   });
 
+  it.each([
+    { disposition: "deliver", elided: false },
+    { disposition: "drop", elided: false },
+    { disposition: "deliver", elided: true },
+    { disposition: "drop", elided: true },
+  ] as const)(
+    "keeps the WebChat $disposition owner on overflow summaries (elided: $elided)",
+    async ({ disposition, elided }) => {
+      const key = `test-webchat-overflow-delivery-${disposition}-${elided}-${Date.now()}`;
+      const settings = createQueueSettings({ cap: 1 });
+      const delivered: string[] = [];
+      const sourceDisposition =
+        disposition === "deliver"
+          ? {
+              kind: "deliver" as const,
+              deliver: async (batch: { payloads: Array<{ text?: string }> }) => {
+                delivered.push(batch.payloads[0]?.text ?? "");
+              },
+            }
+          : { kind: "drop" as const, reason: "source-unavailable" as const };
+      const dropped = createRun({
+        prompt: "overflowed WebChat message",
+        originatingChannel: "webchat",
+        originatingChatType: "direct",
+      });
+      dropped.queuedFollowupReplyDisposition = sourceDisposition;
+      enqueueFollowupRun(key, dropped, settings);
+      if (elided) {
+        enqueueTestRun(
+          key,
+          {
+            prompt: "separate overflow route",
+            originatingChannel: "webchat",
+            originatingChatType: "group",
+          },
+          settings,
+        );
+      }
+      enqueueTestRun(
+        key,
+        {
+          prompt: "live WebChat message",
+          originatingChannel: "webchat",
+          originatingChatType: elided ? "group" : "direct",
+        },
+        settings,
+      );
+
+      const expectedCalls = elided ? 3 : 2;
+      const { calls, done } = createDrainRecorder(expectedCalls);
+      const unrelatedDispatcher = vi.fn();
+      scheduleFollowupDrain(key, async (run) => {
+        calls.push(run);
+        if (run.prompt.includes("overflowed WebChat message")) {
+          const owner = run.queuedFollowupReplyDisposition;
+          if (owner?.kind === "deliver") {
+            await owner.deliver({
+              kind: "queued-followup",
+              runId: "overflow-summary-run",
+              originatingChannel: "webchat",
+              payloads: [{ text: "overflow summary reached its owner" }],
+            });
+          } else if (owner?.kind !== "drop") {
+            unrelatedDispatcher();
+          }
+        }
+        if (calls.length >= expectedCalls) {
+          done.resolve();
+        }
+      });
+      await done.promise;
+
+      expect(calls[0]?.queuedFollowupReplyDisposition).toBe(sourceDisposition);
+      expect(unrelatedDispatcher).not.toHaveBeenCalled();
+      expect(delivered).toEqual(
+        disposition === "deliver" ? ["overflow summary reached its owner"] : [],
+      );
+    },
+  );
+
   it("does not attribute elided private drops to a public summary", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
       `test-collect-overflow-elided-context-${Date.now()}`,

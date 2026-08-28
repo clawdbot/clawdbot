@@ -130,7 +130,7 @@ new code; see the per-row notes below.
     | `plugin-sdk/channel-targets` | Private-local after July 2026; Target parsing helpers; route comparison callers should use `plugin-sdk/channel-route` |
     | `plugin-sdk/channel-contract` | Channel contract types |
     | `plugin-sdk/channel-feedback` | Feedback/reaction wiring |
-    | `plugin-sdk/reply-payload` | Reply payload types, normalization, content/media inspection, chunked send helpers, reasoning detection, and reply fan-out |
+    | `plugin-sdk/reply-payload` | Reply payload types, normalization, content/media inspection, native question option ordering, chunked send helpers, reasoning detection, and reply fan-out |
   </Accordion>
 
 Later-window channel compatibility subpaths remain public only through their
@@ -171,6 +171,14 @@ are private-local.
     | `plugin-sdk/global-singleton` | Private-local after July 2026; Process-local singleton/map/cache helpers |
     | `plugin-sdk/group-activation` | Private-local after July 2026; Narrow group activation mode and command parsing helpers |
   </Accordion>
+
+`createBoundedProviderBinaryStream` requires a request `cleanup` callback.
+Stream cancellation and `release()` start source cancellation, unlock the reader,
+and run cleanup once, then wait for both operations. Cancellation propagates
+source failures; `release()` ignores them. Cleanup failures take precedence in
+both cases. Overflow preserves its fitting prefix and error without waiting for
+cleanup; later `release()` reports cleanup failure. After EOF or a read error,
+the caller must still invoke and await `release()`.
 
 Provider usage snapshots normally report one or more quota `windows`, each with
 a label, percent used, and optional reset time. Providers that expose balance or
@@ -385,7 +393,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/memory-core-host-engine-curated` | Private-local focused curated-memory annotation parsing for doctor and promotion paths |
     | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine exports |
     | `plugin-sdk/memory-core-host-engine-fs` | Private-local focused filesystem and user-path helpers for doctor migrations |
-    | `plugin-sdk/memory-core-host-engine-embeddings` | Private-local after July 2026; Memory host embedding contracts, generic adapter bridging, and batch/remote helpers. Providers register through the generic embedding provider API. |
+    | `plugin-sdk/memory-core-host-engine-embeddings` | Private-local after July 2026; Memory host embedding contracts and batch/remote helpers. Providers register through the generic embedding provider API. |
     | `plugin-sdk/memory-core-host-engine-sessions` | Private-local after July 2026; Memory session transcript and query helpers |
     | `plugin-sdk/memory-core-host-engine-schema` | Private-local focused memory index schema and sqlite-vec helpers for doctor migrations |
     | `plugin-sdk/memory-core-host-engine-storage` | Private-local after July 2026; Memory host storage engine exports |

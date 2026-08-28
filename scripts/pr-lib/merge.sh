@@ -33,6 +33,67 @@ auto_merge_unavailable_error() {
     "$log_file"
 }
 
+record_crabbox_landing_parent_audit() {
+  local landed_sha="$1"
+  local expected_parent_sha="$2"
+  local commit_file=".local/merge-crabbox-landed-commit.json"
+  local audit_file=".local/merge-crabbox-parent-audit.json"
+  local audit_tmp
+  if ! rm -f "$audit_file" ||
+    ! audit_tmp=$(mktemp .local/merge-crabbox-parent-audit.XXXXXX); then
+    echo "merge completed; post-merge audit failed: unable to prepare the landing parent artifact." >&2
+    return 1
+  fi
+  if ! gh_plain api "repos/{owner}/{repo}/commits/$landed_sha" >"$commit_file"; then
+    rm -f "$audit_tmp"
+    echo "Crabbox landing parent audit failed after merge: unable to read landed commit $landed_sha." >&2
+    return 1
+  fi
+
+  local actual_parent_sha
+  actual_parent_sha=$(jq -er '
+    .parents
+    | select(type == "array" and length > 0)
+    | .[0].sha
+    | select(type == "string" and test("^[0-9a-f]{40}$"))
+  ' "$commit_file") || {
+    rm -f "$audit_tmp"
+    echo "Crabbox landing parent audit failed after merge: landed commit has no valid first parent." >&2
+    return 1
+  }
+
+  local status="match"
+  if [ "$actual_parent_sha" != "$expected_parent_sha" ]; then
+    status="drift"
+  fi
+  if ! jq -n \
+    --arg actualParentSha "$actual_parent_sha" \
+    --arg expectedParentSha "$expected_parent_sha" \
+    --arg landedSha "$landed_sha" \
+    --arg status "$status" \
+    '{status: $status, landedSha: $landedSha, expectedParentSha: $expectedParentSha, actualParentSha: $actualParentSha}' \
+    >"$audit_tmp"; then
+    rm -f "$audit_tmp"
+    echo "merge completed; post-merge audit failed: unable to serialize landing parent evidence." >&2
+    return 1
+  fi
+  if ! mv "$audit_tmp" "$audit_file"; then
+    rm -f "$audit_tmp"
+    echo "merge completed; post-merge audit failed: unable to publish the landing parent artifact." >&2
+    return 1
+  fi
+
+  if [ "$status" = "match" ]; then
+    echo "Crabbox landing parent audit matched: landed=$landed_sha parent=$actual_parent_sha"
+  else
+    echo "Crabbox landing parent audit drift: landed=$landed_sha expected_parent=$expected_parent_sha actual_parent=$actual_parent_sha"
+    echo "The merge already completed after an intervening authorized main advance; this audit reports the residual non-atomic race."
+  fi
+}
+
+# shellcheck source=scripts/pr-lib/crabbox-merge-bypass.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/crabbox-merge-bypass.sh"
+
 mainline_drift_requires_sync() {
   local mainline_base="$1"
   local prepared_head_sha="$2"
@@ -99,6 +160,7 @@ mainline_drift_requires_sync() {
 
 merge_verify() {
   local pr="$1"
+  MERGE_USE_CRABBOX_ADMIN_BYPASS=false
   enter_worktree "$pr" false
 
   require_artifact .local/prep.env
@@ -178,18 +240,23 @@ merge_verify() {
   printf '%s\n' "$checks_json" | jq -r '.[] | "\(.bucket)\t\(.name)\t\(.state)"'
 
   local failed_required
-  failed_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="fail")] | length')
+  failed_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="fail" or .bucket=="skipping")] | length')
   local pending_required
   pending_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="pending")] | length')
-
-  if [ "$failed_required" -gt 0 ]; then
-    echo "Required checks are failing."
-    exit 1
-  fi
 
   if [ "$pending_required" -gt 0 ]; then
     echo "Required checks are still pending."
     exit 1
+  fi
+
+  if [ "$failed_required" -gt 0 ]; then
+    echo "Required checks are failing; checking the bounded Crabbox infrastructure fallback."
+    if ! verify_crabbox_admin_merge_bypass "$pr" "$PREP_HEAD_SHA"; then
+      echo "Crabbox merge bypass evidence is not sufficient." >&2
+      echo "Required checks are failing."
+      exit 1
+    fi
+    MERGE_USE_CRABBOX_ADMIN_BYPASS=true
   fi
 
   git fetch origin main
@@ -216,6 +283,71 @@ merge_verify() {
   fi
 
   echo "merge-verify passed for PR #$pr"
+}
+
+prepare_squash_merge_body() {
+  local pr="$1" source_head="${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}"
+  local main_sha source_trailers
+  main_sha=$(git rev-parse --verify refs/remotes/origin/main) || return 1
+  # GraphQL publication can collapse local fixups. Preserve their reviewed
+  # trailers, excluding main's ancestry, rather than inspecting current HEAD.
+  source_trailers=$(git -c trailer.separators=: -c trailer.co-authored-by.key=Co-authored-by log --reverse \
+    --no-show-signature --no-notes --no-color --no-decorate --encoding=UTF-8 \
+    --format='%(trailers:key=Co-authored-by,only,unfold)' "$main_sha..$source_head") || return 1
+  [ -n "$source_trailers" ] || return 0
+
+  local repo_nwo preview
+  repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || return 1
+  preview=$(gh_plain api graphql \
+    -f 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid isMergeQueueEnabled viewerMergeBodyText(mergeType:SQUASH)}}}' \
+    -f owner="${repo_nwo%/*}" -f name="${repo_nwo#*/}" -F number="$pr") || return 1
+  if ! printf '%s\n' "$preview" | jq -e --arg head "$PREP_HEAD_SHA" '
+    .data.repository.pullRequest | .headRefOid == $head and
+      (.viewerMergeBodyText | type == "string") and .isMergeQueueEnabled == false
+  ' >/dev/null; then
+    echo "Cannot preserve squash credit: require a current-head message from a non-queue PR. Refresh prepare evidence and check the merge queue policy." >&2
+    return 1
+  fi
+
+  local body_file envelope original_trailers final_trailers message trailer
+  body_file=$(mktemp .local/merge-body.XXXXXX) || return 1
+  # Git parses complete commit messages; a body containing only trailers needs
+  # a temporary subject. Keep all authors in one terminal trailer block.
+  envelope=$'OpenClaw merge message\n\n'
+  printf '%s' "$envelope" > "$body_file" || return 1
+  printf '%s\n' "$preview" | jq -r '.data.repository.pullRequest.viewerMergeBodyText' >> "$body_file" || return 1
+  original_trailers=$(git -c trailer.separators=: -c trailer.co-authored-by.key=Co-authored-by interpret-trailers \
+    --parse --no-divider "$body_file") || return 1
+  # Mutating interpret-trailers runs configured trailer commands. Parse only,
+  # then append missing values without rewriting the server's existing text.
+  message=$(printf '%s\n' "$preview" | jq -r '.data.repository.pullRequest.viewerMergeBodyText') || return 1
+  while [[ "$message" == *$'\n'* ]] && [[ "${message##*$'\n'}" != *[!$' \t\r']* ]]; do
+    message="${message%$'\n'*}"
+  done
+  local known_trailers="$original_trailers" separator=$'\n\n'
+  [ -z "$original_trailers" ] || separator=$'\n'
+  while IFS= read -r trailer; do
+    [ -n "$trailer" ] || continue
+    if ! printf '%s\n' "$known_trailers" | grep -Fxq -- "$trailer"; then
+      [ -z "$message" ] || message+="$separator"
+      message+="$trailer"
+      known_trailers+=$'\n'"$trailer"
+      separator=$'\n'
+    fi
+  done <<< "$source_trailers"
+  printf '%s%s\n' "$envelope" "$message" > "$body_file" || return 1
+  final_trailers=$(git -c trailer.separators=: -c trailer.co-authored-by.key=Co-authored-by interpret-trailers \
+    --parse --no-divider "$body_file") || return 1
+  while IFS= read -r trailer; do
+    [ -n "$trailer" ] || continue
+    if ! printf '%s\n' "$final_trailers" | grep -Fxq -- "$trailer"; then
+      echo "Cannot preserve squash credit: the final message lost a source or preview trailer." >&2
+      return 1
+    fi
+  done <<< "$original_trailers
+$source_trailers"
+  printf '%s\n' "$message" > "$body_file" || return 1
+  printf '%s\n' "$body_file"
 }
 
 merge_run() {
@@ -251,31 +383,42 @@ merge_run() {
   fi
 
   delete_remote_pr_head_branch_after_merge() {
-    local head_json
-    head_json=$(gh pr view "$pr" --json headRefName,headRepository,headRepositoryOwner,isCrossRepository,maintainerCanModify)
-
-    local head_ref
+    local head_json head_ref
+    if ! head_json=$(gh pr view "$pr" --json headRefName,headRepository,headRepositoryOwner); then
+      echo "Warning: unable to read PR head metadata for remote branch cleanup"
+      return 0
+    fi
     head_ref=$(printf '%s\n' "$head_json" | jq -r '.headRefName // ""')
     if [ -z "$head_ref" ]; then
       return 0
     fi
 
-    local repo_owner
+    local repo_owner repo_name
     repo_owner=$(printf '%s\n' "$head_json" | jq -r '.headRepositoryOwner.login // ""')
-    local repo_name
     repo_name=$(printf '%s\n' "$head_json" | jq -r '.headRepository.name // ""')
     if [ -z "$repo_owner" ] || [ -z "$repo_name" ]; then
       echo "Warning: unable to resolve head repository for remote branch cleanup"
       return 0
     fi
 
-    local encoded_ref
+    local encoded_ref delete_error matching_refs
     encoded_ref=$(jq -rn --arg value "heads/$head_ref" '$value|@uri')
-    if gh_plain api -X DELETE "repos/$repo_owner/$repo_name/git/refs/$encoded_ref" >/dev/null 2>&1; then
+    if delete_error=$(gh_plain api -X DELETE "repos/$repo_owner/$repo_name/git/refs/$encoded_ref" 2>&1); then
+      return 0
+    fi
+
+    # GitHub may auto-delete the head before cleanup. Only a fresh, valid ref
+    # listing proves absence; longer prefix siblings are not the target.
+    if matching_refs=$(gh_plain api -X GET "repos/$repo_owner/$repo_name/git/matching-refs/$encoded_ref") &&
+      printf '%s\n' "$matching_refs" | jq -se --arg ref "refs/heads/$head_ref" '
+        length == 1 and (.[0] | type == "array" and
+          all(.[]; (.ref | type == "string" and startswith($ref)) and .ref != $ref))
+      ' >/dev/null; then
       return 0
     fi
 
     echo "Warning: failed to delete remote branch $repo_owner/$repo_name:$head_ref"
+    printf '%s\n' "$delete_error" >&2
     return 0
   }
 
@@ -301,11 +444,28 @@ merge_run() {
       ;;
   esac
 
+  if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ] && [ "$merge_method" != "squash" ]; then
+    echo "Crabbox infrastructure bypass requires the pinned squash merge method."
+    exit 2
+  fi
+  if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ] && [ "$auto_merge_requested" = "true" ]; then
+    echo "Crabbox infrastructure bypass uses an immediate pinned admin squash merge; ignoring auto-merge."
+    auto_merge_requested=false
+  fi
+
   if [ "$auto_merge_requested" = "true" ] && [ "$merge_method" != "squash" ]; then
     echo "Auto-merge requires squash; unset OPENCLAW_PR_MERGE_METHOD or set it to squash."
     exit 2
   fi
 
+  local merge_args=(--match-head-commit "$PREP_HEAD_SHA")
+  if [ "$merge_method" = "squash" ]; then
+    local merge_body_file
+    merge_body_file=$(prepare_squash_merge_body "$pr") || return 1
+    [ -z "$merge_body_file" ] || merge_args+=(--body-file "$merge_body_file")
+  fi
+
+  local crabbox_final_main_sha=""
   local merge_submitted=false
   local state=""
   # Auto-merge is only a post-verification landing strategy. Keep every
@@ -362,7 +522,7 @@ merge_run() {
       if gh_plain pr merge "$pr" \
         --auto \
         --squash \
-        --match-head-commit "$PREP_HEAD_SHA" \
+        "${merge_args[@]}" \
         >.local/merge-output.log 2>&1
       then
         auto_meta=$(read_pr_view_json "$pr" "state,headRefOid,mergeable,mergeStateStatus,autoMergeRequest") || exit 1
@@ -415,13 +575,37 @@ merge_run() {
   fi
 
   if [ "$merge_submitted" != "true" ]; then
-    if ! gh_plain pr merge "$pr" \
-      "$merge_flag" \
-      --match-head-commit "$PREP_HEAD_SHA" \
-      >.local/merge-output.log 2>&1
-    then
-      print_relevant_log_excerpt .local/merge-output.log
-      exit 1
+    if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ]; then
+      if ! verify_crabbox_admin_merge_bypass "$pr" "$PREP_HEAD_SHA"; then
+        echo "Crabbox merge bypass evidence is not sufficient." >&2
+        exit 1
+      fi
+      crabbox_final_main_sha=$(jq -er '
+        .workflowSha
+        | select(type == "string" and test("^[0-9a-f]{40}$"))
+      ' .local/merge-crabbox-bypass.json) || {
+        echo "Crabbox merge bypass did not preserve the final protected-main SHA." >&2
+        exit 1
+      }
+      merge_label="admin squash with trusted Crabbox infrastructure proof"
+      if ! gh_plain pr merge "$pr" \
+        --admin \
+        "$merge_flag" \
+        "${merge_args[@]}" \
+        >.local/merge-output.log 2>&1
+      then
+        print_relevant_log_excerpt .local/merge-output.log
+        exit 1
+      fi
+    else
+      if ! gh_plain pr merge "$pr" \
+        "$merge_flag" \
+        "${merge_args[@]}" \
+        >.local/merge-output.log 2>&1
+      then
+        print_relevant_log_excerpt .local/merge-output.log
+        exit 1
+      fi
     fi
   fi
 
@@ -451,6 +635,9 @@ merge_run() {
     echo "Landed commit SHA missing."
     exit 1
   fi
+  if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ]; then
+    record_crabbox_landing_parent_audit "$landed_sha" "$crabbox_final_main_sha" || exit 1
+  fi
   local repo_nwo
   repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 
@@ -466,6 +653,20 @@ merge_run() {
     "$prep_sha_url" \
     "$landed_sha" \
     "$landed_sha_url"
+  if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ]; then
+    local crabbox_check_url
+    local ci_gate_url
+    crabbox_check_url=$(jq -r .crabboxCheckUrl .local/merge-crabbox-bypass.json)
+    ci_gate_url=$(jq -r .ciGateUrl .local/merge-crabbox-bypass.json)
+    printf -v comment_body \
+      '%s\n- Alternate gate: [openclaw/crabbox-gate](%s)\n- Hosted CI infrastructure failure: [openclaw/ci-gate](%s)\n- Landing parent audit: %s (expected `%s`, actual `%s`)' \
+      "$comment_body" \
+      "$crabbox_check_url" \
+      "$ci_gate_url" \
+      "$(jq -r 'if .status == "match" then "match" else "drift after an intervening authorized main advance; merge already completed" end' .local/merge-crabbox-parent-audit.json)" \
+      "$(jq -r .expectedParentSha .local/merge-crabbox-parent-audit.json)" \
+      "$(jq -r .actualParentSha .local/merge-crabbox-parent-audit.json)"
+  fi
   local comment_url=""
   local comment_err_file
   comment_err_file=$(mktemp)

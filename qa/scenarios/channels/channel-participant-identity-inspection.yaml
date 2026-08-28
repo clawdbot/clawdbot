@@ -34,7 +34,7 @@ scenario:
     - Direct and group runs project a person invoker while room and route identifiers never become principals.
     - Senderless input is admitted with an unknown invoker, and an allowlist rejection creates no run, identity context, or decision fact.
     - Same and mixed participants remain correctly distinguished across collect-configured QA Channel ingress.
-    - JSON and human CLI inspection remain stable after a Gateway replacement restart.
+    - JSON and human CLI inspection remain stable after a Gateway replacement restart without exposing private generic decision facts as trusted owner evidence.
   docsRefs:
     - docs/gateway/audit.md
     - docs/cli/audit.md
@@ -134,8 +134,8 @@ flow:
             - 60000
             - 250
         - assert:
-            expr: "groupInspect.identity.context.invoker.state === 'present' && groupInspect.decisions.some((receipt) => receipt.action.family === 'channel' && receipt.enforcement.coverageState === 'enforced') && !JSON.stringify(groupInspect).includes('qa-group-room')"
-            message: group allowlist admission must record enforced participant evidence without the room as principal
+            expr: "groupInspect.identity.context.invoker.state === 'present' && groupInspect.coverage.state === 'unknown' && groupInspect.coverage.missingEvidence.includes('decision.display_provenance') && groupInspect.decisionDisplays.some((receipt) => receipt.action.family === 'decision' && receipt.provenance.state === 'unverified') && !JSON.stringify(groupInspect).includes('qa-group-room')"
+            message: group inspection must retain participant identity without presenting private generic facts or the room as trusted owner evidence
         - set: senderlessRunsBefore
           value:
             expr: "[...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string'))]"
@@ -164,7 +164,7 @@ flow:
             - 60000
             - 250
         - assert:
-            expr: "senderlessInspect.identity.context.invoker.state === 'unknown' && senderlessInspect.decisions.some((receipt) => receipt.action.family === 'channel' && receipt.enforcement.coverageState === 'unknown')"
+            expr: "senderlessInspect.identity.context.invoker.state === 'unknown' && senderlessInspect.coverage.state === 'unknown' && senderlessInspect.decisionDisplays.some((receipt) => receipt.action.family === 'decision' && receipt.provenance.state === 'unverified')"
             message: senderless admission must stay unknown
       detailsExpr: "`dm=${dmRunId}; group=${groupRunId}; senderless=${senderlessRunId}`"
 

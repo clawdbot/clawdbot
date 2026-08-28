@@ -144,6 +144,9 @@ CREATE TABLE IF NOT EXISTS session_windows (
 CREATE INDEX IF NOT EXISTS idx_agent_session_windows_updated_at
   ON session_windows(updated_at DESC, session_id);
 
+CREATE INDEX IF NOT EXISTS idx_agent_session_windows_session_key
+  ON session_windows(session_key, updated_at DESC, session_id);
+
 CREATE INDEX IF NOT EXISTS idx_agent_session_windows_created_at
   ON session_windows(created_at DESC, session_id);
 
@@ -456,6 +459,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_message_idempotency
   ON transcript_event_identities(session_id, message_idempotency_key)
   WHERE message_idempotency_key IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_identity_sequence
+  ON transcript_event_identities(session_id, seq);
+
 CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent
   ON transcript_event_identities(session_id, parent_id)
   WHERE parent_id IS NOT NULL;
@@ -550,6 +556,23 @@ CREATE TABLE IF NOT EXISTS memory_index_chunk_provenance (
   observed_at INTEGER NOT NULL,
   supersedes_key TEXT,
   FOREIGN KEY (chunk_id) REFERENCES memory_index_chunks(id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS memory_entry_origins (
+  entry_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  session_key TEXT,
+  origin_class TEXT NOT NULL CHECK (origin_class IN ('owner', 'agent', 'untrusted', 'system')),
+  observed_at INTEGER NOT NULL,
+  PRIMARY KEY (entry_key, agent_id, session_id)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS memory_session_tombstones (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS memory_embedding_cache (

@@ -806,11 +806,7 @@ jobs:
             qa/maturity-scores.yaml
             docs/maturity/scorecard.md
             docs/maturity/taxonomy.md
-          invalidation-paths: |
-            .
-            :(exclude)qa/maturity-scores.yaml
-            :(exclude)docs/maturity/scorecard.md
-            :(exclude)docs/maturity/taxonomy.md
+          invalidation-paths: ""
           overlap-policy: fail
           pr-body: |
             ## What Problem This Solves

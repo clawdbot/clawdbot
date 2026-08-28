@@ -19,10 +19,7 @@ import { checkTelemetryUpdate } from "../infra/telemetry.js";
 import { cleanOldMedia, pruneOutboundMedia, prunePlaybackTranscodeCache } from "../media/store.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
-import {
-  runScheduledSkillCollectionReviews,
-  startSkillCollectionMaintenance,
-} from "../skills/workshop/collection-review.js";
+import { registerSkillUsageTracking } from "../skills/workshop/curator.js";
 import {
   abortChatRunById,
   type ChatAbortControllerEntry,
@@ -98,8 +95,6 @@ export function startGatewayMaintenanceTimers(params: {
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
   runManagedOutgoingMediaGc?: () => Promise<unknown>;
-  enableSkillCurator?: boolean;
-  runSkillCollectionReconcile?: () => Promise<unknown>;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
@@ -107,7 +102,7 @@ export function startGatewayMaintenanceTimers(params: {
   startMediaCleanup: () => void;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   worktreeCleanup: ReturnType<typeof setInterval>;
-  skillCuratorCleanup: () => void;
+  skillUsageCleanup: () => void;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
@@ -226,23 +221,7 @@ export function startGatewayMaintenanceTimers(params: {
   };
   void performDevicePairSetupCompletionGc(Date.now());
 
-  let skillCuratorCleanup = () => {};
-  if (params.enableSkillCurator) {
-    skillCuratorCleanup = startSkillCollectionMaintenance({
-      onError: (err) =>
-        params.logHealth.error(`skill collection review failed: ${formatError(err)}`),
-      run:
-        params.runSkillCollectionReconcile ??
-        (() =>
-          runScheduledSkillCollectionReviews({
-            config: params.getRuntimeConfig(),
-            onError: (err, workspaceDir) =>
-              params.logHealth.error(
-                `skill collection review failed for ${workspaceDir}: ${formatError(err)}`,
-              ),
-          })),
-    });
-  }
+  const skillUsageCleanup = registerSkillUsageTracking();
 
   // dedupe cache cleanup
   const dedupeCleanup = setInterval(() => {
@@ -522,6 +501,6 @@ export function startGatewayMaintenanceTimers(params: {
     startMediaCleanup,
     stopMediaCleanup,
     worktreeCleanup,
-    skillCuratorCleanup,
+    skillUsageCleanup,
   };
 }

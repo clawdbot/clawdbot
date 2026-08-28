@@ -21,6 +21,8 @@ on:
       - "scripts/lib/plugin-npm-package-manifest.mjs"
       - "scripts/lib/plugin-npm-package-manifest.mts"
       - "scripts/lib/tsx-cli-shim.mjs"
+      - "scripts/lib/local-check-runtime.mts"
+      - "scripts/tsx.mjs"
       - "scripts/lib/plugin-npm-release.ts"
       - "scripts/lib/plugin-publication-candidates.ts"
       - "scripts/lib/plugin-publication-collector.ts"

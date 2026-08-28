@@ -8,8 +8,7 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
 import {
-  isMessageActionSuccessful,
-  resolveMessageSendOutcome,
+  resolveMessageActionOutcome,
   type MessageActionResult,
 } from "../infra/outbound/message-action-contracts.js";
 import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
@@ -192,7 +191,7 @@ function renderReactions(payload: unknown, opts: FormatOpts): string[] | null {
     return null;
   }
 
-  const rows = reactions.slice(0, 50).map((r) => {
+  const rows = reactions.slice(0, opts.displayLimit ?? 50).map((r) => {
     const entry = r as Record<string, unknown>;
     const emojiObj = entry.emoji as Record<string, unknown> | undefined;
     const emoji =
@@ -290,6 +289,7 @@ export function formatMessageCliText(
     return [muted(`[dry-run] would run ${result.action} via ${result.channel}`)];
   }
 
+  const outcome = resolveMessageActionOutcome(result);
   if (result.kind === "broadcast") {
     const results = result.payload.results ?? [];
     const rows = results.map((entry) => ({
@@ -300,7 +300,7 @@ export function formatMessageCliText(
     }));
     const okCount = results.filter((entry) => entry.ok).length;
     const total = results.length;
-    const successful = isMessageActionSuccessful(result);
+    const successful = outcome.ok;
     const headingLine = (successful ? ok : fail)(
       `${successful ? "✅ Broadcast complete" : "❌ Broadcast failed"} (${okCount}/${total} succeeded, ${total - okCount} failed)`,
     );
@@ -319,12 +319,12 @@ export function formatMessageCliText(
     ];
   }
 
+  if (!outcome.ok) {
+    const messageId = result.kind === "send" ? result.sendResult?.result?.messageId : undefined;
+    return [fail(`❌ ${outcome.error}${messageId ? ` Message ID: ${messageId}` : ""}`)];
+  }
+
   if (result.kind === "send") {
-    const outcome = resolveMessageSendOutcome(result.sendResult);
-    if (!outcome.ok) {
-      const messageId = result.sendResult?.result?.messageId;
-      return [fail(`❌ ${outcome.error}${messageId ? ` Message ID: ${messageId}` : ""}`)];
-    }
     if (result.handledBy === "core" && result.sendResult) {
       const send = result.sendResult;
       if (send.via === "direct") {

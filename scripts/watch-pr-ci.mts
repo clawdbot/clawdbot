@@ -67,7 +67,11 @@ const RollupResponseSchema = z.object({
     repository: z.object({ pullRequest: RollupPageSchema.nullish() }).nullish(),
   }),
 });
-const RunListItemSchema = z.object({ id: z.number(), workflow_id: optionalNumber });
+const RunListItemSchema = z.object({
+  id: z.number(),
+  workflow_id: optionalNumber,
+  conclusion: optionalNullable(z.string()),
+});
 const RunListSchema = z
   .object({ workflow_runs: validArray(RunListItemSchema) })
   .transform((response) => response.workflow_runs)
@@ -308,9 +312,9 @@ const readPr = (pr: number, repo: string) =>
     ),
   );
 export const buildFindRunArgs = (repo: string, sha: string) =>
-  workflowRunsApiArgs(repo, sha, "pull_request", 1);
+  workflowRunsApiArgs(repo, sha, "pull_request", 20);
 export const selectRunAfter = (runs: RunListItem[], after?: number) =>
-  runs.find((run) => after === undefined || run.id > after);
+  runs.find((run) => run.conclusion !== "skipped" && (after === undefined || run.id > after));
 const findRun = (repo: string, sha: string, after?: number) =>
   selectRunAfter(
     RunListSchema.parse(execGhJson(buildFindRunArgs(repo, sha), GH_READ_OPTIONS)),

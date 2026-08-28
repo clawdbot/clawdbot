@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   resolveControlUiAssetHealth,
   resolveControlUiDistIndexPathForRoot,
@@ -9,6 +10,7 @@ import { resolveStableNodePath } from "./stable-node-path.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import {
   managerInstallArgs,
+  managerInstallIgnoreScriptsArgs,
   managerScriptArgs,
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
@@ -19,11 +21,9 @@ import {
 } from "./update-runner-doctor.js";
 import {
   findBlockingGitFailure,
-  mapManagerResolutionFailure,
   resolveBuildEnv,
   resolveInstallEnv,
-  resolveRetryInstallArgs,
-  shouldRetryWindowsInstallIgnoringScripts,
+  shouldInstallWithoutScriptsOnWindows,
 } from "./update-runner-git-commands.js";
 import { runGitDevPreflight } from "./update-runner-git-preflight.js";
 import { rebuildRolledBackGitRuntime } from "./update-runner-git-recovery.js";
@@ -39,6 +39,17 @@ import type {
   UpdateRunnerOptions,
   UpdateStepResult,
 } from "./update-runner-types.js";
+
+async function readBuiltGatewayBuildId(gitRoot: string): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(path.join(gitRoot, "dist", "build-info.json"), "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    const buildId = isRecord(parsed) ? parsed.buildId : undefined;
+    return typeof buildId === "string" && buildId.trim() ? buildId.trim() : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function updateGitCheckout(params: {
   opts: UpdateRunnerOptions;
@@ -399,7 +410,7 @@ export async function updateGitCheckout(params: {
     "require-preferred",
   );
   if (manager.kind === "missing-required") {
-    return await rollbackError(mapManagerResolutionFailure(manager.reason));
+    return await rollbackError(manager.reason);
   }
   try {
     const installEnv = resolveInstallEnv(manager.manager, manager.env);
@@ -413,8 +424,8 @@ export async function updateGitCheckout(params: {
         installEnv,
       ),
     );
-    if (installStep.exitCode !== 0 && shouldRetryWindowsInstallIgnoringScripts(manager.manager)) {
-      const retryArgv = resolveRetryInstallArgs(manager.manager);
+    if (installStep.exitCode !== 0 && shouldInstallWithoutScriptsOnWindows(manager.manager)) {
+      const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
       if (retryArgv) {
         installStep = await runStep(
           step("deps install (ignore scripts)", retryArgv, gitRoot, installEnv),
@@ -548,6 +559,7 @@ export async function updateGitCheckout(params: {
     }
 
     const failedStep = findBlockingGitFailure(steps);
+    const afterBuildId = channel === "dev" ? await readBuiltGatewayBuildId(gitRoot) : null;
     const afterShaStep = await runStep(
       step("git rev-parse HEAD (after)", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
     );
@@ -570,6 +582,7 @@ export async function updateGitCheckout(params: {
       after: {
         sha: afterShaStep.stdoutTail?.trim() ?? null,
         version: await readPackageVersion(gitRoot),
+        ...(afterBuildId ? { buildId: afterBuildId } : {}),
         ...(!failedStep && devTarget?.mode === "tracked"
           ? { upstreamRef: devTarget.upstreamRef }
           : {}),

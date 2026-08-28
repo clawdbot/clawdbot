@@ -67,7 +67,6 @@ const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS = new Map<strin
   ["@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js", 1],
   ["@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
 ]);
-
 function parseNpmPackFiles(raw: string, packageName: string): string[] {
   const parsed = JSON.parse(raw) as unknown;
   const entries = resolveNpmJsonEntries(parsed);

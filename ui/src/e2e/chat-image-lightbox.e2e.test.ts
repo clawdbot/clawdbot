@@ -1,7 +1,8 @@
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -31,15 +32,6 @@ async function newContext(options: Parameters<Browser["newContext"]>[0]) {
 async function closeContext(context: BrowserContext) {
   openContexts.delete(context);
   await context.close().catch(() => {});
-}
-
-async function waitForLightboxAnimations(page: Page): Promise<void> {
-  await page.locator("openclaw-image-lightbox wa-dialog").evaluate(async (dialogAdapter) => {
-    const nativeDialog = dialogAdapter.shadowRoot?.querySelector("dialog");
-    await Promise.all(
-      (nativeDialog?.getAnimations({ subtree: true }) ?? []).map((animation) => animation.finished),
-    );
-  });
 }
 
 describeControlUiE2e("Control UI image lightbox", () => {
@@ -135,7 +127,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
       const dialog = page.getByRole("dialog", { name: "Image preview: OpenClaw banner" });
       await dialog.waitFor({ state: "visible" });
       const closeButton = page.getByRole("button", { name: "Close image preview" });
-      const openOriginal = page.getByRole("link", { name: "Open original" });
+      const openOriginal = page.getByRole("link", { name: "Open in new tab" });
       await openOriginal.waitFor({ state: "visible" });
       await expect.poll(() => openOriginal.getAttribute("href")).toMatch(/^blob:/);
       const focusIsInsideLightbox = () =>
@@ -165,10 +157,15 @@ describeControlUiE2e("Control UI image lightbox", () => {
           ),
         )
         .toBeGreaterThan(0);
-      await waitForLightboxAnimations(page);
+      await page
+        .locator("openclaw-image-lightbox wa-dialog dialog")
+        .evaluate(finishElementAnimations);
       const desktopBox = await page.locator("openclaw-image-lightbox .lightbox").boundingBox();
-      expect(desktopBox?.width ?? 0).toBeGreaterThan(1000);
-      expect(desktopBox?.height ?? 0).toBeGreaterThan(700);
+      const viewport = page.viewportSize();
+      expect(desktopBox?.x).toBe(0);
+      expect(desktopBox?.y).toBe(0);
+      expect(desktopBox?.width).toBe(viewport?.width);
+      expect(desktopBox?.height).toBe(viewport?.height);
       const originalPopup = page.waitForEvent("popup");
       await openOriginal.click();
       const originalPage = await originalPopup;
@@ -223,7 +220,9 @@ describeControlUiE2e("Control UI image lightbox", () => {
       await page.setViewportSize({ height: 844, width: 390 });
       await sidebarTrigger.click();
       await sidebarDialog.waitFor({ state: "visible" });
-      await waitForLightboxAnimations(page);
+      await page
+        .locator("openclaw-image-lightbox wa-dialog dialog")
+        .evaluate(finishElementAnimations);
       await page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
         lightbox.style.setProperty("--safe-area-top", "18px");
         lightbox.style.setProperty("--safe-area-right", "12px");

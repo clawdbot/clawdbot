@@ -353,6 +353,46 @@ describe("printCronList", () => {
     expectLogsToInclude(show.logs, "trigger: once=yes; evals=4;");
   });
 
+  it("includes condition triggers on stream schedules", () => {
+    const job = createBaseJob({
+      schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      trigger: { script: "json({ fire: true })" },
+      state: {},
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    expectLogsToInclude(list.logs, "stream node events.mjs+trigger");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "schedule: stream node events.mjs+trigger");
+  });
+
+  it("shows disabled stream sources and their actionable failure reason", () => {
+    const job = createBaseJob({
+      schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      state: {
+        streamStatus: "disabled",
+        streamError: "stream sources require cron.triggers.enabled=true",
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    const row = list.logs.find((line) => line.includes(job.id)) ?? "";
+    expect(row).toContain("disabled");
+    expect(row).not.toContain("idle");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "stream status: disabled");
+    expectLogsToInclude(
+      show.logs,
+      "stream error: stream sources require cron.triggers.enabled=true",
+    );
+  });
+
   it("shows on-exit schedules in list and show output", () => {
     const job = createBaseJob({
       id: "on-exit-job",
@@ -434,20 +474,49 @@ describe("printCronList", () => {
   );
 
   it.each([
-    { label: "disabled", enabled: false, runStatus: "ok" as const, expectedStatus: "disabled" },
-    { label: "running", enabled: true, runStatus: "ok" as const, expectedStatus: "running" },
-    { label: "failed", enabled: true, runStatus: "error" as const, expectedStatus: "error" },
+    {
+      label: "disabled",
+      enabled: false,
+      running: false,
+      runStatus: "ok" as const,
+      expectedStatus: "disabled",
+    },
+    {
+      label: "running",
+      enabled: true,
+      running: true,
+      runStatus: "ok" as const,
+      expectedStatus: "running",
+    },
+    {
+      label: "paused but force-running",
+      enabled: false,
+      running: true,
+      runStatus: "ok" as const,
+      expectedStatus: "running",
+    },
+    {
+      label: "failed",
+      enabled: true,
+      running: false,
+      runStatus: "error" as const,
+      expectedStatus: "error",
+    },
   ])(
     "does not let prior non-delivery override a $label automation",
-    ({ enabled, runStatus, expectedStatus }) => {
+    ({ enabled, running, runStatus, expectedStatus }) => {
       const job = createBaseJob({
         enabled,
         state: {
           lastRunStatus: runStatus,
           lastDeliveryStatus: "not-delivered",
-          ...(expectedStatus === "running" ? { runningAtMs: Date.now() } : {}),
+          ...(running ? { runningAtMs: Date.now() } : {}),
         },
       });
+
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, expectedStatus);
 
       const show = createRuntimeLogCapture();
       printCronShow(job, show.runtime);
@@ -455,6 +524,9 @@ describe("printCronList", () => {
       expectLogsToInclude(show.logs, `status: ${expectedStatus}`);
       expect(show.logs.join("\n")).not.toContain("ok (not delivered)");
       expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: expectedStatus });
+      expect(enrichCronJsonWithStatus({ jobs: [job] })).toMatchObject({
+        jobs: [{ status: expectedStatus }],
+      });
     },
   );
 

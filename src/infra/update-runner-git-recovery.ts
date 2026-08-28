@@ -4,6 +4,7 @@ import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import type { UpdateChannel } from "./update-channels.js";
 import {
   managerInstallArgs,
+  managerInstallIgnoreScriptsArgs,
   managerScriptArgs,
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
@@ -11,8 +12,7 @@ import { runStep } from "./update-runner-command.js";
 import {
   resolveBuildEnv,
   resolveInstallEnv,
-  resolveRetryInstallArgs,
-  shouldRetryWindowsInstallIgnoringScripts,
+  shouldInstallWithoutScriptsOnWindows,
 } from "./update-runner-git-commands.js";
 import type { CommandRunner, UpdateStepResult } from "./update-runner-types.js";
 
@@ -89,8 +89,8 @@ export async function rebuildRolledBackGitRuntime(params: {
       }),
       installEnv,
     );
-    if (!installed && shouldRetryWindowsInstallIgnoringScripts(manager.manager)) {
-      const retryArgv = resolveRetryInstallArgs(manager.manager);
+    if (!installed && shouldInstallWithoutScriptsOnWindows(manager.manager)) {
+      const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
       installed = retryArgv
         ? await appendStep("git rollback deps install (ignore scripts)", retryArgv, installEnv)
         : false;

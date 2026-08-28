@@ -38,11 +38,14 @@ export function createCrabboxNodeEnrollmentSetup(params: {
     enrollment.mode === "connect"
       ? `connect --target-file "$setup_code_file" --ephemeral --display-name ${shellQuote(enrollment.displayName)}`
       : `node run --ephemeral --display-name ${shellQuote(enrollment.displayName)}`;
-  const prepareCodex = (binary: string): string[] => {
+  const prepareCodex = (): string[] => {
     if (executionMode !== "remote-exec") {
       return [];
     }
+    // Uncaught node -e errors dump source and append a stack to the diagnosis,
+    // pushing the actionable message out of the bounded provider error tail.
     const inspectPlugin = [
+      "try{",
       'const fs=require("node:fs"),path=require("node:path"),module=require("node:module");',
       'const inspection=JSON.parse(fs.readFileSync(0,"utf8")),plugin=inspection.plugin;',
       `const version=${JSON.stringify(enrollment.openclawVersion)};`,
@@ -69,10 +72,11 @@ export function createCrabboxNodeEnrollmentSetup(params: {
       'if(!existing.isSymbolicLink()||fs.realpathSync(projected)!==root){throw new Error("Codex node plugin path is occupied")}',
       '}catch(error){if(error.code!=="ENOENT"){throw error}fs.symlinkSync(root,projected)}',
       "}",
+      "}catch(error){console.error(String(error));process.exitCode=1}",
     ].join("");
     return [
-      `  ${binary} plugins inspect codex --json | node -e ${shellQuote(inspectPlugin)} "$state_dir"`,
-      `  OPENCLAW_STATE_DIR="$state_dir" ${binary} plugins enable codex`,
+      `"$@" plugins inspect codex --json | node -e ${shellQuote(inspectPlugin)} "$state_dir"`,
+      'OPENCLAW_STATE_DIR="$state_dir" "$@" plugins enable codex',
     ];
   };
   const command = [
@@ -106,12 +110,12 @@ export function createCrabboxNodeEnrollmentSetup(params: {
     "fi",
     'package_spec="$(cat "$package_spec_file")"',
     'if [ "$package_spec" = "@global" ]; then',
-    ...prepareCodex("openclaw"),
-    `  setsid -f sh -c 'printf "%s\\n" "$$" >"$1"; shift; exec "$@"' sh "$pid_file" env OPENCLAW_STATE_DIR="$state_dir" openclaw ${launch} >"$state_dir/node.log" 2>&1 </dev/null`,
+    "  set -- openclaw",
     "else",
-    ...prepareCodex('npx --yes --package "$package_spec" -- openclaw'),
-    `  setsid -f sh -c 'printf "%s\\n" "$$" >"$1"; shift; exec "$@"' sh "$pid_file" env OPENCLAW_STATE_DIR="$state_dir" npx --yes --package "$package_spec" -- openclaw ${launch} >"$state_dir/node.log" 2>&1 </dev/null`,
+    '  set -- npx --yes --package "$package_spec" -- openclaw',
     "fi",
+    ...prepareCodex(),
+    `setsid -f sh -c 'printf "%s\\n" "$$" >"$1"; shift; exec "$@"' sh "$pid_file" env OPENCLAW_STATE_DIR="$state_dir" "$@" ${launch} >"$state_dir/node.log" 2>&1 </dev/null`,
     'for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$pid_file" ] && break; sleep 0.1; done',
     'test -s "$pid_file"',
   ].join("\n");

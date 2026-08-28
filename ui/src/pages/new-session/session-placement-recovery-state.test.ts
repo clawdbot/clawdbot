@@ -65,6 +65,28 @@ describe("pending session placement recovery state", () => {
     });
   });
 
+  it("preserves the requested permission mode in placement recovery", () => {
+    const pending = new PendingSessionPlacementRecoveryState();
+    const createParams = pending.stageCreate({
+      agentId: "cloud",
+      target: { kind: "profile", profileId: "aws" },
+      message: "run remotely with guarded permissions",
+      gatewayUrl: "ws://gateway.example",
+      recoveryScope: "principal-a",
+      createParams: {
+        agentId: "cloud",
+        message: "",
+        permissionMode: "guarded",
+        worktree: true,
+      },
+    });
+
+    expect(createParams).toMatchObject({ permissionMode: "guarded" });
+    expect(
+      readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
+    ).toMatchObject({ createParams: { permissionMode: "guarded" } });
+  });
+
   it.each(["", "x".repeat(129)])(
     "rejects an invalid persisted machine class %#",
     (machineClass) => {

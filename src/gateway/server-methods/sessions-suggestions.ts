@@ -561,6 +561,9 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       respond(true, { ok: true, broadcast: false });
       return;
     }
+    if (params.typing) {
+      context.recordClientActivity?.(client);
+    }
     const sessionKeys = new Set([
       params.sessionKey,
       target.canonicalKey,

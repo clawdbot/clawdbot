@@ -3,6 +3,7 @@ import type { IncomingMessage, Server } from "node:http";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
 import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-supervisor-commands.js";
@@ -475,6 +476,77 @@ describe("node workspace transfer service", () => {
     await expect(fs.readdir(temporaryRoot)).resolves.toEqual([]);
     await service.closeAll();
     await expect(fs.stat(temporaryRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("drains sibling transfer contexts and removes scratch after a cleanup failure", async () => {
+    const root = tempDirs.make("node-workspace-transfer-close-siblings-");
+    const localPath = path.join(root, "workspace");
+    const temporaryRoot = path.join(root, "transfer-tmp");
+    await fs.mkdir(localPath);
+    const service = createNodeWorkspaceTransferService({
+      getOwner: (environmentId) => ({
+        credential: {
+          ownerEpoch: 1,
+          expiresAtMs: Date.now() + 60_000,
+          sessionId: `session-${environmentId}`,
+        },
+        environment: {
+          ownerEpoch: 1,
+          attachedSessionIds: [`session-${environmentId}`],
+          destroyRequestedAtMs: null,
+          state: "attached",
+        },
+      }),
+      temporaryRoot,
+    });
+    for (const environmentId of ["environment-1", "environment-2"]) {
+      await service.prepareSync({
+        environmentId,
+        ownerEpoch: 1,
+        sessionId: `session-${environmentId}`,
+        generation: 1,
+        localPath,
+        isAuthorized: () => true,
+      });
+    }
+
+    const cleanupError = new Error("first transfer context cleanup failed");
+    const siblingCleanup = createDeferred();
+    const originalRemove = fs.rm.bind(fs);
+    let contextRemovals = 0;
+    const remove = vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+      const target = args[0];
+      if (typeof target === "string" && path.dirname(target) === temporaryRoot) {
+        contextRemovals += 1;
+        if (contextRemovals === 1) {
+          throw cleanupError;
+        }
+        await siblingCleanup.promise;
+      }
+      await originalRemove(...args);
+    });
+    const stopping = service.closeAll();
+    const settled = vi.fn();
+    void stopping.then(settled, settled);
+
+    try {
+      await vi.waitFor(() => expect(contextRemovals).toBe(2));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(settled).not.toHaveBeenCalled();
+      expect(remove).not.toHaveBeenCalledWith(temporaryRoot, expect.anything());
+
+      siblingCleanup.resolve();
+      await expect(stopping).rejects.toBe(cleanupError);
+      expect(remove).toHaveBeenCalledWith(temporaryRoot, { recursive: true, force: true });
+      await expect(fs.stat(temporaryRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      siblingCleanup.resolve();
+      await stopping.catch(() => undefined);
+      remove.mockRestore();
+      await fs.rm(temporaryRoot, { recursive: true, force: true });
+    }
   });
 
   it("serializes transfer context replacement for one environment", async () => {

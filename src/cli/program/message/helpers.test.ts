@@ -2,6 +2,9 @@
 import { Command } from "commander";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerMessagePollCommand } from "./register.poll.js";
+import { registerMessageReactionsCommands } from "./register.reactions.js";
+import { registerMessageReadEditDeleteCommands } from "./register.read-edit-delete.js";
 import { registerMessageSendCommand } from "./register.send.js";
 
 const messageCommandMock = vi.fn(async (): Promise<unknown> => undefined);
@@ -202,6 +205,64 @@ describe("runMessageAction", () => {
             "channel:123",
             "--message",
             "hi",
+            ...(dryRun ? ["--dry-run"] : []),
+          ],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("exit");
+
+      expect(exitMock).toHaveBeenCalledWith(exitCode);
+    },
+  );
+
+  it.each([
+    ["disabled reaction", "react", { ok: false, hint: "Reactions are disabled." }, 1],
+    ["rejected added reaction", "react", { ok: false, warning: "Unavailable", added: "✅" }, 1],
+    ["rejected delete", "delete", { ok: false, deleted: false, warning: "Not deleted" }, 1],
+    ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, 1],
+    ["rejected send", "send", { ok: false, error: "Message rejected" }, 1],
+    ["successful reaction", "react", { ok: true, added: "✅" }, 0],
+    ["legacy reaction", "react", { added: "✅" }, 0],
+    ["non-boolean outcome", "react", { ok: "false", added: "✅" }, 0],
+    ["dry-run", "react", { ok: false, error: "Not executed" }, 0],
+  ] as const)(
+    "propagates %s through the real CLI parser",
+    async (name, action, payload, exitCode) => {
+      const dryRun = name === "dry-run";
+      const kind = action === "send" || action === "poll" ? action : "action";
+      messageCommandMock.mockResolvedValueOnce({
+        kind,
+        channel: "telegram",
+        action,
+        ...(kind === "action" ? {} : { to: "123" }),
+        handledBy: "plugin",
+        payload,
+        dryRun,
+      });
+      const program = new Command();
+      const message = program.command("message");
+      const helpers = createMessageCliHelpers(message, "telegram");
+      registerMessageSendCommand(message, helpers);
+      registerMessagePollCommand(message, helpers);
+      registerMessageReactionsCommands(message, helpers);
+      registerMessageReadEditDeleteCommands(message, helpers);
+      const args = {
+        react: ["--message-id", "456", "--emoji", "✅"],
+        delete: ["--message-id", "456"],
+        poll: ["--poll-question", "Ready?", "--poll-option", "Yes", "--poll-option", "No"],
+        send: ["--message", "hello"],
+      }[action];
+
+      await expect(
+        program.parseAsync(
+          [
+            "message",
+            action,
+            "--channel",
+            "telegram",
+            "--target",
+            "123",
+            ...args,
             ...(dryRun ? ["--dry-run"] : []),
           ],
           { from: "user" },

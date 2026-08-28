@@ -244,7 +244,6 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
     },
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    bootstrapPromptWarningLines: [],
     claudeSkillsPluginArgs: [],
     ...(params?.openClawHistoryPrompt
       ? { openClawHistoryPrompt: params.openClawHistoryPrompt }
@@ -2446,12 +2445,8 @@ describe("runCliAgent reliability", () => {
   it("returns the assembled CLI prompt in meta for raw trace consumers", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from cli" }));
 
-    const result = await runPreparedCliAgent({
-      ...buildPreparedContext(),
-      bootstrapPromptWarningLines: ["Warning: prompt budget low."],
-    });
+    const result = await runPreparedCliAgent(buildPreparedContext());
 
-    expect(result.meta.finalPromptText).toContain("Warning: prompt budget low.");
     expect(result.meta.finalPromptText).toContain("hi");
     expect(result.meta.finalAssistantRawText).toBe("hello from cli");
     const executionTrace = requireRecord(result.meta.executionTrace, "execution trace");
@@ -4366,7 +4361,6 @@ describe("runCliAgent reliability", () => {
       expect(context.systemPrompt).toBe("");
       expect(context.contextEngine).toBeUndefined();
       expect(context.claudeSkillsPluginArgs).toEqual([]);
-      expect(context.bootstrapPromptWarningLines).toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

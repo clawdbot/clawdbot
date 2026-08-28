@@ -107,7 +107,6 @@ vi.mock("./shared.js", () => ({
   filterDaemonEnv: () => ({}),
   formatRuntimeStatus: () => "running (pid 8000)",
   resolveRuntimeStatusColor: () => "",
-  resolveDaemonContainerContext: () => null,
   renderRuntimeHints: () => [],
   safeDaemonEnv: () => [],
 }));
@@ -252,7 +251,7 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "Host desktop: managed · failed: startxfce4 not installed");
   });
 
-  it("prints the applied Gateway heap limit and derivation", () => {
+  it("distinguishes configured controls, installer recommendation, and unmeasured runtime", () => {
     printDaemonStatus(
       {
         service: {
@@ -261,7 +260,8 @@ describe("printDaemonStatus", () => {
           loadedText: "loaded",
           notLoadedText: "not loaded",
           gatewayHeap: {
-            appliedMiB: 6144,
+            nodeOptions: "--max-old-space-size=6144",
+            execArgv: [],
             maxOldSpaceSizeMiB: 4096,
             availableMemoryMiB: 8192,
             memorySource: "constrained",
@@ -275,9 +275,13 @@ describe("printDaemonStatus", () => {
       { json: false },
     );
 
-    expectMockLineContains(runtime.log, "Gateway heap: 6144 MiB");
-    expectMockLineContains(runtime.log, "adaptive default 4096 MiB");
-    expectMockLineContains(runtime.log, "8192 MiB constrained memory");
+    expectMockLineContains(
+      runtime.log,
+      "Gateway heap: service NODE_OPTIONS: --max-old-space-size=6144",
+    );
+    expectMockLineContains(runtime.log, "installer recommendation: 4096 MiB old space");
+    expectMockLineContains(runtime.log, "8192 MiB constrained capacity");
+    expectMockLineContains(runtime.log, "runtime V8 ceiling: not measured");
   });
 
   it.skipIf(process.platform !== "win32")(
@@ -475,7 +479,7 @@ describe("printDaemonStatus", () => {
     expect(renderSystemdUnavailableHintsMock).toHaveBeenCalledWith({
       wsl: true,
       kind: "generic_unavailable",
-      container: false,
+      env: { WSL_DISTRO_NAME: "Ubuntu" },
     });
     expectMockLineContains(runtime.log, "Service: systemd (unknown)");
     expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("Service: systemd (not loaded)");

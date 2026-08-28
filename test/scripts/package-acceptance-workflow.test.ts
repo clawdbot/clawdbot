@@ -1,5 +1,6 @@
 // Package Acceptance Workflow tests cover package acceptance workflow script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   mkdirSync,
@@ -510,6 +511,26 @@ function workflowMatrixEntry(path: string, jobName: string, suiteId: string): Wo
   return entry;
 }
 
+function runFocusedLiveSuiteValidation(suiteId: string, overrides: Record<string, string> = {}) {
+  const step = workflowStep(
+    workflowJob(LIVE_E2E_WORKFLOW, "validate_live_suite_filter"),
+    "Validate focused live suite filter",
+  );
+  return spawnSync("bash", ["-c", step.run ?? ""], {
+    encoding: "utf8",
+    env: {
+      PATH: process.env.PATH,
+      LIVE_SUITE_FILTER: suiteId,
+      RELEASE_TEST_PROFILE: "full",
+      INCLUDE_REPO_E2E: "true",
+      INCLUDE_LIVE_SUITES: "true",
+      LIVE_MODELS_ONLY: "false",
+      LIVE_MODEL_PROVIDERS: "",
+      ...overrides,
+    },
+  });
+}
+
 function expectTextToIncludeAll(text: string | undefined, snippets: string[]): void {
   if (text === undefined) {
     throw new Error("Expected text to be defined before checking snippets");
@@ -813,6 +834,101 @@ function runPackageAcceptanceProfile(params: {
   return { outputs, result };
 }
 
+function runPackageAcceptanceRegistryInputValidation(params: {
+  candidateArtifactJson?: string;
+  prepublishPluginRegistryJson?: string;
+}) {
+  const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
+  const script = workflowStep(job, "Validate prerelease plugin registry input").run;
+  if (!script) {
+    throw new Error("Expected package acceptance registry input validation script");
+  }
+  const workdir = tempDirs.make("package-acceptance-registry-input-");
+  const outputPath = resolve(workdir, "github-output");
+  const result = spawnSync("bash", ["-c", script], {
+    encoding: "utf8",
+    env: {
+      CANDIDATE_ARTIFACT_JSON: params.candidateArtifactJson ?? "",
+      GITHUB_OUTPUT: outputPath,
+      PATH: process.env.PATH,
+      PREPUBLISH_PLUGIN_REGISTRY_JSON: params.prepublishPluginRegistryJson ?? "",
+    },
+  });
+  const output = result.status === 0 ? readFileSync(outputPath, "utf8") : "";
+  return { output, result };
+}
+
+function packageAcceptanceRegistryTuple(overrides: Record<string, string> = {}) {
+  return {
+    prepublishPluginRegistryArtifactName: "docker-e2e-prepublish-plugin-registry-123-2",
+    prepublishPluginRegistryArtifactId: "456",
+    prepublishPluginRegistryArtifactDigest: "a".repeat(64),
+    prepublishPluginRegistryArtifactRunId: "123",
+    prepublishPluginRegistryArtifactRunAttempt: "2",
+    prepublishPluginRegistryManifestSha256: "b".repeat(64),
+    ...overrides,
+  };
+}
+
+function runPackageAcceptanceResolveScript(params: {
+  prepublishPluginRegistryJson?: string;
+  source: "artifact" | "npm" | "ref" | "trusted-url" | "url";
+  telegramMode: "mock-openai" | "none";
+}) {
+  const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
+  const script = workflowStep(job, "Resolve package candidate").run;
+  if (!script) {
+    throw new Error("Expected package acceptance resolve script");
+  }
+  const workdir = tempDirs.make("package-acceptance-resolve-");
+  const binDir = resolve(workdir, "bin");
+  const capturePath = resolve(workdir, "node-args");
+  const outputPath = resolve(workdir, "github-output");
+  const artifactDir = resolve(workdir, ".artifacts/package-candidate-input");
+  mkdirSync(binDir, { recursive: true });
+  mkdirSync(artifactDir, { recursive: true });
+  const nodePath = resolve(binDir, "node");
+  const artifactPath = resolve(artifactDir, "openclaw-current.tgz");
+  const artifactBody = "package acceptance artifact";
+  writeFileSync(artifactPath, artifactBody);
+  writeFileSync(
+    nodePath,
+    `#!/bin/sh
+printf "%s\\n" "$@" > "$CAPTURE_PATH"
+if [ "$SOURCE" = "artifact" ]; then
+  mkdir -p .artifacts/docker-e2e-package
+  printf '{"name":"openclaw","sha256":"%s","packageSourceSha":"%s","version":"%s"}\\n' \
+    "$PACKAGE_SHA256" "$PACKAGE_SOURCE_SHA" "$PACKAGE_VERSION" \
+    > .artifacts/docker-e2e-package/package-candidate.json
+fi
+`,
+  );
+  chmodSync(nodePath, 0o755);
+  const result = spawnSync("bash", ["-c", script], {
+    cwd: workdir,
+    encoding: "utf8",
+    env: {
+      CAPTURE_PATH: capturePath,
+      GITHUB_OUTPUT: outputPath,
+      OPENCLAW_TRUSTED_PACKAGE_TOKEN: "",
+      PACKAGE_FILE_NAME: "openclaw-current.tgz",
+      PACKAGE_REF: "HEAD",
+      PACKAGE_SHA256: createHash("sha256").update(artifactBody).digest("hex"),
+      PACKAGE_SOURCE_SHA: "a".repeat(40),
+      PACKAGE_SPEC: "openclaw@beta",
+      PACKAGE_URL: "https://example.invalid/openclaw.tgz",
+      PACKAGE_VERSION: "2026.8.26",
+      PATH: `${binDir}:${process.env.PATH}`,
+      PREPUBLISH_PLUGIN_REGISTRY_JSON: params.prepublishPluginRegistryJson ?? "",
+      SOURCE: params.source,
+      TELEGRAM_MODE: params.telegramMode,
+      TRUSTED_SOURCE_ID: "",
+    },
+  });
+  const args = result.status === 0 ? readFileSync(capturePath, "utf8") : "";
+  return { args, result };
+}
+
 function runNpmTelegramInputValidation(overrides: Record<string, string>) {
   const job = workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e");
   const script = workflowStep(job, "Validate inputs and secrets").run;
@@ -835,6 +951,12 @@ function runNpmTelegramInputValidation(overrides: Record<string, string>) {
       PACKAGE_SPEC: "openclaw@beta",
       PACKAGE_VERSION: "",
       PATH: process.env.PATH,
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST: "",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: "",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: "",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT: "",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID: "",
+      PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: "",
       PROVIDER_MODE: "mock-openai",
       ...overrides,
     },
@@ -2599,6 +2721,17 @@ describe("package acceptance workflow", () => {
       description: "Acceptance profile: smoke, package, telegram, product, full, or custom",
       options: ["smoke", "package", "telegram", "product", "full", "custom"],
     });
+    const dispatchInputs = parsedWorkflow.on?.workflow_dispatch?.inputs;
+    const callInputs = parsedWorkflow.on?.workflow_call?.inputs;
+    expect(dispatchInputs?.prepublish_plugin_registry_json).toBeUndefined();
+    expect(dispatchInputs?.advisory).toEqual(callInputs?.advisory);
+    expect(callInputs?.advisory).toEqual({
+      description: "Treat acceptance failures as advisory for the caller",
+      required: false,
+      default: false,
+      type: "boolean",
+    });
+    expect(Object.keys(dispatchInputs ?? {})).toHaveLength(25);
     expect(parsedWorkflow.on?.workflow_dispatch?.inputs?.telegram_advisory).toBeUndefined();
     expect(parsedWorkflow.on?.workflow_call?.inputs?.suite_profile).toMatchObject({
       default: "package",
@@ -2676,6 +2809,49 @@ describe("package acceptance workflow", () => {
     expect(packageTelegram.with?.package_source_sha).toBe(
       "${{ needs.resolve_package.outputs.package_source_sha }}",
     );
+    const registryInputs = {
+      prepublish_plugin_registry_artifact_name:
+        "${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactName || '' }}",
+      prepublish_plugin_registry_artifact_id:
+        "${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}",
+      prepublish_plugin_registry_artifact_digest:
+        "${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}",
+      prepublish_plugin_registry_artifact_run_id:
+        "${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}",
+      prepublish_plugin_registry_artifact_run_attempt:
+        "${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}",
+      prepublish_plugin_registry_manifest_sha256:
+        "${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
+    };
+    expect(packageTelegram.with).toMatchObject(registryInputs);
+    const registryInputSchema = Object.fromEntries(
+      Object.keys(registryInputs).map((name) => [
+        name,
+        expect.objectContaining({ default: "", required: false, type: "string" }),
+      ]),
+    );
+    const npmTelegramInputs = readWorkflow(NPM_TELEGRAM_WORKFLOW).on;
+    expect(npmTelegramInputs?.workflow_call?.inputs).toMatchObject(registryInputSchema);
+    expect(npmTelegramInputs?.workflow_dispatch?.inputs).toMatchObject(registryInputSchema);
+    expect(npmTelegramWorkflow).toContain(
+      "Artifact-backed Telegram E2E requires the complete prerelease plugin registry tuple.",
+    );
+    expect(npmTelegramWorkflow).toContain(
+      "Prerelease plugin registry inputs require an artifact-backed OpenClaw package.",
+    );
+    expect(npmTelegramWorkflow).toContain(
+      'expected_registry_suffix="-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID}-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT}"',
+    );
+    expect(npmTelegramWorkflow).toContain(
+      '"docker-e2e-prepublish-plugin-registry${expected_registry_suffix}" | \\\n' +
+        '                "package-acceptance-telegram-plugin-registry${expected_registry_suffix}"',
+    );
+    expect(npmTelegramWorkflow).not.toContain(
+      "Prerelease plugin registry and package artifacts must come from the same workflow run attempt.",
+    );
+    expect(npmTelegramWorkflow).toContain('verify-upload "Prerelease plugin registry"');
+    expect(npmTelegramWorkflow).toContain("Download prerelease plugin registry artifact");
+    expect(npmTelegramWorkflow).toContain("--required-packages-json '[\"@openclaw/codex\"]'");
     expect(packageTelegram.secrets).toEqual({
       OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
       OPENCLAW_QA_CONVEX_SECRET_CI: "${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
@@ -2683,6 +2859,17 @@ describe("package acceptance workflow", () => {
     });
     expect(dockerAcceptance.with?.ref).toBe(
       "${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}",
+    );
+    expect(dockerAcceptance.with?.advisory).toBe("${{ inputs.advisory || false }}");
+    expect(dockerAcceptanceRegistry.with?.advisory).toBe("${{ inputs.advisory || false }}");
+    expect(dockerAcceptance.with?.prepublish_plugin_registry_artifact_name).toContain(
+      "startsWith(",
+    );
+    expect(dockerAcceptance.with?.prepublish_plugin_registry_artifact_name).toContain(
+      "'docker-e2e-prepublish-plugin-registry-'",
+    );
+    expect(packageTelegram.with?.prepublish_plugin_registry_artifact_name).not.toContain(
+      "startsWith(",
     );
     expect(npm12Install.if).toBe("inputs.suite_profile != 'telegram'");
     expect(dockerAcceptance.if).toBe(
@@ -2724,6 +2911,101 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("Published upgrade survivor baseline:");
     expect(workflow).toContain("Published upgrade survivor baselines:");
     expect(workflow).toContain("Published upgrade survivor scenarios:");
+  });
+
+  it("normalizes one closed prerelease registry tuple before child workflows", () => {
+    const tuple = packageAcceptanceRegistryTuple();
+    const direct = runPackageAcceptanceRegistryInputValidation({
+      prepublishPluginRegistryJson: JSON.stringify(tuple),
+    });
+    expect(direct.result.status, direct.result.stderr).toBe(0);
+    expect(direct.output).toContain(`json=${JSON.stringify(tuple)}\n`);
+
+    const candidate = runPackageAcceptanceRegistryInputValidation({
+      candidateArtifactJson: JSON.stringify({
+        imageArtifactName: "image-123-2",
+        ...tuple,
+      }),
+    });
+    expect(candidate.result.status, candidate.result.stderr).toBe(0);
+    expect(candidate.output).toContain(`json=${JSON.stringify(tuple)}\n`);
+
+    const identical = runPackageAcceptanceRegistryInputValidation({
+      candidateArtifactJson: JSON.stringify(tuple),
+      prepublishPluginRegistryJson: JSON.stringify(tuple),
+    });
+    expect(identical.result.status, identical.result.stderr).toBe(0);
+    expect(identical.output).toContain(`json=${JSON.stringify(tuple)}\n`);
+  });
+
+  it("rejects partial or ambiguous prerelease registry tuples before child workflows", () => {
+    const tuple = packageAcceptanceRegistryTuple();
+    const partial = runPackageAcceptanceRegistryInputValidation({
+      prepublishPluginRegistryJson: JSON.stringify({
+        prepublishPluginRegistryArtifactId: tuple.prepublishPluginRegistryArtifactId,
+      }),
+    });
+    expect(partial.result.status).toBe(1);
+    expect(partial.result.stderr).toContain(
+      "Prerelease plugin registry JSON must contain one complete immutable tuple.",
+    );
+
+    const ambiguous = runPackageAcceptanceRegistryInputValidation({
+      candidateArtifactJson: JSON.stringify(tuple),
+      prepublishPluginRegistryJson: JSON.stringify(
+        packageAcceptanceRegistryTuple({
+          prepublishPluginRegistryArtifactId: "789",
+        }),
+      ),
+    });
+    expect(ambiguous.result.status).toBe(1);
+    expect(ambiguous.result.stderr).toContain("Prerelease plugin registry inputs disagree.");
+  });
+
+  it("generates a Telegram-only registry only for direct ref or artifact candidates", () => {
+    for (const source of ["ref", "artifact"] as const) {
+      const generated = runPackageAcceptanceResolveScript({
+        source,
+        telegramMode: "mock-openai",
+      });
+      expect(generated.result.status, generated.result.stderr).toBe(0);
+      expect(generated.args).toContain("--plugin-registry-output-dir\n");
+      expect(generated.args).toContain(".artifacts/package-acceptance-telegram-plugin-registry\n");
+      expect(generated.args).toContain('--required-plugin-packages-json\n["@openclaw/codex"]\n');
+    }
+
+    for (const source of ["npm", "url", "trusted-url"] as const) {
+      const skipped = runPackageAcceptanceResolveScript({
+        source,
+        telegramMode: "mock-openai",
+      });
+      expect(skipped.result.status, skipped.result.stderr).toBe(0);
+      expect(skipped.args).not.toContain("--plugin-registry-output-dir");
+    }
+
+    const telegramDisabled = runPackageAcceptanceResolveScript({
+      source: "ref",
+      telegramMode: "none",
+    });
+    expect(telegramDisabled.result.status, telegramDisabled.result.stderr).toBe(0);
+    expect(telegramDisabled.args).not.toContain("--plugin-registry-output-dir");
+  });
+
+  it("reuses a supplied registry and keeps generated artifact names distinct from Docker", () => {
+    const tuple = packageAcceptanceRegistryTuple();
+    const reused = runPackageAcceptanceResolveScript({
+      prepublishPluginRegistryJson: JSON.stringify(tuple),
+      source: "ref",
+      telegramMode: "mock-openai",
+    });
+    expect(reused.result.status, reused.result.stderr).toBe(0);
+    expect(reused.args).not.toContain("--plugin-registry-output-dir");
+
+    const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
+    expect(workflow).toContain(
+      "package-acceptance-telegram-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(workflow).toContain('"docker-e2e-prepublish-plugin-registry-" +');
   });
 
   it("selects one normalized Telegram scenario without enabling broad acceptance lanes", () => {
@@ -3476,6 +3758,76 @@ describe("package artifact reuse", () => {
     );
   });
 
+  it.each(["beta", "minimum", "stable", "full"])(
+    "accepts every runnable focused live suite for the %s profile",
+    (profile) => {
+      const suiteIds = new Set(["openshell-e2e", "live-cache", "docker-live-models"]);
+      for (const jobName of [
+        "validate_live_provider_suites",
+        "validate_live_docker_provider_suites",
+        "validate_live_media_provider_suites",
+      ]) {
+        const entries = workflowJob(LIVE_E2E_WORKFLOW, jobName).strategy?.matrix?.include;
+        expect(entries?.length, jobName).toBeGreaterThan(0);
+        for (const entry of entries ?? []) {
+          if (!entry.profiles?.split(/\s+/u).includes(profile)) {
+            continue;
+          }
+          for (const suiteId of [entry.suite_id, entry.suite_group]) {
+            if (suiteId) {
+              suiteIds.add(suiteId);
+            }
+          }
+        }
+      }
+
+      for (const suiteId of suiteIds) {
+        const result = runFocusedLiveSuiteValidation(suiteId, { RELEASE_TEST_PROFILE: profile });
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain(`Focused live suite filter is valid: ${suiteId}`);
+      }
+    },
+  );
+
+  it("accepts the OpenCode Go aggregate for its stable smoke lane", () => {
+    const result = runFocusedLiveSuiteValidation("native-live-src-gateway-profiles-opencode-go", {
+      RELEASE_TEST_PROFILE: "stable",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.each<{ suiteId: string; env?: Record<string, string> }>([
+    { suiteId: "native-live-src-gateway-profiles-opencode-go-unknown" },
+    { suiteId: "native-live-extensions-media-video-e" },
+    { suiteId: "unknown-live-suite" },
+    {
+      suiteId: "native-live-src-gateway-profiles-opencode-go-kimi",
+      env: { RELEASE_TEST_PROFILE: "stable" },
+    },
+    {
+      suiteId: "native-live-extensions-media-video-a",
+      env: { RELEASE_TEST_PROFILE: "beta" },
+    },
+    {
+      suiteId: "native-live-src-gateway-profiles-opencode-go-kimi",
+      env: { INCLUDE_LIVE_SUITES: "false" },
+    },
+    {
+      suiteId: "native-live-extensions-media-video-a",
+      env: { LIVE_MODELS_ONLY: "true" },
+    },
+    { suiteId: "openshell-e2e", env: { INCLUDE_REPO_E2E: "false" } },
+    { suiteId: "docker-live-models", env: { INCLUDE_LIVE_SUITES: "false" } },
+  ])("rejects unavailable focused suite $suiteId with $env", ({ suiteId, env }) => {
+    const result = runFocusedLiveSuiteValidation(suiteId, env);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `live_suite_filter '${suiteId}' does not match any runnable suite`,
+    );
+  });
+
   it("shards broad native live tests instead of one serial live-all job", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const retryHelper = readFileSync("scripts/ci-live-command-retry.sh", "utf8");
@@ -3500,25 +3852,6 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "live_suite_filter '${LIVE_SUITE_FILTER}' does not match any runnable suite",
     );
-    expect(workflow).toContain('add_profile_suite docker-live-models "beta minimum stable full"');
-    expect(workflow).toContain(
-      'add_profile_suite native-live-src-gateway-core "beta minimum stable full"',
-    );
-    expect(workflow).toContain('add_profile_suite native-live-src-infra "stable full"');
-    expect(workflow).toContain('add_profile_suite live-gateway-docker "beta minimum stable full"');
-    expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker "stable full"');
-    expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker-full "full"');
-    expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker "full"');
-    expect(workflow).toContain(
-      'add_profile_suite live-gateway-advisory-docker-deepseek-fireworks "full"',
-    );
-    expect(workflow).toContain(
-      'add_profile_suite live-gateway-advisory-docker-opencode-openrouter "full"',
-    );
-    expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker-xai-zai "full"');
-    expect(workflow).toContain('add_profile_suite live-cli-backend-docker "stable full"');
-    expect(workflow).toContain('add_profile_suite live-cli-cache-docker "stable full"');
-    expect(workflow).toContain('add_profile_suite live-subagent-announce-docker "stable full"');
     expect(workflow).toContain(
       "inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id",
     );
@@ -3740,7 +4073,6 @@ describe("package artifact reuse", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const providerSuites = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_docker_provider_suites");
     const scenarios = readFileSync("scripts/lib/docker-e2e-scenarios.mts", "utf8");
-    const scheduler = readFileSync("scripts/test-docker-all.mts", "utf8");
     const harness = readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8");
     const codexLiveTest = readFileSync("src/gateway/gateway-codex-harness.live.test.ts", "utf8");
     const liveDockerAuth = readFileSync("scripts/lib/live-docker-auth.sh", "utf8");
@@ -3848,15 +4180,6 @@ describe("package artifact reuse", () => {
     expect(scenarios).toMatch(
       /liveDockerScriptCommand\(\s*"test-live-subagent-announce-docker\.sh"/u,
     );
-    expect(scheduler).toContain("function liveDockerHarnessScriptCommand");
-    expect(scheduler).toContain("const LIVE_DOCKER_DEFAULT_HARNESS_DIR");
-    expect(scheduler).toContain('path.basename(SCRIPT_ROOT_DIR) === ".release-harness"');
-    expect(scheduler).toContain("ROOT_DIR !== SCRIPT_ROOT_DIR");
-    expect(scheduler).toContain(
-      'harness="\\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-${LIVE_DOCKER_DEFAULT_HARNESS_DIR}}"',
-    );
-    expect(scheduler).not.toContain("harness=.release-harness");
-    expect(scheduler).toContain('liveDockerHarnessScriptCommand("test-live-build-docker.sh")');
     expect(liveDockerAuth).toContain("codex-cli | openai)");
     expect(liveDockerAuth).toContain("openclaw_live_init_docker_run_args()");
     expect(liveDockerAuth).toContain("openclaw_live_stage_profile_into_home()");
@@ -4041,6 +4364,7 @@ describe("package artifact reuse", () => {
       "BYTEPLUS_API_KEY",
       "CEREBRAS_API_KEY",
       "DEEPINFRA_API_KEY",
+      "DEEPSEEK_API_KEY",
       "DASHSCOPE_API_KEY",
       "GROQ_API_KEY",
       "KIMI_API_KEY",
@@ -4117,6 +4441,58 @@ describe("package artifact reuse", () => {
         expect(step.env?.[key]).toBe("${{ secrets." + key + " }}");
       }
     }
+    for (const workflowPath of [LIVE_E2E_WORKFLOW, PACKAGE_ACCEPTANCE_WORKFLOW]) {
+      expect(readWorkflow(workflowPath).on?.workflow_call).toMatchObject({
+        secrets: { DEEPSEEK_API_KEY: { required: false } },
+      });
+    }
+    for (const [jobName, job] of Object.entries(readWorkflow(LIVE_E2E_WORKFLOW).jobs ?? {})) {
+      if (job.steps?.some((step) => step.run === `bash ${CI_HYDRATE_LIVE_AUTH_SCRIPT}`)) {
+        expect(job.env?.DEEPSEEK_API_KEY, jobName).toBe("${{ secrets.DEEPSEEK_API_KEY }}");
+      }
+    }
+    for (const workflowPath of [
+      RELEASE_CHECKS_WORKFLOW,
+      SCHEDULED_LIVE_CHECKS_WORKFLOW,
+      PACKAGE_ACCEPTANCE_WORKFLOW,
+    ]) {
+      for (const [jobName, job] of Object.entries(readWorkflow(workflowPath).jobs ?? {})) {
+        if (
+          job.uses === `./${LIVE_E2E_WORKFLOW}` ||
+          job.uses === `./${PACKAGE_ACCEPTANCE_WORKFLOW}`
+        ) {
+          expect(job.secrets, `${workflowPath}:${jobName}`).toMatchObject({
+            DEEPSEEK_API_KEY: "${{ secrets.DEEPSEEK_API_KEY }}",
+          });
+        }
+      }
+    }
+    const hydrationHome = tempDirs.make("live-auth-hydration-");
+    const hydrated = spawnSync(
+      "bash",
+      [
+        "-euc",
+        `bash "$1" "$2"
+unset DEEPSEEK_API_KEY DEEPINFRA_API_KEY
+source "$2"
+printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
+        "hydrate-live-auth",
+        CI_HYDRATE_LIVE_AUTH_SCRIPT,
+        resolve(hydrationHome, "live.profile"),
+      ],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          PATH: process.env.PATH,
+          HOME: hydrationHome,
+          DEEPSEEK_API_KEY: "deepseek-sentinel",
+          DEEPINFRA_API_KEY: "deepinfra-sentinel",
+        },
+      },
+    );
+    expect(hydrated.status, hydrated.stderr).toBe(0);
+    expect(hydrated.stdout).toBe("deepseek-sentinel\ndeepinfra-sentinel\n");
     expect(reusableWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
     expect(packageAcceptanceWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
     expectTextToIncludeAll(reusableWorkflow, [
@@ -4499,6 +4875,8 @@ describe("package artifact reuse", () => {
         "${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.package_mode != 'published') && needs.prepare_release_package.outputs.package_sha256 || '' }}",
       package_source_sha: "${{ needs.prepare_release_package.outputs.source_sha }}",
       package_version: "${{ needs.prepare_release_package.outputs.package_version }}",
+      prepublish_plugin_registry_json:
+        "${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_json }}",
       suite_profile: "custom",
     });
     expect(releaseChecksTargetSummary.env).toMatchObject({
@@ -4511,7 +4889,7 @@ describe("package artifact reuse", () => {
       enable_prepublish_plugin_registry:
         '${{ contains(fromJSON(\'["artifact","ref"]\'), inputs.source) }}',
       prepublish_plugin_registry_manifest_sha256:
-        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
+        "${{ startsWith(fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactName || '', 'docker-e2e-prepublish-plugin-registry-') && fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
     });
     expect(workflow).toContain(
       "candidate_artifact_json cannot be combined with release package specs.",
@@ -5804,6 +6182,69 @@ describe("package artifact reuse", () => {
     );
   });
 
+  it("accepts direct package artifacts and validates an optional registry tuple", () => {
+    const packageTuple = {
+      PACKAGE_ARTIFACT_DIGEST: "a".repeat(64),
+      PACKAGE_ARTIFACT_ID: "123",
+      PACKAGE_ARTIFACT_NAME: "package-under-test",
+      PACKAGE_ARTIFACT_RUN_ATTEMPT: "2",
+      PACKAGE_ARTIFACT_RUN_ID: "456",
+      PACKAGE_FILE_NAME: "openclaw-2026.8.1.tgz",
+      PACKAGE_SHA256: "b".repeat(64),
+      PACKAGE_SOURCE_SHA: "c".repeat(40),
+      PACKAGE_VERSION: "2026.8.1",
+    };
+    const registryTuple = {
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST: "d".repeat(64),
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: "789",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: "docker-e2e-prepublish-plugin-registry-123-1",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT: "1",
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID: "123",
+      PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: "e".repeat(64),
+    };
+
+    expect(runNpmTelegramInputValidation(packageTuple).status).toBe(0);
+    expect(runNpmTelegramInputValidation({ ...packageTuple, ...registryTuple }).status).toBe(0);
+    expect(
+      runNpmTelegramInputValidation({
+        ...packageTuple,
+        ...registryTuple,
+        PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME:
+          "package-acceptance-telegram-plugin-registry-123-1",
+      }).status,
+    ).toBe(0);
+
+    const partial = runNpmTelegramInputValidation({
+      ...packageTuple,
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: "789",
+    });
+    expect(partial.status).toBe(1);
+    expect(partial.stderr).toContain(
+      "Artifact-backed Telegram E2E requires the complete prerelease plugin registry tuple.",
+    );
+
+    const wrongName = runNpmTelegramInputValidation({
+      ...packageTuple,
+      ...registryTuple,
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: "wrong-name",
+    });
+    expect(wrongName.status).toBe(1);
+    expect(wrongName.stderr).toContain(
+      "Prerelease plugin registry artifact name does not match its producer run.",
+    );
+  });
+
+  it("rejects prerelease plugin registry inputs without a package artifact", () => {
+    const result = runNpmTelegramInputValidation({
+      PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: "789",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Prerelease plugin registry inputs require an artifact-backed OpenClaw package.",
+    );
+  });
+
   it("uses bounded Convex lease waits instead of GitHub concurrency for CI Telegram consumers", () => {
     const telegramJobs = [
       [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E", "600000"],
@@ -6931,9 +7372,10 @@ describe("package artifact reuse", () => {
     const postpublishEvidence = workflowStep(releasePublishJob, "Upload postpublish evidence");
 
     expect(packageJson.scripts).toMatchObject({
-      "release:verify-beta": "node --import tsx scripts/release-verify-beta.ts",
-      "release:candidate": "node --import tsx scripts/release-candidate-checklist.mts",
-      "release:beta": "node --import tsx scripts/release-candidate-checklist.mts",
+      "release:verify-beta": "node --import ./scripts/tsx.mjs scripts/release-verify-beta.ts",
+      "release:candidate":
+        "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
+      "release:beta": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
       "release:fast-pretag-check": "bash scripts/release-fast-pretag-check.sh",
     });
     expect(workflowStep(releasePublishJob, "Setup Node environment").with).toMatchObject({

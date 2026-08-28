@@ -222,6 +222,9 @@ suite.define(() => {
       const footerBox = await page
         .locator(".new-session-page__composer .agent-chat__composer-footer")
         .boundingBox();
+      const actionsBox = await page
+        .locator(".new-session-page__composer .agent-chat__composer-actions")
+        .boundingBox();
       const attachmentButton = page.getByRole("button", { name: "Add attachment" });
       const attachmentBox = await attachmentButton.boundingBox();
       expect(heroBox).not.toBeNull();
@@ -230,6 +233,7 @@ suite.define(() => {
       expect(modelBox).not.toBeNull();
       expect(modelWrapperBox).not.toBeNull();
       expect(footerBox).not.toBeNull();
+      expect(actionsBox).not.toBeNull();
       expect(attachmentBox).not.toBeNull();
       expect((heroBox?.y ?? 0) + (heroBox?.height ?? 0)).toBeLessThanOrEqual(
         (triggersBox?.y ?? 0) + 1,
@@ -260,15 +264,84 @@ suite.define(() => {
         (footerBox?.x ?? 0) + (footerBox?.width ?? 0) / 2,
       );
       expect(
-        (footerBox?.x ?? 0) +
-          (footerBox?.width ?? 0) -
-          ((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)),
+        (actionsBox?.x ?? 0) - ((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)),
       ).toBeLessThanOrEqual(12);
+      expect((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)).toBeLessThanOrEqual(
+        actionsBox?.x ?? 0,
+      );
+      expect((actionsBox?.x ?? 0) + (actionsBox?.width ?? 0)).toBeLessThanOrEqual(
+        (footerBox?.x ?? 0) + (footerBox?.width ?? 0) + 1,
+      );
       expect(triggersBox?.x).toBeCloseTo(composerBox?.x ?? 0, 0);
       expect(triggersBox?.width).toBeCloseTo(composerBox?.width ?? 0, 0);
       expect(composerBox?.width).toBeCloseTo(48 * 16, 0);
       expect(await page.locator(".new-session-page__message").getAttribute("rows")).toBe("1");
       await captureProjectUiProof(page, "new-session-control-layout.png");
+
+      await page.setViewportSize({ width: 393, height: 852 });
+      const mobileModelSettings = page.locator(
+        '.new-session-page__composer [data-chat-model-select="true"]',
+      );
+      const mobilePermission = page.locator(
+        '.new-session-page__composer [data-chat-permission-select="true"]',
+      );
+      const mobilePermissionIcon = mobilePermission.locator(".chat-controls__permission-icon svg");
+      const permissionIconCenterError = async () => {
+        const [triggerBox, iconBox] = await Promise.all([
+          mobilePermission.boundingBox(),
+          mobilePermissionIcon.boundingBox(),
+        ]);
+        if (!triggerBox || !iconBox) {
+          return Number.POSITIVE_INFINITY;
+        }
+        const x = iconBox.x + iconBox.width / 2 - (triggerBox.x + triggerBox.width / 2);
+        const y = iconBox.y + iconBox.height / 2 - (triggerBox.y + triggerBox.height / 2);
+        return Math.max(Math.abs(x), Math.abs(y));
+      };
+      await expect.poll(() => mobileModelSettings.isVisible()).toBe(true);
+      await expect.poll(permissionIconCenterError).toBeLessThanOrEqual(1);
+      const [mobileFooterBox, mobileModelSettingsBox] = await Promise.all([
+        page.locator(".new-session-page__composer .agent-chat__composer-footer").boundingBox(),
+        mobileModelSettings.boundingBox(),
+      ]);
+      expect(mobileFooterBox).not.toBeNull();
+      expect(mobileModelSettingsBox).not.toBeNull();
+      if (!mobileFooterBox || !mobileModelSettingsBox) {
+        throw new Error("expected mobile new-session composer controls");
+      }
+      expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
+      expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
+      expect(mobileModelSettingsBox.x).toBeGreaterThanOrEqual(mobileFooterBox.x);
+      expect(mobileModelSettingsBox.x + mobileModelSettingsBox.width).toBeLessThanOrEqual(
+        mobileFooterBox.x + mobileFooterBox.width,
+      );
+      await captureProjectUiProof(page, "mobile-new-session-idle.png");
+      await mobilePermission.click();
+      await page.locator('[data-chat-permission-option="workspace"]').click();
+      await expect
+        .poll(() => mobilePermission.getAttribute("data-chat-select-value"))
+        .toBe("workspace");
+      await mobilePermission.click();
+      await expect
+        .poll(() => page.locator(".chat-controls__permission-option").first().isVisible())
+        .toBe(true);
+      await captureProjectUiProof(page, "mobile-new-session-permissions-open.png");
+      await page.keyboard.press("Escape");
+      await mobileModelSettings.click();
+      await expect.poll(() => page.locator(".chat-controls__model-menu").isVisible()).toBe(true);
+      await captureProjectUiProof(page, "mobile-new-session-model-open.png");
+      expect(
+        await page
+          .locator(".chat-controls__model-menu")
+          .getByText(/Effort|Fast mode/)
+          .count(),
+      ).toBe(0);
+      await page.keyboard.press("Escape");
+      await page.locator('[data-chat-thinking-select="true"]').click();
+      await expect.poll(() => page.locator(".chat-controls__effort-menu").isVisible()).toBe(true);
+      await captureProjectUiProof(page, "mobile-new-session-effort-open.png");
+      await page.keyboard.press("Escape");
+      await page.setViewportSize({ width: 1280, height: 900 });
 
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();

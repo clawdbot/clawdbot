@@ -1,5 +1,6 @@
 import {
   describe,
+  embeddedAgentLog,
   registerCodexEventProjectorTestLifecycle,
   expect,
   it,
@@ -424,7 +425,29 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
     });
   });
 
-  it("surfaces startup and thread warnings without requiring an upstream turn id", async () => {
+  it.each([
+    { tier: "priority", model: "test-no-tier-model" },
+    { tier: "flex", model: "test-no-tier-model" },
+  ])("logs unsupported $tier tiers without projecting a UI notice", async ({ tier, model }) => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+    const message = `Configured service tier \`${tier}\` is not advertised as supported for model \`${model}\` and will be omitted from requests.`;
+
+    await projector.handleNotification({
+      method: "warning",
+      params: { threadId: THREAD_ID, message },
+    });
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(message);
+  });
+
+  it.each([
+    "Project hooks were disabled.",
+    "Configured service tier `priority` requires account access.",
+    "Configured service tier `priority` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests. Additional action required.",
+  ])("surfaces startup and thread warnings: %s", async (message) => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
 
@@ -437,7 +460,7 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
     });
     await projector.handleNotification({
       method: "warning",
-      params: { threadId: THREAD_ID, message: "Project hooks were disabled." },
+      params: { threadId: THREAD_ID, message },
     });
     await projector.handleNotification({
       method: "warning",
@@ -454,7 +477,7 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
       },
       {
         stream: "notice",
-        data: { phase: "warning", message: "Project hooks were disabled." },
+        data: { phase: "warning", message },
       },
     ]);
   });
@@ -531,15 +554,9 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
       },
     );
     expect(result.toolMetas).toEqual([{ toolName: "sessions_send", isError: false }]);
-    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "assistant",
-    ]);
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
-    expect(JSON.stringify(result.messagesSnapshot[2])).toContain("Codex plan");
-    expect(JSON.stringify(result.messagesSnapshot[2])).toContain("next");
-    expect(JSON.stringify(result.messagesSnapshot[2])).toContain("[in_progress] patch");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("Codex plan:");
     expect(result.compactionCount).toBe(1);
     expect(requireRecord(result.itemLifecycle, "item lifecycle")).not.toHaveProperty(
       "compactionCount",

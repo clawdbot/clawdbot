@@ -1,4 +1,6 @@
+import { CLAUDE_CLI_PROFILE_ID as SDK_CLAUDE_CLI_PROFILE_ID } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
+import { CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
 function requestUrl(input: string | URL | Request): URL {
@@ -166,6 +168,10 @@ describe("Anthropic provider usage", () => {
     expect(result).toEqual({
       token: 'openclaw:anthropic-admin:v1:{"token":"sk-ant-admin-billing"}',
     });
+  });
+
+  it("keeps the local retired profile id aligned with the plugin-sdk constant", () => {
+    expect(CLAUDE_CLI_PROFILE_ID).toBe(SDK_CLAUDE_CLI_PROFILE_ID);
   });
 
   it("does not refresh the native Claude login for usage polling", async () => {

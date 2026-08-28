@@ -39,6 +39,8 @@ import { createStorageMock } from "./storage.ts";
 
 // The attention widget owns independent health RPC tests. Keep those requests
 // out of sidebar client call-order assertions.
+// Sidebar attention is inert in this harness; cover attention rendering in
+// sidebar-attention.test.ts, not app-sidebar cases.
 vi.mock("../components/sidebar-attention.ts", () => ({}));
 
 export type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["groupsRename"]>>;
@@ -50,12 +52,16 @@ const sidebarSessionGatewayBindings = new WeakMap<
 >();
 
 export type SidebarLifecycleState = HTMLElement & {
+  basePath: string;
   hiddenSessionCatalogIds: ReadonlySet<string>;
   activeRouteId?: string;
   activeWorkboardBoardId: string;
   enabledRouteIds?: readonly NavigationRouteId[];
   connected: boolean;
   offline: boolean;
+  restartPending: boolean;
+  queuedOutboxCount: number;
+  lastError: string | null;
   outboxAttentionCountForSession: (sessionKey: string) => number;
   hasSessionDraft: (sessionKey: string) => boolean;
   terminalAvailable: boolean;
@@ -68,11 +74,13 @@ export type SidebarLifecycleState = HTMLElement & {
   sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
+  readonly sessionOwnerFilterId: string | null;
   sessionKey: string;
   onNavigate: (
     routeId: string,
     options?: { pathname?: string; search?: string; hash?: string },
   ) => void;
+  dismissTransientMenus: () => boolean;
   readonly sessionData: SessionDataController;
   readonly sessionOrganizer: SessionOrganizerController;
   listSessionGroupFolders(path?: string): Promise<{
@@ -151,6 +159,7 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
       bootstrapToken: "",
       password: "",
     },
+    connectionRevision: 0,
     setSessionKey: () => undefined,
     subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
       listeners.add(listener);
@@ -276,8 +285,6 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       })),
     }),
   );
-  const setOwnerFilter = vi.fn(() => Promise.resolve());
-  const setInvolvingMeFilter = vi.fn(() => Promise.resolve());
   const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
     Promise.resolve({ key, agentId: options?.agentId ?? null }),
   );
@@ -356,9 +363,11 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     create,
     patch,
     archiveVisibility: (key: string) => archiveVisibilityByKey.get(key),
-    setArchiveVisibility(key: string, visibility: "pending" | "archived" | undefined) {
-      if (visibility) {
-        archiveVisibilityByKey.set(key, visibility);
+    setArchivePending(key: string, pending: boolean) {
+      if (pending) {
+        archiveVisibilityByKey.set(key, "pending");
+      } else if (state.result?.sessions.find((row) => row.key === key)?.archived) {
+        archiveVisibilityByKey.set(key, "archived");
       } else {
         archiveVisibilityByKey.delete(key);
       }
@@ -372,7 +381,11 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     deleteMany,
     list,
     listSnapshot(scope: Parameters<SessionCapability["listSnapshot"]>[0]) {
-      if (!scope.archivedFilter || scope.archivedFilter === "active") {
+      if (
+        (!scope.archivedFilter || scope.archivedFilter === "active") &&
+        !scope.ownerId &&
+        !scope.involvingMe
+      ) {
         return {
           result: state.result,
           agentId: state.agentId,
@@ -389,14 +402,16 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       return scopedSessions!.subscribeList(scope, listener);
     },
     refreshList(options: Parameters<SessionCapability["refreshList"]>[0]) {
-      if (!options?.archivedFilter || options.archivedFilter === "active") {
+      if (
+        (!options?.archivedFilter || options.archivedFilter === "active") &&
+        !options?.ownerId &&
+        !options?.involvingMe
+      ) {
         return refresh(options);
       }
       return scopedSessions!.refreshList(options);
     },
     reconcile,
-    setOwnerFilter,
-    setInvolvingMeFilter,
     refresh,
     refreshReplacement,
     subscribeMessages,
@@ -433,12 +448,12 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
           const { archived, ...options } = (params ?? {}) as SessionListOptions & {
             archived?: true | "all";
           };
-          if (!archived) {
+          if (!archived && !options.ownerId && !options.involvingMe) {
             return state.result as T;
           }
           return (await list({
             ...options,
-            archivedFilter: archived === true ? "archived" : "all",
+            ...(archived ? { archivedFilter: archived === true ? "archived" : "all" } : {}),
           })) as T;
         },
       } as GatewayBrowserClient;
@@ -475,8 +490,6 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     deleteMany,
     list,
     reconcile,
-    setOwnerFilter,
-    setInvolvingMeFilter,
     refresh,
     refreshReplacement,
     subscribeMessages,
@@ -567,6 +580,7 @@ export async function mountSidebar(
     sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
   };
   await Promise.all([
+    import("../components/app-sidebar-session-narration.ts"),
     sidebarWithPreloads.preloadCatalogRenderer(),
     sidebarWithPreloads.sidebarMenus.preloadMenuRenderer(),
   ]);

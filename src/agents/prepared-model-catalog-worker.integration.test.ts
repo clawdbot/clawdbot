@@ -10,6 +10,7 @@ import {
   loadGatewayModelCatalogSnapshot,
   loadPreparedGatewayModelCatalogSnapshot,
 } from "../gateway/server-model-catalog.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./auth-profiles/constants.js";
 import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
@@ -26,9 +27,9 @@ import {
 import {
   createPreparedModelCatalogWorker,
   createPreparedModelCatalogWorkerInput,
-  getPreparedModelFullCatalogAuth,
 } from "./prepared-model-catalog-worker.js";
 import {
+  getPreparedModelFullCatalogAuth,
   getPreparedModelRuntimeAuthStore,
   loadPreparedModelRuntimeAuth,
   setPreparedModelRuntimeAuthLoader,
@@ -209,7 +210,10 @@ module.exports = {
 async function createStaticSnapshot(
   spinMs: number,
   envOverride: NodeJS.ProcessEnv = {},
-  options?: { hydrateExternalCliProviderIds?: readonly string[] },
+  options?: {
+    hydrateExternalCliProviderIds?: readonly string[];
+    metadataWorkspace?: "gateway" | "none" | "activation";
+  },
 ) {
   const root = tempDirs.make("openclaw-model-catalog-worker-");
   const stateDir = path.join(root, "state");
@@ -301,6 +305,20 @@ async function createStaticSnapshot(
     30_000,
     "static",
     () => current,
+    false,
+    undefined,
+    options?.metadataWorkspace
+      ? loadPluginMetadataSnapshot({
+          config:
+            options.metadataWorkspace === "activation"
+              ? { ...config, plugins: { ...config.plugins, entries: {} } }
+              : config,
+          env,
+          ...(options.metadataWorkspace === "gateway"
+            ? { workspaceDir: path.join(root, "gateway-workspace") }
+            : {}),
+        })
+      : undefined,
   ).pending;
   return {
     agentDir,
@@ -322,6 +340,32 @@ async function waitForMarker(marker: string): Promise<void> {
 }
 
 describe("prepared model catalog worker boundary", () => {
+  it.each([
+    ["gateway", "catalog"],
+    ["gateway", "auth-refresh"],
+    ["none", "catalog"],
+    ["none", "auth-refresh"],
+    ["activation", "catalog"],
+    ["activation", "auth-refresh"],
+  ] as const)(
+    "keeps %s metadata discovery scope with %s first",
+    async (metadataWorkspace, first) => {
+      const fixture = await createStaticSnapshot(0, {}, { metadataWorkspace });
+      if (first === "auth-refresh") {
+        const auth = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
+          providerIds: [PROVIDER_ID],
+        });
+        expect(auth?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toMatchObject({
+          access: "v1:A",
+        });
+      }
+      const catalog = await fixture.snapshot.loadFullModelCatalog?.();
+      expect(catalog?.entries).toContainEqual(
+        expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+      );
+    },
+  );
+
   it("publishes account-scoped harness models only in the full catalog", async () => {
     const fixture = await createStaticSnapshot(0);
 
@@ -774,6 +818,7 @@ describe("prepared model catalog worker boundary", () => {
   it("retires a worker whose reconstructed generation does not match", async () => {
     const fixture = await createStaticSnapshot(0);
     writeFixturePlugin({ root: fixture.root, spinMs: 0, pluginVersion: "v2" });
+    fixture.config.plugins.entries[PLUGIN_ID] = { enabled: true, config: {} };
 
     await expect(fixture.snapshot.loadFullModelCatalog?.()).rejects.toThrow(
       "generation was invalid",
@@ -813,6 +858,7 @@ describe("prepared model catalog worker boundary", () => {
       catalogMode: "static",
     });
     writeFixturePlugin({ root: fixture.root, spinMs: 0, pluginVersion: "v2" });
+    fixture.config.plugins.entries[PLUGIN_ID] = { enabled: true, config: {} };
 
     const loadRecoveredCatalog = async () =>
       await loadGatewayModelCatalogSnapshot({

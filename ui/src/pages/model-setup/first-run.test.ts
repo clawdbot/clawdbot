@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { routeIdFromPath } from "../../app-routes.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
+import { persistFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
 import { isDefaultChatLanding, startModelSetupFirstRunRedirectAfterLocation } from "./first-run.ts";
 
 const defaultLanding = { pathname: "/chat/main", search: "", hash: "" };
@@ -51,6 +53,12 @@ function createConnectedContext(
   const context = {
     gateway: {
       snapshot,
+      connection: {
+        gatewayUrl: "wss://gateway.example",
+        token: "gateway-auth-token",
+        password: "",
+        bootstrapToken: "",
+      },
       subscribe: () => () => undefined,
     },
     agentSelection: {
@@ -62,7 +70,19 @@ function createConnectedContext(
 }
 
 describe("model setup first-run redirect", () => {
-  it("recognizes only the implicit chat landing without a session deep link", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    localStorage.setItem(
+      "openclaw-device-identity-v1",
+      JSON.stringify({ version: 1, privateKey: "durable-device-private-key-for-testing" }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("recognizes default chat landings without accepting session deep links", () => {
     expect(isDefaultChatLanding({ pathname: "/", search: "", hash: "" }, "", routeIdFromPath)).toBe(
       true,
     );
@@ -85,6 +105,30 @@ describe("model setup first-run redirect", () => {
     ).toBe(false);
     expect(
       isDefaultChatLanding({ pathname: "/chat/main", search: "", hash: "" }, "", routeIdFromPath),
+    ).toBe(true);
+    expect(
+      isDefaultChatLanding({ pathname: "/chat/main/", search: "", hash: "" }, "", routeIdFromPath),
+    ).toBe(true);
+    expect(
+      isDefaultChatLanding(
+        { pathname: "/openclaw/chat/main", search: "", hash: "" },
+        "/openclaw",
+        routeIdFromPath,
+      ),
+    ).toBe(true);
+    expect(
+      isDefaultChatLanding(
+        { pathname: "/chat/research", search: "", hash: "" },
+        "",
+        routeIdFromPath,
+      ),
+    ).toBe(false);
+    expect(
+      isDefaultChatLanding(
+        { pathname: "/chat/main/existing-session", search: "", hash: "" },
+        "",
+        routeIdFromPath,
+      ),
     ).toBe(false);
     expect(
       isDefaultChatLanding(
@@ -134,6 +178,20 @@ describe("model setup first-run redirect", () => {
     expect(replaceLocation).toHaveBeenCalledWith(canonicalLocation);
     expect(subscribe).not.toHaveBeenCalled();
     expect(replaceRoute).not.toHaveBeenCalled();
+  });
+
+  it("redirects a restored default chat when no model has been configured", async () => {
+    const { context, replace } = createConnectedContext();
+
+    const dispose = await startModelSetupFirstRunRedirectAfterLocation({
+      context,
+      enabled: isDefaultChatLanding(defaultLanding, "", routeIdFromPath),
+      history: { location: () => defaultLanding, replace: () => undefined },
+      initialLocationReady: Promise.resolve(defaultLanding),
+    });
+
+    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+    dispose();
   });
 
   it.each([
@@ -200,6 +258,38 @@ describe("model setup first-run redirect", () => {
     });
 
     expect(request).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  it("restores unfinished onboarding after its activation already configured the model", async () => {
+    const { context, replace } = createConnectedContext({ modelConfigured: true });
+    persistFirstRunActivationReceipt(context, {
+      kind: "openai-api-key",
+      modelRef: "openai/expected",
+    });
+
+    const dispose = await startRedirect(context);
+
+    await vi.waitFor(() => {
+      expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+    });
+    dispose();
+  });
+
+  it("does not restore an activation owned by replaced Gateway credentials", async () => {
+    const { context, replace } = createConnectedContext({ modelConfigured: true });
+    persistFirstRunActivationReceipt(context, {
+      kind: "openai-api-key",
+      modelRef: "openai/expected",
+    });
+    context.gateway.connection.token = "different-owner-token";
+
+    const dispose = await startRedirect(context);
+
+    await vi.waitFor(() => {
+      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
+    });
     expect(replace).not.toHaveBeenCalled();
     dispose();
   });

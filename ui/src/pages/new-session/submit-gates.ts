@@ -50,6 +50,20 @@ export const PAGE_RENDERED_GATES: ReadonlySet<string> = new Set([
   "worktree-name",
 ]);
 
+export function resolveCloudPlacementDisabledReason(place: DraftPlaceState): string | undefined {
+  const runtimeReason = place.modelControl.cloudRuntimeUnsupportedReason();
+  if (runtimeReason) {
+    return runtimeReason;
+  }
+  if (place.repository.kind === "checking") {
+    return t("newSession.checkingGit");
+  }
+  if (place.repository.kind === "unavailable" && !place.worktreeAvailable()) {
+    return t("newSession.gitCheckUnavailable");
+  }
+  return place.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");
+}
+
 /** Facts the gate walk reads from DraftSubmissionFlow, kept read-only. */
 type SubmitGateHost = {
   readonly gatewayState: DraftGatewayState;
@@ -84,7 +98,7 @@ export function resolveNewSessionSubmitBlock(
   if (
     gateway.preferenceLoading ||
     place.modelControl.isRestoringPreference() ||
-    !place.worktreePreferenceReady
+    !place.placementPreferenceReady
   ) {
     return { gate: "preference-restore", reason: t("newSession.restoringPreferences") };
   }
@@ -166,16 +180,16 @@ export function resolveNewSessionSubmitBlock(
     return { gate: "device-runtime", reason: deviceRuntimeUnsupportedReason };
   }
   const placementTarget = host.placementTargetForSubmission();
-  if (placementTarget && (!client.recoveryScope || !client.recoveryScopeReady)) {
+  if (
+    placementTarget &&
+    (!client.recoveryScope || !client.recoveryScopeReady || gateway.cloudProfilesPending)
+  ) {
     return { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
   const cloudProfileId = placementTarget?.kind === "profile" ? placementTarget.profileId : "";
   if (
     cloudProfileId &&
-    (!client.recoveryScope ||
-      !client.recoveryScopeReady ||
-      !gateway.cloudProfilesReady ||
-      gateway.cloudProfilesPending ||
+    (!gateway.cloudProfilesReady ||
       !place.worktree ||
       !gateway.cloudProfiles.some((profile) => profile.id === cloudProfileId) ||
       Boolean(host.cloudRuntimeUnsupportedReason()))

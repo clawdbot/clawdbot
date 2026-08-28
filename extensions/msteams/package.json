@@ -8,11 +8,11 @@
   },
   "type": "module",
   "dependencies": {
-    "@azure/identity": "4.13.1",
+    "@azure/identity": "4.13.2",
     "@microsoft/teams.api": "2.0.15",
     "@microsoft/teams.apps": "2.0.15",
     "express": "5.2.1",
-    "typebox": "1.3.15",
+    "typebox": "1.3.16",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -38,12 +38,10 @@
       "id": "msteams",
       "configuredState": {
         "env": {
-          "anyOf": [
-            "MSTEAMS_APP_ID",
-            "MSTEAMS_APP_PASSWORD",
-            "MSTEAMS_TENANT_ID"
-          ]
-        }
+          "anyOf": ["MSTEAMS_APP_ID", "MSTEAMS_APP_PASSWORD", "MSTEAMS_TENANT_ID"]
+        },
+        "specifier": "./configured-state",
+        "exportName": "hasConfiguredMSTeamsChannelState"
       },
       "label": "Microsoft Teams",
       "selectionLabel": "Microsoft Teams (Teams SDK)",

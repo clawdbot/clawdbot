@@ -1,6 +1,7 @@
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 /** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/failover/signal.js";
+import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
@@ -156,6 +157,7 @@ export type CronResolvedDeliveryState = {
   delivered?: boolean;
   status: CronDeliveryStatus;
   error?: string;
+  deliverySuppressionReason?: NormalizeReplySkipReason;
   failureNotification: CronFailureNotificationDelivery;
 };
 
@@ -301,7 +303,10 @@ export type CronPayload =
   | (CronScriptPayload & CronPayloadToolAllow)
   // System-owned heartbeat monitor: execution requests an interval heartbeat
   // wake. Gateway-converged only; not accepted from client create/patch APIs.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllow);
+  | ({ kind: "heartbeat" } & CronPayloadToolAllow)
+  // System-owned skill collection review: execution invokes the workshop
+  // runner. Gateway-converged only; not accepted from client create/patch APIs.
+  | ({ kind: "skillCollectionReview" } & CronPayloadToolAllow);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =
@@ -311,7 +316,14 @@ export type CronPayloadPatch =
   | (CronScriptPayloadPatch & CronPayloadToolAllowPatch)
   // Representable so the service can reject it with a typed boundary error;
   // transports and tools never accept it.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllowPatch);
+  | ({ kind: "heartbeat" } & CronPayloadToolAllowPatch)
+  | ({ kind: "skillCollectionReview" } & CronPayloadToolAllowPatch);
+
+export function isSystemOwnedCronPayloadKind(
+  kind: unknown,
+): kind is "heartbeat" | "skillCollectionReview" {
+  return typeof kind === "string" && (kind === "heartbeat" || kind === "skillCollectionReview");
+}
 
 type CronPayloadToolAllow = {
   /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */
@@ -454,6 +466,8 @@ export type CronJobState = {
   lastDeliveryStatus?: CronDeliveryStatus;
   /** Delivery-specific error text when available. */
   lastDeliveryError?: string;
+  /** Intentional non-delivery reason for the last run, when recorded by the dispatcher. */
+  deliverySuppressionReason?: NormalizeReplySkipReason;
   /** Whether the last run's output was delivered to the target channel. */
   lastDelivered?: boolean;
   /** Whether the last failed run's failure notification was delivered to the target channel. */
@@ -464,7 +478,7 @@ export type CronJobState = {
   lastFailureNotificationDeliveryError?: string;
 };
 
-export type CronTrigger = {
+type CronTrigger = {
   script: string;
   once?: boolean;
 };

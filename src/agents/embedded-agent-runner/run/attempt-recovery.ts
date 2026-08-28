@@ -1,9 +1,12 @@
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
+import type { AssistantMessage } from "../../../llm/types.js";
+import { isRetryableAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
+import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import type { normalizeUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
@@ -11,7 +14,11 @@ import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./attempt-dispatch-preparation.js";
 import type { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
-import { hasAsyncActivity, isCurrentAttemptReplaySafe } from "./attempt-terminal-evidence.js";
+import {
+  hasAsyncActivity,
+  hasAttemptTerminalState,
+  isCurrentAttemptReplaySafe,
+} from "./attempt-terminal-evidence.js";
 import { buildEmbeddedRunBlockedResult } from "./blocked-run-result.js";
 import { resolveCodexAppServerRecoveryRetry } from "./codex-app-server-recovery.js";
 import { resolveCompactionLiveModelSelection } from "./compaction-live-model-selection.js";
@@ -27,6 +34,22 @@ import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import { isEmbeddedRunTerminalInterrupted } from "./terminal-outcome.js";
 import { recoverEmbeddedRunTimeout } from "./timeout-context-recovery.js";
+
+const MAX_TRANSPORT_DROP_CONTINUATIONS = 2;
+
+/** Errored assistant turn with transient transport evidence and no visible output. */
+function isSilentTransportDropAssistant(assistant: AssistantMessage | undefined): boolean {
+  if (
+    !assistant ||
+    assistant.stopReason !== "error" ||
+    !isRetryableAssistantError(assistant) ||
+    !assistant.diagnostics?.some((diagnostic) => diagnostic.type === "provider_transport_failure")
+  ) {
+    return false;
+  }
+  const content = Array.isArray(assistant.content) ? assistant.content : [];
+  return content.length === 0 || hasOnlyAssistantReasoningContent(assistant);
+}
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
 type NormalizedAttempt = Extract<
@@ -113,11 +136,39 @@ export async function recoverEmbeddedRunAttempt(input: {
   } = projectAgentRunAttemptTerminal(attempt.terminal);
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
   const currentAttemptReplaySafe = isCurrentAttemptReplaySafe(attempt);
+  // Mid-turn overflow continues from the persisted tool results and never
+  // replays the assistant call. Generic tools must still be fully settled; only
+  // a batch whose exec result parked a Code Mode run (producer-recorded) may
+  // continue with lifecycle items active — the nested call stays owned by the
+  // code-mode run registry and resumes through `wait`, exactly as across turns.
+  const settledEvidence = resolveSettledToolBatchEvidence(attempt);
+  const midTurnBatchSettled =
+    settledEvidence.allToolsProvenSettled || settledEvidence.parkedCodeModeRun;
   const canContinueSettledMidTurnOverflow =
     promptErrorSource === "precheck" &&
     attempt.preflightRecovery?.source === "mid-turn" &&
-    resolveSettledToolBatchEvidence(attempt).allToolsProvenSettled &&
+    midTurnBatchSettled &&
     !hasAsyncActivity(attempt.toolMetas);
+  // A transient transport failure that lands after the whole tool batch settled
+  // is a resume, not a replay: the continuation prompt re-enters after the
+  // persisted tool results and nothing from the failed attempt is resubmitted.
+  // Only a silent errored assistant qualifies; partial visible text would be
+  // duplicated or replaced. Everything #122516 closed for side-effecting
+  // attempts (prompt resubmission, profile rotation, model fallback) stays
+  // closed below this branch.
+  const settledTransportDropAssistant =
+    !currentAttemptReplaySafe &&
+    !promptError &&
+    !aborted &&
+    !timedOut &&
+    !terminalInterrupted &&
+    !hasAttemptTerminalState(attempt) &&
+    midTurnBatchSettled &&
+    // A parked Code Mode result is persisted same-session state. Continuing is
+    // how the model reaches wait; it does not resubmit the prompt or exec call.
+    isSilentTransportDropAssistant(currentAttemptAssistant)
+      ? currentAttemptAssistant
+      : undefined;
   const { signalOwnedInterruption } = terminalState;
   const assistantOverflowCandidate =
     currentAttemptCompletedAssistant !== undefined
@@ -176,7 +227,11 @@ export async function recoverEmbeddedRunAttempt(input: {
       }),
     };
   }
-  if (!currentAttemptReplaySafe && !canContinueSettledMidTurnOverflow) {
+  if (
+    !currentAttemptReplaySafe &&
+    !canContinueSettledMidTurnOverflow &&
+    !settledTransportDropAssistant
+  ) {
     return replayUnsafeOutcome;
   }
 
@@ -274,6 +329,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     assistantOverflowCandidate,
     attemptCompactionCount,
     prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
+    markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,
   });
   if (overflowRecovery.action === "retry") {
     return retry();
@@ -304,8 +360,26 @@ export async function recoverEmbeddedRunAttempt(input: {
       }),
     };
   }
-  // Settled-tool continuation authorizes only current-transcript overflow recovery.
-  // Every path below can replay or replace the original attempt and remains fail-closed.
+  const recoveryState = input.contextRecoveryState;
+  if (
+    settledTransportDropAssistant &&
+    recoveryState.transportDropContinuations < MAX_TRANSPORT_DROP_CONTINUATIONS
+  ) {
+    runInput.laneController.throwIfAborted();
+    recoveryState.transportDropContinuations += 1;
+    sessionPromptState.continueFromCurrentTranscript();
+    log.warn(
+      `provider transport dropped after a settled tool batch; continuing from the transcript ` +
+        `attempt=${recoveryState.transportDropContinuations}/${MAX_TRANSPORT_DROP_CONTINUATIONS} ` +
+        `provider=${preparedRuntime.provider} model=${preparedRuntime.modelId} ` +
+        `error=${settledTransportDropAssistant.errorMessage?.trim() ?? "unknown"} ` +
+        `runId=${params.runId} sessionId=${params.sessionId}`,
+    );
+    return retry();
+  }
+  // Settled-tool continuation authorizes only current-transcript overflow and
+  // transport-drop recovery. Every path below can replay or replace the original
+  // attempt and remains fail-closed.
   if (!currentAttemptReplaySafe) {
     return replayUnsafeOutcome;
   }

@@ -135,16 +135,47 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     expect(describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
   });
 
-  it("warns when a default-only heartbeat session is missing", () => {
-    const cfg = cfgWithDefaultHeartbeat("slack:channel:c123");
-    writeStore(cfg, {});
+  it.each([
+    {
+      name: "the sole default-only agent",
+      configuredAgentIds: ["ops"],
+      heartbeatAgentId: undefined,
+      expectedAgentIds: ["ops"],
+    },
+    {
+      name: "every agent sharing heartbeat defaults",
+      configuredAgentIds: ["main", "ops"],
+      heartbeatAgentId: undefined,
+      expectedAgentIds: ["main", "ops"],
+    },
+    {
+      name: "only the explicit default heartbeat owner",
+      configuredAgentIds: ["main", "ops"],
+      heartbeatAgentId: "ops",
+      expectedAgentIds: ["ops"],
+    },
+  ])(
+    "warns for missing sessions owned by $name",
+    ({ configuredAgentIds, heartbeatAgentId, expectedAgentIds }) => {
+      const cfg = cfgWithDefaultHeartbeat("slack:channel:c123");
+      if (!cfg.agents?.defaults?.heartbeat) {
+        throw new Error("expected test config to include default heartbeat config");
+      }
+      cfg.agents.list = configuredAgentIds.map((id) => ({ id }));
+      cfg.agents.defaults.heartbeat.agentId = heartbeatAgentId;
+      writeStore(cfg, {});
 
-    const warnings = describeHeartbeatSessionTargetIssues(cfg);
+      const warnings = describeHeartbeatSessionTargetIssues(cfg);
 
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("Agent ops heartbeat.session pins slack:channel:c123");
-    expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
-  });
+      expect(warnings).toHaveLength(expectedAgentIds.length);
+      for (const [index, agentId] of expectedAgentIds.entries()) {
+        expect(warnings[index]).toContain(
+          `Agent ${agentId} heartbeat.session pins slack:channel:c123`,
+        );
+        expect(warnings[index]).toContain(`resolved to agent:${agentId}:slack:channel:c123`);
+      }
+    },
+  );
 
   it("warns when an explicit heartbeat inherits a default session", () => {
     const cfg = cfgWithDefaultHeartbeat("slack:channel:c123");

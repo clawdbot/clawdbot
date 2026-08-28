@@ -54,6 +54,7 @@ export function createGatewayHarness(
       return snapshot;
     },
     connection: { gatewayUrl: "ws://gateway.test", password: "", token: "", bootstrapToken: "" },
+    connectionRevision: 0,
     eventLog: [],
     connect,
     setSessionKey() {},

@@ -1,6 +1,16 @@
 package ai.openclaw.app.node
 
+import android.Manifest
+import android.app.Application
+import android.content.ContentProvider
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
+import android.content.pm.ProviderInfo
+import android.database.Cursor
+import android.database.sqlite.SQLiteDatabase
+import android.net.Uri
+import android.provider.ContactsContract
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -10,6 +20,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowContentResolver
 
 class ContactsHandlerTest : NodeHandlerRobolectricTest() {
   @Test
@@ -160,6 +172,226 @@ class ContactsHandlerTest : NodeHandlerRobolectricTest() {
     assertEquals("null", request.givenName)
     assertEquals(listOf("null"), request.phoneNumbers)
   }
+
+  @Test
+  fun handleContactsAdd_usesOrganizationAsDisplayNameWhenContactHasNoName() {
+    assertSystemContactDisplayName(
+      """{"organizationName":"Analytical Engine"}""",
+      "Analytical Engine",
+    )
+  }
+
+  @Test
+  fun handleContactsAdd_usesPhoneAsDisplayNameWhenContactHasNoName() {
+    assertSystemContactDisplayName(
+      """{"phoneNumbers":["+12025550123"]}""",
+      "+12025550123",
+    )
+  }
+
+  @Test
+  fun handleContactsAdd_usesEmailAsDisplayNameWhenContactHasNoName() {
+    assertSystemContactDisplayName(
+      """{"emails":["ADA@EXAMPLE.COM"]}""",
+      "ada@example.com",
+    )
+  }
+
+  @Test
+  fun handleContactsAdd_prefersOrganizationOverPhoneAndEmailForDisplayName() {
+    assertSystemContactDisplayName(
+      """{"organizationName":"Analytical Engine","phoneNumbers":["+12025550123"],"emails":["ada@example.com"]}""",
+      "Analytical Engine",
+    )
+  }
+
+  @Test
+  fun handleContactsAdd_prefersPhoneOverEmailForDisplayName() {
+    assertSystemContactDisplayName(
+      """{"phoneNumbers":["+12025550123"],"emails":["ada@example.com"]}""",
+      "+12025550123",
+    )
+  }
+
+  @Test
+  fun handleContactsAdd_preservesStructuredNameOverOrganizationForDisplayName() {
+    assertSystemContactDisplayName(
+      """{"givenName":"Ada","familyName":"Lovelace","organizationName":"Analytical Engine"}""",
+      "Ada Lovelace",
+    )
+  }
+
+  @Test
+  fun handleContactsAdd_preservesExplicitDisplayNameOverOrganization() {
+    assertSystemContactDisplayName(
+      """{"displayName":"Countess Lovelace","organizationName":"Analytical Engine"}""",
+      "Countess Lovelace",
+    )
+  }
+
+  private fun assertSystemContactDisplayName(
+    params: String,
+    expectedDisplayName: String,
+  ) {
+    val app = appContext() as Application
+    shadowOf(app).grantPermissions(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS)
+    val provider = TestContactsProvider()
+    provider.attachInfo(app, ProviderInfo().apply { authority = ContactsContract.AUTHORITY })
+    ShadowContentResolver.registerProviderInternal(ContactsContract.AUTHORITY, provider)
+    val handler = ContactsHandler(app)
+
+    val addResult = handler.handleContactsAdd(params)
+
+    assertTrue("contacts.add failed: ${addResult.error?.message}", addResult.ok)
+    val added =
+      Json
+        .parseToJsonElement(addResult.payloadJson ?: error("missing add payload"))
+        .jsonObject
+        .getValue("contact")
+        .jsonObject
+    assertEquals(expectedDisplayName, added.getValue("displayName").jsonPrimitive.content)
+
+    val searchResult = handler.handleContactsSearch("""{"query":"$expectedDisplayName"}""")
+
+    assertTrue("contacts.search failed: ${searchResult.error?.message}", searchResult.ok)
+    val found =
+      Json
+        .parseToJsonElement(searchResult.payloadJson ?: error("missing search payload"))
+        .jsonObject
+        .getValue("contacts")
+        .jsonArray
+        .single()
+        .jsonObject
+    assertEquals(added.getValue("identifier").jsonPrimitive.content, found.getValue("identifier").jsonPrimitive.content)
+    assertEquals(expectedDisplayName, found.getValue("displayName").jsonPrimitive.content)
+  }
+}
+
+private class TestContactsProvider : ContentProvider() {
+  private val database =
+    SQLiteDatabase.create(null).apply {
+      execSQL("CREATE TABLE raw_contacts (_id INTEGER PRIMARY KEY, contact_id INTEGER)")
+      execSQL("CREATE TABLE contacts (_id INTEGER PRIMARY KEY, display_name TEXT)")
+      execSQL(
+        "CREATE TABLE data (_id INTEGER PRIMARY KEY AUTOINCREMENT, raw_contact_id INTEGER, " +
+          "contact_id INTEGER, mimetype TEXT, data1 TEXT, data2 TEXT, data3 TEXT)",
+      )
+    }
+  private val displayPriorities = mutableMapOf<Long, Int>()
+
+  override fun onCreate(): Boolean = true
+
+  override fun query(
+    uri: Uri,
+    projection: Array<out String>?,
+    selection: String?,
+    selectionArgs: Array<out String>?,
+    sortOrder: String?,
+  ): Cursor {
+    val paths = uri.pathSegments
+    val mimeType =
+      when (paths.getOrNull(1)) {
+        "phones" -> ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE
+        "emails" -> ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE
+        else -> null
+      }
+    val clauses = listOfNotNull(selection, mimeType?.let { "${ContactsContract.Data.MIMETYPE}=?" })
+    val arguments = selectionArgs?.toList().orEmpty() + listOfNotNull(mimeType)
+    return database.query(
+      paths.first(),
+      projection,
+      clauses.joinToString(" AND ").ifEmpty { null },
+      arguments.toTypedArray().takeIf { it.isNotEmpty() },
+      null,
+      null,
+      sortOrder,
+    )
+  }
+
+  override fun insert(
+    uri: Uri,
+    values: ContentValues?,
+  ): Uri =
+    when (uri.pathSegments.first()) {
+      "raw_contacts" -> {
+        val contactId = database.insertOrThrow("contacts", null, ContentValues().apply { putNull("display_name") })
+        val rawContactId =
+          database.insertOrThrow(
+            "raw_contacts",
+            null,
+            ContentValues().apply { put(ContactsContract.RawContacts.CONTACT_ID, contactId) },
+          )
+        ContentUris.withAppendedId(uri, rawContactId)
+      }
+      "data" -> {
+        val row = ContentValues(requireNotNull(values))
+        val rawContactId = row.getAsLong(ContactsContract.Data.RAW_CONTACT_ID)
+        val contactId =
+          database
+            .query(
+              "raw_contacts",
+              arrayOf(ContactsContract.RawContacts.CONTACT_ID),
+              "${ContactsContract.RawContacts._ID}=?",
+              arrayOf(rawContactId.toString()),
+              null,
+              null,
+              null,
+            ).use { cursor ->
+              check(cursor.moveToFirst())
+              cursor.getLong(0)
+            }
+        row.put(ContactsContract.Data.CONTACT_ID, contactId)
+        val dataId = database.insertOrThrow("data", null, row)
+        updateDisplayName(contactId, row)
+        ContentUris.withAppendedId(uri, dataId)
+      }
+      else -> error("unexpected contacts URI: $uri")
+    }
+
+  private fun updateDisplayName(
+    contactId: Long,
+    row: ContentValues,
+  ) {
+    val mimeType = row.getAsString(ContactsContract.Data.MIMETYPE)
+    val priority =
+      when (mimeType) {
+        ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE -> 40
+        ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE -> 30
+        ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE -> 20
+        ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE -> 10
+        else -> return
+      }
+    if (priority < (displayPriorities[contactId] ?: 0)) return
+    val display =
+      row.getAsString(ContactsContract.Data.DATA1)
+        ?: listOfNotNull(
+          row.getAsString(ContactsContract.CommonDataKinds.StructuredName.GIVEN_NAME),
+          row.getAsString(ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME),
+        ).joinToString(" ")
+    if (display.isBlank()) return
+    database.update(
+      "contacts",
+      ContentValues().apply { put(ContactsContract.Contacts.DISPLAY_NAME_PRIMARY, display) },
+      "${ContactsContract.Contacts._ID}=?",
+      arrayOf(contactId.toString()),
+    )
+    displayPriorities[contactId] = priority
+  }
+
+  override fun delete(
+    uri: Uri,
+    selection: String?,
+    selectionArgs: Array<out String>?,
+  ): Int = 0
+
+  override fun update(
+    uri: Uri,
+    values: ContentValues?,
+    selection: String?,
+    selectionArgs: Array<out String>?,
+  ): Int = 0
+
+  override fun getType(uri: Uri): String? = null
 }
 
 private class FakeContactsDataSource(

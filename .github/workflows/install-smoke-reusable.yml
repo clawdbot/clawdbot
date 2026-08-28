@@ -13,7 +13,7 @@ on:
         required: false
         type: string
       run_bun_global_install_smoke:
-        description: Run the Bun global install image-provider smoke
+        description: Run the Bun global install and runtime smoke
         required: false
         default: true
         type: boolean

@@ -35,8 +35,8 @@ describe("AppSidebar update card wiring", () => {
   });
 });
 
-describe("AppSidebar brand actions", () => {
-  it("starts a thread for the expanded agent from the brand action", async () => {
+describe("AppSidebar new session navigation", () => {
+  it("opens new-session links for the expanded agent without intercepting browser gestures", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const agentsList = {
       defaultId: "main",
@@ -51,31 +51,95 @@ describe("AppSidebar brand actions", () => {
       agentsList,
     );
     const onOpenNewSession = vi.fn();
+    sidebar.basePath = "/control";
     sidebar.connected = false;
     sidebar.onOpenNewSession = onOpenNewSession;
     await sidebar.updateComplete;
 
     const actions = sidebar.querySelector(".sidebar-brand__actions");
-    const brandButton = sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__new-thread");
-    expect(actions?.firstElementChild?.querySelector(".sidebar-brand__new-thread")).toBe(
-      brandButton,
-    );
-    expect(brandButton?.getAttribute("aria-label")).toBe("New session");
-    expect(brandButton?.disabled).toBe(true);
-    expect(actions?.querySelectorAll("button")).toHaveLength(1);
+    const brandLink = sidebar.querySelector<HTMLAnchorElement>(".sidebar-brand__new-thread");
+    expect(actions?.firstElementChild?.querySelector(".sidebar-brand__new-thread")).toBe(brandLink);
+    expect(brandLink?.getAttribute("aria-label")).toBe("New session");
+    expect(brandLink).toBeInstanceOf(HTMLAnchorElement);
+    expect(brandLink?.getAttribute("aria-disabled")).toBe("true");
+    expect(brandLink?.hasAttribute("href")).toBe(false);
+    expect(brandLink?.tabIndex).toBe(-1);
+    brandLink?.click();
+    expect(onOpenNewSession).not.toHaveBeenCalled();
     expect(sidebar.querySelector(".sidebar-search")).toBeNull();
     expect(sidebar.querySelector(".sidebar-brand__collapse")).toBeNull();
 
     sidebar.connected = true;
     await sidebar.updateComplete;
-    expect(brandButton?.disabled).toBe(false);
-    brandButton?.click();
-    expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
-
-    const toolbarButton = sidebar.querySelector<HTMLButtonElement>(
+    for (const selector of [
+      ".sidebar-brand__new-thread",
       ".sidebar-session-toolbar .sidebar-new-session",
+    ]) {
+      const link = sidebar.querySelector<HTMLAnchorElement>(selector)!;
+      expect(link.getAttribute("aria-label")).toBe("New session");
+      expect(link.getAttribute("href")).toBe("/control/new?agent=research");
+      expect(link.hasAttribute("aria-disabled")).toBe(false);
+      for (const modifiers of [
+        { metaKey: true },
+        { ctrlKey: true },
+        { shiftKey: true },
+        { button: 1 },
+      ]) {
+        const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifiers });
+        link.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(false);
+        expect(onOpenNewSession).not.toHaveBeenCalled();
+      }
+      link.click();
+      expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
+      onOpenNewSession.mockClear();
+    }
+  });
+
+  it("opens a catalog-targeted draft from its new-session action", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("research", ["agent:research:main"]),
+      "panel",
+      {
+        defaultId: "main",
+        mainKey: "agent:main:main",
+        scope: "global",
+        agents: [
+          { id: "main", name: "Main" },
+          { id: "research", name: "Research" },
+        ],
+      },
     );
-    expect(toolbarButton?.getAttribute("aria-label")).toBe("New session");
+    const onOpenNewSession = vi.fn();
+    sidebar.connected = true;
+    sidebar.onOpenNewSession = onOpenNewSession;
+    sidebar.sessionData.sessionCatalogs = [
+      {
+        id: "claude",
+        label: "Claude Code",
+        capabilities: {
+          continueSession: true,
+          archive: false,
+          createSession: { model: "anthropic/claude-opus-4-8" },
+        },
+        hosts: [],
+      },
+    ];
+    sidebar.sessionData.requestSessionDataUpdate();
+    await sidebar.updateComplete;
+
+    const link = sidebar.querySelector<HTMLAnchorElement>(".sidebar-session-catalog-new")!;
+    expect(link.getAttribute("aria-label")).toBe("New session — Claude Code");
+    expect(link.getAttribute("href")).toBe("/new?agent=research&catalog=claude");
+    const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    link.dispatchEvent(contextMenu);
+    expect(contextMenu.defaultPrevented).toBe(false);
+    expect(sidebar.querySelector(".sidebar-session-catalog-view-menu")).toBeNull();
+    link.click();
+
+    expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
   });
 });
 
@@ -222,17 +286,11 @@ describe("AppSidebar agent chip", () => {
     expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
       "Account",
     );
-    expect(card?.querySelector(".sidebar-identity-card__subtitle")?.textContent).toBe(
-      "Reconnecting…",
-    );
-    expect(
-      card?.querySelector(".sidebar-identity-card__subtitle")?.getAttribute("aria-hidden"),
-    ).toBe("true");
-    const connectionStatus = sidebar.querySelector(".sidebar-identity-card__status");
-    expect(connectionStatus?.getAttribute("role")).toBe("status");
+    expect(card?.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
+    const connectionStatus = sidebar.querySelector(".sidebar-footer-bar__status");
     expect(connectionStatus?.getAttribute("aria-live")).toBe("polite");
-    expect(connectionStatus?.textContent).toBe("Reconnecting…");
-    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
+    expect(connectionStatus?.textContent).toContain("Offline");
+    expect(connectionStatus?.textContent).toContain("Reconnecting…");
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).not.toContain(
       "Offline",
     );
@@ -247,7 +305,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.offline = false;
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-    expect(sidebar.querySelector(".sidebar-identity-card__status")?.textContent).toBe("");
+    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
   });
 
   it("shows a working subtitle while the agent has an active run", async () => {
@@ -313,7 +371,7 @@ describe("AppSidebar agent chip", () => {
       sidebar.requestUpdate();
       await sidebar.updateComplete;
 
-      const glyph = sidebar.querySelector(".nav-item--home .sidebar-board-glyph");
+      const glyph = sidebar.querySelector('.nav-item--home [aria-label="Dashboard available"]');
       expect(glyph?.getAttribute("aria-label")).toBe("Dashboard available");
       expect(glyph?.hasAttribute("title")).toBe(false);
       expect(

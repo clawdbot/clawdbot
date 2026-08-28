@@ -217,7 +217,6 @@ describe("buildAgentSystemPrompt", () => {
       ownerNumbers: ["+123"],
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
-      heartbeatPrompt: "ping",
       toolNames: ["message", "memory_search", "read", "exec", "process"],
       docsPath: "/tmp/openclaw/docs",
       extraSystemPrompt: "Subagent details",
@@ -390,6 +389,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Skills");
   });
 
+  it("omits tool guidance from tool-free minimal prompts", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      extraSystemPrompt: "Write only the requested prose.",
+    });
+
+    expect(prompt).not.toContain("## Tooling");
+    expect(prompt).not.toContain("## Tool Call Style");
+    expect(prompt).toContain("## Subagent Context\nWrite only the requested prose.");
+  });
+
   it("avoids the Claude subscription classifier wording in reply tag guidance", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -414,11 +425,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("[[tts:");
   });
 
-  it("omits the heartbeat section when no heartbeat prompt is provided", () => {
+  it("keeps scheduled heartbeat instructions out of the system prompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       promptMode: "full",
-      heartbeatPrompt: undefined,
     });
 
     expect(prompt).not.toContain("## Heartbeats");
@@ -585,6 +595,27 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain('[embed content_type="html" title="Status"]...[/embed]');
   });
 
+  it("offers routine promotion only when the automations tool is available", () => {
+    const withAutomations = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["automations"],
+    });
+    const withoutAutomations = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read"],
+    });
+
+    expect(withAutomations).toContain("asked a 3rd time");
+    expect(withAutomations).toContain("get a yes, create it");
+    expect(withAutomations).toContain("failed test => say so and remove it");
+    // Created enabled on purpose: the scheduler alerts and auto-disables a
+    // failing enabled job, but nothing watches one left disabled.
+    expect(withAutomations).not.toContain("enabled:false");
+    // Gated: without the tool the trigger would point at a capability the
+    // model cannot reach.
+    expect(withoutAutomations).not.toContain("asked a 3rd time");
+  });
+
   it("teaches direct status answers only on the full Control UI surface", () => {
     const defaultPrompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -669,14 +700,14 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it("guides visible terminal work separately from quiet exec", () => {
+  it("describes operator-owned terminals and policy-governed agent input", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["exec", "terminal"],
     });
 
     expect(prompt).toContain(
-      "- terminal: Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work",
+      "- terminal: List/read/resize/close operator-opened session terminals; input follows exec policy and may require exact-input approval; never open shells",
     );
   });
 
@@ -1311,6 +1342,48 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Alpha");
     expect(prompt).toContain("## IDENTITY.md");
     expect(prompt).toContain("Bravo");
+  });
+
+  it("removes shipped heartbeat prompt quotes from workspace context without dropping user guidance", () => {
+    const heartbeatPrompts = [
+      "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+      "Follow the heartbeat monitor scratch context when provided. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+      "Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+      "Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+    ];
+
+    for (const heartbeatPrompt of heartbeatPrompts) {
+      for (const lineEnding of ["\n", "\r\n"]) {
+        const prompt = buildAgentSystemPrompt({
+          workspaceDir: "/tmp/openclaw",
+          contextFiles: [
+            {
+              path: "AGENTS.md",
+              content: `Keep this user guidance.${lineEnding}${lineEnding}Default heartbeat prompt:${lineEnding}\`${heartbeatPrompt}\`${lineEnding}${lineEnding}Keep this too.`,
+            },
+          ],
+        });
+
+        expect(prompt).toContain("Keep this user guidance.");
+        expect(prompt).toContain("Keep this too.");
+        expect(prompt).not.toContain("## Heartbeats");
+        expect(prompt).not.toContain("HEARTBEAT_OK");
+        expect(prompt).not.toContain("HEARTBEAT.md");
+        expect(prompt).not.toContain(heartbeatPrompt);
+        expect(prompt).not.toContain("Default heartbeat prompt:");
+      }
+    }
+  });
+
+  it("preserves custom quoted workspace instructions that are not default heartbeat prompts", () => {
+    const customPrompt =
+      "Default heartbeat prompt:\n`Review only the incident queue. If nothing needs attention, reply HEARTBEAT_OK.`";
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "AGENTS.md", content: customPrompt }],
+    });
+
+    expect(prompt).toContain(customPrompt);
   });
 
   it("ignores context files with missing or blank paths", () => {

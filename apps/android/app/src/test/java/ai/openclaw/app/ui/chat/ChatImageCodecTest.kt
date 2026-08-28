@@ -1,10 +1,17 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
+import android.content.ContentProvider
+import android.content.ContentValues
+import android.content.pm.ProviderInfo
+import android.database.Cursor
+import android.database.MatrixCursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
+import android.os.ParcelFileDescriptor
+import android.provider.OpenableColumns
 import android.util.Base64
 import androidx.exifinterface.media.ExifInterface
 import org.junit.After
@@ -16,6 +23,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowContentResolver
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -122,6 +130,41 @@ class ChatImageCodecTest {
   }
 
   @Test
+  fun pickedImagePreservesProviderDisplayNameInsteadOfContentUriId() {
+    val attachment = loadProviderImage(displayName = "vacation-photo.png")
+
+    assertEquals("vacation-photo.jpg", attachment.fileName)
+  }
+
+  @Test
+  fun pickedImageSanitizesUnsafeProviderDisplayName() {
+    val attachment = loadProviderImage(displayName = "Summer/Trips\\2026\u0007.png")
+
+    assertEquals("Summer_Trips_2026_.jpg", attachment.fileName)
+  }
+
+  @Test
+  fun pickedImagePreservesUnicodeProviderDisplayName() {
+    val attachment = loadProviderImage(displayName = "旅-été.png")
+
+    assertEquals("旅-été.jpg", attachment.fileName)
+  }
+
+  @Test
+  fun pickedImageFallsBackWhenProviderDisplayNameIsBlank() {
+    val attachment = loadProviderImage(displayName = "   ")
+
+    assertEquals("42.jpg", attachment.fileName)
+  }
+
+  @Test
+  fun pickedImageFallsBackWhenProviderDisplayNameQueryFails() {
+    val attachment = loadProviderImage(displayName = "unavailable.png", failQuery = true)
+
+    assertEquals("42.jpg", attachment.fileName)
+  }
+
+  @Test
   fun imageDecoderPreservesImagesWithoutExifMetadata() {
     val bitmap = createAsymmetricBitmap()
     val bytes =
@@ -136,6 +179,21 @@ class ChatImageCodecTest {
     assertOrientedPixels(
       decoded,
       OrientationCase(ExifInterface.ORIENTATION_NORMAL, RED, GREEN, BLUE, YELLOW),
+    )
+  }
+
+  private fun loadProviderImage(
+    displayName: String,
+    failQuery: Boolean = false,
+  ): PendingAttachment {
+    val image = createTaggedImage(ExifInterface.ORIENTATION_NORMAL)
+    val authority = "ai.openclaw.app.image-proof"
+    val provider = TestImageContentProvider(image, displayName, failQuery)
+    provider.attachInfo(RuntimeEnvironment.getApplication(), ProviderInfo().apply { this.authority = authority })
+    ShadowContentResolver.registerProviderInternal(authority, provider)
+    return loadSizedImageAttachment(
+      RuntimeEnvironment.getApplication().contentResolver,
+      Uri.parse("content://$authority/images/42"),
     )
   }
 
@@ -211,4 +269,48 @@ class ChatImageCodecTest {
     val BLUE = Color.rgb(0, 0, 255)
     val YELLOW = Color.rgb(255, 255, 0)
   }
+}
+
+private class TestImageContentProvider(
+  private val image: File,
+  private val displayName: String,
+  private val failQuery: Boolean,
+) : ContentProvider() {
+  override fun onCreate(): Boolean = true
+
+  override fun query(
+    uri: Uri,
+    projection: Array<out String>?,
+    selection: String?,
+    selectionArgs: Array<out String>?,
+    sortOrder: String?,
+  ): Cursor {
+    if (failQuery) throw SecurityException("display name unavailable")
+    return MatrixCursor(arrayOf(OpenableColumns.DISPLAY_NAME)).apply { addRow(arrayOf(displayName)) }
+  }
+
+  override fun openFile(
+    uri: Uri,
+    mode: String,
+  ): ParcelFileDescriptor = ParcelFileDescriptor.open(image, ParcelFileDescriptor.MODE_READ_ONLY)
+
+  override fun getType(uri: Uri): String = "image/jpeg"
+
+  override fun insert(
+    uri: Uri,
+    values: ContentValues?,
+  ): Uri? = null
+
+  override fun delete(
+    uri: Uri,
+    selection: String?,
+    selectionArgs: Array<out String>?,
+  ): Int = 0
+
+  override fun update(
+    uri: Uri,
+    values: ContentValues?,
+    selection: String?,
+    selectionArgs: Array<out String>?,
+  ): Int = 0
 }

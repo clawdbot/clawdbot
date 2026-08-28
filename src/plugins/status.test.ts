@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   createCompatibilityNotice,
   createCustomHook,
@@ -19,9 +20,6 @@ const loadPluginMetadataRegistrySnapshotMock = vi.fn();
 const loadPluginManifestRegistryForPluginRegistryMock = vi.fn();
 const loadPluginRegistrySnapshotWithMetadataMock = vi.fn();
 const loadPluginManifestRegistryForInstalledIndexMock = vi.fn();
-const isPluginMetadataSnapshotCompatibleMock = vi.fn<
-  typeof import("./plugin-metadata-snapshot.js").isPluginMetadataSnapshotCompatible
->(() => true);
 const loadPluginMetadataSnapshotMock = vi.fn((rawParams: unknown = {}) => {
   const params = rawParams as { index?: unknown };
   const manifestRegistry = loadPluginManifestRegistryForInstalledIndexMock(params) ?? {
@@ -58,7 +56,8 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/io.plugin-metadata.js", () => ({
-  resolveConfigWidePluginManifestRegistry: () => ({ plugins: [], diagnostics: [] }),
+  resolveConfigWidePluginMetadataSnapshot: (params: unknown) =>
+    loadPluginMetadataSnapshotMock(params),
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -91,13 +90,15 @@ vi.mock("./manifest-registry-installed.js", () => ({
   resolveInstalledManifestRegistryIndexFingerprint: () => "test-installed-index",
 }));
 
-vi.mock("./plugin-metadata-snapshot.js", () => ({
-  isPluginMetadataSnapshotCompatible: isPluginMetadataSnapshotCompatibleMock,
-  loadPluginMetadataSnapshot: (params?: unknown) => loadPluginMetadataSnapshotMock(params),
-  rebasePluginMetadataSnapshotManifestRegistry: <T>(snapshot: T) => snapshot,
-  resolvePluginMetadataSnapshot: (params?: { pluginMetadataSnapshot?: unknown }) =>
-    params?.pluginMetadataSnapshot ?? loadPluginMetadataSnapshotMock(params),
-}));
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-metadata-snapshot.js")>();
+  return {
+    loadPluginMetadataSnapshot: (params?: unknown) => loadPluginMetadataSnapshotMock(params),
+    projectPluginMetadataSnapshot: actual.projectPluginMetadataSnapshot,
+    resolvePluginMetadataSnapshot: (params?: { pluginMetadataSnapshot?: unknown }) =>
+      params?.pluginMetadataSnapshot ?? loadPluginMetadataSnapshotMock(params),
+  };
+});
 
 vi.mock("./providers.js", () => ({
   resolveBundledProviderCompatPluginIds: (...args: unknown[]) =>
@@ -395,6 +396,7 @@ describe("plugin status reports", () => {
   });
 
   beforeEach(() => {
+    clearPluginMetadataLifecycleCaches();
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     resolveCompatibleRuntimePluginRegistryMock.mockReset();
@@ -402,8 +404,6 @@ describe("plugin status reports", () => {
     loadPluginManifestRegistryForPluginRegistryMock.mockReset();
     loadPluginRegistrySnapshotWithMetadataMock.mockReset();
     loadPluginManifestRegistryForInstalledIndexMock.mockReset();
-    isPluginMetadataSnapshotCompatibleMock.mockReset();
-    isPluginMetadataSnapshotCompatibleMock.mockReturnValue(true);
     loadPluginMetadataSnapshotMock.mockClear();
     applyPluginAutoEnableMock.mockReset();
     resolveBundledProviderCompatPluginIdsMock.mockReset();
@@ -754,6 +754,82 @@ describe("plugin status reports", () => {
       "text-inference",
       "web-search",
     ]);
+  });
+
+  it.each([
+    {
+      id: "extractor-only",
+      providers: { contracts: { webContentExtractors: ["readability"] } },
+      capabilities: [{ kind: "web-content-extractors", ids: ["readability"] }],
+      shape: "plain-capability",
+      mode: "plain",
+    },
+    {
+      id: "fetch-only",
+      providers: { webFetchProviderIds: ["fetch-only"] },
+      capabilities: [{ kind: "web-fetch", ids: ["fetch-only"] }],
+      shape: "plain-capability",
+      mode: "plain",
+    },
+    {
+      id: "firecrawl",
+      providers: {
+        webFetchProviderIds: ["firecrawl"],
+        webSearchProviderIds: ["firecrawl", "firecrawl-free"],
+      },
+      capabilities: [
+        { kind: "web-fetch", ids: ["firecrawl"] },
+        { kind: "web-search", ids: ["firecrawl", "firecrawl-free"] },
+      ],
+      shape: "hybrid-capability",
+      mode: "hybrid",
+    },
+    {
+      id: "migration-only",
+      providers: { migrationProviderIds: ["importer"] },
+      capabilities: [{ kind: "migration-provider", ids: ["importer"] }],
+      shape: "plain-capability",
+      mode: "plain",
+    },
+  ])(
+    "projects $id capabilities from cold metadata without a hook-only warning",
+    ({ id, providers, capabilities, shape, mode }) => {
+      setSinglePluginLoadResult(createPluginRecord({ id, ...providers }), {
+        hooks: [createCustomHook({ pluginId: id, events: ["message"] })],
+      });
+      const report = buildPluginSnapshotReport({ config: {} });
+      const inspect = expectInspectReport(id, { config: {}, report });
+      expect(inspect).toMatchObject({
+        shape,
+        capabilityMode: mode,
+        capabilityCount: capabilities.length,
+        capabilities,
+        compatibility: [],
+      });
+      expect(buildAllPluginInspectReports({ config: {}, report })).toEqual([inspect]);
+      expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("exposes gateway discovery only after its service is registered", () => {
+    setSinglePluginLoadResult(createPluginRecord({ id: "bonjour" }));
+    const report = buildPluginSnapshotReport({ config: {} });
+    expect(expectInspectReport("bonjour", { config: {}, report })).toMatchObject({
+      shape: "non-capability",
+      capabilityCount: 0,
+      capabilities: [],
+    });
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    setSinglePluginLoadResult(
+      createPluginRecord({ id: "bonjour", gatewayDiscoveryServiceIds: ["bonjour"] }),
+    );
+    expect(expectInspectReport("bonjour", { config: {} })).toMatchObject({
+      shape: "plain-capability",
+      capabilityMode: "plain",
+      capabilityCount: 1,
+      capabilities: [{ kind: "gateway-discovery", ids: ["bonjour"] }],
+    });
+    expect(mockInput(loadOpenClawPluginsMock).activate).toBe(false);
   });
 
   it("treats a CLI-command-only plugin as a plain capability", () => {

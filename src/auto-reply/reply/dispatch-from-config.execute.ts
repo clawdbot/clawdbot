@@ -41,6 +41,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     dispatcher,
     failDispatchReplyOperation,
     flushPendingCommentaryProgress,
+    getAgentRunTerminalOutcome,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
     hookRunner,
@@ -597,14 +598,18 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
         `dispatch-from-config: deferred final text fallback failed: ${formatErrorMessage(fallbackError)}`,
       );
     }
+    const failedAgentRun = getAgentRunTerminalOutcome() === "failed";
     if (
       params.replyOptions?.isHeartbeat === true ||
-      !didDeliverVisiblePartialReply ||
+      (!failedAgentRun && !didDeliverVisiblePartialReply) ||
       isDispatchOperationAborted()
     ) {
       throw error;
     }
     failDispatchReplyOperation(error, "failed");
+    if (!didDeliverVisiblePartialReply) {
+      return undefined;
+    }
     return buildTerminalAgentRunFailureReplyPayload({
       visibleReplyDelivered: true,
       sessionCtx: ctx,

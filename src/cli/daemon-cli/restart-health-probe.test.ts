@@ -223,6 +223,33 @@ describe("restart health", () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
+  it("stops waiting once the restarted gateway reports the wrong build identity", async () => {
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.4.24", buildId: "old-build", connId: "old" },
+    });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      expectedBuildId: "new-build",
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.waitOutcome).toBe("build-id-mismatch");
+    expect(snapshot.elapsedMs).toBe(0);
+    expect(snapshot.buildIdMismatch).toEqual({ expected: "new-build", actual: "old-build" });
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it("marks matching-version restarts unhealthy when activated plugins failed to load", async () => {
     probeGateway.mockResolvedValue({
       ok: true,

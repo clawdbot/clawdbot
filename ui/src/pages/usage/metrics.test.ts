@@ -2,6 +2,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildAggregatesFromSessions,
   buildPeakErrorHours,
   formatUsageCost,
   formatUsageTokens,
@@ -66,6 +67,64 @@ function peakErrorSummaries(result: ReturnType<typeof buildPeakErrorHours>) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("usage aggregate model identity", () => {
+  it("keeps colon-bearing provider and model identities distinct", () => {
+    const session = (
+      key: string,
+      provider: string,
+      model: string,
+      dailyProvider: string,
+      dailyModel: string,
+      totalCost: number,
+    ): UsageSessionEntry => {
+      const totals = {
+        input: 1,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 1,
+        totalCost,
+        inputCost: totalCost,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      };
+      return {
+        key,
+        usage: {
+          ...totals,
+          modelUsage: [{ provider, model, count: 1, totals }],
+          dailyModelUsage: [
+            {
+              date: "2026-02-01",
+              provider: dailyProvider,
+              model: dailyModel,
+              tokens: 1,
+              cost: totalCost,
+              count: 1,
+            },
+          ],
+        },
+      };
+    };
+
+    const aggregates = buildAggregatesFromSessions([
+      session("current", "fixture", "bedrock::arn", "fixture", "bedrock:arn", 0.02),
+      session("old", "fixture::bedrock", "arn", "fixture:bedrock", "arn", 0.01),
+    ]);
+
+    expect(aggregates.byModel).toMatchObject([
+      { provider: "fixture", model: "bedrock::arn" },
+      { provider: "fixture::bedrock", model: "arn" },
+    ]);
+    expect(aggregates.modelDaily).toMatchObject([
+      { provider: "fixture", model: "bedrock:arn" },
+      { provider: "fixture:bedrock", model: "arn" },
+    ]);
+  });
 });
 
 describe("buildPeakErrorHours", () => {

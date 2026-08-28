@@ -206,7 +206,7 @@ function resolveExecutionBudgetMs(request: BrowserActRequest): number {
  * Resolve the runtime budget before an outer transport watchdog is armed.
  * Wait phases and batch children execute serially, so maxima would abort valid work midway.
  */
-export function resolveBrowserActExecutionBudgetMs(request: BrowserActRequest): number {
+function resolveBrowserActExecutionBudgetMs(request: BrowserActRequest): number {
   const executionBudgetMs = resolveExecutionBudgetMs(request);
   if (request.kind === "wait") {
     return executionBudgetMs;

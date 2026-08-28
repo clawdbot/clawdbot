@@ -829,14 +829,13 @@ describe("doctor gateway runtime checks", () => {
     expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();
   });
 
-  it("skips host-service findings for an externally managed container gateway", async () => {
+  it("skips host-service findings for a container without an OpenClaw service", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);
 
     await expect(
       collectGatewayDaemonFindings({ cfg: { gateway: { mode: "local" } } }),
     ).resolves.toEqual([]);
 
-    expect(mocks.resolveGatewayService).not.toHaveBeenCalled();
     expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();
   });
 });

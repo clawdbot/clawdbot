@@ -100,6 +100,7 @@ describe("resolveModelRuntimePolicy", () => {
     ).toEqual({
       policy: { id: "openclaw" },
       source: "model",
+      forcedByEnvironment: true,
     });
   });
 

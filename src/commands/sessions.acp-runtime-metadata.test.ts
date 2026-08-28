@@ -1,9 +1,15 @@
 // Sessions ACP runtime metadata tests cover session-owned runtime overlays.
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveCurrentSessionAgentRuntimeMetadata,
   resolveModelAgentRuntimeMetadata,
 } from "../agents/agent-runtime-metadata.js";
+import {
+  clearAgentHarnesses,
+  listRegisteredAgentHarnesses,
+  registerAgentHarness,
+} from "../agents/harness/registry.js";
+import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 
@@ -36,7 +42,87 @@ function computeSessionAgentRuntime(params: {
   });
 }
 
+const registeredHarnesses = listRegisteredAgentHarnesses();
+beforeEach(() => clearAgentHarnesses());
+afterAll(() => restoreRegisteredAgentHarnesses(registeredHarnesses));
+
 describe("session ACP runtime metadata", () => {
+  it.each(["model", "provider", "session-key", "implicit"] as const)(
+    "projects a declared fallback for the next turn while retaining %s attribution",
+    (source) => {
+      const supports = vi.fn((_context: unknown) => ({
+        supported: false as const,
+        fallbackRuntime: "openclaw" as const,
+      }));
+      registerAgentHarness({
+        id: "codex",
+        label: "Codex",
+        supports,
+        runAttempt: async () => {
+          throw new Error("projection must not execute");
+        },
+      });
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              ...(source === "provider" ? { agentRuntime: { id: "codex" } } : {}),
+              models: [
+                {
+                  id: "gpt-5.6-sol",
+                  name: "Sol",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200_000,
+                  maxTokens: 8192,
+                  compat: { supportsStore: false },
+                },
+              ],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.6-sol": source === "model" ? { agentRuntime: { id: "codex" } } : {},
+            },
+          },
+        },
+      };
+      const params = {
+        cfg,
+        agentId: "main",
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        sessionKey: NON_ACP_SESSION_KEY,
+        sessionEntry: {
+          agentHarnessId: "codex",
+          ...(source === "session-key" ? { agentRuntimeOverride: "codex" } : {}),
+        },
+      };
+      expect(resolveCurrentSessionAgentRuntimeMetadata(params)).toEqual({ id: "openclaw", source });
+      expect(
+        resolveCurrentSessionAgentRuntimeMetadata({
+          ...params,
+          sessionEntry: { ...params.sessionEntry, modelSelectionLocked: true },
+        }),
+      ).toEqual({ id: "codex", source: "session" });
+      expect(
+        resolveCurrentSessionAgentRuntimeMetadata({
+          ...params,
+          sessionKey: "agent:main:acp:runtime-test",
+          acpRuntime: true,
+        }),
+      ).toEqual({ id: "acpx", source: "session-key" });
+      // Projection consumes registered support only; it never discovers provider ownership.
+      for (const [context] of supports.mock.calls) {
+        expect(context).not.toHaveProperty("providerOwnerStatus");
+      }
+    },
+  );
   it("prefers an explicit ACP backend", () => {
     const agentRuntime = computeSessionAgentRuntime({
       cfg: buildConfigWithoutAgentRuntimePolicy(),
@@ -97,28 +183,31 @@ describe("session ACP runtime metadata", () => {
     expect(agentRuntime).toEqual({ id: "codex", source: "session" });
   });
 
-  it("reports current model policy instead of an unlocked historical producer", () => {
-    const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+  it.each([undefined, "codex"])(
+    "reports current %s policy instead of an unlocked historical producer",
+    (runtime) => {
+      const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.6-sol": runtime ? { agentRuntime: { id: runtime } } : {},
+              },
             },
           },
+        } as OpenClawConfig,
+        agentId: "main",
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        sessionKey: NON_ACP_SESSION_KEY,
+        sessionEntry: {
+          agentHarnessId: "openclaw",
         },
-      } as OpenClawConfig,
-      agentId: "main",
-      provider: "openai",
-      model: "gpt-5.6-sol",
-      sessionKey: NON_ACP_SESSION_KEY,
-      sessionEntry: {
-        agentHarnessId: "openclaw",
-      },
-    });
+      });
 
-    expect(agentRuntime).toEqual({ id: "codex", source: "model" });
-  });
+      expect(agentRuntime).toEqual({ id: "codex", source: runtime ? "model" : "implicit" });
+    },
+  );
 
   it("keeps an explicit compatible runtime override", () => {
     const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({

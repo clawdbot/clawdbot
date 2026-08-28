@@ -10,6 +10,7 @@ import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserNonNegativeIntegerValue,
+  parseBrowserPositiveIntegerOption,
   parseBrowserPositiveIntegerValue,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
@@ -17,6 +18,7 @@ import {
   danger,
   defaultRuntime,
   getRuntimeConfig,
+  inheritOptionFromParent,
   shortenHomePath,
   type SnapshotResult,
 } from "./core-api.js";
@@ -54,6 +56,22 @@ function parseBrowserChoiceOption<const T extends string>(
   return undefined;
 }
 
+function resolveBrowserInspectTimeout(
+  command: Command,
+  parent: BrowserParentOpts,
+  value: string | undefined,
+): { parent: BrowserParentOpts; timeoutMs?: number } {
+  const timeout =
+    command.getOptionValueSource("timeout") === "cli"
+      ? value
+      : inheritOptionFromParent<string>(command, "timeout", "cli");
+  if (timeout === undefined) {
+    return { parent };
+  }
+  const timeoutMs = parseBrowserPositiveIntegerOption(timeout, "--timeout");
+  return { parent: { ...parent, timeout: String(timeoutMs) }, timeoutMs };
+}
+
 /** Registers Browser screenshot and snapshot commands. */
 export function registerBrowserInspectCommands(
   browser: Command,
@@ -72,6 +90,7 @@ export function registerBrowserInspectCommands(
       false,
     )
     .option("--type <png|jpeg>", "Output type (default: png)", "png")
+    .option("--timeout <ms>", "Timeout in ms")
     .action(async (targetId: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -80,7 +99,8 @@ export function registerBrowserInspectCommands(
         return;
       }
       try {
-        const result = await callBrowserRequest<{ path: string }>(parent, {
+        const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
+        const result = await callBrowserRequest<{ path: string }>(request.parent, {
           method: "POST",
           path: "/screenshot",
           query: profile ? { profile } : undefined,
@@ -91,6 +111,7 @@ export function registerBrowserInspectCommands(
             element: normalizeOptionalString(opts.element),
             labels: Boolean(opts.labels),
             type,
+            ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
           },
         });
         if (parent?.json) {
@@ -120,6 +141,7 @@ export function registerBrowserInspectCommands(
     .option("--labels", "Include label overlay screenshot with annotations", false)
     .option("--urls", "Append discovered link URLs to AI snapshots", false)
     .option("--out <path>", "Write snapshot to a file")
+    .option("--timeout <ms>", "Timeout in ms")
     .action(async (opts, cmd: Command) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -152,6 +174,7 @@ export function registerBrowserInspectCommands(
         return;
       }
       try {
+        const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
         const query: Record<string, string | number | boolean | undefined> = {
           format,
           targetId: normalizeOptionalString(opts.targetId),
@@ -165,8 +188,9 @@ export function registerBrowserInspectCommands(
           urls: opts.urls ? true : undefined,
           mode,
           profile,
+          ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
         };
-        const result = await callBrowserRequest<SnapshotResult>(parent, {
+        const result = await callBrowserRequest<SnapshotResult>(request.parent, {
           method: "GET",
           path: "/snapshot",
           query,

@@ -328,6 +328,29 @@ describe("noteAuthProfileHealth", () => {
     ]);
   });
 
+  it("reports expired credentials independently from an active cooldown", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(now + 5 * 60_000);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      ...expiredStore("openai:expired", now - 60_000),
+      usageStats: { "openai:expired": { cooldownUntil: now + 5 * 60_000 } },
+    });
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: {
+        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+      } as OpenClawConfig,
+    });
+
+    expect(findings.map((finding) => finding.message)).toEqual([
+      "Auth profile openai:expired is cooldown (5m).",
+      "Auth profile openai:expired is expired (0m).",
+    ]);
+  });
+
   it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
@@ -576,6 +599,38 @@ describe("noteAuthProfileHealth", () => {
     const body = String(modelAuthCalls[0]?.[0]);
     expect(body.match(/openai-codex:shared/g)).toHaveLength(1);
     expect(body).not.toContain("(agents:");
+  });
+
+  it("offers credential repair while the same profile is cooling down", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    writeAuthStore(mainDir);
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(now + 5 * 60_000);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      ...expiredStore("openai-codex:expired", now - 60_000),
+      usageStats: { "openai-codex:expired": { cooldownUntil: now + 5 * 60_000 } },
+    });
+    const confirmAutoFix = vi.fn(async () => false);
+
+    await noteAuthProfileHealth({
+      cfg: {
+        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+      } as OpenClawConfig,
+      prompter: { confirmAutoFix } as unknown as DoctorPrompter,
+      allowKeychainPrompt: false,
+    });
+
+    expect(confirmAutoFix).toHaveBeenCalledOnce();
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("openai-codex:expired: cooldown (5m)"),
+      "Auth profile cooldowns",
+    );
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("openai-codex:expired: expired"),
+      "Model auth",
+    );
   });
 
   it("does not treat inherited main auth as a local secondary-agent source", async () => {

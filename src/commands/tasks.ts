@@ -651,7 +651,7 @@ export async function tasksMaintenanceCommand(
     info(
       sessionMaintenance.skippedReason
         ? `Session registry: sweep skipped (${sessionMaintenance.skippedReason})`
-        : `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running automations`,
+        : `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running automations · ${sessionMaintenance.skippedStores} skipped ${sessionMaintenance.skippedStores === 1 ? "store" : "stores"}`,
     ),
   );
   runtime.log(

@@ -439,19 +439,23 @@ async function runProof(options: ProducerOptions): Promise<string> {
     }
 
     const db = new DatabaseSync(stateDatabasePath(gateway), { readOnly: true });
-    let genericCount = 0;
+    let ownerDuplicateCount = 0;
     try {
-      if (hasSqliteColumns(db, "execution_decision_facts", ["receipt_id"])) {
-        genericCount = (
-          db.prepare("SELECT COUNT(*) AS count FROM execution_decision_facts").get() as {
-            count: number;
-          }
+      if (hasSqliteColumns(db, "execution_decision_facts", ["owner"])) {
+        ownerDuplicateCount = (
+          db
+            .prepare(
+              `SELECT COUNT(*) AS count
+               FROM execution_decision_facts
+               WHERE owner IN ('cron_run_receipts', 'task_runs', 'flow_runs')`,
+            )
+            .get() as { count: number }
         ).count;
       }
     } finally {
       db.close();
     }
-    if (genericCount !== 0) {
+    if (ownerDuplicateCount !== 0) {
       throw new Error("owner lifecycle rows were duplicated into execution_decision_facts");
     }
 

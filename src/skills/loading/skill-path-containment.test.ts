@@ -15,7 +15,7 @@ import { readSkillFrontmatterSafe } from "./local-loader.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
 vi.mock("./plugin-skills.js", () => ({
-  resolvePluginSkillDirs: () => [],
+  resolvePluginSkillRoots: () => [],
 }));
 
 let fakeHome = "";
@@ -27,6 +27,15 @@ async function createTempWorkspaceDir() {
   const workspaceDir = path.join(tempRoot, `workspace-${++workspaceCaseIndex}`);
   await fs.mkdir(workspaceDir, { recursive: true });
   return workspaceDir;
+}
+
+async function writeHardlinkedSkill(params: { dir: string; name: string; description: string }) {
+  const sourceDir = path.join(tempRoot, `hardlink-source-${++workspaceCaseIndex}`);
+  await writeSkill({ ...params, dir: sourceDir });
+  await fs.mkdir(params.dir, { recursive: true });
+  const skillFilePath = path.join(params.dir, "SKILL.md");
+  await fs.link(path.join(sourceDir, "SKILL.md"), skillFilePath);
+  expect((await fs.stat(skillFilePath)).nlink).toBeGreaterThan(1);
 }
 
 function captureWarningLogger() {
@@ -97,6 +106,90 @@ afterAll(async () => {
 });
 
 describe("skill path containment", () => {
+  it.each([
+    { source: "bundled", expectedSource: "openclaw-bundled" },
+    { source: "custodian", expectedSource: "openclaw-custodian" },
+  ] as const)("loads hardlinked packaged $source skills", async ({ source, expectedSource }) => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const bundledSkillsDir = path.join(workspaceDir, "package", "skills");
+    const skillRoot =
+      source === "bundled"
+        ? bundledSkillsDir
+        : path.join(path.dirname(bundledSkillsDir), "custodian-skills");
+    const skillName = `${source}-hardlinked-skill`;
+    await writeHardlinkedSkill({
+      dir: path.join(skillRoot, skillName),
+      name: skillName,
+      description: `Packaged ${source} skill`,
+    });
+    const warn = captureWarningLogger();
+
+    const entries = loadTestWorkspaceSkills(workspaceDir, {
+      bundledSkillsDir,
+      agentId: "ops",
+      config: {
+        agents: {
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { ops: {} },
+        },
+      },
+    });
+
+    expect(entries).toEqual([
+      expect.objectContaining({
+        skill: expect.objectContaining({ name: skillName, source: expectedSource }),
+      }),
+    ]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { source: "workspace", expectedSource: "openclaw-workspace" },
+    { source: "managed", expectedSource: "openclaw-managed" },
+    { source: "config-extra", expectedSource: "openclaw-extra" },
+  ] as const)(
+    "rejects hardlinked $source skills while preserving ordinary files",
+    async ({ source, expectedSource }) => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const skillRoot =
+        source === "workspace"
+          ? path.join(workspaceDir, "skills")
+          : source === "managed"
+            ? path.join(workspaceDir, ".managed")
+            : path.join(workspaceDir, "extra-skills");
+      const rejectedSkillName = `${source}-hardlinked-skill`;
+      const acceptedSkillName = `${source}-ordinary-skill`;
+      await writeHardlinkedSkill({
+        dir: path.join(skillRoot, rejectedSkillName),
+        name: rejectedSkillName,
+        description: `Untrusted ${source} hardlink`,
+      });
+      await writeSkill({
+        dir: path.join(skillRoot, acceptedSkillName),
+        name: acceptedSkillName,
+        description: `Ordinary ${source} skill`,
+      });
+      const warn = captureWarningLogger();
+
+      const entries = loadTestWorkspaceSkills(
+        workspaceDir,
+        source === "config-extra"
+          ? { config: { skills: { load: { extraDirs: [skillRoot] } } } }
+          : undefined,
+      );
+
+      expect(entries).toEqual([
+        expect.objectContaining({
+          skill: expect.objectContaining({ name: acceptedSkillName, source: expectedSource }),
+        }),
+      ]);
+      const warningLine = firstWarningLine(warn);
+      expect(warningLine).toContain("Skipping invalid skill:");
+      expect(warningLine).toContain(rejectedSkillName);
+      expect(warningLine).toMatch(/hardlink/iu);
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "skips workspace skill paths that resolve outside the workspace root",
     async () => {

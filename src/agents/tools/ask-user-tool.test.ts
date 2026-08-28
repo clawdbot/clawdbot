@@ -82,6 +82,14 @@ describe("ask_user normalization", () => {
     expect(normalized.questions[0]).not.toHaveProperty("isSecret");
   });
 
+  it("repeats the structured-choice contract in the model-visible schema", () => {
+    const schema = JSON.stringify(createAskUserTool({}).parameters);
+
+    expect(schema).toContain("Put all selectable choices in options");
+    expect(schema).toContain("Every selectable choice");
+    expect(schema).toContain("True only when the user may choose several options at once");
+  });
+
   it.each([
     ["empty questions", { questions: [] }, "1 to 3 questions"],
     [

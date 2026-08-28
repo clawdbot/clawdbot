@@ -34,6 +34,14 @@ const SYNC_SUPPORT_FILES = [
     target: path.join(".openclaw-sync", "lib", "tsx-cli-shim.mjs"),
   },
   {
+    source: path.join(ROOT, "scripts", "lib", "local-check-runtime.mts"),
+    target: path.join(".openclaw-sync", "lib", "local-check-runtime.mts"),
+  },
+  {
+    source: path.join(ROOT, "scripts", "tsx.mjs"),
+    target: path.join(".openclaw-sync", "tsx.mjs"),
+  },
+  {
     source: path.join(ROOT, "scripts", "lib", "mintlify-accordion.mjs"),
     target: path.join(".openclaw-sync", "lib", "mintlify-accordion.mjs"),
   },

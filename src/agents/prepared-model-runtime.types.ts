@@ -117,6 +117,8 @@ export type PreparedModelRuntimeRefreshOptions = {
   allowGatewaySubagentBinding?: boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   isPublicationCurrent?: () => boolean;
+  /** Restricts replacement to configured owners whose normalized agent id is present. */
+  agentIds?: ReadonlySet<string>;
 };
 
 export type PreparedModelRuntimeBuildStats = Readonly<{

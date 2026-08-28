@@ -14,6 +14,7 @@ import {
   listStoredChatOutboxes,
   removeStoredChatComposerQueueItem,
   resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
   updateStoredChatComposerQueueItem,
   updateStoredChatComposerQueueItems,
   type StoredChatQueueReplacement,
@@ -396,8 +397,9 @@ export function removeQueuedMessage(host: ChatQueueScopedSessionHost, id: string
 export function removeDeliveredQueuedChatSendForRun(
   host: ChatQueueScopedSessionHost,
   runId: string | undefined,
+  scope: StoredChatOutboxScope,
 ): ChatQueueItem | null {
-  const match = readDeliveredQueuedChatSendForRun(host, runId);
+  const match = readDeliveredQueuedChatSendForRun(host, runId, scope);
   if (!match) {
     return null;
   }
@@ -417,14 +419,17 @@ export function removeDeliveredQueuedChatSendForRun(
 export function readDeliveredQueuedChatSendForRun(
   host: ChatQueueScopedSessionHost,
   runId: string | undefined,
+  scope: StoredChatOutboxScope,
 ): { item: ChatQueueItem; outbox: StoredChatOutbox } | null {
   if (!runId) {
     return null;
   }
-  const match = listStoredChatOutboxes(host)
-    .flatMap((outbox) => outbox.queue.map((item) => ({ item, outbox })))
-    .find(({ item }) => item.sendRunId === runId);
-  return match ?? null;
+  const scopeKey = storedChatOutboxScopeKey(scope);
+  const outbox = listStoredChatOutboxes(host).find(
+    (candidate) => storedChatOutboxScopeKey(candidate) === scopeKey,
+  );
+  const item = outbox?.queue.find((candidate) => candidate.sendRunId === runId);
+  return item && outbox ? { item, outbox } : null;
 }
 
 export function clearPendingQueueItemsForRun(

@@ -831,7 +831,8 @@ extension OpenClawChatViewModel {
               let entry = self.currentSessionEntry() ?? fallbackEntry,
               let revision = self.unreadPatchGuard.shouldPatch(
                   key: self.sessionMutationIdentity(for: entry.key, listedKey: entry.key),
-                  unread: entry.unread)
+                  unread: entry.unread,
+                  markedUnreadAt: entry.markedUnreadAt)
         else { return }
         let identityKey = self.sessionMutationIdentity(for: entry.key, listedKey: entry.key)
         let routeLease = Task { await self.transport.acquireSessionMutationRouteLease() }
@@ -839,6 +840,7 @@ extension OpenClawChatViewModel {
             routeLease: routeLease,
             queueKey: identityKey,
             routeKey: entry.key,
+            expectedMarkedUnreadAt: .some(entry.markedUnreadAt),
             unread: false)
         do {
             try await operation.value
@@ -847,9 +849,7 @@ extension OpenClawChatViewModel {
                 unread: false,
                 revision: revision)
             else { return }
-            if let index = self.sessions.firstIndex(where: { $0.key == entry.key }) {
-                self.sessions[index].unread = false
-            }
+            self.refreshSessions()
         } catch {
             guard self.unreadPatchGuard.patchFailed(key: identityKey, revision: revision) else { return }
             chatSessionActionsLogger.error(

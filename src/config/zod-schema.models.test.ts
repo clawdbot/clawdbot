@@ -133,4 +133,24 @@ describe("ModelsConfigSchema", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("accepts catalog-declared instructions compatibility", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        "my-proxy": {
+          baseUrl: "https://proxy.example.com/v1",
+          api: "openai-responses",
+          models: [
+            {
+              id: "custom-model",
+              name: "Custom Model",
+              compat: { supportsInstructions: false },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
 });

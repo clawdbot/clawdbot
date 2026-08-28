@@ -434,7 +434,14 @@ describe("subagent registry seam flow", () => {
       }) as never,
     sendRecoveryNotice: vi.fn(),
   };
-  const activateRegistry = () => mod.activateSubagentRegistry(() => ({ recoveryRuntime }) as never);
+  const activateRegistry = () =>
+    mod.activateSubagentRegistry(
+      () =>
+        ({
+          recoveryRuntime,
+          resolveGatewayContext: () => ({ recoveryRuntime }),
+        }) as never,
+    );
   const hydrateAndActivateRegistry = () => {
     mod.initSubagentRegistry();
     activateRegistry();
@@ -2038,6 +2045,14 @@ describe("subagent registry seam flow", () => {
 
   it("detaches subagent completion from a disposed requester transcript owner", async () => {
     const sessionKey = "agent:main:main";
+    const activeGatewayContext = { recoveryRuntime } as never;
+    mod.activateSubagentRegistry(
+      () =>
+        ({
+          recoveryRuntime,
+          resolveGatewayContext: () => activeGatewayContext,
+        }) as never,
+    );
     let disposed = false;
     let resolveWait: (value: Record<string, unknown>) => void = () => {};
     const pendingWait = new Promise<Record<string, unknown>>((resolve) => {
@@ -2090,6 +2105,12 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
     expect(freshCompletionWrite).toHaveBeenCalledOnce();
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+    const announceParams = (
+      mocks.runSubagentAnnounceFlow.mock.calls as unknown as Array<
+        [{ resolveGatewayContext?: () => unknown }]
+      >
+    )[0]?.[0];
+    expect(announceParams?.resolveGatewayContext?.()).toBe(activeGatewayContext);
     expect(requesterTranscriptWrite).not.toHaveBeenCalled();
   });
 

@@ -68,6 +68,7 @@ import {
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildBootstrapBudgetState,
+  buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
 } from "../bootstrap-budget.js";
 import {
@@ -107,11 +108,11 @@ import {
 } from "../embedded-agent-runner/sandbox-skills.js";
 import { selectContextEngineForTranscriptHost } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
-import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { findModelCatalogEntry, loadManifestModelCatalog } from "../model-catalog.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
+import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
@@ -591,7 +592,7 @@ export async function prepareCliRunContext(
       `CLI backend ${backendResolved.id} cannot run with tools disabled because it exposes native tools`,
     );
   }
-  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+  const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
     agentId: sessionOwner,
@@ -965,6 +966,7 @@ export async function prepareCliRunContext(
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
   });
+  const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(bootstrapPromptWarning.lines);
   // Ring-zero OpenClaw runs replace the bundle MCP surface entirely: no
   // loopback server, no plugin/user servers. A selectable backend also removes
   // its native tools, leaving only this openclaw stdio server.
@@ -1156,12 +1158,19 @@ export async function prepareCliRunContext(
         ]),
       )
     : baseExtraSystemPromptHash;
-  // Bootstrap guidance changes resumable system context. Hash the pending mode
-  // so entering or leaving bootstrap refreshes first-only CLI system prompts.
+  // Bootstrap guidance and truncation notices change resumable system context.
+  // Hash both so entering or leaving either state refreshes first-only CLI
+  // system prompts.
   const extraSystemPromptHash =
-    bootstrapMode === "none"
+    bootstrapMode === "none" && bootstrapTruncationNotice === undefined
       ? toolBoundExtraSystemPromptHash
-      : hashCliSessionText(JSON.stringify([toolBoundExtraSystemPromptHash ?? null, bootstrapMode]));
+      : hashCliSessionText(
+          JSON.stringify([
+            toolBoundExtraSystemPromptHash ?? null,
+            bootstrapMode,
+            bootstrapTruncationNotice !== undefined,
+          ]),
+        );
   let cleanupPreparedResources: (() => Promise<void>) | undefined;
   let preparedExecution: PrivateCliBackendPreparedExecution | undefined;
   try {
@@ -1560,13 +1569,6 @@ export async function prepareCliRunContext(
         `cli session reset: provider=${params.provider} reason=${invalidatedReason}`,
       );
     }
-    const heartbeatPrompt = skipsTurnPreparation
-      ? undefined
-      : resolveHeartbeatPromptForSystemPrompt({
-          config: params.config,
-          agentId: sessionAgentId,
-          defaultAgentId,
-        });
     const openClawReferences = skipsTurnPreparation
       ? { docsPath: null, sourcePath: null }
       : await prepareDeps.resolveOpenClawReferencePaths({
@@ -1612,13 +1614,13 @@ export async function prepareCliRunContext(
             runtimeChatType,
             runtimeCapabilities,
             ownerNumbers: params.ownerNumbers,
-            heartbeatPrompt,
             docsPath: openClawReferences.docsPath ?? undefined,
             sourcePath: openClawReferences.sourcePath ?? undefined,
             skillsPrompt: systemPromptSkillsPrompt,
             tools: promptTools,
             contextFiles,
             bootstrapMode,
+            bootstrapTruncationNotice,
             modelDisplay,
             agentId: sessionAgentId,
             sessionKey: params.sessionKey,
@@ -1794,6 +1796,24 @@ export async function prepareCliRunContext(
         ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
       });
       bindMcpClientGrantAdmission(preparedParams.admittedRunContext);
+      if (!isControlOperation) {
+        recordAdmittedModelRoutingDecision({
+          admittedRunContext: preparedParams.admittedRunContext,
+          abortSignal: preparedParams.abortSignal,
+          requestedProvider:
+            params.modelRoutingProvenance?.requestedProvider ??
+            params.modelProvider ??
+            params.provider,
+          requestedModel:
+            params.modelRoutingProvenance?.requestedModel ?? params.model ?? "default",
+          selectedProvider: params.modelProvider ?? params.provider,
+          selectedModel: normalizedModel,
+          selectionMode: requestedAuthProfileId ? "explicit" : "automatic",
+          credentialProfileId: effectiveAuthProfileId,
+          fallbackSelected: params.modelRoutingProvenance?.stage === "fallback",
+          fallbackReason: params.modelRoutingProvenance?.fallbackReason,
+        });
+      }
 
       return {
         params: preparedParams,
@@ -1814,7 +1834,6 @@ export async function prepareCliRunContext(
         systemPrompt,
         systemPromptReport,
         claudeSkillsPluginArgs: claudeSkillsPlugin.args,
-        bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
         authEpoch,
         authBindingFingerprint,
         ...(skipLocalCredentialEpoch ? { authBindingSkipsLocalCredential: true } : {}),
@@ -1887,6 +1906,19 @@ export async function prepareCliRunContext(
       ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
     });
     bindMcpClientGrantAdmission(preparedParams.admittedRunContext);
+    recordAdmittedModelRoutingDecision({
+      admittedRunContext: preparedParams.admittedRunContext,
+      abortSignal: preparedParams.abortSignal,
+      requestedProvider:
+        params.modelRoutingProvenance?.requestedProvider ?? params.modelProvider ?? params.provider,
+      requestedModel: params.modelRoutingProvenance?.requestedModel ?? params.model ?? "default",
+      selectedProvider: params.modelProvider ?? params.provider,
+      selectedModel: normalizedModel,
+      selectionMode: requestedAuthProfileId ? "explicit" : "automatic",
+      credentialProfileId: effectiveAuthProfileId,
+      fallbackSelected: params.modelRoutingProvenance?.stage === "fallback",
+      fallbackReason: params.modelRoutingProvenance?.fallbackReason,
+    });
 
     return {
       params: preparedParams,
@@ -1912,9 +1944,7 @@ export async function prepareCliRunContext(
       systemPrompt,
       systemPromptReport,
       claudeSkillsPluginArgs: claudeSkillsPlugin.args,
-      bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
       ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
-      heartbeatPrompt,
       authEpoch,
       authBindingFingerprint,
       ...(skipLocalCredentialEpoch ? { authBindingSkipsLocalCredential: true } : {}),

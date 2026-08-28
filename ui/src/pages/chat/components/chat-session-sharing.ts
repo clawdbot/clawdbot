@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type {
   GatewaySessionRow,
-  SessionMembersListResult,
+  SessionMembersListEvidenceResult,
   SessionVisibility,
 } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
@@ -11,7 +11,7 @@ import { t } from "../../../i18n/index.ts";
 
 export type ChatSessionSharingState = {
   loading: boolean;
-  result?: SessionMembersListResult;
+  result?: SessionMembersListEvidenceResult;
   error?: string;
 };
 

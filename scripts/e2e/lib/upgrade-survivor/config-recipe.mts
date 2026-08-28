@@ -232,12 +232,7 @@ export function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
   return scenarioConfigSteps.get(scenario) ?? [];
 }
 
-const recipe: ConfigStep[] = [
-  {
-    id: "update-channel",
-    intent: "update",
-    argv: ["config", "set", "update.channel", "stable"],
-  },
+const sharedRecipe: ConfigStep[] = [
   configSetJsonFile("gateway", "gateway", "gateway", "gateway.json"),
   ...representativeConfigSteps,
   {
@@ -248,9 +243,15 @@ const recipe: ConfigStep[] = [
 ];
 
 export function resolveUpgradeSurvivorConfigSteps(scenario = "base"): ConfigStep[] {
-  const validateStep = recipe.at(-1);
+  const validateStep = sharedRecipe.at(-1);
+  const updateChannel = scenario === "prerelease-plugin-registry" ? "beta" : "stable";
   return [
-    ...recipe.slice(0, -1),
+    {
+      id: "update-channel",
+      intent: "update",
+      argv: ["config", "set", "update.channel", updateChannel],
+    },
+    ...sharedRecipe.slice(0, -1),
     ...resolveScenarioConfigSteps(scenario),
     ...(validateStep ? [validateStep] : []),
   ];

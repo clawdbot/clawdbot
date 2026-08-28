@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   captureUnionProof,
   createSidebarFooterProofSuite,
@@ -98,6 +99,10 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
     ]);
 
     const settings = menu.locator('wa-dropdown-item[value="command:settings"]');
+    const settingsShortcut = settings.locator(".session-menu__shortcut");
+    expect(
+      await settingsShortcut.evaluate((element) => getComputedStyle(element).fontFamily),
+    ).toMatch(/^system-ui,/u);
     const settingsRestBackground = await settings.evaluate(
       (element) => getComputedStyle(element).backgroundColor,
     );
@@ -158,6 +163,50 @@ const suite = createSidebarFooterProofSuite(
 );
 
 suite.define(() => {
+  it("shows visible offline retry and immediate announced-restart states", async () => {
+    const opened = await openSidebarFooterProofPage(suite);
+    try {
+      const { gateway, page, sidebar } = opened;
+      const footer = sidebar.locator(".sidebar-footer-bar");
+      await setSidebarProofTheme(page, "dark");
+      await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+      await waitForControlUiGatewayReady(page);
+
+      await gateway.setOnline(false);
+      // The offline pill waits out the store's 2s offline-stability debounce.
+      const offline = footer.locator("button.sidebar-footer-bar__status");
+      await offline.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await offline.textContent()).toContain("Offline");
+      expect(await offline.textContent()).toContain("Reconnecting…");
+      await expect.poll(() => page.title()).toContain("(Disconnected)");
+      await captureUnionProof(page, "sidebar-account-footer", "feature-dark-offline.png", [footer]);
+
+      const socketCount = await gateway.getSocketCount();
+      await offline.click();
+      await expect
+        .poll(() => gateway.getSocketCount(), { timeout: 10_000 })
+        .toBeGreaterThan(socketCount);
+
+      await gateway.setOnline(true);
+      await expect
+        .poll(() => footer.locator(".sidebar-footer-bar__status").count(), { timeout: 10_000 })
+        .toBe(0);
+      await expect.poll(() => page.title()).not.toContain("Disconnected");
+      await gateway.emitGatewayEvent("shutdown", {
+        reason: "gateway restart",
+        restartExpectedMs: 5_000,
+      });
+      const restarting = footer.locator(".sidebar-footer-bar__status--restarting");
+      await restarting.waitFor({ state: "visible" });
+      expect(await restarting.textContent()).toBe("Restarting…");
+      await captureUnionProof(page, "sidebar-account-footer", "feature-dark-restarting.png", [
+        footer,
+      ]);
+    } finally {
+      await suite.closeBrowserContext(opened.context);
+    }
+  });
+
   it("keeps the feature account target, identity menu, and visual states coherent", async () => {
     const opened = await openSidebarFooterProofPage(suite);
     try {

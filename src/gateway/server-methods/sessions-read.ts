@@ -307,6 +307,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 modelCatalog: modelCatalogByAgent,
                 opts: p,
                 ...(p.involvingMe === true && identityId ? { involvingActorId: identityId } : {}),
+                ...(p.ownerFirst === true && identityId ? { ownerFirstActorId: identityId } : {}),
               }),
             {
               config: cfg,
@@ -720,3 +721,5 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     respond(true, { messages }, undefined);
   },
 };
+
+export const sessionsListHandler = sessionReadHandlers["sessions.list"]!;

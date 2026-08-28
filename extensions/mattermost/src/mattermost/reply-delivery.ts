@@ -16,7 +16,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { requiresMattermostMediaUpload } from "../normalize.js";
+import { requiresMattermostMediaUpload, resolveMattermostPresentation } from "../normalize.js";
 import type { MattermostSendResult } from "./send.js";
 
 type MarkdownTableMode = Parameters<PluginRuntime["channel"]["text"]["convertMarkdownTables"]>[1];
@@ -31,6 +31,7 @@ type SendMattermostMessage = (
     mediaLocalRoots?: readonly string[];
     requireMediaUpload?: boolean;
     replyToId?: string;
+    buttons?: Array<unknown>;
   },
 ) => Promise<MattermostSendResult>;
 
@@ -75,11 +76,9 @@ export async function deliverMattermostReplyPayload(params: {
       suppression: { reason: "no_visible_result" },
     };
   }
+  const presentation = resolveMattermostPresentation(params.payload);
   const reply = resolveSendableOutboundReplyParts(params.payload, {
-    text: params.core.channel.text.convertMarkdownTables(
-      params.payload.text ?? "",
-      params.tableMode,
-    ),
+    text: params.core.channel.text.convertMarkdownTables(presentation.text, params.tableMode),
   });
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
   const chunkMode = params.core.channel.text.resolveChunkMode(
@@ -89,7 +88,21 @@ export async function deliverMattermostReplyPayload(params: {
   );
   const results: MattermostSendResult[] = [];
   const acceptedContents: string[] = [];
-  const deliveryTarget = `channel:${params.channelId}`;
+  const sendAccepted = async (text: string, mediaUrl?: string) => {
+    const result = await params.sendMessage(`channel:${params.channelId}`, text, {
+      cfg: params.cfg,
+      accountId: params.accountId,
+      ...(mediaUrl ? { mediaUrl, mediaLocalRoots } : {}),
+      // Local media must upload successfully instead of silently posting only its caption.
+      ...(requiresMattermostMediaUpload(mediaUrl) ? { requireMediaUpload: true } : {}),
+      ...(results.length === 0 && reply.mediaUrls.length < 2 && presentation.buttons.length
+        ? { buttons: presentation.buttons }
+        : {}),
+      replyToId: params.replyToId,
+    });
+    results.push(result);
+    acceptedContents.push(result.content);
+  };
   let outcome: Exclude<MattermostReplyDeliveryOutcome, "reasoning_skipped">;
   try {
     outcome = await deliverTextOrMediaReply({
@@ -97,29 +110,8 @@ export async function deliverMattermostReplyPayload(params: {
       text: reply.text,
       chunkText: (value) =>
         params.core.channel.text.chunkMarkdownTextWithMode(value, params.textLimit, chunkMode),
-      sendText: async (chunk) => {
-        const result = await params.sendMessage(deliveryTarget, chunk, {
-          cfg: params.cfg,
-          accountId: params.accountId,
-          replyToId: params.replyToId,
-        });
-        results.push(result);
-        acceptedContents.push(result.content);
-      },
-      sendMedia: async ({ mediaUrl, caption }) => {
-        // Require upload for local media so a failure surfaces instead of
-        // silently posting the caption alone (mirrors channel.ts send paths).
-        const result = await params.sendMessage(deliveryTarget, caption ?? "", {
-          cfg: params.cfg,
-          accountId: params.accountId,
-          mediaUrl,
-          mediaLocalRoots,
-          ...(requiresMattermostMediaUpload(mediaUrl) ? { requireMediaUpload: true } : {}),
-          replyToId: params.replyToId,
-        });
-        results.push(result);
-        acceptedContents.push(result.content);
-      },
+      sendText: sendAccepted,
+      sendMedia: ({ mediaUrl, caption }) => sendAccepted(caption ?? "", mediaUrl),
     });
   } catch (error: unknown) {
     const failedPartial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;

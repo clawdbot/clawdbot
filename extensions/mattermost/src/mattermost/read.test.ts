@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
 import { createMattermostTestConfig, requestUrl } from "./reactions.test-helpers.js";
 import { readMattermostMessages } from "./read.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {

@@ -1,79 +1,19 @@
 import { html, nothing } from "lit";
 import "../../../components/elapsed-time.ts";
-import type { ApplicationPlacementStartupStatus } from "../../../app/session-placement-startup.ts";
 import "../../../components/working-phrase.ts";
 import { icons } from "../../../components/icons.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import type { TurnRecap } from "../chat-progress.ts";
-import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
-// Almost every run uses the default loop; an alternate move fires once, then yields back to it.
-const STARTUP_STATUS_LABEL_KEYS = {
-  preparing_workspace: "chat.startupStatus.preparingWorkspace",
-  provisioning_environment: "chat.startupStatus.provisioningEnvironment",
-  preparing_context: "chat.startupStatus.preparingContext",
-  starting_model: "chat.startupStatus.startingModel",
-} as const satisfies Record<ChatRunStartupPhase, Parameters<typeof t>[0]>;
 const TURN_RECAP_DURATION_UNITS = [
   { seconds: 86_400, unit: "day" },
   { seconds: 3_600, unit: "hour" },
   { seconds: 60, unit: "minute" },
   { seconds: 1, unit: "second" },
 ] as const;
-
-function startupStatusLabel(phase: ChatRunStartupPhase): string {
-  return t(STARTUP_STATUS_LABEL_KEYS[phase]);
-}
-
-function placementStartupStatusLabel(status: ApplicationPlacementStartupStatus): string {
-  if (status.phase === "pending") {
-    return t("newSession.starting");
-  }
-  return status.phase === "sending" || status.phase === "active"
-    ? t("chat.composer.sendingMessage")
-    : t("sessionsView.cloudWorkerPlacement", { state: status.phase });
-}
-
-export function renderPlacementStartupStatus(
-  status: ApplicationPlacementStartupStatus | null | undefined,
-  onRetry?: () => void,
-) {
-  if (!status) {
-    return nothing;
-  }
-  if (status.phase === "failed") {
-    return html`
-      <div class="chat-error chat-cloud-startup-error" role="alert">
-        <span class="chat-error__dot" aria-hidden="true"></span>
-        <span class="chat-error__content"
-          >${t("newSession.placementStartFailed", {
-            error: status.error ?? t("newSession.createFailed"),
-          })}</span
-        >
-        ${status.retryable && onRetry
-          ? html`<button class="btn btn--sm" type="button" @click=${onRetry}>
-              ${t("common.retry")}
-            </button>`
-          : nothing}
-      </div>
-    `;
-  }
-  return html`
-    <div class="chat-working-indicator chat-cloud-startup" role="status" aria-live="polite">
-      <div class="chat-bubble chat-reading-indicator" aria-hidden="true">${icons.claw}</div>
-      <span class="chat-working-indicator__status">
-        <span>${placementStartupStatusLabel(status)}</span>
-        <openclaw-elapsed-time
-          class="chat-working-indicator__elapsed"
-          .startMs=${status.startedAt}
-        ></openclaw-elapsed-time>
-      </span>
-    </div>
-  `;
-}
 
 function formatTurnRecapDuration(ms: number): string {
   let remainingSeconds = Math.max(1, Math.round(ms / 1_000));
@@ -120,7 +60,7 @@ export function renderChatWorkingIndicator(
   part: Extract<ChatItem, { kind: "reading-indicator" }>,
   options: {
     waitingApproval?: boolean;
-    startupPhase?: ChatRunStartupPhase;
+    startupLabel?: string;
     outputTokens?: number | null;
     presentation?: "standalone" | "continuation";
   } = {},
@@ -153,9 +93,9 @@ export function renderChatWorkingIndicator(
       <span class="chat-working-indicator__status">
         ${waitingApproval
           ? html`<span>${t("chat.waitingForApproval")}</span>`
-          : options.startupPhase
+          : options.startupLabel
             ? html`
-                <span>${startupStatusLabel(options.startupPhase)}</span>
+                <span>${options.startupLabel}</span>
                 <openclaw-elapsed-time
                   class="chat-working-indicator__elapsed"
                   .startMs=${part.startedAt}

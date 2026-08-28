@@ -30,6 +30,7 @@ import {
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../infra/gateway-suspend-coordinator.js";
+import { writeJsonAtomic } from "../infra/json-files.js";
 import {
   resetGatewayRestartStateForInProcessRestart,
   setGatewaySigusr1RestartPolicy,
@@ -201,8 +202,8 @@ async function persistTestSessionConfig(): Promise<void> {
     } else {
       delete config.session;
     }
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+    // Suite servers may still read config from pending session-change callbacks.
+    await writeJsonAtomic(configPath, config, { durable: false, trailingNewline: true });
   }
   resetConfigRuntimeState();
   lastSyncedSessionStorePath = testState.sessionStorePath;
@@ -359,6 +360,9 @@ function resetGatewayLifecycleTestState(options: { preserveRuntimeBindings: bool
 function resetGatewayMutableTestFixtures(): void {
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
+  agentDiscoveryMock.enabled = false;
+  agentDiscoveryMock.discoverCalls = 0;
+  agentDiscoveryMock.models = [];
   testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
   testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
   testState.gatewayControlUi = undefined;
@@ -480,9 +484,6 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   const mod = await getServerModule();
   await mod.resetPreparedModelCatalogForTest();
   gatewayReplyRuntimePrepared = false;
-  agentDiscoveryMock.enabled = false;
-  agentDiscoveryMock.discoverCalls = 0;
-  agentDiscoveryMock.models = [];
 }
 
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {

@@ -1,8 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
+import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
+import { resolveSessionBoundaryPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
+import { emitAgentEvent, onAgentRuntimeEvent } from "../../infra/agent-events.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
 import {
   isGatewaySubordinateWorkAdmissionClosed,
   tryBeginGatewayRootWorkAdmission,
@@ -37,6 +44,20 @@ vi.mock("../../agents/sessions/index.js", () => ({
   },
 }));
 
+function foregroundPromptContext(
+  workspaceDir: string,
+  sandboxSessionKey = "agent:main:main",
+): EmbeddedForegroundPromptContext {
+  return {
+    agentId: "main",
+    agentDir: workspaceDir,
+    workspaceDir,
+    cwd: workspaceDir,
+    sandboxSessionKey,
+    trigger: "user",
+  };
+}
+
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 
@@ -54,8 +75,133 @@ afterEach(async () => {
 });
 
 describe("experience review auto apply", () => {
+  it("does not occupy the foreground session lane", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-session-lane-");
+    const foregroundSessionKey = "agent:main:main";
+    const reviewStarted = createDeferred();
+    const releaseReview = createDeferred();
+    runEmbeddedAgent.mockImplementation(async (params) =>
+      enqueueCommandInLane(resolveSessionLane(params.sessionKey ?? params.sessionId), async () => {
+        reviewStarted.resolve();
+        await releaseReview.promise;
+        return {};
+      }),
+    );
+
+    const review = runSkillExperienceReview(
+      {
+        ctx: {
+          sessionId: "foreground-session",
+          sessionKey: foregroundSessionKey,
+          workspaceDir,
+          modelProviderId: "openai",
+          modelId: "gpt-test",
+          foregroundPromptContext: foregroundPromptContext(workspaceDir),
+        },
+        config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
+      },
+      { getCurrentConfig: () => ({}) },
+    );
+    await reviewStarted.promise;
+
+    const foregroundStarted = createDeferred();
+    const foreground = enqueueCommandInLane(resolveSessionLane(foregroundSessionKey), async () => {
+      foregroundStarted.resolve();
+    });
+    try {
+      await withTestTimeout(
+        foregroundStarted.promise,
+        1_000,
+        "foreground work did not start while the review was active",
+      );
+    } finally {
+      releaseReview.resolve();
+      await Promise.all([review, foreground]);
+    }
+  });
+
+  it("keeps detached review events out of foreground session presentation", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-hidden-events-");
+    const observed: Array<
+      [
+        stream: string,
+        controlUiVisible?: boolean,
+        projectSessionLifecycle?: boolean,
+        projectSessionMessages?: boolean,
+        sessionKey?: string,
+      ]
+    > = [];
+    let reviewRunId = "";
+    const unsubscribe = onAgentRuntimeEvent((event) => {
+      if (event.runId !== reviewRunId) {
+        return;
+      }
+      observed.push([
+        event.stream,
+        event.controlUiVisible,
+        event.projectSessionLifecycle,
+        event.projectSessionMessages,
+        event.sessionKey,
+      ]);
+    });
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      reviewRunId = params.runId;
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "NOTHING_TO_LEARN" },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: { phase: "start", name: "skill_workshop", toolCallId: "review-tool" },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: Date.now() },
+      });
+      return {};
+    });
+    const config = { skills: { workshop: { autonomous: { mode: "auto" as const } } } };
+
+    try {
+      await runSkillExperienceReview(
+        {
+          ctx: {
+            sessionId: "foreground-session",
+            sessionKey: "agent:main:main",
+            workspaceDir,
+            modelProviderId: "openai",
+            modelId: "gpt-test",
+            foregroundPromptContext: foregroundPromptContext(workspaceDir),
+          },
+          config,
+        },
+        { getCurrentConfig: () => config },
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(observed.slice(0, 2)).toEqual([
+      ["assistant", false, false, false, undefined],
+      ["tool", false, false, false, undefined],
+    ]);
+    expect(observed[2]?.slice(0, 4)).toEqual(["lifecycle", false, false, false]);
+    expect(observed[2]?.[4]).toMatch(
+      /^agent:main:internal-session-effects:skill-workshop-review_/u,
+    );
+    expect(getAgentRunContext(reviewRunId)).toBeUndefined();
+  });
+
   it("applies the isolated reviewer proposal after the reviewer completes", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-auto-apply-workspace-");
+    const foregroundPromptCacheKey = resolveSessionBoundaryPromptCacheKey({
+      api: "openai-responses",
+      boundaryCount: 0,
+      sessionId: "foreground-session",
+    });
     runEmbeddedAgent.mockImplementation(async (params) => {
       const tool = createSkillWorkshopTool({
         workspaceDir: params.workspaceDir,
@@ -84,7 +230,17 @@ describe("experience review auto apply", () => {
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
-        reasoningLevel: "on",
+        foregroundPromptContext: {
+          agentId: "main",
+          agentDir: workspaceDir,
+          workspaceDir,
+          cwd: workspaceDir,
+          sandboxSessionKey: "agent:main:main",
+          trigger: "user",
+          promptCacheKey: foregroundPromptCacheKey,
+          messageActionTurnCapability: "closed-foreground-capability",
+          reasoningLevel: "on",
+        },
       },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
     };
@@ -108,11 +264,62 @@ describe("experience review auto apply", () => {
         skillWorkshopAutonomousCapture: true,
         toolExecutionAllow: ["skill_workshop"],
         sessionPersistence: "detached",
+        silentExpected: true,
+        allowEmptyAssistantReplyAsSilent: true,
+        cleanupBundleMcpOnRunEnd: true,
+        terminalReplyExpectation: "optional",
+        promptCacheKey: foregroundPromptCacheKey,
+        sandboxSessionKey: "agent:main:main",
+        sessionId: expect.stringMatching(/^internal-session-effects-skill-workshop-review_/u),
+        sessionKey: expect.stringMatching(
+          /^agent:main:internal-session-effects:skill-workshop-review_/u,
+        ),
+        skillWorkshopOrigin: {
+          agentId: "main",
+          runId: "foreground-run",
+          sessionKey: "agent:main:main",
+        },
+        trigger: "user",
         reasoningLevel: "on",
       }),
     );
+    const reviewSessionKey = runEmbeddedAgent.mock.calls[0]?.[0].sessionKey;
+    expect(reviewSessionKey).not.toBe("agent:main:main");
+    expect(runEmbeddedAgent.mock.calls[0]?.[0].messageActionTurnCapability).toBeUndefined();
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("sessionTarget");
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("disableMessageTool");
-    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
+  });
+
+  it("records provider input buckets for the detached review run", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-usage-");
+    runEmbeddedAgent.mockResolvedValue({
+      meta: {
+        agentMeta: {
+          usage: { input: 43, cacheRead: 12_000, cacheWrite: 200, output: 91 },
+        },
+      },
+    });
+    const config = { skills: { workshop: { autonomous: { mode: "auto" as const } } } };
+
+    await runSkillExperienceReview(
+      {
+        ctx: {
+          sessionId: "foreground-session",
+          sessionKey: "agent:main:usage",
+          workspaceDir,
+          modelProviderId: "openai",
+          modelId: "gpt-test",
+          foregroundPromptContext: foregroundPromptContext(workspaceDir, "agent:main:usage"),
+        },
+        config,
+      },
+      { getCurrentConfig: () => config },
+    );
+
+    expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+      outcome: "nothing",
+      usage: { inputTokens: 12_243, cachedInputTokens: 12_000, outputTokens: 91 },
+    });
   });
 
   it("auto-applies updates to the durable workspace from a session worktree", async () => {
@@ -170,6 +377,7 @@ describe("experience review auto apply", () => {
         workspaceDir: worktreeWorkspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(worktreeWorkspaceDir),
       },
       config: {
         agents: { list: [{ id: "main", default: true, workspace: canonicalWorkspaceDir }] },
@@ -251,6 +459,7 @@ describe("experience review auto apply", () => {
           workspaceDir,
           modelProviderId: "openai",
           modelId: "gpt-test",
+          foregroundPromptContext: foregroundPromptContext(workspaceDir),
         },
         config,
       },
@@ -313,6 +522,7 @@ describe("experience review auto apply", () => {
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(workspaceDir),
       },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
     };
@@ -351,6 +561,7 @@ describe("experience review auto apply", () => {
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(workspaceDir),
       },
       config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
     };
@@ -400,6 +611,7 @@ describe("experience review auto apply", () => {
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(workspaceDir),
       },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
     };
@@ -447,6 +659,7 @@ describe("experience review auto apply", () => {
         workspaceDir,
         modelProviderId: "openai",
         modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(workspaceDir),
       },
       config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
     };
@@ -503,6 +716,7 @@ describe("experience review auto apply", () => {
           workspaceDir,
           modelProviderId: "openai",
           modelId: "gpt-test",
+          foregroundPromptContext: foregroundPromptContext(workspaceDir),
         },
         config,
       },

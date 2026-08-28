@@ -14,7 +14,7 @@ import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/oper
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
 import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
@@ -508,8 +508,7 @@ class DevicesPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("devices")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("devices")}
-            ${renderDocsLink(DEVICES_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("devices")} ${renderLearnMoreLink(DEVICES_DOCS_URL)}
           </div>
         </div>
       </section>

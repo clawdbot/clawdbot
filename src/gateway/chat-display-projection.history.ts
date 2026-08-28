@@ -405,7 +405,7 @@ export function filterVisibleProjectedHistoryMessages(
       continue;
     }
     if (
-      isDuplicateAcpGatewayInjectedMessage(current, visible.at(-1)) ||
+      isDuplicateAcpGatewayInjectedMessage(current, messages[i - 1]) ||
       isDuplicateChannelFinalDeliveryMirror(current, messages[i - 1])
     ) {
       changed = true;

@@ -29,7 +29,7 @@ import { resolveSessionPermissionCoreToolPolicy } from "./session-permission-exe
 /** Session-scoped exec fields that may be carried across an isolated runtime boundary. */
 export type ExecSessionDefaults = Pick<
   SessionEntry,
-  "execHost" | "execSecurity" | "execAsk" | "execNode" | "execCwd" | "permissionMode"
+  "execHost" | "execSecurity" | "execAsk" | "execNode" | "execCwd" | "permissionMode" | "sandbox"
 >;
 
 // Resolved exec config layers come from global config, agent config, legacy
@@ -159,18 +159,17 @@ export function resolveExecDefaults(params: {
     agentExec,
     globalExec,
   } = resolveExecConfigState(params);
-  const sandboxAvailable =
-    params.sandboxAvailable ??
-    (params.sessionKey
-      ? resolveSandboxRuntimeStatus({
-          cfg,
-          sessionKey: params.sessionKey,
-        }).sandboxed
-      : false);
+  const sandboxRuntime = params.sessionKey
+    ? resolveSandboxRuntimeStatus({ cfg, sessionKey: params.sessionKey })
+    : undefined;
+  const sandboxRequired =
+    params.sessionEntry?.sandbox === "required" || sandboxRuntime?.sandboxRequired === true;
+  const sandboxAvailable = params.sandboxAvailable ?? sandboxRuntime?.sandboxed ?? false;
   const resolved = resolveExecTarget({
     configuredTarget: host,
-    elevatedRequested: params.elevatedRequested === true,
+    elevatedRequested: params.elevatedRequested === true && !sandboxRequired,
     sandboxAvailable,
+    sandboxRequired,
   });
   const defaultSecurity = resolved.effectiveHost === "sandbox" ? "deny" : "full";
   const sessionPermissionPolicy = params.sessionEntry?.permissionMode
@@ -215,7 +214,7 @@ export function resolveExecDefaults(params: {
       ? modePolicy.mode
       : resolveExecModeFromPolicy({ security, ask });
   return {
-    host,
+    host: resolved.configuredTarget,
     effectiveHost: resolved.effectiveHost,
     mode,
     security,
@@ -226,7 +225,7 @@ export function resolveExecDefaults(params: {
       agentExec?.node ??
       globalExec?.node,
     canRequestNode: isRequestedExecTargetAllowed({
-      configuredTarget: host,
+      configuredTarget: resolved.configuredTarget,
       requestedTarget: "node",
       sandboxAvailable,
     }),

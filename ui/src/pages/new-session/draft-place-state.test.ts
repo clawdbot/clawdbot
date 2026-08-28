@@ -1,8 +1,147 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../../app/context.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
-import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
+import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
+import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
+
+const REMOTE_PROJECT = {
+  identity: "openclaw/openclaw",
+  cloneUrl: "https://github.com/openclaw/openclaw.git",
+};
+
+function createRepositoryFixture() {
+  const requestUpdate = vi.fn();
+  const persistPreference = vi.fn();
+  const readPreference = vi.fn(() => ({ worktree: true }));
+  const request = vi.fn(async (method: string) =>
+    method === "fs.listDir"
+      ? { path: "/plain", entries: [] }
+      : { repositoryStatus: "not_git", branches: [] },
+  );
+  const context = {
+    gateway: {
+      snapshot: {
+        phase: "connected",
+        client: { request },
+        hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
+      },
+    },
+    agents: {
+      state: {
+        agentsList: {
+          defaultId: "main",
+          agents: [{ id: "main", workspace: "/workspace", workspaceGit: false }],
+        },
+      },
+    },
+    sessions: { state: { result: null } },
+  } as unknown as ApplicationContext;
+  const gateway = {
+    cloudProfiles: [{ id: "aws", providerId: "crabbox" }],
+    environments: [
+      {
+        id: "node:desktop",
+        type: "node",
+        status: "available",
+        sessionHost: true,
+        workerSlots: { total: 1, available: 1 },
+      },
+    ],
+    persistPreference,
+    readPreference,
+  } as unknown as DraftGatewayState;
+  const browser = new DraftPlaceBrowser(
+    new TestReactiveControllerHost(),
+    gateway,
+    () => ({ context, isAdmin: true }),
+    {
+      requestUpdate,
+      onProjectMissing: vi.fn(),
+      onSelectProject: vi.fn(),
+      onApprovedListing: vi.fn(),
+      querySelector: () => null,
+      activeElement: () => null,
+      body: () => null,
+    },
+  );
+  const state = new DraftPlaceState(
+    gateway,
+    browser,
+    () => ({ context, data: undefined, submitting: false, pendingPlacementSessionKey: "" }),
+    { requestUpdate, onError: vi.fn(), onClearError: vi.fn() },
+  );
+  return { state, browser, persistPreference, requestUpdate };
+}
+
+describe("DraftPlaceState repository selection", () => {
+  it("offers remote-project worktrees locally without resetting the typed base branch on toggle", () => {
+    const { state } = createRepositoryFixture();
+    state.selectRemoteProject(REMOTE_PROJECT);
+
+    expect(state.repository).toEqual({ kind: "pending-clone", cloneUrl: REMOTE_PROJECT.cloneUrl });
+    expect(state.worktreeAvailable()).toBe(true);
+    expect(state.worktree).toBe(false);
+    state.toggleWorktree();
+    expect(state.worktree).toBe(true);
+    state.setBaseRef("release");
+    state.toggleWorktree();
+    state.toggleWorktree();
+    expect(state.worktree).toBe(true);
+    expect(state.baseRef).toBe("release");
+  });
+
+  it.each(["device", "cloud"] as const)(
+    "preserves a remote project and enables worktree when switching to %s placement",
+    (placement) => {
+      const { state, browser } = createRepositoryFixture();
+      state.selectRemoteProject(REMOTE_PROJECT);
+      state.setBaseRef("release");
+      if (placement === "device") {
+        state.selectDevice("desktop");
+        expect(state.deviceId).toBe("desktop");
+      } else {
+        state.selectCloudProfile("aws");
+        expect(state.cloudProfileId).toBe("aws");
+      }
+      expect(browser.remoteProject).toEqual(REMOTE_PROJECT);
+      expect(state.worktree).toBe(true);
+      expect(state.baseRef).toBe("release");
+    },
+  );
+
+  it.each(["/workspace", "/plain"])(
+    "rejects and persists worktree off for a non-git folder %s",
+    async (folder) => {
+      const { state, persistPreference, requestUpdate } = createRepositoryFixture();
+      state.adoptAgentDefaults();
+      state.applyFolder(folder);
+      await vi.waitFor(() => expect(state.repository.kind).toBe("direct"));
+      persistPreference.mockClear();
+      requestUpdate.mockClear();
+
+      state.toggleWorktree();
+
+      await vi.waitFor(() => expect(state.worktree).toBe(false));
+      expect(state.worktreeAvailable()).toBe(false);
+      expect(persistPreference).toHaveBeenLastCalledWith("main", "/workspace", {
+        worktree: false,
+      });
+      expect(requestUpdate).toHaveBeenCalled();
+    },
+  );
+
+  it("restores a preferred worktree when a remote project awaits cloning", () => {
+    const { state, browser } = createRepositoryFixture();
+    browser.selectProject({ kind: "remote", project: REMOTE_PROJECT });
+
+    state.adoptAgentDefaults();
+
+    expect(state.worktree).toBe(true);
+    expect(state.placementPreferenceReady).toBe(true);
+  });
+});
 
 describe("DraftPlaceState cloud machine selection", () => {
   it("uses each profile default and retains only non-default overrides per destination", () => {
@@ -102,22 +241,26 @@ describe("DraftPlaceState cloud machine selection", () => {
 
   it.each([
     {
-      name: "clears a one-mode cloud profile when the runtime becomes incompatible",
+      name: "preserves a recovered one-mode cloud profile when the runtime becomes incompatible",
       executionModes: ["worker-turn"] as const,
-      compatible: false,
+      selectedByUser: false,
+    },
+    {
+      name: "preserves an explicitly chosen one-mode cloud profile when the runtime becomes incompatible",
+      executionModes: ["worker-turn"] as const,
+      selectedByUser: true,
     },
     {
       name: "retains a two-mode cloud profile and its machine when the runtime changes",
       executionModes: ["worker-turn", "remote-exec"] as const,
-      compatible: true,
+      selectedByUser: false,
     },
-  ])("$name", ({ executionModes, compatible }) => {
+  ])("$name", ({ executionModes, selectedByUser }) => {
     const persistPreference = vi.fn();
     const cloudProfiles: DraftCloudProfile[] = [
       {
         id: "aws",
         providerId: "crabbox",
-        executionMode: "worker-turn",
         executionModes,
         machines: [
           { id: "standard", label: "Standard", default: true },
@@ -149,7 +292,15 @@ describe("DraftPlaceState cloud machine selection", () => {
       cloudPlacementExecutionMode: "worker-turn",
       source: "model",
     });
-    state.applyPendingPlacement({ agentId: "main", profileId: "aws", machineClass: "fast" });
+    if (selectedByUser) {
+      vi.spyOn(state, "isAdmin").mockReturnValue(true);
+      vi.spyOn(state, "worktreeAvailable").mockReturnValue(true);
+      state.selectCloudProfile("aws");
+      state.cloudMachines.select("aws", "fast", cloudProfiles);
+      persistPreference.mockClear();
+    } else {
+      state.applyPendingPlacement({ agentId: "main", profileId: "aws", machineClass: "fast" });
+    }
     state.restorePreferenceSelections();
     expect(state.cloudProfileId).toBe("aws");
     expect(state.machineClass).toBe("fast");
@@ -162,19 +313,9 @@ describe("DraftPlaceState cloud machine selection", () => {
     });
     state.restorePreferenceSelections();
 
-    if (compatible) {
-      expect(state.cloudProfileId).toBe("aws");
-      expect(state.machineClass).toBe("fast");
-      expect(state.worktree).toBe(true);
-      expect(persistPreference).not.toHaveBeenCalled();
-    } else {
-      expect(state.cloudProfileId).toBe("");
-      expect(state.worktree).toBe(false);
-      expect(persistPreference).toHaveBeenLastCalledWith(
-        "main",
-        "",
-        expect.objectContaining({ where: { kind: "local" }, worktree: false }),
-      );
-    }
+    expect(state.cloudProfileId).toBe("aws");
+    expect(state.machineClass).toBe("fast");
+    expect(state.worktree).toBe(true);
+    expect(persistPreference).not.toHaveBeenCalled();
   });
 });

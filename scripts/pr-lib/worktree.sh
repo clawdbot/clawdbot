@@ -163,8 +163,10 @@ recover_review_transition() {
   fi
 
   validate_review_transition_state "$pr" "$source" "$target" || return 1
-  if ! git diff --quiet "$source" "$target"; then
-    git diff --name-only --no-renames -z "$source" "$target" |
+  # Completed deletions are absent from both index and target, so replay only
+  # remaining entries rather than passing already-removed paths to restore.
+  if ! git diff --cached --quiet "$target"; then
+    git diff --cached --name-only --no-renames -z "$target" |
       git --literal-pathspecs restore --source="$target" --staged --worktree \
         --pathspec-from-file=- --pathspec-file-nul || return 1
   fi

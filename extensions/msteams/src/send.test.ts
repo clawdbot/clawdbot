@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { deleteMessageMSTeams, editMessageMSTeams, sendMessageMSTeams } from "./send.js";
+import {
+  deleteMessageMSTeams,
+  editAdaptiveCardMSTeams,
+  editMessageMSTeams,
+  sendMessageMSTeams,
+} from "./send.js";
 
 const mockState = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
@@ -612,6 +617,38 @@ describe("editMessageMSTeams", () => {
         text: "Updated text",
       }),
     ).rejects.toThrow("msteams edit failed");
+  });
+
+  it("updates an existing activity with a replacement Adaptive Card", async () => {
+    const mockApp = createMockApp();
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      app: mockApp,
+      conversationId: "19:conversation@thread.tacv2",
+      ref: { conversation: { id: "19:conversation@thread.tacv2" } },
+      log: { debug: vi.fn(), info: vi.fn() },
+      sdkCloudOptions: { cloud: "Public" },
+    });
+    const card = { type: "AdaptiveCard", version: "1.5", body: [] };
+
+    const result = await editAdaptiveCardMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:conversation@thread.tacv2",
+      activityId: "approval-activity",
+      card,
+    });
+
+    expect(result.conversationId).toBe("19:conversation@thread.tacv2");
+    expect(mockState.updateMSTeamsActivityWithReference).toHaveBeenCalledWith(
+      mockApp,
+      expect.objectContaining({ conversation: { id: "19:conversation@thread.tacv2" } }),
+      "approval-activity",
+      {
+        type: "message",
+        id: "approval-activity",
+        attachments: [{ contentType: "application/vnd.microsoft.card.adaptive", content: card }],
+      },
+      { serviceUrlBoundary: { cloud: "Public" } },
+    );
   });
 });
 

@@ -1,5 +1,7 @@
 // Browser tests cover browser tool.schema plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { projectRuntimeToolInputSchema } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeOpenAIToolSchemas } from "openclaw/plugin-sdk/provider-tools";
 import { describe, expect, it } from "vitest";
 import { createBrowserToolSchema, resolveBrowserToolCapabilities } from "./browser-tool.schema.js";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "./browser/act-policy.js";
@@ -54,6 +56,54 @@ describe("browser tool schema", () => {
     expect(requestTargetId.description).toBe(targetId.description);
   });
 
+  it("describes canonical keyboard keys and aliases on nested and flattened act params", () => {
+    const properties = BrowserToolSchema.properties as BrowserSchemaRecord;
+    const requestProperties = requireSchemaProperty(properties, "request", "browser request schema")
+      .properties as BrowserSchemaRecord;
+    const key = requireSchemaProperty(properties, "key", "browser key schema");
+    const requestKey = requireSchemaProperty(
+      requestProperties,
+      "key",
+      "browser request key schema",
+    );
+
+    expect(key.description).toContain("Escape");
+    expect(key.description).toContain("aliases Esc, Return, Del, Ctrl, Cmd");
+    expect(key.description).toContain("Control+Shift+T");
+    expect(requestKey.description).toBe(key.description);
+  });
+
+  it.each([false, true])(
+    "preserves key guidance within the Codex schema budget (bound=%s)",
+    (tabBound) => {
+      const schema = createBrowserToolSchema(resolveBrowserToolCapabilities({ tabBound }));
+      const properties = schema.properties as BrowserSchemaRecord;
+      const key = requireSchemaProperty(properties, "key", "browser key schema");
+      const normalized = normalizeOpenAIToolSchemas({
+        provider: "openai",
+        modelApi: "openai-chatgpt-responses",
+        tools: [
+          {
+            name: "browser",
+            label: "Browser",
+            description: "Browser",
+            parameters: schema,
+            execute: async () => ({ content: [], details: {} }),
+          },
+        ],
+      });
+      const projection = projectRuntimeToolInputSchema(normalized[0]?.parameters);
+      expect(projection.violations).toEqual([]);
+      // Codex strips parameter descriptions above 5,000 bytes after schema normalization.
+      expect(Buffer.byteLength(JSON.stringify(projection.schema))).toBeLessThanOrEqual(5_000);
+      expect(projection.schema).toHaveProperty("properties.key.description", key.description);
+      expect(projection.schema).toHaveProperty(
+        "properties.request.properties.key.description",
+        key.description,
+      );
+    },
+  );
+
   it("exposes explicit download actions and their output path", () => {
     const properties = BrowserToolSchema.properties as BrowserSchemaRecord;
 
@@ -89,5 +139,49 @@ describe("browser tool schema", () => {
       requireSchemaProperty(requestProperties, "kind", "browser request kind schema").enum,
     ).toContain("batch");
     expect(requestProperties.actions).toBeDefined();
+
+    for (const name of ["kind", "actions", "stopOnError", "doubleClick", "ref"] as const) {
+      const flattened = requireSchemaProperty(properties, name, `browser ${name} schema`);
+      const nested = requireSchemaProperty(
+        requestProperties,
+        name,
+        `browser request ${name} schema`,
+      );
+
+      expect(flattened.description, name).toBeTruthy();
+      expect(nested.description, name).toBe(flattened.description);
+    }
+
+    expect(properties.actions?.description).toContain("batch");
+    expect(properties.stopOnError?.description).toContain("default");
+    expect(properties.doubleClick?.description).toContain("clickCoords");
+    expect(properties.ref?.description).toContain("snapshot");
+    expect(properties.profile?.description).toContain("default");
+    expect(properties.labels?.description).toContain("snapshot");
+    expect(properties.request?.description).toContain("act");
+  });
+
+  it("preserves batch fields without advertising them on unsupported profiles", () => {
+    const schema = createBrowserToolSchema(
+      resolveBrowserToolCapabilities({
+        profileCapabilities: {
+          supportsBatchActions: false,
+          supportsDownloads: false,
+          supportsPdf: false,
+        },
+      }),
+    );
+    const properties = schema.properties as BrowserSchemaRecord;
+    const requestProperties = requireSchemaProperty(properties, "request", "browser request schema")
+      .properties as BrowserSchemaRecord;
+
+    for (const scopedProperties of [properties, requestProperties]) {
+      expect(scopedProperties.kind?.enum).not.toContain("batch");
+      expect(scopedProperties.kind?.description).not.toContain("batch");
+      expect(scopedProperties.actions).toBeDefined();
+      expect(scopedProperties.stopOnError).toBeDefined();
+      expect(scopedProperties.actions?.description).toBeUndefined();
+      expect(scopedProperties.stopOnError?.description).toBeUndefined();
+    }
   });
 });

@@ -2,14 +2,13 @@
 import { randomUUID } from "node:crypto";
 import type { Component, OverlayHandle, SelectItem, TUI } from "@earendil-works/pi-tui";
 import type { Result } from "@openclaw/normalization-core/result";
-import { normalizeLowercaseStringOrEmpty as normalizedChatSendAckStatus } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import { shouldForwardModelCommandToServer } from "../auto-reply/commands-registry.shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
-  formatThinkingLevels,
   isSessionDefaultDirectiveValue,
+  listThinkingLevelOptions,
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
@@ -19,6 +18,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { normalizeTerminalChatSendAckStatus } from "../shared/chat-send-ack-status.js";
 import {
   formatTuiLevelCommandUsage,
   helpText,
@@ -108,15 +108,6 @@ function isSlashStopCommand(text: string): boolean {
   return trimmed.startsWith("/") && isChatStopCommandText(trimmed);
 }
 
-function isTerminalChatSendAckFailure(status: unknown): boolean {
-  const normalized = normalizedChatSendAckStatus(status);
-  return normalized === "timeout" || normalized === "error";
-}
-
-function isTerminalChatSendAckSuccess(status: unknown): boolean {
-  return normalizedChatSendAckStatus(status) === "ok";
-}
-
 const TERMINAL_CHAT_SEND_FAILURE_MESSAGE = "Chat failed before the run started; try again.";
 
 export function createCommandHandlers(context: CommandHandlerContext) {
@@ -152,7 +143,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     boundary: null as "new" | "reset" | null,
     epoch: 0,
   };
-  let pickerRequest: { overlay?: OverlayHandle } | null = null;
+  let pickerRequest: { overlay?: OverlayHandle; noticeId: string } | null = null;
 
   // Hold one owner through the full identity transition so later input cannot
   // target the session being retired while create/reset awaits the backend.
@@ -223,11 +214,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     chatLog.addSystem(`agent set to ${state.currentAgentId}; use /openclaw to return`);
   };
 
-  const beginPickerRequest = (): { overlay?: OverlayHandle } => {
+  const beginPickerRequest = (): { overlay?: OverlayHandle; noticeId: string } => {
+    if (pickerRequest && chatLog.dismissPendingSystem(pickerRequest.noticeId)) {
+      tui.requestRender();
+    }
     if (pickerRequest?.overlay) {
       closeOverlayAndRender(pickerRequest.overlay);
     }
-    return (pickerRequest = {});
+    return (pickerRequest = { noticeId: randomUUID() });
   };
 
   const closeOverlayAndRender = (handle: OverlayHandle) => {
@@ -264,23 +258,18 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     state.currentAgentId === selection.agentId &&
     agentSessionKeysMatchByRequestKey(state.currentSessionKey, selection.sessionKey);
 
-  const patchCurrentSession = async (
-    patch: Omit<Parameters<TuiBackend["patchSession"]>[0], "key" | "agentId">,
-  ): Promise<SessionsPatchResult | null> => {
+  const captureSessionIncarnation = () => {
     const selection = captureSessionSelection();
-    try {
-      const result = await client.patchSession({
-        key: selection.sessionKey,
-        ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
-        ...patch,
-      });
-      return isCurrentSessionSelection(selection) ? result : null;
-    } catch (err) {
-      if (!isCurrentSessionSelection(selection)) {
-        return null;
-      }
-      throw err;
-    }
+    const sessionId = state.currentSessionId;
+    const generation = state.sessionGeneration ?? 0;
+    return {
+      selection,
+      sessionId,
+      isCurrent: () =>
+        isCurrentSessionSelection(selection) &&
+        (state.sessionGeneration ?? 0) === generation &&
+        (sessionId === null || state.currentSessionId === sessionId),
+    };
   };
 
   const applySessionSetting = async (
@@ -289,9 +278,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     failure: string,
     after?: (result: SessionsPatchResult) => void | Promise<void>,
   ) => {
+    const { selection, isCurrent } = captureSessionIncarnation();
     try {
-      const result = await patchCurrentSession(patch);
-      if (!result) {
+      const result = await client.patchSession({
+        key: selection.sessionKey,
+        ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
+        ...patch,
+      });
+      if (!isCurrent()) {
         return;
       }
       chatLog.addSystem(typeof success === "function" ? success(result) : success);
@@ -302,7 +296,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await refreshSessionInfo();
       }
     } catch (err) {
-      chatLog.addSystem(`${failure}: ${formatTuiErrorMessage(err)}`);
+      if (isCurrent()) {
+        chatLog.addSystem(`${failure}: ${formatTuiErrorMessage(err)}`);
+      }
     }
   };
 
@@ -311,17 +307,19 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     onSelect: (value: string) => Promise<void>,
     request: { overlay?: OverlayHandle },
   ) => {
-    const selection = captureSessionSelection();
+    const { isCurrent } = captureSessionIncarnation();
     selector.onSelect = (item) => {
       void (async () => {
         try {
-          if (isCurrentSessionSelection(selection)) {
+          if (isCurrent()) {
             await onSelect(item.value);
           }
         } catch (err) {
           // A rejected selection must not strand the overlay open with an
           // unhandled rejection; close it and surface the cause in chat.
-          chatLog.addSystem(`selection failed: ${formatTuiErrorMessage(err)}`);
+          if (isCurrent()) {
+            chatLog.addSystem(`selection failed: ${formatTuiErrorMessage(err)}`);
+          }
         }
         closeOverlayAndRender(overlayHandle);
       })();
@@ -333,17 +331,16 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   const openModelSelector = async () => {
     const request = beginPickerRequest();
-    const selection = captureSessionSelection();
+    const { selection, isCurrent } = captureSessionIncarnation();
     try {
-      chatLog.addSystem("loading models...");
+      chatLog.addPendingSystem(request.noticeId, "loading models...");
       tui.requestRender();
       const models = await client.listModels({ agentId: selection.agentId });
-      if (request !== pickerRequest || !isCurrentSessionSelection(selection)) {
+      if (request !== pickerRequest || !isCurrent()) {
         return;
       }
       if (models.length === 0) {
         chatLog.addSystem("no models available");
-        tui.requestRender();
         return;
       }
       const items = models.map((model) => {
@@ -361,11 +358,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         request,
       );
     } catch (err) {
-      if (request !== pickerRequest || !isCurrentSessionSelection(selection)) {
+      if (request !== pickerRequest || !isCurrent()) {
         return;
       }
       chatLog.addSystem(`model list failed: ${formatTuiErrorMessage(err)}`);
-      tui.requestRender();
+    } finally {
+      if (request === pickerRequest && chatLog.dismissPendingSystem(request.noticeId)) {
+        tui.requestRender();
+      }
     }
   };
 
@@ -406,16 +406,16 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   const openSessionSelector = async () => {
     const request = beginPickerRequest();
-    const selection = captureSessionSelection();
+    const { selection, isCurrent } = captureSessionIncarnation();
     try {
       const sessions = await loadRecentSessions(client, { agentId: selection.agentId });
-      if (request !== pickerRequest || !isCurrentSessionSelection(selection)) {
+      if (request !== pickerRequest || !isCurrent()) {
         return;
       }
       const selector = createFilterableSelectList(buildSessionChoices(sessions), 9);
       openSelector(selector, setSession, request);
     } catch (err) {
-      if (request !== pickerRequest || !isCurrentSessionSelection(selection)) {
+      if (request !== pickerRequest || !isCurrent()) {
         return;
       }
       chatLog.addSystem(`sessions list failed: ${formatTuiErrorMessage(err)}`);
@@ -467,6 +467,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           provider: state.sessionInfo.modelProvider,
           model: state.sessionInfo.model,
           agentRuntime: state.sessionInfo.agentRuntime?.id,
+          thinkingLevels: state.sessionInfo.thinkingLevels,
         }),
       );
     },
@@ -545,19 +546,24 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     },
     goal: async (_args, raw) => {
       if (opts.local === true && client.runGoalCommand) {
+        const { selection, isCurrent } = captureSessionIncarnation();
         try {
           const result = await client.runGoalCommand({
-            sessionKey: state.currentSessionKey,
-            agentId: state.currentAgentId,
+            ...selection,
             command: raw,
           });
+          if (!isCurrent()) {
+            return;
+          }
           chatLog.addSystem(result.text);
           await refreshSessionInfo();
-          if (result.continuationPrompt) {
+          if (result.continuationPrompt && isCurrent()) {
             await sendMessage(result.continuationPrompt);
           }
         } catch (err) {
-          chatLog.addSystem(`goal failed: ${formatTuiErrorMessage(err)}`);
+          if (isCurrent()) {
+            chatLog.addSystem(`goal failed: ${formatTuiErrorMessage(err)}`);
+          }
         }
       } else {
         await sendMessage(raw);
@@ -612,20 +618,20 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     },
     models: async () => await openModelSelector(),
     think: async (args) => {
+      const { thinkingLevels, modelProvider, model, agentRuntime } = state.sessionInfo;
+      const levels = thinkingLevels?.length
+        ? thinkingLevels
+        : listThinkingLevelOptions(modelProvider, model, undefined, agentRuntime?.id);
       if (!args) {
-        const levels =
-          state.sessionInfo.thinkingLevels?.map((level) => level.label).join("|") ||
-          formatThinkingLevels(
-            state.sessionInfo.modelProvider,
-            state.sessionInfo.model,
-            "|",
-            undefined,
-            state.sessionInfo.agentRuntime?.id,
-          );
-        chatLog.addSystem(`usage: /think <${levels}|default>`);
+        chatLog.addSystem(`usage: /think <${levels.map(({ label }) => label).join("|")}|default>`);
         return;
       }
-      const thinkingLevel = isSessionDefaultDirectiveValue(args) ? null : args;
+      const normalized = args.toLowerCase();
+      const thinkingLevel = isSessionDefaultDirectiveValue(args)
+        ? null
+        : (levels.find(({ id }) => id.toLowerCase() === normalized)?.id ??
+          levels.find(({ label }) => label.toLowerCase() === normalized)?.id ??
+          args);
       await applySessionSetting({ thinkingLevel }, `thinking set to ${args}`, "think failed");
     },
     verbose: async (args) => {
@@ -688,14 +694,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           addUnsupportedLocalCommand("usage cost");
           return;
         }
-        const selection = captureSessionSelection();
+        const { selection, isCurrent } = captureSessionIncarnation();
         try {
           const result = await client.runUsageCostCommand(selection);
-          if (isCurrentSessionSelection(selection)) {
+          if (isCurrent()) {
             chatLog.addSystem(result.text);
           }
         } catch (err) {
-          if (isCurrentSessionSelection(selection)) {
+          if (isCurrent()) {
             chatLog.addSystem(`usage cost failed: ${formatTuiErrorMessage(err)}`);
           }
         }
@@ -758,27 +764,31 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (rejectUnsafeSessionRollover("new")) {
         return;
       }
+      let creationIncarnation = captureSessionIncarnation();
+      const { selection, sessionId } = creationIncarnation;
       const finishSessionTransition = beginSessionTransition("new");
       try {
-        const uniqueKey = `tui-${randomUUID()}`;
         const result = await client.createSession({
-          key: uniqueKey,
-          agentId: state.currentAgentId,
-          ...(state.currentSessionId
-            ? { parentSessionKey: state.currentSessionKey, succeedsParent: true }
-            : {}),
+          key: `tui-${randomUUID()}`,
+          agentId: selection.agentId,
+          ...(sessionId ? { parentSessionKey: selection.sessionKey, succeedsParent: true } : {}),
         });
+        if (!creationIncarnation.isCurrent()) {
+          return;
+        }
         if (!result.key) {
           throw new Error("sessions.create returned no session key");
         }
-        state.sessionInfo.inputTokens = null;
-        state.sessionInfo.outputTokens = null;
-        state.sessionInfo.totalTokens = null;
-        tui.requestRender();
-        await setSession(result.key);
-        chatLog.addSystem(`new session: ${result.key}`);
+        const adoption = setSession(result.key);
+        creationIncarnation = captureSessionIncarnation();
+        await adoption;
+        if (creationIncarnation.isCurrent()) {
+          chatLog.addSystem(`new session: ${result.key}`);
+        }
       } catch (err) {
-        chatLog.addSystem(`new session failed: ${formatTuiErrorMessage(err)}`);
+        if (creationIncarnation.isCurrent()) {
+          chatLog.addSystem(`new session failed: ${formatTuiErrorMessage(err)}`);
+        }
       } finally {
         finishSessionTransition();
       }
@@ -787,8 +797,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (rejectUnsafeSessionRollover("reset")) {
         return;
       }
-      const resetSelection = captureSessionSelection();
-      let resetResultSelection = resetSelection;
+      let resetIncarnation = captureSessionIncarnation();
+      const resetSelection = resetIncarnation.selection;
       const finishSessionTransition = beginSessionTransition("reset");
       try {
         const result = await client.resetSession(
@@ -798,7 +808,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             ? { agentId: resetSelection.agentId }
             : undefined,
         );
-        if (!isCurrentSessionSelection(resetSelection)) {
+        if (!resetIncarnation.isCurrent()) {
           return;
         }
         state.sessionInfo.inputTokens = null;
@@ -806,17 +816,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         state.sessionInfo.totalTokens = null;
         tui.requestRender();
         if (applySessionMutationResult(result, resetSelection)) {
-          resetResultSelection = captureSessionSelection();
+          resetIncarnation = captureSessionIncarnation();
           await refreshSessionInfo();
         } else {
           await loadHistory();
         }
-        if (!isCurrentSessionSelection(resetResultSelection)) {
+        if (!resetIncarnation.isCurrent()) {
           return;
         }
         chatLog.addSystem(`session ${state.currentSessionKey} reset`);
       } catch (err) {
-        if (!isCurrentSessionSelection(resetResultSelection)) {
+        if (!resetIncarnation.isCurrent()) {
           return;
         }
         chatLog.addSystem(`reset failed: ${formatTuiErrorMessage(err)}`);
@@ -857,7 +867,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     tui.requestRender();
   };
 
-  const sendMessage = async (text: string) => {
+  const sendMessage = async (text: string, timeoutMs = opts.timeoutMs) => {
     const admission = resolveMessageAdmission(text);
     if (admission.status === "blocked") {
       reportBlockedMessageSubmit(text, admission);
@@ -875,13 +885,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     // The Gateway owns queue policy. TUI only serializes pending RPC admission;
     // an already-active run must not suppress steer/followup/collect/interrupt.
     const runId = randomUUID();
-    const sendSelection = captureSessionSelection();
-    const sendSessionId = state.currentSessionId;
-    const sendSessionGeneration = state.sessionGeneration ?? 0;
-    const isCurrentSendViewport = () =>
-      isCurrentSessionSelection(sendSelection) &&
-      (state.sessionGeneration ?? 0) === sendSessionGeneration &&
-      (sendSessionId === null || state.currentSessionId === sendSessionId);
+    const {
+      selection: sendSelection,
+      sessionId: sendSessionId,
+      isCurrent: isCurrentSendViewport,
+    } = captureSessionIncarnation();
     const sendScope = readTuiSessionProjectionScope(state);
     try {
       if (!isBtw) {
@@ -915,13 +923,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         message: text,
         thinking: opts.thinking,
         deliver: deliverDefault,
-        timeoutMs: opts.timeoutMs,
+        timeoutMs,
         runId,
       });
       const acceptedRunId = sendResult.runId || runId;
-      const terminalAckFailure = isTerminalChatSendAckFailure(sendResult.status);
-      const terminalAckSuccess = isTerminalChatSendAckSuccess(sendResult.status);
-      const terminalAck = terminalAckFailure || terminalAckSuccess;
+      const terminalAckStatus = normalizeTerminalChatSendAckStatus(sendResult.status);
+      const terminalAckFailure = terminalAckStatus === "timeout" || terminalAckStatus === "error";
+      const terminalAck = terminalAckStatus !== undefined;
       if (!isCurrentSendViewport()) {
         if (isBtw) {
           forgetLocalBtwRunId?.(runId);
@@ -1007,6 +1015,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             state.activeChatRunId = null;
           }
           await loadHistory();
+          if (!isCurrentSendViewport()) {
+            return;
+          }
           if (terminalAckFailure) {
             chatLog.addSystem(`send failed: ${TERMINAL_CHAT_SEND_FAILURE_MESSAGE}`);
             setActivityStatus("error");

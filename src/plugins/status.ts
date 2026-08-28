@@ -21,7 +21,6 @@ import {
   type PluginCapabilityEntry,
   type PluginInspectShape,
 } from "./inspect-shape.js";
-import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import { loadPluginRegistryHandle, resolveCompatibleRuntimePluginRegistry } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
@@ -45,6 +44,7 @@ import {
   buildPluginDependencyStatus,
   projectPluginDependencyHealth,
 } from "./status-dependencies-core.js";
+import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
 import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -190,6 +190,8 @@ type PluginReportParams = {
   config?: OpenClawConfig;
   effectiveOnly?: boolean;
   onlyPluginIds?: readonly string[];
+  /** Capture full registrations without starting channel runtime sidecars. */
+  runtimeInspection?: boolean;
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
@@ -216,17 +218,14 @@ function buildPluginReport(
       workspaceDir: initialWorkspaceDir,
       ...(params?.onlyPluginIds !== undefined ? { pluginIds: params.onlyPluginIds } : {}),
     });
-  const baseContext = {
-    ...resolvePluginRuntimeLoadContext({
-      config: rawConfig,
-      env: params?.env,
-      logger: params?.logger,
-      workspaceDir: initialWorkspaceDir,
-      onlyPluginIds: params?.onlyPluginIds,
-      manifestRegistry: metadataSnapshot.manifestRegistry,
-    }),
-    installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
-  };
+  const baseContext = resolvePluginRuntimeLoadContext({
+    config: rawConfig,
+    env: params?.env,
+    logger: params?.logger,
+    workspaceDir: initialWorkspaceDir,
+    onlyPluginIds: params?.onlyPluginIds,
+    metadataSnapshot,
+  });
   const workspaceDir = baseContext.workspaceDir ?? initialWorkspaceDir;
   const context =
     workspaceDir === baseContext.workspaceDir
@@ -275,6 +274,7 @@ function buildPluginReport(
               loadModules,
               cache: false,
               onlyPluginIds,
+              toolDiscovery: params?.runtimeInspection,
             }),
           ),
         { surface: "status", onlyPluginCount: onlyPluginIds?.length },
@@ -309,7 +309,16 @@ function buildPluginReport(
     workspaceDir,
     workspaceScope: workspace.workspaceScope,
     ...registry,
-    diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(registry.diagnostics, workspace),
+    diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(
+      [
+        ...registry.diagnostics,
+        ...collectPluginCapabilityConsentDiagnostics({
+          index: metadataSnapshot.index,
+          manifests: manifestByPluginId,
+        }),
+      ],
+      workspace,
+    ),
     plugins: registry.plugins.map((plugin) =>
       Object.assign({}, plugin, {
         imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),

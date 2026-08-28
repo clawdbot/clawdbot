@@ -3,19 +3,16 @@ import type { TemplateResult, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import type { ChatSendShortcut } from "../../../app/settings.ts";
+import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
+import type { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
-import type {
-  RealtimeTalkCameraDevice,
-  RealtimeTalkDeviceIssue,
-  RealtimeTalkInputDevice,
-} from "../realtime-talk-input.ts";
+import type { RealtimeTalkCameraDevice } from "../realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
@@ -46,7 +43,7 @@ type ChatComposerDisabledBannerContent = {
   title?: string;
   text: string;
   tone?: "info" | "neutral";
-  icon?: "warning";
+  icon?: "warning" | "archive";
   actionLabel: string;
   actionStyle?: "primary";
   busy?: boolean;
@@ -67,6 +64,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   queuedOutboxCount?: number;
   canSend: boolean;
   disabledReason: string | null;
+  disabledReasonTone?: "info" | "danger";
   disabledBanner?: ChatComposerDisabledBanner;
   runError?: { summary: string } | null;
   sending: boolean;
@@ -76,6 +74,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   progressCard?: ProgressCard | null;
+  progressCardHasActiveRun?: boolean;
   onDismissProgressCard?: (card: ProgressCard) => void;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   messages: unknown[];
@@ -111,20 +110,24 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   realtimeTalkCameraError?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
+  onComposerHoldToRecordChange?: (enabled: boolean) => void;
+  onOpenTalkSettings?: () => void;
+  onOpenDictationSettings?: () => void;
   suggestionComposer?: boolean;
+  typingActors?: readonly { id: string; label: string; preview?: string }[];
   onTypingChange?: (typing: boolean, preview?: string) => void;
   composerControls?: TemplateResult | typeof nothing;
+  anchoredNotices?: TemplateResult | typeof nothing;
   permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string) => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
-  onSend: (followUpModeOverride?: "steer", submissionAction?: Event) => void;
-  onCompact?: () => void | Promise<void>;
+  onSlashCommand?: (command: string) => void;
+  onSend: (followUpModeOverride?: ChatFollowUpMode, submissionAction?: Event) => void;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;
   onSwitchRealtimeCamera?: () => void;
   onDismissRealtimeTalkError?: () => void;
-  onDictationError?: (message: string) => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
@@ -161,13 +164,7 @@ export type ChatComposerState = SkillMenuState &
     restoreComposerFocus: boolean;
     composerInput: HTMLElement | null;
     composerTextarea: HTMLTextAreaElement | null;
-    microphonePickerOpen: boolean;
-    microphonePickerLoading: boolean;
-    microphoneDevices: RealtimeTalkInputDevice[];
-    microphoneIssue: RealtimeTalkDeviceIssue | null;
-    /** Unsubscribe for the devicechange watch; non-null only while the picker is open. */
-    microphoneDeviceWatch: (() => void) | null;
-    microphoneDiscoveryRequest: number;
+    microphonePicker: ComposerMicrophonePicker | null;
     capabilityMenuOpen: boolean;
     capabilityMenuView: ChatComposerPlusMenuView;
     // Stable Lit refs: inline arrows would change identity per render and force
@@ -176,5 +173,6 @@ export type ChatComposerState = SkillMenuState &
     textareaRef: ((element?: Element) => void) | null;
     dictation: ComposerDictationController | null;
     dictationDraftKey: string | null;
-    dictationSelection: { start: number; end: number } | null;
+    dictationError: string | null;
+    dictationSelection: { start: number; end: number; value: string } | null;
   };

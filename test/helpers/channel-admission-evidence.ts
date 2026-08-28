@@ -13,6 +13,7 @@ export function createChannelParticipantAdmissionEvidence(params: {
   channelId: string;
   accountId?: string;
   participantId: string | number;
+  identifierAuthentication?: "affected" | "evaluated" | "not-evaluated";
 }): ChannelAdmissionEvidence | undefined {
   return bindTestChannelParticipantAdmissionEvidence({ ...params, context: {} });
 }
@@ -23,6 +24,7 @@ export function bindTestChannelParticipantAdmissionEvidence(params: {
   channelId: string;
   accountId?: string;
   participantId: string | number;
+  identifierAuthentication?: "affected" | "evaluated" | "not-evaluated";
 }): ChannelAdmissionEvidence | undefined {
   const result = {
     state: {
@@ -48,6 +50,7 @@ export function bindTestChannelParticipantAdmissionEvidence(params: {
       accountId: params.accountId,
       rawPrincipalRef: params.participantId,
       participantOutcomeAffecting: false,
+      identifierAuthentication: params.identifierAuthentication ?? "not-evaluated",
       scope: {
         conversation: { kind: "direct", id: "test-conversation" },
         contextBinding: {

@@ -233,7 +233,9 @@ describe("gateway control-plane write rate limit", () => {
     expect(suspension?.release()).toBe(true);
   });
 
-  it.each(STARTUP_UNAVAILABLE_GATEWAY_METHODS)(
+  it.each([
+    ...new Set(["sessions.list", "sessions.subscribe", ...STARTUP_UNAVAILABLE_GATEWAY_METHODS]),
+  ])(
     "blocks startup-gated method %s before dispatch with a retryable startup error",
     async (method) => {
       const handlerCalls = vi.fn();

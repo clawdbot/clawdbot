@@ -431,6 +431,8 @@ export class GatewayClient {
       },
       notifyStoppedClose: true,
       onConnectError: (error) => this.notifyConnectError(error),
+      onReconnectStopped: (error) =>
+        this.notifyReconnectPaused({ code: 1008, reason: error.message, detailCode: null }),
       onParseError: (error) =>
         this.logDebug(`gateway client parse error: ${formatGatewayClientErrorForLog(error)}`),
       onEvent: (event) => this.opts.onEvent?.(event),
@@ -558,14 +560,8 @@ export class GatewayClient {
     this.transportValidated = false;
     let upgradeError: GatewayClientRequestError | undefined;
     ws.on("open", () => {
-      handlers.open();
-      const tlsError = transport.validateSocket(ws);
-      if (tlsError) {
-        handlers.error(tlsError);
-        ws.close(1008, tlsError.message);
-        return;
-      }
       this.transportValidated = true;
+      handlers.open();
     });
     ws.on("message", (data) => handlers.message(rawDataToString(data)));
     ws.on("close", (code, reason) => {

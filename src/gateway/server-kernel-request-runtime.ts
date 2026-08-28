@@ -33,6 +33,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     getPortalService,
     terminalLaunchPolicy,
     execApprovalManager,
+    questionManager,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest,
     pluginApprovalIosPushDelivery,
@@ -132,6 +133,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
       isTerminalEnabled: terminalLaunchPolicy.isEnabled,
       execApprovalManager,
+      questionManager,
       cancelRunBoundApprovals,
       forwardPluginApprovalRequest,
       pluginApprovalIosPushDelivery,
@@ -237,6 +239,13 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     sidecars: runtimeState.gatewayLifetimeSidecars,
   });
   pluginGatewayContext.current = gatewayRequestContext;
+  gatewayRequestContext.dispatchHookAgentTurn = async (pluginId, hookParams) => {
+    const transport = runtime.transportBridge.current();
+    if (!transport) {
+      throw new Error("Gateway listener must start before plugin hook dispatch");
+    }
+    return await transport.dispatchHookAgentTurn(pluginId, hookParams);
+  };
   const { createGatewayInstanceRuntime } = await import("./server-instance-runtime.js");
   const gatewayInstanceRuntime = createGatewayInstanceRuntime({
     getContext: () => gatewayRequestContext,

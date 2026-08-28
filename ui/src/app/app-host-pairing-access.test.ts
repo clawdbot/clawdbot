@@ -3,9 +3,11 @@
 import { render, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import "../components/app-sidebar.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
+import { loadSettings } from "./settings.ts";
 import "./app-host.ts";
 
 type PairingShell = HTMLElement & {
@@ -30,8 +32,6 @@ type PairingSidebar = HTMLElement & {
 };
 
 type PairingAuth = { role: string; scopes?: string[] };
-
-let renderedSidebar = false;
 
 function createPairingShell(params: {
   auth: PairingAuth | null;
@@ -100,7 +100,7 @@ function createPairingShell(params: {
     agents: { state: { agentsList: null } },
     agentSelection: { state: { selectedId: "main", scopeId: "main" } },
     sessions: { state: { result: null } },
-    theme: { mode: "system" },
+    theme: { mode: "system", settings: loadSettings() },
   } as unknown as ApplicationContext;
   const shell = document.createElement("openclaw-app-shell") as PairingShell;
   shell.runtime = { context, router: {} } as ApplicationRuntime;
@@ -111,7 +111,6 @@ function createPairingShell(params: {
   const container = document.createElement("div");
 
   const renderSidebar = () => {
-    renderedSidebar = true;
     render(shell.render(), container);
     const sidebar = container.querySelector<PairingSidebar>("openclaw-app-sidebar");
     if (!sidebar) {
@@ -147,12 +146,8 @@ function createPairingShell(params: {
   };
 }
 
-afterEach(async () => {
+afterEach(() => {
   vi.useRealTimers();
-  if (renderedSidebar) {
-    await waitForFast(() => expect(customElements.get("openclaw-app-sidebar")).toBeDefined());
-    renderedSidebar = false;
-  }
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -309,7 +304,7 @@ describe("application shell pairing access", () => {
     button?.click();
 
     await waitForFast(() => expect(button?.textContent?.trim()).toBe("Copy failed"));
-    expect(button?.getAttribute("aria-label")).toBe("Copy failed");
+    expect(button?.getAttribute("aria-label")).toBeNull();
     expect(button?.querySelector("svg")).not.toBeNull();
     expect(writeText).toHaveBeenCalledWith("pair-mobile-secret");
     expect(execCommand).toHaveBeenCalledWith("copy");
@@ -321,7 +316,7 @@ describe("application shell pairing access", () => {
     reset();
 
     expect(button?.textContent?.trim()).toBe("Copy setup code");
-    expect(button?.getAttribute("aria-label")).toBe("Copy setup code");
+    expect(button?.getAttribute("aria-label")).toBeNull();
   });
 
   it("expires a node setup link from the pairing clock", async () => {

@@ -5,18 +5,26 @@ import { parseWorkerLaunchPlan, type WorkerLaunchPlan } from "./launch-descripto
 
 const IDENTIFIER_MAX_CHARS = 256;
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
-const NODE_WORKER_SUPERVISOR_CANCEL_REQUEST_MAX_BYTES = 4 * 1024;
+const NODE_WORKER_SUPERVISOR_CONTROL_REQUEST_MAX_BYTES = 4 * 1024;
 const NODE_WORKER_RESULT_JSON_MAX_BYTES = 64 * 1024;
 const NODE_WORKER_ERROR_TEXT_MAX_BYTES = 4 * 1024;
 const NODE_WORKER_CONNECTION_FAILURE_CAUSE_MAX_BYTES = 64 * 1024;
 export const NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE = "openclaw-worker-connection-failure-v1";
 
 export type NodeWorkerLaunchInput = {
+  environmentSession: 1;
   launchId: string;
   gatewayNamespace: string;
   expectedBundleHash: string;
   placementGeneration: number;
   descriptor: WorkerLaunchPlan;
+};
+
+export type NodeWorkerEnvironmentStopInput = {
+  gatewayNamespace: string;
+  environmentId: string;
+  sessionId: string;
+  ownerEpoch: number;
 };
 
 export type NodeWorkerSupervisorIdentity = {
@@ -102,7 +110,7 @@ function decodeRequest(raw?: string | null): unknown {
   }
 }
 
-export function assertNodeWorkerLaunchIdentity(
+function assertNodeWorkerLaunchIdentity(
   input: Pick<NodeWorkerLaunchInput, "launchId" | "expectedBundleHash">,
   descriptor: WorkerLaunchPlan,
 ): void {
@@ -115,10 +123,14 @@ export function assertNodeWorkerLaunchIdentity(
 }
 
 export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunchInput {
-  const value = decodeRequest(raw);
+  return validateNodeWorkerLaunchInput(decodeRequest(raw));
+}
+
+export function validateNodeWorkerLaunchInput(value: unknown): NodeWorkerLaunchInput {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, [
+      "environmentSession",
       "launchId",
       "gatewayNamespace",
       "expectedBundleHash",
@@ -127,6 +139,9 @@ export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunc
     ])
   ) {
     throw new Error("INVALID_REQUEST: invalid node worker launch request");
+  }
+  if (value.environmentSession !== 1) {
+    throw new Error("INVALID_REQUEST: node worker environment lifetime support required");
   }
   const launchId = requireIdentifier(value.launchId, "launchId");
   const gatewayNamespace = requireIdentifier(value.gatewayNamespace, "gatewayNamespace");
@@ -149,6 +164,7 @@ export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunc
     descriptor,
   );
   return {
+    environmentSession: 1,
     launchId,
     gatewayNamespace,
     expectedBundleHash: value.expectedBundleHash,
@@ -169,7 +185,7 @@ export function parseNodeWorkerLookupInput(raw?: string | null): { launchId: str
 }
 
 export function parseNodeWorkerCancelInput(raw?: string | null): NodeWorkerSupervisorIdentity {
-  if (!raw || Buffer.byteLength(raw, "utf8") > NODE_WORKER_SUPERVISOR_CANCEL_REQUEST_MAX_BYTES) {
+  if (!raw || Buffer.byteLength(raw, "utf8") > NODE_WORKER_SUPERVISOR_CONTROL_REQUEST_MAX_BYTES) {
     throw new Error("INVALID_REQUEST: invalid node worker cancel request");
   }
   const value = decodeRequest(raw);
@@ -201,6 +217,31 @@ export function parseNodeWorkerCancelInput(raw?: string | null): NodeWorkerSuper
       "placementGeneration",
     ),
     runId: requireIdentifier(value.runId, "runId"),
+  };
+}
+
+export function parseNodeWorkerEnvironmentStopInput(
+  raw?: string | null,
+): NodeWorkerEnvironmentStopInput {
+  if (!raw || Buffer.byteLength(raw, "utf8") > NODE_WORKER_SUPERVISOR_CONTROL_REQUEST_MAX_BYTES) {
+    throw new Error("INVALID_REQUEST: invalid node worker environment stop request");
+  }
+  const value = decodeRequest(raw);
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["gatewayNamespace", "environmentId", "sessionId", "ownerEpoch"])
+  ) {
+    throw new Error("INVALID_REQUEST: invalid node worker environment stop request");
+  }
+  const gatewayNamespace = requireIdentifier(value.gatewayNamespace, "gatewayNamespace");
+  if (!GATEWAY_NAMESPACE_PATTERN.test(gatewayNamespace)) {
+    throw new Error("INVALID_REQUEST: gatewayNamespace must be a safe bounded path component");
+  }
+  return {
+    gatewayNamespace,
+    environmentId: requireIdentifier(value.environmentId, "environmentId"),
+    sessionId: requireIdentifier(value.sessionId, "sessionId"),
+    ownerEpoch: requireNonNegativeInteger(value.ownerEpoch, "ownerEpoch"),
   };
 }
 

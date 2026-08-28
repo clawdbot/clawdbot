@@ -13,15 +13,35 @@ import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { renderSidebarApprovalRow } from "./exec-approval-card.ts";
 import { icons } from "./icons.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import type { SidebarAttentionItem } from "./sidebar-attention-items.ts";
+import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import "./sidebar-update-card.ts";
 
 type SidebarIssueItemHandlers = {
   basePath: string;
-  onDismiss: (item: SidebarAttentionItem) => void;
+  onDismiss?: () => void;
   onNavigate: (routeId: NavigationRouteId) => void;
   onOpen: (item: SidebarAttentionItem) => void;
 };
+
+function renderSidebarDismissButton(itemLabel: string, onDismiss?: () => void) {
+  if (!onDismiss) {
+    return nothing;
+  }
+  const label = t("attention.dismissItem", { item: itemLabel });
+  return html`<button
+    type="button"
+    class="sidebar-issues-panel__dismiss"
+    aria-label=${label}
+    title=${label}
+    @click=${(event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onDismiss();
+    }}
+  >
+    ${icons.x}
+  </button>`;
+}
 
 export function renderSidebarAskOpenClawButton(params: {
   count: number;
@@ -152,15 +172,10 @@ function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>
   return state satisfies never;
 }
 
-function scopeUpgradeSummaryText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>): string {
-  return state.phase === "guidance" || state.phase === "available"
-    ? t("connection.scopeUpgrade.inboxState")
-    : scopeUpgradeText(state);
-}
-
 export function renderSidebarScopeUpgradeItem(params: {
   state: ScopeUpgradeState;
   onCancel: () => void;
+  onDismiss?: () => void;
   onRequest: () => void;
   onRetry: () => void;
 }) {
@@ -168,8 +183,11 @@ export function renderSidebarScopeUpgradeItem(params: {
     return nothing;
   }
   const text = scopeUpgradeText(params.state);
-  const summary = scopeUpgradeSummaryText(params.state);
-  const retryable = ["pending", "rejected", "error"].includes(params.state.phase);
+  const summary = t("connection.scopeUpgrade.inboxState");
+  const retryable =
+    params.state.phase === "error"
+      ? params.state.retryable
+      : params.state.phase === "pending" || params.state.phase === "rejected";
   return html`<details
     class="sidebar-issues-panel__details sidebar-issues-panel__details--${params.state.phase ===
       "error" || params.state.phase === "rejected"
@@ -183,6 +201,9 @@ export function renderSidebarScopeUpgradeItem(params: {
         <span class="sidebar-issues-panel__entity">${t("connection.scopeUpgrade.status")}</span>
         <span class="sidebar-issues-panel__state" title=${summary}>${summary}</span>
       </span>
+      ${params.onDismiss
+        ? renderSidebarDismissButton(t("connection.scopeUpgrade.status"), params.onDismiss)
+        : nothing}
       <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
     </summary>
     <div class="sidebar-issues-panel__body" role="status" aria-live="polite">
@@ -207,15 +228,17 @@ export function renderSidebarScopeUpgradeItem(params: {
                 ${t("connection.scopeUpgrade.requestingAction")}
               </button>
             </div>`
-          : retryable
+          : retryable || params.state.phase === "error"
             ? html`<div class="sidebar-issues-panel__actions">
-                <button
-                  type="button"
-                  class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-                  @click=${params.onRetry}
-                >
-                  ${t("connection.scopeUpgrade.retry")}
-                </button>
+                ${retryable
+                  ? html`<button
+                      type="button"
+                      class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+                      @click=${params.onRetry}
+                    >
+                      ${t("connection.scopeUpgrade.retry")}
+                    </button>`
+                  : nothing}
                 <button
                   type="button"
                   class="sidebar-issues-panel__action"
@@ -274,15 +297,7 @@ function renderNavigationItem(item: SidebarAttentionItem, handlers: SidebarIssue
           ${renderItemMeta(item)}
         </span>
       </a>
-      <button
-        type="button"
-        class="sidebar-issues-panel__dismiss"
-        aria-label=${t("attention.dismissItem", { item: item.label })}
-        title=${t("attention.dismissItem", { item: item.label })}
-        @click=${() => handlers.onDismiss(item)}
-      >
-        ${icons.x}
-      </button>
+      ${renderSidebarDismissButton(item.label, handlers.onDismiss)}
       <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
     </div>
   </div>`;
@@ -315,19 +330,7 @@ export function renderSidebarIssueItem(
         <span class="sidebar-issues-panel__entity" title=${item.label}>${item.label}</span>
         ${renderItemMeta(item)}
       </span>
-      <button
-        type="button"
-        class="sidebar-issues-panel__dismiss"
-        aria-label=${t("attention.dismissItem", { item: item.label })}
-        title=${t("attention.dismissItem", { item: item.label })}
-        @click=${(event: Event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          handlers.onDismiss(item);
-        }}
-      >
-        ${icons.x}
-      </button>
+      ${renderSidebarDismissButton(item.label, handlers.onDismiss)}
       <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
     </summary>
     <div class="sidebar-issues-panel__body">

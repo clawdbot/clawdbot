@@ -212,6 +212,7 @@ export type CodexHooksListResponse = {
 
 export type CodexConfigReadResponse = {
   config: JsonObject;
+  origins: Record<string, CodexConfigLayerMetadata | undefined>;
   layers?: JsonValue[] | null;
 };
 

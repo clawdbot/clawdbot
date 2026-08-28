@@ -203,7 +203,7 @@ vi.mock("../infra/startup-migration-checkpoint.js", () => ({
   recordSuccessfulStartupMigrations,
 }));
 
-vi.mock("../plugins/installed-plugin-index-store.js", () => ({
+vi.mock("../plugins/installed-plugin-index-store-write.js", () => ({
   writePersistedInstalledPluginIndexWithLeaseSync,
 }));
 

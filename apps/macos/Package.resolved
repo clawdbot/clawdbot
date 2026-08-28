@@ -47,15 +47,6 @@
       }
     },
     {
-      "identity" : "menubarextraaccess",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/orchetect/MenuBarExtraAccess",
-      "state" : {
-        "revision" : "e93e3a5b814714bf4d4cea67bf63a6b6a8323968",
-        "version" : "1.3.1"
-      }
-    },
-    {
       "identity" : "peekaboo",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/openclaw/Peekaboo.git",

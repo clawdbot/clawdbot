@@ -177,6 +177,10 @@ When a task reaches a terminal state, OpenClaw notifies you. There are two deliv
 
 **Session-queued delivery** - if direct delivery fails or no origin is set, the update is queued as a system event in the requester's session and surfaces on the next heartbeat.
 
+When `gateway.publicOrigin` is configured and the Control UI is enabled,
+direct channel notifications include an `Inspect` link to the task's own
+session. Session-queued notifications do not include this link.
+
 Durable subagent completion handoffs retry for up to 30 minutes with capped
 exponential backoff. A queued handoff is not reported as delivered until the
 queue settles. If delivery reaches its deadline or fails permanently, the task
@@ -366,7 +370,7 @@ Legacy sidecar stores from older installs (`tasks/runs.sqlite`, `flows/registry.
 
 ### Automatic maintenance
 
-A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway start) and handles four things:
+A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway start) and handles five things:
 
 <Steps>
   <Step title="Reconciliation">
@@ -380,6 +384,9 @@ A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway st
   </Step>
   <Step title="Pruning">
     Deletes records past their `cleanupAfter` date.
+  </Step>
+  <Step title="Task Flow retention">
+    Deletes terminal Task Flow records after 7 days. A `blocked` flow is terminal only when it has `endedAt`; resumable managed `blocked` flows remain registered.
   </Step>
 </Steps>
 

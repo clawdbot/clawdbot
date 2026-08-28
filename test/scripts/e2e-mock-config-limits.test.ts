@@ -304,7 +304,7 @@ describe("mock OpenAI response markers", () => {
       hold: true,
       responses: [
         { text: "first response" },
-        { fail: { status: 429 } },
+        { fail: { status: 429, message: "OAuth token refresh failed for openai: invalid_grant" } },
         { text: "third response" },
       ],
       default: { text: "default response" },
@@ -329,7 +329,9 @@ describe("mock OpenAI response markers", () => {
           expect((await first.json()).output?.[0]?.content?.[0]?.text).toBe("first response");
           const second = await request();
           expect(second.status).toBe(429);
-          expect(await second.json()).toEqual({ error: { message: "mantis injected fault" } });
+          expect(await second.json()).toEqual({
+            error: { message: "OAuth token refresh failed for openai: invalid_grant" },
+          });
           const third = await request();
           expect((await third.json()).output?.[0]?.content?.[0]?.text).toBe("third response");
           const fourth = await request();

@@ -2,6 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   createSparseTsgoSkipEnv,
@@ -354,36 +355,78 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
     expect(result.stderr.trim().split("\n").at(-1)).toBe("[tsgo] FAILED (exit 1)");
   }, 30_000);
 
-  it("lets the inner supervisor reap a wedged compiler before the wrapper exits on SIGTERM", async () => {
-    const cwd = createTempDir("openclaw-run-tsgo-signal-");
-    const pidFile = path.join(cwd, "fake-tsgo.pid");
-    fs.writeFileSync(path.join(cwd, "tsconfig.extensions.json"), "{}\n");
-    writeFakeTsgo(
-      cwd,
-      '#!/bin/sh\necho $$ > "$(dirname "$0")/../../fake-tsgo.pid"\ntrap \'\' TERM HUP INT\nwhile true; do sleep 1; done\n',
-    );
-    const wrapper = spawn(
-      process.execPath,
-      [path.resolve("scripts/run-tsgo.mjs"), "-p", "tsconfig.extensions.json"],
-      { cwd, stdio: "ignore" },
-    );
-
-    try {
-      const compilerPid = await waitForPidFile(pidFile, 10_000);
-      wrapper.kill("SIGTERM");
-
-      await expect(waitForChildClose(wrapper, 15_000)).resolves.toEqual({
-        code: 143,
-        signal: null,
-      });
-      await expect(waitForDead(compilerPid, 2_000)).resolves.toBeUndefined();
-    } finally {
-      if (wrapper.exitCode === null && wrapper.signalCode === null) {
-        wrapper.kill("SIGKILL");
-      }
-      reapFakeTsgo(cwd);
+  it.each(["wrapper", "spawn"])(
+    "reaps a wedged compiler on SIGTERM during %s",
+    async (phase) => {
+      const cwd = fs.realpathSync(createTempDir("openclaw-run-tsgo-signal-"));
+      const pidFile = path.join(cwd, "fake-tsgo.pid");
+      fs.writeFileSync(path.join(cwd, "tsconfig.extensions.json"), "{}\n");
+      writeFakeTsgo(
+        cwd,
+        '#!/bin/sh\ntrap \'\' TERM HUP INT\necho $$ > "$(dirname "$0")/../../fake-tsgo.pid"\nwhile true; do sleep 1; done\n',
+      );
+      const preloadPath = path.join(cwd, "signal-during-spawn.mjs");
+      // Hold the real spawn boundary until the compiler is ready, then deliver an
+      // OS signal before the supervisor can register the returned child.
+      fs.writeFileSync(
+        preloadPath,
+        `
+import childProcess from "node:child_process";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const spawn = childProcess.spawn;
+childProcess.spawn = (...args) => {
+  const child = spawn(...args);
+  if (args[0] === ${JSON.stringify(path.join(cwd, "node_modules/.bin/tsgo"))}) {
+    const pidFile = ${JSON.stringify(pidFile)};
+    const deadline = Date.now() + 10_000;
+    while (!fs.existsSync(pidFile) || Number(fs.readFileSync(pidFile, "utf8")) !== child.pid) {
+      if (Date.now() >= deadline) throw new Error("compiler readiness timed out");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
     }
-  }, 20_000);
+    process.kill(process.pid, "SIGTERM");
+  }
+  return child;
+};
+syncBuiltinESMExports();
+`,
+      );
+      const wrapper = spawn(
+        process.execPath,
+        [path.resolve("scripts/run-tsgo.mjs"), "-p", "tsconfig.extensions.json"],
+        {
+          cwd,
+          stdio: "ignore",
+          env: {
+            ...process.env,
+            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""}${phase === "spawn" ? ` --import=${pathToFileURL(preloadPath).href}` : ""}`,
+          },
+        },
+      );
+      const wrapperClose = waitForChildClose(wrapper, 15_000);
+
+      try {
+        const compilerPid = await waitForPidFile(pidFile, 10_000);
+        if (phase === "wrapper") {
+          wrapper.kill("SIGTERM");
+        }
+
+        const wrapperResult = await wrapperClose;
+        expect([
+          { code: 143, signal: null },
+          { code: null, signal: "SIGTERM" },
+        ]).toContainEqual(wrapperResult);
+        await expect(waitForDead(compilerPid, 2_000)).resolves.toBeUndefined();
+      } finally {
+        if (wrapper.exitCode === null && wrapper.signalCode === null) {
+          wrapper.kill("SIGKILL");
+        }
+        reapFakeTsgo(cwd);
+        await wrapperClose;
+      }
+    },
+    20_000,
+  );
 
   // Every bound that must leave a completing compiler alone. The ceiling case is the
   // regression that matters: without saturation Node collapses the delay to 1ms and

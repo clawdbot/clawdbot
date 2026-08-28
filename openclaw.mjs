@@ -263,26 +263,6 @@ const respawnWithPackagedCompileCacheIfNeeded = () => {
   );
 };
 
-// Codex owns the relay timeout by PID. Keep the launcher as that exact process
-// so a timeout cannot strand a compile-cache respawn child.
-const waitingForCompileCacheRespawn =
-  !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
-  (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded());
-
-// https://nodejs.org/api/module.html#module-compile-cache
-if (
-  !waitingForCompileCacheRespawn &&
-  module.enableCompileCache &&
-  !isNodeCompileCacheDisabled() &&
-  !isSourceCheckoutLauncher()
-) {
-  try {
-    module.enableCompileCache(resolvePackagedCompileCacheDirectory());
-  } catch {
-    // Ignore errors
-  }
-}
-
 const getErrorMessage = (err) =>
   err && typeof err === "object" && "message" in err && typeof err.message === "string"
     ? err.message
@@ -427,6 +407,24 @@ const consumeLauncherRootOptionToken = (args, index) => {
   return 0;
 };
 
+// Mirror the entry's foreground Gmail policy before any built modules can load.
+// A compile-cache wrapper would kill its owner before descendant cleanup finishes.
+const isForegroundGmailRunInvocation = (argv) => {
+  const args = argv.slice(2);
+  const commandPath = [];
+  for (let index = 0; index < args.length && commandPath.length < 3; index += 1) {
+    const consumed = consumeLauncherRootOptionToken(args, index);
+    if (consumed > 0) {
+      index += consumed - 1;
+    } else if (!args[index] || args[index].startsWith("-")) {
+      break;
+    } else {
+      commandPath.push(args[index]);
+    }
+  }
+  return commandPath.join(" ") === "webhooks gmail run";
+};
+
 const hasLauncherContainerTarget = (argv) => {
   if (normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {
     return true;
@@ -509,7 +507,7 @@ const resolveLauncherHomeDir = () => {
   const explicit = normalizeLauncherHomeValue(process.env.OPENCLAW_HOME);
   const rawHome =
     explicit && (explicit === "~" || explicit.startsWith("~/") || explicit.startsWith("~\\"))
-      ? explicit.replace(/^~(?=$|[\\/])/, resolveLauncherOsHomeDir())
+      ? explicit.replace(/^~(?=$|[\\/])/, () => resolveLauncherOsHomeDir())
       : (explicit ?? resolveLauncherOsHomeDir());
   return path.resolve(rawHome);
 };
@@ -725,7 +723,7 @@ const tryOutputBareRootHelp = async () => {
   if (!isBareRootHelpInvocation(process.argv)) {
     return false;
   }
-  if (shouldDeferRootHelpToRuntimeEntry()) {
+  if (hasLauncherContainerTarget(process.argv) || shouldDeferRootHelpToRuntimeEntry()) {
     return false;
   }
   const precomputed = loadPrecomputedHelpText("rootHelpText");
@@ -768,6 +766,27 @@ const tryOutputPrecomputedCommandHelp = () => {
   process.stdout.write(precomputed);
   return true;
 };
+
+// Codex owns the relay timeout by PID. Keep the launcher as that exact process
+// so a timeout cannot strand a compile-cache respawn child.
+const waitingForCompileCacheRespawn =
+  !isForegroundGmailRunInvocation(process.argv) &&
+  !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
+  (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded());
+
+// https://nodejs.org/api/module.html#module-compile-cache
+if (
+  !waitingForCompileCacheRespawn &&
+  module.enableCompileCache &&
+  !isNodeCompileCacheDisabled() &&
+  !isSourceCheckoutLauncher()
+) {
+  try {
+    module.enableCompileCache(resolvePackagedCompileCacheDirectory());
+  } catch {
+    // Ignore errors
+  }
+}
 
 if (!waitingForCompileCacheRespawn) {
   if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {

@@ -19,7 +19,7 @@ import {
   type Model,
   type ModelThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { discoverAuthStorage, discoverModels } from "../agents/agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
@@ -50,6 +50,7 @@ import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   appendPrioritizedDynamicLiveModels,
+  applyLiveProviderPluginDiscoveryCompat,
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   getHighSignalLiveModelPriorityIndex,
@@ -61,6 +62,7 @@ import {
   selectHighSignalLiveItems,
   selectSmallLiveItems,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
+  resolveLiveProviderDiscoveryProviderIds,
 } from "../agents/test-helpers/live-model-dynamic-candidates.js";
 import { createLiveTargetMatcher } from "../agents/test-helpers/live-target-matcher.js";
 import { mergeWorkspaceSetupState } from "../agents/workspace-state-store.js";
@@ -194,12 +196,6 @@ function parseFilter(raw?: string): Set<string> | null {
   return ids.length ? new Set(ids) : null;
 }
 
-function providerFilterList(): string[] | undefined {
-  return PROVIDERS
-    ? [...PROVIDERS].toSorted((left, right) => left.localeCompare(right))
-    : undefined;
-}
-
 function listHighSignalLiveModelProviders(): string[] {
   return [...new Set(listPrioritizedHighSignalLiveModelRefs().map((ref) => ref.provider))].toSorted(
     (left, right) => left.localeCompare(right),
@@ -268,12 +264,13 @@ function filterGatewayLiveModelRefsByProvider(
 }
 
 function resolvePrioritizedGatewayLiveModelRefs(params: {
+  explicitRefs: readonly { provider: string; id: string }[];
   providerFilter: ReadonlySet<string> | null;
   useExplicit: boolean;
   useSmall: boolean;
 }): Array<{ provider: string; id: string }> {
   if (params.useExplicit) {
-    return [];
+    return filterGatewayLiveModelRefsByProvider(params.explicitRefs, params.providerFilter);
   }
   // High-signal refs can be plugin-resolved models absent from the static
   // catalog; omitting them leaves provider-scoped live lanes with zero coverage.
@@ -1491,7 +1488,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
     expect(candidates).toEqual([model]);
   });
 
-  it("keeps provider-qualified explicit refs usable when the registry is empty", () => {
+  it("fails closed when canonical metadata is unavailable for an explicit ref", () => {
     const matcher = createLiveTargetMatcher({
       providerFilter: new Set(["openai"]),
       modelFilter: new Set(["openai/gpt-5.5"]),
@@ -1513,11 +1510,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
       targetMatcher: matcher,
     });
 
-    if (!candidates) {
-      throw new Error("expected explicit fallback candidates");
-    }
-    expect(candidates).toEqual([createExplicitLiveFallbackModel("openai", "gpt-5.5")]);
-    expect(candidates[0]?.contextWindow).toBeGreaterThanOrEqual(4_000);
+    expect(candidates).toBeNull();
   });
 
   it("uses the Bedrock Converse API for explicit Bedrock fallback candidates", () => {
@@ -1633,6 +1626,7 @@ describe("providerScopedModelRegistryProviders", () => {
   it("loads provider-scoped dynamic refs for default high-signal sweeps", () => {
     expect(
       resolvePrioritizedGatewayLiveModelRefs({
+        explicitRefs: [],
         providerFilter: new Set(["openrouter"]),
         useExplicit: false,
         useSmall: false,
@@ -1644,21 +1638,23 @@ describe("providerScopedModelRegistryProviders", () => {
     ]);
     expect(
       resolvePrioritizedGatewayLiveModelRefs({
+        explicitRefs: [],
         providerFilter: new Set(["fireworks"]),
         useExplicit: false,
         useSmall: false,
       }),
-    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" }]);
+    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/routers/glm-5p2-fast" }]);
   });
 
-  it("leaves explicit gateway model refs to targeted registry lookup", () => {
+  it("loads explicit gateway model refs through dynamic discovery", () => {
     expect(
       resolvePrioritizedGatewayLiveModelRefs({
+        explicitRefs: [{ provider: "openrouter", id: "openai/gpt-5.2-chat" }],
         providerFilter: new Set(["openrouter"]),
         useExplicit: true,
         useSmall: false,
       }),
-    ).toEqual([]);
+    ).toEqual([{ provider: "openrouter", id: "openai/gpt-5.2-chat" }]);
   });
 
   it("does not count small models outside a provider-scoped gateway sweep", () => {
@@ -1802,6 +1798,22 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
     ).toBe("off");
   });
 
+  it.each([
+    ["openai-completions", "off"],
+    ["anthropic-messages", "high"],
+  ] as const)("uses the discovered %s transport for provider thinking policy", (api, expected) => {
+    expect(
+      resolveGatewayLiveModelThinkingLevel({
+        model: {
+          ...createGatewayLiveTestModel("opencode-go", "glm-5.1"),
+          api,
+          reasoning: true,
+        },
+        requestedLevel: "high",
+      }),
+    ).toBe(expected);
+  });
+
   it.each(["xai", "x-ai"])(
     "preserves Grok 4.5 thinking support for the %s provider id",
     (provider) => {
@@ -1867,7 +1879,7 @@ describe("buildLiveGatewayConfig", () => {
     const cfg = buildLiveGatewayConfig({
       cfg: {
         agents: {
-          entries: { ops: { default: true } },
+          entries: { ops: {} },
         },
         bindings: [{ agentId: "ops", match: { channel: "telegram" } }],
         broadcast: {
@@ -1882,7 +1894,6 @@ describe("buildLiveGatewayConfig", () => {
 
     expect(cfg.agents?.entries).toEqual({
       [GATEWAY_LIVE_AGENT_ID]: {
-        default: true,
         agentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
         workspace: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
         sandbox: { mode: "off" },
@@ -1898,7 +1909,6 @@ describe("buildLiveGatewayConfig", () => {
         agents: {
           entries: {
             dev: {
-              default: true,
               agentDir: "/operator/agent",
               workspace: "/operator/workspace",
             },
@@ -1912,7 +1922,6 @@ describe("buildLiveGatewayConfig", () => {
 
     expect(cfg.agents?.entries).toEqual({
       [GATEWAY_LIVE_AGENT_ID]: {
-        default: true,
         agentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
         workspace: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
         sandbox: { mode: "off" },
@@ -2898,6 +2907,52 @@ function buildLiveGatewayAuthProfileStore(params: {
   };
 }
 
+function materializeGatewayLiveDiscoveryAuth(params: {
+  env: NodeJS.ProcessEnv;
+  providerList: readonly string[] | undefined;
+  store: AuthProfileStore;
+}): AuthProfileStore {
+  const includesOpenAi =
+    !params.providerList ||
+    params.providerList.some((provider) => normalizeProviderId(provider) === "openai");
+  const apiKey = includesOpenAi ? params.env.OPENAI_API_KEY?.trim() : undefined;
+  if (!apiKey) {
+    return params.store;
+  }
+  return buildLiveGatewayAuthProfileStore({
+    store: params.store,
+    candidates: [
+      {
+        model: createGatewayLiveTestModel("openai", "gpt-5.6-sol"),
+        auth: { apiKey, mode: "api-key", source: "env: OPENAI_API_KEY" },
+      },
+    ],
+  });
+}
+
+function resolveGatewayLivePreparedProfileId(
+  store: AuthProfileStore,
+  provider: string,
+): string | undefined {
+  return normalizeProviderId(provider) === "openai" && store.profiles["openai:live"]
+    ? "openai:live"
+    : undefined;
+}
+
+async function enterIsolatedGatewayLiveDiscoveryState(): Promise<() => Promise<void>> {
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-discovery-state-"));
+  setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+  return async () => {
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  };
+}
+
 function createGatewayLiveModelSession(params: {
   agentId: string;
   credentialAttempt: number;
@@ -3059,6 +3114,90 @@ describe("buildLiveGatewayAuthProfileStore", () => {
     });
     expect(isolated.order?.openai).toEqual(["openai:live"]);
     expect(store.profiles).toEqual({});
+  });
+
+  it("materializes the OpenAI live secret before profile-first discovery", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+
+    const prepared = materializeGatewayLiveDiscoveryAuth({
+      env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+      providerList: ["openai"],
+      store,
+    });
+
+    expect(prepared.profiles["openai:live"]).toEqual({
+      type: "api_key",
+      provider: "openai",
+      key: "prepared-openai-test-key",
+    });
+    expect(prepared.order?.openai).toEqual(["openai:live"]);
+    expect(store.profiles).toEqual({});
+  });
+
+  it("does not materialize OpenAI auth for another provider's focused sweep", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+
+    expect(
+      materializeGatewayLiveDiscoveryAuth({
+        env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+        providerList: ["anthropic"],
+        store,
+      }),
+    ).toBe(store);
+  });
+
+  it("carries the materialized OpenAI profile into profile-first lookup", () => {
+    const store = materializeGatewayLiveDiscoveryAuth({
+      env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+      providerList: ["openai"],
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(resolveGatewayLivePreparedProfileId(store, "openai")).toBe("openai:live");
+    expect(resolveGatewayLivePreparedProfileId(store, "anthropic")).toBeUndefined();
+  });
+
+  it("keeps prepared discovery credentials out of the ambient auth store", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const ambientStateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-live-ambient-state-"),
+    );
+    process.env.OPENCLAW_STATE_DIR = ambientStateDir;
+    const ambientAgentDir = resolveDefaultAgentDir({});
+    const ambientStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:ambient": { type: "api_key", provider: "openai", key: "ambient-test-key" },
+      },
+    };
+    saveAuthProfileStore(ambientStore, ambientAgentDir);
+
+    try {
+      const leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState();
+      try {
+        const discoveryAgentDir = resolveDefaultAgentDir({});
+        expect(discoveryAgentDir).not.toBe(ambientAgentDir);
+        const prepared = materializeGatewayLiveDiscoveryAuth({
+          env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+          providerList: ["openai"],
+          store: ensureAuthProfileStore(discoveryAgentDir, { allowKeychainPrompt: false }),
+        });
+        saveAuthProfileStore(prepared, discoveryAgentDir);
+      } finally {
+        await leaveDiscoveryState();
+      }
+
+      expect(
+        ensureAuthProfileStore(ambientAgentDir, { allowKeychainPrompt: false }).profiles,
+      ).toEqual(ambientStore.profiles);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(ambientStateDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps an env-first provider on its prepared direct credential", () => {
@@ -4554,7 +4693,12 @@ function resolveExplicitLiveModelCandidates(params: {
     }
     const model =
       params.modelRegistry.find(ref.provider, ref.modelId) ??
-      createExplicitLiveFallbackModel(ref.provider, ref.modelId);
+      (ref.provider === "amazon-bedrock"
+        ? createExplicitLiveFallbackModel(ref.provider, ref.modelId)
+        : undefined);
+    if (!model) {
+      return null;
+    }
     if (
       !params.targetMatcher.matchesProvider(model.provider) ||
       !params.targetMatcher.matchesModel(model.provider, model.id)
@@ -4584,6 +4728,7 @@ function resolveGatewayLiveModelThinkingLevel(params: {
     context: {
       provider: model.provider,
       modelId: model.id,
+      api: model.api,
       agentRuntime: "openclaw",
       reasoning: model.reasoning,
       compat: getProviderThinkingModelCompat(model),
@@ -4736,7 +4881,6 @@ function buildLiveGatewayConfig(params: {
   const providers = Object.keys(nextProviders).length > 0 ? nextProviders : baseProviders;
   const configuredAgents = {
     [GATEWAY_LIVE_AGENT_ID]: {
-      default: true,
       agentDir: params.liveAgentDir,
       workspace: params.liveAgentWorkspaceDir,
       sandbox: { mode: "off" },
@@ -5758,20 +5902,71 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 }
 
 describeLive("gateway live (dev agent, profile keys)", () => {
+  let leaveDiscoveryState: (() => Promise<void>) | undefined;
+
+  beforeEach(async () => {
+    leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState();
+  });
+
+  afterEach(async () => {
+    await leaveDiscoveryState?.();
+    leaveDiscoveryState = undefined;
+  });
+
   it(
     "runs meaningful prompts across models with available keys",
     async () =>
       await withSuppressedGatewayLiveWarnings(async () => {
-        const providerList = providerFilterList();
+        const rawModels = await resolveGatewayLiveRequestedModels();
+        const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
+        const useSmall = rawModels === "small";
+        const useExplicit = Boolean(rawModels) && !useModern && !useSmall;
+        const filter = useExplicit ? parseFilter(rawModels) : null;
+        const explicitRefs = useExplicit
+          ? [...(filter ?? [])].flatMap((raw) => {
+              const ref = parseExplicitLiveModelRef(raw, PROVIDERS);
+              return ref ? [{ provider: ref.provider, id: ref.modelId }] : [];
+            })
+          : [];
+        const priorityRefs = filterGatewayLiveModelRefsByProvider(
+          useExplicit
+            ? explicitRefs
+            : useSmall
+              ? listPrioritizedSmallLiveModelRefs()
+              : listPrioritizedHighSignalLiveModelRefs(),
+          PROVIDERS,
+        );
+        const providerList = resolveLiveProviderDiscoveryProviderIds({
+          providerFilter: PROVIDERS,
+          explicitRefs,
+          priorityRefs,
+        });
         const providerLog = providerList?.join(",") ?? "all";
         logProgress(`[all-models] discover candidates providers=${providerLog}`);
         logProgress("[all-models] loading config");
         clearRuntimeConfigSnapshot();
-        const cfg = await withGatewayLiveSetupTimeout(
+        const loadedCfg = await withGatewayLiveSetupTimeout(
           readLiveTestConfig(),
           "[all-models] load config",
         );
+        const cfg = applyLiveProviderPluginDiscoveryCompat({
+          config: loadedCfg,
+          providers: providerList,
+          env: process.env,
+        });
         const workspaceDir = resolveAgentWorkspaceDir(cfg, DEFAULT_AGENT_ID);
+        const discoveryAgentDir = resolveDefaultAgentDir(cfg);
+        const discoveryAuthProfileStore = ensureAuthProfileStore(discoveryAgentDir, {
+          allowKeychainPrompt: false,
+        });
+        const preparedDiscoveryAuthProfileStore = materializeGatewayLiveDiscoveryAuth({
+          env: process.env,
+          providerList,
+          store: discoveryAuthProfileStore,
+        });
+        if (preparedDiscoveryAuthProfileStore !== discoveryAuthProfileStore) {
+          saveAuthProfileStore(preparedDiscoveryAuthProfileStore, discoveryAgentDir);
+        }
         logProgress("[all-models] preparing models.json");
         const modelsJsonResult = await withGatewayLiveSetupTimeout(
           ensureOpenClawModelsJson(cfg, undefined, {
@@ -5781,12 +5976,6 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           "[all-models] prepare models.json",
         );
         const agentDir = modelsJsonResult.agentDir;
-
-        const rawModels = await resolveGatewayLiveRequestedModels();
-        const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
-        const useSmall = rawModels === "small";
-        const useExplicit = Boolean(rawModels) && !useModern && !useSmall;
-        const filter = useExplicit ? parseFilter(rawModels) : null;
         const providerScopedModelProviders = providerScopedModelRegistryProviders({
           providerList,
           useSmall,
@@ -5823,12 +6012,17 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           }
         } else {
           logProgress("[all-models] loading auth profiles");
-          const authBacked = await loadAuthBackedLiveModelRegistry({ agentDir, cfg, providerList });
+          const authBacked = await loadAuthBackedLiveModelRegistry({
+            agentDir,
+            cfg,
+            providerList,
+          });
           authProfileStore = authBacked.authProfileStore;
           modelRegistry = authBacked.modelRegistry;
           all = authBacked.all;
         }
         const prioritizedRefs = resolvePrioritizedGatewayLiveModelRefs({
+          explicitRefs,
           providerFilter: PROVIDERS,
           useExplicit,
           useSmall,
@@ -5915,6 +6109,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                 store: authProfileStore,
                 agentDir,
                 workspaceDir,
+                profileId: resolveGatewayLivePreparedProfileId(authProfileStore, model.provider),
                 credentialPrecedence: resolveLiveCredentialPrecedence(
                   model.provider,
                   REQUIRE_PROFILE_KEYS,

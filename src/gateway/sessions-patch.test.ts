@@ -2,10 +2,10 @@
 // aliases, model catalog validation, and rejected invalid patch payloads.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
-import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
@@ -313,7 +313,7 @@ describe("gateway sessions patch", () => {
 
   afterEach(() => {
     acpSessionMetaMocks.readAcpSessionMetaForEntry.mockReset();
-    resetProviderAuthAliasMapCacheForTest();
+    clearPluginMetadataLifecycleCaches();
     resetPluginRuntimeStateForTest();
   });
 
@@ -605,6 +605,7 @@ describe("gateway sessions patch", () => {
         label: "Stale Session",
         sendPolicy: "deny",
         modelOverride: OPENAI_GPT_ID,
+        liveModelSwitchPending: true,
         responseUsage: "tokens",
         parentSessionKey: "agent:main:main",
       } as SessionEntry,
@@ -623,6 +624,7 @@ describe("gateway sessions patch", () => {
     expect(entry.label).toBeUndefined();
     expect(entry.sendPolicy).toBe("deny");
     expect(entry.modelOverride).toBe(OPENAI_GPT_ID);
+    expect(entry.liveModelSwitchPending).toBeUndefined();
     expect(entry.responseUsage).toBe("tokens");
     expect(entry.parentSessionKey).toBe("agent:main:main");
     expect(entry.fastMode).toBe(true);
@@ -932,22 +934,28 @@ describe("gateway sessions patch", () => {
     expect(entry.label).toBe("Remote Codex task");
   });
 
-  test("marks explicit model patches as pending live model switches", async () => {
-    const store = mainStoreEntry({
-      sessionId: "sess-live",
-      providerOverride: "openai",
-      modelOverride: OPENAI_GPT_ID,
-    });
-    const entry = await applyMainModelPatch({
-      store,
-      cfg: createAllowlistedAnthropicModelCfg(),
-      model: ANTHROPIC_SONNET_MODEL,
-      catalogRefs: [OPENAI_GPT_MODEL, ANTHROPIC_SONNET_MODEL],
-    });
+  test.each(["fresh", "placeholder", "existing"] as const)(
+    "queues model switches only for existing sessions (%s)",
+    async (sessionState) => {
+      const store =
+        sessionState === "fresh"
+          ? undefined
+          : mainStoreEntry({
+              sessionId: sessionState === "existing" ? "sess-live" : undefined,
+              providerOverride: "openai",
+              modelOverride: OPENAI_GPT_ID,
+            });
+      const entry = await applyMainModelPatch({
+        store,
+        cfg: createAllowlistedAnthropicModelCfg(),
+        model: ANTHROPIC_SONNET_MODEL,
+        catalogRefs: [OPENAI_GPT_MODEL, ANTHROPIC_SONNET_MODEL],
+      });
 
-    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
-    expect(entry.liveModelSwitchPending).toBe(true);
-  });
+      expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+      expect(entry.liveModelSwitchPending).toBe(sessionState === "existing" ? true : undefined);
+    },
+  );
 
   test("clears an agent model rollback marker on explicit model patches", async () => {
     const store = mainStoreEntry({
@@ -1230,41 +1238,50 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("medium");
   });
 
-  test("validates context-window selections against the effective model catalog", async () => {
-    const cfg = {
-      agents: { defaults: { model: { primary: "claude-cli/claude-fable-5" } } },
-    } as OpenClawConfig;
-    const loadGatewayModelCatalog = async () => [
-      {
-        provider: "claude-cli",
-        id: "claude-fable-5",
-        name: "Claude Fable 5",
-        contextWindow: 1_000_000,
-        contextWindows: [
-          { id: "200k", label: "200K", contextWindow: 200_000 },
-          { id: "1m", label: "1M", contextWindow: 1_000_000 },
-        ],
-        contextWindowDefault: "1m",
-      },
-    ];
+  test.each(["fresh", "placeholder", "existing"] as const)(
+    "validates context-window initialization without queuing fresh-session switches (%s)",
+    async (sessionState) => {
+      const cfg = {
+        agents: { defaults: { model: { primary: "claude-cli/claude-fable-5" } } },
+      } as OpenClawConfig;
+      const loadGatewayModelCatalog = async () => [
+        {
+          provider: "claude-cli",
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          contextWindow: 1_000_000,
+          contextWindows: [
+            { id: "200k", label: "200K", contextWindow: 200_000 },
+            { id: "1m", label: "1M", contextWindow: 1_000_000 },
+          ],
+          contextWindowDefault: "1m",
+        },
+      ];
 
-    const entry = expectPatchOk(
-      await runPatch({
+      const entry = expectPatchOk(
+        await runPatch({
+          cfg,
+          store:
+            sessionState === "fresh"
+              ? undefined
+              : mainStoreEntry({
+                  sessionId: sessionState === "existing" ? "sess-context" : undefined,
+                }),
+          patch: { key: MAIN_SESSION_KEY, contextWindow: "200k" },
+          loadGatewayModelCatalog,
+        }),
+      );
+      expect(entry.contextWindow).toBe("200k");
+      expect(entry.liveModelSwitchPending).toBe(sessionState === "existing" ? true : undefined);
+
+      const invalid = await runPatch({
         cfg,
-        patch: { key: MAIN_SESSION_KEY, contextWindow: "200k" },
+        patch: { key: MAIN_SESSION_KEY, contextWindow: "2m" },
         loadGatewayModelCatalog,
-      }),
-    );
-    expect(entry.contextWindow).toBe("200k");
-    expect(entry.liveModelSwitchPending).toBe(true);
-
-    const invalid = await runPatch({
-      cfg,
-      patch: { key: MAIN_SESSION_KEY, contextWindow: "2m" },
-      loadGatewayModelCatalog,
-    });
-    expectPatchError(invalid, 'contextWindow "2m" is not supported');
-  });
+      });
+      expectPatchError(invalid, 'contextWindow "2m" is not supported');
+    },
+  );
 
   test("rejects thinking levels forbidden by the concrete runtime policy", async () => {
     providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
@@ -1655,6 +1672,27 @@ describe("gateway sessions patch", () => {
     expect(cleared.sessionRoot).toBe("/workspace/project");
   });
 
+  test("stores and clears a session permission mode without a recorded root", async () => {
+    const store = mainStoreEntry({});
+    const stored = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, permissionMode: "workspace" },
+      }),
+    );
+    expect(stored.permissionMode).toBe("workspace");
+    expect(stored.sessionRoot).toBeUndefined();
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, permissionMode: null },
+      }),
+    );
+    expect(cleared.permissionMode).toBeUndefined();
+    expect(cleared.sessionRoot).toBeUndefined();
+  });
+
   test("clears a node cwd when changing or clearing the node binding", async () => {
     const store = mainStoreEntry({
       execHost: "node",
@@ -1762,7 +1800,7 @@ describe("gateway sessions patch", () => {
     });
     expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
     expectAuthOverride(entry, { profile: "myprofile" });
-    expect(entry.liveModelSwitchPending).toBe(true);
+    expect(entry.liveModelSwitchPending).toBeUndefined();
   });
 
   test("marks same-model @profile patches as pending live model switches", async () => {

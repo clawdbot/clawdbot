@@ -26,6 +26,7 @@ export function makeMockHttpResponse(): {
     headersSent: false,
     statusCode: 200,
     setHeader,
+    removeHeader: vi.fn(),
     end,
   }) as unknown as ServerResponse;
   return { res, setHeader, end };

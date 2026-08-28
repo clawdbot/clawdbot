@@ -23,12 +23,10 @@ describe("draftCloudProfileSupportsExecutionMode", () => {
   );
 
   it("does not treat the singular display projection as a placement capability", () => {
-    expect(
-      draftCloudProfileSupportsExecutionMode(
-        { id: "legacy", providerId: "crabbox", executionMode: "worker-turn" },
-        "worker-turn",
-      ),
-    ).toBe(false);
+    const [profile] = readDraftCloudProfiles([
+      { id: "legacy", providerId: "crabbox", executionMode: "worker-turn" },
+    ]);
+    expect(draftCloudProfileSupportsExecutionMode(profile!, "worker-turn")).toBe(false);
   });
 });
 
@@ -79,7 +77,6 @@ describe("readDraftCloudProfiles", () => {
         id: "aws",
         providerId: "crabbox",
         trust: "persistent",
-        executionMode: "worker-turn",
         executionModes: ["worker-turn", "remote-exec"],
         machines: [
           {
@@ -96,19 +93,16 @@ describe("readDraftCloudProfiles", () => {
         id: "invalid-trust",
         providerId: "crabbox",
         trust: undefined,
-        executionMode: undefined,
       },
       {
         id: "legacy",
         providerId: "static-ssh",
         trust: undefined,
-        executionMode: undefined,
       },
       {
         id: "zeta",
         providerId: "static-ssh",
         trust: "disposable",
-        executionMode: "worker-turn",
       },
     ]);
   });
@@ -136,7 +130,6 @@ describe("readDraftCloudProfiles", () => {
           id: "aws",
           providerId: "crabbox",
           trust: undefined,
-          executionMode: "remote-exec",
           executionModes: [],
         },
       ]);

@@ -1,9 +1,7 @@
 import { note } from "../../packages/terminal-core/src/note.js";
+import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
-import {
-  isGatewayHostServiceEnvironment,
-  NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON,
-} from "../infra/gateway-supervision.js";
+import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { runCoreContributionHealth } from "./doctor-health-contribution-core.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
@@ -27,7 +25,7 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
     return;
   }
-  if (!isGatewayHostServiceEnvironment(ctx.env ?? process.env)) {
+  if (!(await shouldManageGatewayService(ctx.env ?? process.env))) {
     return;
   }
   const {

@@ -99,6 +99,12 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /**
+   * Run-owned start timestamp captured by the embedded-run orchestrator before
+   * admission. Flows onto the queue handle so recovery can project the active
+   * run's authoritative start time instead of the session's subagent first-run.
+   */
+  startedAtMs?: number;
   /** Explicit session owner captured before fallback agent resolution. */
   contextEngineAgentId?: string;
   /** Host-resolved sandbox snapshot for plugin harness tool construction. */
@@ -287,6 +293,8 @@ export type EmbeddedRunAttemptResult = {
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
+    /** Producer-recorded: this exec result parked a Code Mode run (status "waiting"). */
+    codeModeSuspended?: boolean;
   }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   /** This attempt accepted work whose future output has a runtime-owned delivery path. */

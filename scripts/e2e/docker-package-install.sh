@@ -25,32 +25,35 @@ trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" docker-package-install "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
 
+# The bun smoke runs the shared openclaw-e2e-instance library (mock provider
+# servers included), so copy its whole script roots instead of a per-file list
+# that silently drifts when the library grows a dependency. The repo checkout
+# itself stays unmounted: the lane proves the packaged artifact, not sources.
 for harness_path in \
-  scripts/e2e/bun-global-install-smoke.sh \
-  scripts/e2e/lib/bun-global-install/assertions.mjs \
-  scripts/lib/docker-e2e-container.sh \
-  scripts/lib/docker-e2e-logs.sh \
-  scripts/lib/docker-e2e-package.sh \
-  scripts/lib/docker-e2e-resource-diagnostics.sh; do
+  packages/normalization-core/src \
+  scripts; do
   mkdir -p "$BUN_HARNESS_DIR/$(dirname "$harness_path")"
-  cp "$ROOT_DIR/$harness_path" "$BUN_HARNESS_DIR/$harness_path"
+  cp -R "$ROOT_DIR/$harness_path" "$BUN_HARNESS_DIR/$harness_path"
 done
 chmod -R a+rX "$BUN_HARNESS_DIR"
 
-echo "Installing the real OpenClaw package artifact with npm..."
+echo "Installing the real OpenClaw package artifact with npm as root..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$NPM_PROOF_CONTAINER" \
+  --user root \
   -v "$PACKAGE_TGZ:/tmp/openclaw-current.tgz:ro" \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
-    npm install -g --prefix /tmp/openclaw-proof /tmp/openclaw-current.tgz --no-fund --no-audit
-    export PATH="/tmp/openclaw-proof/bin:$PATH"
-    package_root=/tmp/openclaw-proof/lib/node_modules/openclaw
-    test "$(command -v openclaw)" = "/tmp/openclaw-proof/bin/openclaw"
-    openclaw --version > /tmp/openclaw-version
-    openclaw --help > /tmp/openclaw-help
+    npm install -g /tmp/openclaw-current.tgz --no-fund --no-audit
+    test "$(command -v openclaw)" = "/usr/local/bin/openclaw"
+    # Root installed the global package; a non-root user must still be able to
+    # run it. A same-user install can never catch an installed tree that ends
+    # up owner-only readable, which is how sudo-install breakage ships.
+    runuser -u appuser -- openclaw --version > /tmp/openclaw-version
+    runuser -u appuser -- openclaw --help > /tmp/openclaw-help
     test -s /tmp/openclaw-help
+    chmod 644 /tmp/openclaw-version /tmp/openclaw-help
     touch /tmp/openclaw-proof-ready
     exec sleep infinity
   ' >/dev/null
@@ -117,7 +120,7 @@ for container_name in "$NPM_PROOF_CONTAINER" "$PNPM_PROOF_CONTAINER" "$BUN_PROOF
   wait_for_proof "$container_name"
 done
 
-NPM_PACKAGE_ROOT="/tmp/openclaw-proof/lib/node_modules/openclaw"
+NPM_PACKAGE_ROOT="/usr/local/lib/node_modules/openclaw"
 NPM_INSTALLED_VERSION="$(docker exec "$NPM_PROOF_CONTAINER" cat /tmp/openclaw-version | tr -d '\r\n')"
 PNPM_PACKAGE_ROOT="$(docker exec "$PNPM_PROOF_CONTAINER" cat /tmp/openclaw-package-root | tr -d '\r\n')"
 PNPM_INSTALLED_VERSION="$(docker exec "$PNPM_PROOF_CONTAINER" cat /tmp/openclaw-version | tr -d '\r\n')"
@@ -148,8 +151,9 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identit
   --detail "npm:installedPackageRoot=$NPM_PACKAGE_ROOT" \
   --detail "npm:installedPackageVersion=$PACKAGE_VERSION" \
   --detail "npm:openclawVersion=$NPM_INSTALLED_VERSION" \
-  --detail "npm:openclawPath=/tmp/openclaw-proof/bin/openclaw" \
+  --detail "npm:openclawPath=/usr/local/bin/openclaw" \
   --detail "npm:helpCommand=passed" \
+  --detail "npm:nonRootExecution=passed" \
   --detail "pnpm:installedPackageRoot=$PNPM_PACKAGE_ROOT" \
   --detail "pnpm:installedPackageVersion=$PACKAGE_VERSION" \
   --detail "pnpm:openclawVersion=$PNPM_INSTALLED_VERSION" \

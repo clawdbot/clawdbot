@@ -21,7 +21,12 @@ import {
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
-import { applyChatAgentsList, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
+import {
+  applyChatAgentsList,
+  getChatHistoryLoadState,
+  resumePendingChatHistoryLoad,
+  syncSelectedSessionMessageSubscription,
+} from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import {
   applySelectedSessionProjection,
@@ -47,6 +52,7 @@ import { cancelChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 import { migrateLegacyDockVisibility } from "./sidebar-layout-legacy-migration.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
+import { maybeResetToolStream } from "./stream-reconciliation.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
@@ -258,13 +264,13 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         }
         state.chatSending = false;
         state.chatSendingScopeKey = null;
+        invalidateAssistantIdentityCache(state.client);
       }
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
       this.connectionGeneration += 1;
       this.retireHeaderSessionMutations();
       invalidateChatAvatarCache(state);
-      invalidateAssistantIdentityCache(state.client);
       state.assistantIdentityRequestVersion += 1;
       retireChatMetadataRequests(state);
       this.swarmHydrator?.dispose();
@@ -304,8 +310,16 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
     state.selfUser = snapshot.selfUser ?? null;
+    state.assistantAgentId = snapshot.assistantAgentId;
+    if (wasConnected && !state.connected) {
+      // Only the connected->disconnected transition may reshape loading state;
+      // repeated disconnected snapshots must stay no-ops for pane ownership.
+      state.chatLoading = getChatHistoryLoadState(state).phase === "pending-connection";
+    }
+    const resumedHistory =
+      !wasConnected && state.connected ? resumePendingChatHistoryLoad(state) : undefined;
     if (sourceChanged) {
-      retireSessionWorkspaceCheckout(state, this.presented);
+      retireSessionWorkspaceCheckout(state);
     }
     if (!sourceChanged && previousMediaAuthToken !== resolveAssistantAttachmentAuthToken(state)) {
       releaseChatMediaResourceSubscriber(state.requestUpdate);
@@ -356,10 +370,13 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         startup: true,
         awaitHistory: true,
         deferBranches: true,
+        historyLoad: resumedHistory,
       });
-      this.deferSessionHydrationUntilTranscript(state.sessionKey, historyRefresh);
+      this.deferSessionHydrationUntilTranscript(
+        state.sessionKey,
+        historyRefresh.then(() => getChatHistoryLoadState(state).phase === "committed"),
+      );
     }
-    state.assistantAgentId = snapshot.assistantAgentId;
     const routeSessionKey = this.sessionKey.trim();
     const catalogRouteKey = parseCatalogSessionKey(routeSessionKey);
     const canonicalRouteSessionKey =
@@ -400,7 +417,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.connectedClient = null;
       setQuestionPromptClient(this.questionPromptState, null);
       stopChatRealtimeTalk(state);
-      state.resetToolStream();
+      maybeResetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
       state.requestUpdate?.();
       return;
     }
@@ -445,8 +462,12 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         startup: true,
         awaitHistory: true,
         deferBranches: true,
+        historyLoad: resumedHistory,
       });
-      this.deferSessionHydrationUntilTranscript(startupSessionKey, historyRefresh);
+      this.deferSessionHydrationUntilTranscript(
+        startupSessionKey,
+        historyRefresh.then(() => getChatHistoryLoadState(state).phase === "committed"),
+      );
       void historyRefresh.finally(() => {
         void finishStartup();
       });

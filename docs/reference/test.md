@@ -79,6 +79,14 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
+Maintained JavaScript tooling wrappers and root package commands use tsx's
+in-process transform cache. They skip its shared disk cache before the loader
+starts, and child tooling inherits that policy. This cache policy does not clean
+existing temporary directories, Node or Vitest caches, or other global caches. Standalone
+`pnpm ui:build` keeps native startup and applies the same preload to its post-build
+validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
+external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
+
 Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary; Vitest's own duration line stays the per-shard detail.
 
 | Command                                           | What it does                                                                                                                                                                                                                                                                                                                                          |
@@ -92,7 +100,38 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 | `pnpm changed:lanes`                              | Shows the architectural lanes triggered by the diff against `origin/main`.                                                                                                                                                                                                                                                                            |
 | `pnpm check:changed`                              | Classifies and runs the local changed formatting/typecheck/lint/guard plan. Does not run Vitest; use `pnpm test:changed` or `pnpm test <target>` for test proof.                                                                                                                                                                                      |
 
+## Linux shell integrations
+
+The Mantis Telegram lease-fence integration tests require Linux, Bash,
+util-linux `setsid`, and coreutils (`sleep`, `cat`, and `true`). On Ubuntu,
+install the prerequisites with `sudo apt-get install bash util-linux coreutils`.
+With repository dependencies ready, run the focused proof on Linux:
+
+```bash
+node scripts/run-vitest.mjs test/scripts/run-with-lease-fence.test.ts
+```
+
+All three tests must pass: lease loss removes the command's process group,
+clean exit propagates, and stdin reaches the fenced command. Missing `setsid`
+fails the Linux suite with prerequisite guidance; it does not skip the tests.
+macOS and Windows skip this Linux workflow integration. Use Linux CI or an
+isolated Linux environment for that proof. See [Mantis](/concepts/mantis).
+
+Remote filesystem fixtures that execute GNU `stat` and `readlink` run locally
+only on Linux. The shared leading-`@` file-tool scenario
+also runs against a portable remote-only bridge on every platform. Native
+Python helper coverage remains separate, including macOS; these fixture gates
+do not restrict the [SSH backend's Gateway host](/gateway/sandboxing#ssh-backend).
+
 ## Shared test state and process helpers
+
+On POSIX hosts, the Vitest wrapper gives each invocation an owned temporary
+namespace through `TMPDIR`, `TMP`, and `TEMP`. Fallback SQLite state stays available
+across shared-worker files and module resets, then the wrapper removes the namespace
+after its child process group has stopped, including failed test runs. Explicit state
+and artifact paths outside that namespace are unchanged. Windows and raw invocations
+outside the wrapper are unchanged; interrupted wrappers or unverified process-group
+teardown can retain their temporary files. The wrapper never sweeps old PID directories.
 
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - `pnpm test:env-mutations:report`: non-blocking report of tests/harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related env keys directly. Use it to find migration candidates for the shared test-state helper.
@@ -114,7 +153,7 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 ## Gateway and E2E
 
 - Gateway tests are included in the untargeted `pnpm test` full suite; run them alone with `pnpm test:gateway`.
-- `pnpm test:e2e`: repo E2E aggregate = `pnpm test:e2e:gateway && pnpm test:ui:e2e`.
+- `pnpm test:e2e`: repo E2E aggregate = `pnpm test:e2e:gateway && pnpm test:e2e:agent-plugin-gateway && pnpm test:ui:e2e`.
 - `pnpm test:e2e:gateway`: gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with one worker in `vitest.e2e.config.ts`; opt into parallelism with `OPENCLAW_E2E_WORKERS=<n>` (capped at 16), and enable verbose logs with `OPENCLAW_E2E_VERBOSE=1`.
 - `pnpm test:live`: provider live tests (Claude/Minimax/DeepSeek/z.ai/etc, gated by `*.live.test.ts`). Requires API keys and `LIVE=1` (or `OPENCLAW_LIVE_TEST=1`) to unskip; verbose output with `OPENCLAW_LIVE_TEST_QUIET=0`.
 
@@ -168,14 +207,14 @@ Other behavior: the runner preflights Docker by default, cleans stale OpenClaw E
 
 ### Sandbox compatibility lanes
 
-| Command                                      | Verifies                                                                                                                                                           |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `pnpm test:e2e:openshell`                    | Real OpenShell gateway, custom image build, managed sandbox lifecycle, SSH execution, remote filesystem bridge, seeded workspace, and deny/allow network policies. |
-| `pnpm test:docker:package-install`           | Packed OpenClaw npm artifact installation into a clean global prefix, then CLI version and help startup from the installed package.                                |
-| `pnpm test:docker:openai-web-search-minimal` | Mocked TLS endpoint with a private test CA, isolated Gateway startup, and web-search request handling through the configured certificate trust path.               |
-| `pnpm test:docker:browser-cdp-snapshot`      | Chromium startup, raw CDP connectivity, isolated Gateway browser commands, doctor output, and accessibility snapshot roles.                                        |
-| `pnpm test:docker:kitchen-sink-rpc`          | Installed plugin commands and catalog tools, read-only Gateway RPC traversal, authentication boundaries, channel lifecycle, and resource ceilings.                 |
-| `pnpm test:docker:kitchen-sink-plugin`       | Packaged and registry plugin install flows, plugin execution, expected unsupported-version failures, ClawHub fallback, and npm-to-ClawHub migration.               |
+| Command                                      | Verifies                                                                                                                                                                                                                                                           |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pnpm test:e2e:openshell`                    | Real OpenShell gateway, isolated control-plane workspace, custom image, remote and mirrored filesystems, eight-way mixed exec/file stress, exact host/remote inventories, failure recovery, SSH cleanup, protected host metadata, and deny/allow network policies. |
+| `pnpm test:docker:package-install`           | Packed OpenClaw npm artifact installation into a clean global prefix, then CLI version and help startup from the installed package.                                                                                                                                |
+| `pnpm test:docker:openai-web-search-minimal` | Mocked TLS endpoint with a private test CA, isolated Gateway startup, and web-search request handling through the configured certificate trust path.                                                                                                               |
+| `pnpm test:docker:browser-cdp-snapshot`      | Chromium startup, raw CDP connectivity, isolated Gateway browser commands, doctor output, and accessibility snapshot roles.                                                                                                                                        |
+| `pnpm test:docker:kitchen-sink-rpc`          | Installed plugin commands and catalog tools, read-only Gateway RPC traversal, authentication boundaries, channel lifecycle, and resource ceilings.                                                                                                                 |
+| `pnpm test:docker:kitchen-sink-plugin`       | Packaged and registry plugin install flows, plugin execution, expected unsupported-version failures, ClawHub fallback, and npm-to-ClawHub migration.                                                                                                               |
 
 ## Local PR gate
 
@@ -200,6 +239,11 @@ If `pnpm test` flakes on a loaded host, rerun once before treating it as a regre
 - `pnpm test:perf:profile:main` writes a CPU profile for the Vitest main thread (`.artifacts/vitest-main-profile`); `pnpm test:perf:profile:runner` writes CPU + heap profiles for the unit runner (`.artifacts/vitest-runner-profile`).
 - `pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json`: runs every full-suite Vitest leaf config serially and writes grouped duration data plus per-config JSON/log artifacts. Full-suite reports isolate files by default so retained module graphs and GC pauses from earlier files are not charged to later assertions; pass `-- --no-isolate` only when intentionally profiling shared-worker accumulation. `pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json` compares grouped reports after a performance-focused change.
 - Full, extension, and include-pattern shard runs update local timing data in `.artifacts/vitest-shard-timings.json`; later whole-config runs use those timings to balance slow and fast shards. Include-pattern CI shards append the shard name to the timing key, which keeps filtered shard timings visible without replacing whole-config timing data. Set `OPENCLAW_TEST_PROJECTS_TIMINGS=0` to ignore the local timing artifact.
+- `pnpm ci:timings:refit`: regenerate committed `config/ci-test-timings.json` from the last five successful main CI runs; add `--dry-run` to preview the changed-entry table. This file owns per-file UI E2E and per-profile compact-group weights, unlike the gitignored `.artifacts/vitest-shard-timings.json` whole-config timing cache. Independent CI shards use only the committed weights, never that cache. See [CI timing refits](/ci#measured-shard-weights) for the daily refresh and sampling rules.
+
+`pnpm test:extensions:memory` profiles built plugin index entries from `dist/extensions` (including nested `dist` output) and package-local `extensions/<id>/dist` output; TypeScript source entries are excluded. Root artifacts take precedence when both builds exist. Selecting an already-built plugin with `--extension <id>` reuses its output without requiring unrelated plugin builds; build the plugin package first if its output is not supplied by `pnpm build`.
+
+Native imports also need the plugin's declared dependencies and a resolvable `openclaw` host package. The profiler does not install or link dependencies: missing dependencies remain import failures in the JSON report and cause a nonzero exit.
 
 ## Benchmarks
 

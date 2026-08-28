@@ -9,7 +9,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { completeWithPreparedSimpleCompletionModel } from "openclaw/plugin-sdk/simple-completion-runtime";
+import { runHostPreparedIsolatedCompletion } from "openclaw/plugin-sdk/simple-completion-runtime";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
@@ -18,7 +18,7 @@ import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-ty
 // New runtime identity uses the `openai` provider.
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
-// Audited against @openai/codex 0.149.1 (rust-v0.149.1). These exact denies
+// Audited against @openai/codex 0.150.1 (rust-v0.150.1). These exact denies
 // either have no Codex-native equivalent or are enforced by the harness. Keep
 // the list positive and conservative: an omitted tool isolates the native surface.
 const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
@@ -60,36 +60,6 @@ type CodexAppServerAgentHarnessOptions = {
   bindingStore: CodexAppServerBindingStore;
   sessionCatalogControlFactory?: CodexSessionCatalogControlFactory;
 };
-
-type CodexHostPreparedIsolatedCompletionParams = Parameters<
-  NonNullable<AgentHarnessV2["runIsolatedCompletion"]>
->[0];
-
-async function runCodexHostPreparedIsolatedCompletion(
-  params: CodexHostPreparedIsolatedCompletionParams,
-) {
-  const timeoutSignal = AbortSignal.timeout(params.timeoutMs);
-  const signal = params.abortSignal
-    ? AbortSignal.any([params.abortSignal, timeoutSignal])
-    : timeoutSignal;
-  const assistant = await completeWithPreparedSimpleCompletionModel({
-    model: params.model,
-    auth: params.auth,
-    cfg: params.config,
-    context: {
-      systemPrompt: params.systemPrompt,
-      messages: [{ role: "user", content: params.prompt, timestamp: Date.now() }],
-      tools: [],
-    },
-    options: {
-      maxTokens: params.streamParams?.maxTokens,
-      temperature: params.streamParams?.temperature,
-      reasoning: params.thinkLevel,
-      signal,
-    },
-  });
-  return { assistant };
-}
 
 async function disposeSharedCodexAppServerClients(): Promise<void> {
   const dispose = (
@@ -273,15 +243,7 @@ export function createCodexAppServerAgentHarness(
     },
     runIsolatedCompletionV2: async (params) => {
       if (params.authorization.owner === "host") {
-        const { authorization, ...commonParams } = params;
-        return runCodexHostPreparedIsolatedCompletion({
-          ...commonParams,
-          model: authorization.model,
-          auth: authorization.auth,
-          ...(authorization.sourceAuthFingerprint
-            ? { sourceAuthFingerprint: authorization.sourceAuthFingerprint }
-            : {}),
-        });
+        return runHostPreparedIsolatedCompletion(params);
       }
       const { runCodexIsolatedCompletion } =
         await import("./src/app-server/isolated-completion.js");
@@ -292,7 +254,15 @@ export function createCodexAppServerAgentHarness(
     runIsolatedCompletion: async (params) => {
       // Keep the deprecated V1 contract on its exact host-prepared transport.
       // V2 owns native Codex auth and zero-tool attestation above.
-      return runCodexHostPreparedIsolatedCompletion(params);
+      return runHostPreparedIsolatedCompletion({
+        ...params,
+        authorization: {
+          owner: "host",
+          model: params.model,
+          auth: params.auth,
+          sourceAuthFingerprint: params.sourceAuthFingerprint,
+        },
+      });
     },
     finalizeSettledTurn: async (params) => {
       const { runCodexSettledTurnFinalization } =
@@ -318,8 +288,14 @@ export function createCodexAppServerAgentHarness(
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
     },
+    withSessionDeletion: async (params, run) => {
+      const { withCodexAppServerSessionDeletion } =
+        await import("./src/app-server/session-retirement.js");
+      params.assertCurrent();
+      return withCodexAppServerSessionDeletion(options.bindingStore, params, run);
+    },
     reset: async (params) => {
-      if (params.sessionId) {
+      if (params.sessionId && params.reason !== "deleted") {
         const [
           { reclaimCurrentCodexSessionGeneration, sessionBindingIdentity },
           { retireCodexAppServerSessionGeneration },
@@ -336,7 +312,7 @@ export function createCodexAppServerAgentHarness(
           retireCodexAppServerSessionGeneration({
             bindingStore: options.bindingStore,
             identity,
-            mode: params.reason === "deleted" ? "retire" : "reset",
+            mode: "reset",
           });
         let reset = await resetGeneration();
         if (reset === "conflict") {

@@ -1,7 +1,7 @@
 // Discord tests cover threading.starter plugin behavior.
 import { StickerFormatType } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
-import { ChannelType, type Client } from "../internal/discord.js";
+import { ChannelType, DiscordError, type Client } from "../internal/discord.js";
 import { getCachedThreadStarter, setCachedThreadStarter } from "./threading.cache.js";
 import { resolveDiscordThreadStarter } from "./threading.js";
 
@@ -69,6 +69,10 @@ function createStarterMessage(overrides: ThreadStarterRestMessage = {}): ThreadS
   };
 }
 
+function createDiscordError(status: number): DiscordError {
+  return new DiscordError(new Response(null, { status }), {});
+}
+
 function requireThreadStarter(
   result: Awaited<ReturnType<typeof resolveDiscordThreadStarter>>,
 ): ResolvedThreadStarter {
@@ -76,6 +80,13 @@ function requireThreadStarter(
     throw new Error("expected resolved Discord thread starter");
   }
   return result;
+}
+
+function requireCachedThreadStarter(value: ReturnType<typeof getCachedThreadStarter>) {
+  if (!value || value.kind !== "hit") {
+    throw new Error("expected cached Discord thread starter");
+  }
+  return value.starter;
 }
 
 function firstRestGetPath(get: ReturnType<typeof vi.fn>): unknown {
@@ -99,6 +110,7 @@ async function resolveStarter(params: {
   const result = await resolveDiscordThreadStarter({
     channel: { id: threadId },
     client,
+    accountId: "test-account",
     parentId: params.parentId ?? "parent-1",
     parentType: params.parentType ?? ChannelType.GuildText,
     resolveTimestampMs: params.resolveTimestampMs ?? (() => undefined),
@@ -119,6 +131,7 @@ describe("resolveDiscordThreadStarter", () => {
       const params = {
         channel: { id: `active-thread-${++threadIdIndex}` },
         client,
+        accountId: "test-account",
         parentId: "parent-1",
         parentType: ChannelType.GuildText,
         resolveTimestampMs: () => undefined,
@@ -148,7 +161,11 @@ describe("resolveDiscordThreadStarter", () => {
     { name: "a clock rollback before the starter was fetched", now: 999_999 },
   ])("invalidates cached thread starters at $name", ({ now }) => {
     const key = `expired-thread-${++threadIdIndex}`;
-    setCachedThreadStarter(key, { text: "stale", author: "Alice" }, 1_000_000);
+    setCachedThreadStarter(
+      key,
+      { kind: "hit", starter: { text: "stale", author: "Alice" } },
+      1_000_000,
+    );
 
     expect(getCachedThreadStarter(key, now)).toBeUndefined();
   });
@@ -158,17 +175,227 @@ describe("resolveDiscordThreadStarter", () => {
     for (let index = 0; index < 500; index += 1) {
       setCachedThreadStarter(
         `${prefix}${index}`,
-        { text: `starter-${index}`, author: "Alice" },
+        { kind: "hit", starter: { text: `starter-${index}`, author: "Alice" } },
         1_000_000,
       );
     }
 
-    expect(getCachedThreadStarter(`${prefix}0`, 1_000_001)?.text).toBe("starter-0");
-    setCachedThreadStarter(`${prefix}500`, { text: "new starter", author: "Alice" }, 1_000_002);
+    expect(requireCachedThreadStarter(getCachedThreadStarter(`${prefix}0`, 1_000_001)).text).toBe(
+      "starter-0",
+    );
+    setCachedThreadStarter(
+      `${prefix}500`,
+      { kind: "hit", starter: { text: "new starter", author: "Alice" } },
+      1_000_002,
+    );
 
-    expect(getCachedThreadStarter(`${prefix}0`, 1_000_003)?.text).toBe("starter-0");
+    expect(requireCachedThreadStarter(getCachedThreadStarter(`${prefix}0`, 1_000_003)).text).toBe(
+      "starter-0",
+    );
     expect(getCachedThreadStarter(`${prefix}1`, 1_000_003)).toBeUndefined();
-    expect(getCachedThreadStarter(`${prefix}500`, 1_000_003)?.text).toBe("new starter");
+    expect(requireCachedThreadStarter(getCachedThreadStarter(`${prefix}500`, 1_000_003)).text).toBe(
+      "new starter",
+    );
+  });
+
+  it.each([
+    { name: "a missing starter", get: () => vi.fn().mockResolvedValue(null) },
+    {
+      name: "an inaccessible starter",
+      get: () => vi.fn().mockRejectedValue(createDiscordError(403)),
+    },
+  ])("negative-caches $name for 30 seconds", async ({ get: createGet }) => {
+    vi.useFakeTimers();
+    try {
+      const now = new Date("2026-08-24T00:00:00.000Z");
+      vi.setSystemTime(now);
+      const get = createGet();
+      const client = { rest: { get } } as unknown as Client;
+      const params = {
+        channel: { id: `missing-starter-${++threadIdIndex}` },
+        client,
+        accountId: "test-account",
+        parentId: "parent-1",
+        parentType: ChannelType.GuildText,
+        resolveTimestampMs: () => undefined,
+      };
+
+      await expect(resolveDiscordThreadStarter(params)).resolves.toBeNull();
+      await expect(resolveDiscordThreadStarter(params)).resolves.toBeNull();
+      expect(get).toHaveBeenCalledOnce();
+
+      vi.setSystemTime(now.getTime() + 30_000);
+      await expect(resolveDiscordThreadStarter(params)).resolves.toBeNull();
+      expect(get).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces concurrent starter lookups for the same account and thread", async () => {
+    let releaseGet!: (message: ThreadStarterRestMessage | null) => void;
+    const response = new Promise<ThreadStarterRestMessage | null>((resolve) => {
+      releaseGet = resolve;
+    });
+    const get = vi.fn(() => response);
+    const client = { rest: { get } } as unknown as Client;
+    const params = {
+      channel: { id: `concurrent-starter-${++threadIdIndex}` },
+      client,
+      accountId: "test-account",
+      parentId: "parent-1",
+      parentType: ChannelType.GuildText,
+      resolveTimestampMs: () => undefined,
+    };
+
+    const first = resolveDiscordThreadStarter(params);
+    const second = resolveDiscordThreadStarter(params);
+    expect(get).toHaveBeenCalledOnce();
+
+    releaseGet(null);
+    await expect(Promise.all([first, second])).resolves.toEqual([null, null]);
+    expect(get).toHaveBeenCalledOnce();
+  });
+
+  it("does not coalesce missing metadata with a lookup that has a parent id", async () => {
+    const get = vi.fn().mockResolvedValue(createStarterMessage({ content: "resolved" }));
+    const client = { rest: { get } } as unknown as Client;
+    const params = {
+      channel: { id: `metadata-single-flight-${++threadIdIndex}` },
+      client,
+      accountId: "test-account",
+      parentType: ChannelType.GuildText,
+      resolveTimestampMs: () => undefined,
+    };
+
+    const missingMetadata = resolveDiscordThreadStarter(params);
+    const completeMetadata = resolveDiscordThreadStarter({ ...params, parentId: "parent-1" });
+
+    await expect(missingMetadata).resolves.toBeNull();
+    await expect(completeMetadata).resolves.toMatchObject({ text: "resolved" });
+    expect(get).toHaveBeenCalledOnce();
+  });
+
+  it("does not negative-cache transient REST failures", async () => {
+    const get = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary network failure"))
+      .mockResolvedValue(createStarterMessage({ content: "recovered starter" }));
+    const client = { rest: { get } } as unknown as Client;
+    const params = {
+      channel: { id: `transient-starter-${++threadIdIndex}` },
+      client,
+      accountId: "test-account",
+      parentId: "parent-1",
+      parentType: ChannelType.GuildText,
+      resolveTimestampMs: () => undefined,
+    };
+
+    await expect(resolveDiscordThreadStarter(params)).resolves.toBeNull();
+    await expect(resolveDiscordThreadStarter(params)).resolves.toMatchObject({
+      text: "recovered starter",
+    });
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it("scopes negative cache entries to the Discord account", async () => {
+    const deniedGet = vi.fn().mockRejectedValue(createDiscordError(403));
+    const allowedGet = vi.fn().mockResolvedValue(createStarterMessage({ content: "visible" }));
+    const threadId = `account-scoped-starter-${++threadIdIndex}`;
+    const baseParams = {
+      channel: { id: threadId },
+      parentId: "parent-1",
+      parentType: ChannelType.GuildText,
+      resolveTimestampMs: () => undefined,
+    };
+
+    await expect(
+      resolveDiscordThreadStarter({
+        ...baseParams,
+        client: { rest: { get: deniedGet } } as unknown as Client,
+        accountId: "account-a",
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      resolveDiscordThreadStarter({
+        ...baseParams,
+        client: { rest: { get: allowedGet } } as unknown as Client,
+        accountId: "account-b",
+      }),
+    ).resolves.toMatchObject({ text: "visible" });
+    expect(deniedGet).toHaveBeenCalledOnce();
+    expect(allowedGet).toHaveBeenCalledOnce();
+  });
+
+  it("does not cache missing parent metadata", async () => {
+    const get = vi.fn().mockResolvedValue(createStarterMessage({ content: "resolved" }));
+    const client = { rest: { get } } as unknown as Client;
+    const channel = { id: `metadata-starter-${++threadIdIndex}` };
+
+    await expect(
+      resolveDiscordThreadStarter({
+        channel,
+        client,
+        accountId: "test-account",
+        parentType: ChannelType.GuildText,
+        resolveTimestampMs: () => undefined,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      resolveDiscordThreadStarter({
+        channel,
+        client,
+        accountId: "test-account",
+        parentId: "parent-1",
+        parentType: ChannelType.GuildText,
+        resolveTimestampMs: () => undefined,
+      }),
+    ).resolves.toMatchObject({ text: "resolved" });
+    expect(get).toHaveBeenCalledOnce();
+  });
+
+  it("resolves thread starters when their parent type is unavailable", async () => {
+    const threadId = `unknown-parent-type-starter-${++threadIdIndex}`;
+    const get = vi.fn().mockResolvedValue(createStarterMessage({ content: "visible starter" }));
+
+    await expect(
+      resolveDiscordThreadStarter({
+        channel: { id: threadId },
+        client: { rest: { get } } as unknown as Client,
+        accountId: "test-account",
+        parentId: "parent-1",
+        resolveTimestampMs: () => undefined,
+      }),
+    ).resolves.toMatchObject({ text: "visible starter" });
+    expect(get).toHaveBeenCalledExactlyOnceWith(`/channels/parent-1/messages/${threadId}`);
+  });
+
+  it("keeps parent-route misses separate when forum metadata recovers", async () => {
+    const threadId = `recovering-forum-starter-${++threadIdIndex}`;
+    const get = vi.fn(async (path: string) =>
+      path === `/channels/${threadId}/messages/${threadId}`
+        ? createStarterMessage({ content: "recovered forum starter" })
+        : null,
+    );
+    const client = { rest: { get } } as unknown as Client;
+    const params = {
+      channel: { id: threadId },
+      client,
+      accountId: "test-account",
+      parentId: "parent-1",
+      resolveTimestampMs: () => undefined,
+    };
+
+    await expect(
+      resolveDiscordThreadStarter({ ...params, parentType: undefined }),
+    ).resolves.toBeNull();
+    expect(get).toHaveBeenCalledExactlyOnceWith(`/channels/parent-1/messages/${threadId}`);
+
+    await expect(
+      resolveDiscordThreadStarter({ ...params, parentType: ChannelType.GuildForum }),
+    ).resolves.toMatchObject({ text: "recovered forum starter" });
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenNthCalledWith(2, `/channels/${threadId}/messages/${threadId}`);
   });
 
   it("falls back to joined embed title and description when content is empty", async () => {

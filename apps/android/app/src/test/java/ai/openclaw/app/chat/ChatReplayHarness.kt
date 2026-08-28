@@ -20,6 +20,7 @@ internal fun CoroutineScope.createChatController(
   currentDefaultAgentId: () -> String? = { "main" },
   currentDefaultAgentRevision: () -> Long = { 0L },
   gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
+  gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null },
   recordModelRecent: (String) -> Unit = {},
   onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
   onOfflineDefaultAgentRestored: (String) -> Unit = {},
@@ -49,6 +50,7 @@ internal fun CoroutineScope.createChatController(
     currentDefaultAgentId = currentDefaultAgentId,
     currentDefaultAgentRevision = currentDefaultAgentRevision,
     gatewayAdvertisesMethod = gatewayAdvertisesMethod,
+    gatewayAdvertisesCapability = gatewayAdvertisesCapability,
     recordModelRecent = recordModelRecent,
     onSessionDeleted = onSessionDeleted,
     onOfflineDefaultAgentRestored = onOfflineDefaultAgentRestored,
@@ -62,6 +64,7 @@ internal class ChatControllerTestSetup(
   val requests = mutableListOf<Pair<String, String?>>()
   var cacheScope: () -> ChatCacheScope? = { null }
   var gatewayAdvertisesMethod: (method: String) -> Boolean? = { null }
+  var gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null }
   var recordModelRecent: (String) -> Unit = {}
 
   private val handlers = mutableMapOf<String, suspend (String?) -> String>()
@@ -84,6 +87,7 @@ internal class ChatControllerTestSetup(
     scope.createChatController(
       cacheScope = cacheScope,
       gatewayAdvertisesMethod = gatewayAdvertisesMethod,
+      gatewayAdvertisesCapability = gatewayAdvertisesCapability,
       recordModelRecent = recordModelRecent,
       requestGateway = { method, paramsJson ->
         requests += method to paramsJson

@@ -1004,78 +1004,91 @@ describe("runSetupWizard", () => {
   });
 
   it.each([
-    { name: "token", optionKey: "remoteToken", remoteKey: "token" },
-    { name: "password", optionKey: "remotePassword", remoteKey: "password" },
-  ])("seeds interactive remote $name auth from command flags", async ({ optionKey, remoteKey }) => {
-    const remoteCredential = "REDACTED";
-    readConfigFileSnapshot.mockResolvedValueOnce({
-      path: "/tmp/.openclaw/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      resolved: {},
-      sourceConfigBeforeMigrations: {},
-      valid: true,
-      config: {
-        gateway: {
-          remote: {
-            url: "wss://stored.example.com:18789",
-            token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
-            password: { source: "env", provider: "default", id: "STORED_GATEWAY_PASSWORD" },
+    { name: "token", optionKey: "remoteToken", remoteKey: "token", hasStoredUrl: true },
+    { name: "password", optionKey: "remotePassword", remoteKey: "password", hasStoredUrl: true },
+    {
+      name: "token without a saved endpoint",
+      optionKey: "remoteToken",
+      remoteKey: "token",
+      hasStoredUrl: false,
+    },
+  ])(
+    "seeds interactive remote $name auth from command flags",
+    async ({ optionKey, remoteKey, hasStoredUrl }) => {
+      const storedUrl = hasStoredUrl ? "wss://stored.example.com:18789" : undefined;
+      const remoteCredential = "REDACTED";
+      readConfigFileSnapshot.mockResolvedValueOnce({
+        path: "/tmp/.openclaw/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        resolved: {},
+        sourceConfigBeforeMigrations: {},
+        valid: true,
+        config: {
+          gateway: {
+            remote: {
+              url: storedUrl,
+              token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
+              password: { source: "env", provider: "default", id: "STORED_GATEWAY_PASSWORD" },
+            },
           },
         },
-      },
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
-    });
-    const prompter = buildWizardPrompter({});
-    const runtime = createRuntime();
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      });
+      const prompter = buildWizardPrompter({});
+      const runtime = createRuntime();
 
-    if (remoteKey === "password") {
-      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "ambient-gateway-token");
-    }
-    try {
-      await runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "advanced",
-          mode: "remote",
-          remoteUrl: " wss://flag.example.com:18789 ",
-          [optionKey]: ` ${remoteCredential} `,
-        },
-        runtime,
-        prompter,
-      );
-    } finally {
       if (remoteKey === "password") {
-        vi.unstubAllEnvs();
+        vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "ambient-gateway-token");
       }
-    }
-
-    expect(probeGatewayReachable).toHaveBeenCalledWith({
-      url: "wss://flag.example.com:18789",
-      token: remoteKey === "token" ? remoteCredential : undefined,
-      ...(remoteKey === "password" ? { password: remoteCredential } : {}),
-    });
-    expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gateway: expect.objectContaining({
-          remote: {
-            url: "wss://flag.example.com:18789",
-            token: remoteKey === "token" ? remoteCredential : undefined,
-            password: remoteKey === "password" ? remoteCredential : undefined,
+      try {
+        await runSetupWizard(
+          {
+            acceptRisk: true,
+            flow: "advanced",
+            mode: "remote",
+            remoteUrl: " wss://flag.example.com:18789 ",
+            [optionKey]: ` ${remoteCredential} `,
           },
+          runtime,
+          prompter,
+        );
+      } finally {
+        if (remoteKey === "password") {
+          vi.unstubAllEnvs();
+        }
+      }
+
+      expect(probeGatewayReachable).toHaveBeenCalledWith({
+        url: "wss://flag.example.com:18789",
+        token: remoteKey === "token" ? remoteCredential : undefined,
+        ...(remoteKey === "password" ? { password: remoteCredential } : {}),
+      });
+      expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          gateway: expect.objectContaining({
+            remote: {
+              url: "wss://flag.example.com:18789",
+              token: remoteKey === "token" ? remoteCredential : undefined,
+              password: remoteKey === "password" ? remoteCredential : undefined,
+            },
+          }),
         }),
-      }),
-      expect.any(Object),
-      {
+        expect.any(Object),
+        expect.any(Object),
+      );
+      expect(
+        getMockCallArg(promptRemoteGatewayConfig, 0, 2, "remote prompt options"),
+      ).toStrictEqual({
         secretInputMode: undefined,
-        edgeAuthOriginUrl: "wss://stored.example.com:18789",
-      },
-    );
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteCredential));
-  });
+        remoteOriginUrl: storedUrl,
+      });
+      expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteCredential));
+    },
+  );
 
   it("uses the configured remote password for the setup reachability probe", async () => {
     const remotePassword = "remote-password"; // pragma: allowlist secret
@@ -1263,7 +1276,7 @@ describe("runSetupWizard", () => {
       expect.any(Object),
       {
         secretInputMode: undefined,
-        edgeAuthOriginUrl: "wss://stored.example.com:18789",
+        remoteOriginUrl: "wss://stored.example.com:18789",
       },
     );
   });

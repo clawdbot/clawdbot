@@ -53,6 +53,7 @@ async function querySystemManager(unitName: string): Promise<SystemSystemdOwners
   const detail = `${result.stderr} ${result.stdout}`.trim();
   const normalizedDetail = detail.toLowerCase();
   if (
+    result.termination === "exit" &&
     normalizedDetail.includes(unitName.toLowerCase()) &&
     /not[- ]found|could not be found/i.test(normalizedDetail)
   ) {

@@ -29,7 +29,7 @@ import {
   sessionRowAgentId,
 } from "./session-organizer-batch-mutations.ts";
 import type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
-import { rememberSessionGroup } from "./session-organizer-catalog.ts";
+import { rememberSessionGroup, type SessionGroupActionHost } from "./session-organizer-catalog.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
@@ -58,9 +58,7 @@ export async function patchSession(
     key: session.key,
     ...patch,
     agentId,
-    ...(typeof patch.archived === "boolean" && session.sessionId
-      ? { expectedSessionId: session.sessionId }
-      : {}),
+    ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
   };
   if (typeof patch.archived === "boolean" && !session.sessionId?.trim()) {
     host.sessionData.publishSessionMutationError(
@@ -77,7 +75,7 @@ export async function patchSession(
   try {
     const patched = await scope.sessions.patch(session.key, patch, {
       agentId,
-      ...(typeof patch.archived === "boolean" ? { expectedSessionId: session.sessionId } : {}),
+      ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
       ...(refresh.deferListRefresh ? { deferListRefresh: true } : {}),
     });
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -164,9 +162,9 @@ export async function archiveSessionWithUndo(
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
 ) {
-  scope.sessions.setArchiveVisibility(session.key, "pending");
+  scope.sessions.setArchivePending(session.key, true);
   const result = await patchSession(host, session, { archived: true }, scope);
-  scope.sessions.setArchiveVisibility(session.key, result === "completed" ? "archived" : undefined);
+  scope.sessions.setArchivePending(session.key, false);
   if (result !== "completed" || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
@@ -429,61 +427,55 @@ export async function createSessionGroup(
   sessions: readonly SidebarRecentSession[],
   scope: SidebarSessionMutationScope,
 ): Promise<SidebarSessionMutationResult> {
+  if (sessions.some((session) => !session.sessionId)) {
+    host.sessionData.publishSessionMutationError(scope, t("common.refresh"));
+    return "failed";
+  }
   const remembered = await rememberSessionGroup(host, name, scope);
   if (remembered !== "completed") {
     return remembered;
   }
-  // The dialog no longer blocks, so a captured row can be deleted while the
-  // catalog write is in flight, and sessions.patch would recreate it. Re-resolve
-  // every target against the current list, as the Sessions-page path does.
-  const targets = sessions.flatMap((session) => {
-    const current = host.findSidebarSessionByKey(session.key);
-    return current ? [current] : [];
-  });
-  if (targets.length > 0) {
-    const moved =
-      targets.length === 1
-        ? await patchSession(host, targets[0]!, { category: name }, scope)
-        : await patchSessions(host, targets, { category: name }, scope);
-    // Rows that left the list are absent from `targets`, so patching the
-    // remainder reports success for a selection that was only partly applied.
-    // Closing on that would leave the skipped rows unaccounted for, so the
-    // partial outcome is named here; it is terminal, as the group already exists.
-    if (moved === "completed" && targets.length < sessions.length) {
-      showToast({ message: t("sessionsView.newGroupMovePartial") });
-    }
-    return moved;
+  // The Gateway checks the identities captured with the action. A bounded
+  // roster can page them out or replace a key, so it cannot authorize the move.
+  if (sessions.length > 0) {
+    return sessions.length === 1
+      ? patchSession(host, sessions[0]!, { category: name }, scope)
+      : patchSessions(host, sessions, { category: name }, scope);
   }
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
-  // A header-created group starts empty and needs no notice. Rows that were
-  // requested but resolved to nothing are a partial outcome: the group landed
-  // and the moves did not. The sidebar list is a bounded projection, so this is
-  // not proof the sessions are gone — say so rather than closing on a silent
-  // non-outcome the operator cannot account for.
-  if (sessions.length > 0) {
-    showToast({ message: t("sessionsView.newGroupMoveSkipped") });
-  }
-  // Re-render so the new section shows up.
+  // A header-created group starts empty and needs no assignment.
   host.requestUpdate();
   return "completed";
 }
 
 export async function assignSessionCategory(
-  host: SessionOrganizerControllerHost,
-  session: SidebarRecentSession,
+  host: SessionGroupActionHost,
+  session: SessionActionRow,
   category: string | null,
   scope: SidebarSessionMutationScope,
   patch: { pinned?: boolean } = {},
+  options: { resolveSession?: () => SessionActionRow | null } = {},
 ): Promise<void> {
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
+  const catalogChanged = Boolean(category && !host.knownSessionGroups().includes(category));
   if (category && (await rememberSessionGroup(host, category, scope)) !== "completed") {
     return;
   }
-  await patchSession(host, session, { category, ...patch }, scope);
+  const currentSession = options.resolveSession ? options.resolveSession() : session;
+  if (!currentSession) {
+    showToast({
+      message: t(catalogChanged ? "sessionsView.newGroupMoveSkipped" : "common.refresh"),
+    });
+    return;
+  }
+  if ((currentSession.category ?? null) === category && patch.pinned === undefined) {
+    return;
+  }
+  await patchSession(host, currentSession, { category, ...patch }, scope);
 }
 
 export async function forkSession(

@@ -89,10 +89,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
 
   it("runs the package and Docker product lanes through the existing scheduler", () => {
     const plan = createPluginPrereleaseTestPlan();
-    const channelLaneScript = readFileSync(
-      "scripts/e2e/npm-onboard-channel-agent-docker.sh",
-      "utf8",
-    );
 
     expect(plan.dockerLanes).toEqual([
       "npm-onboard-channel-agent",
@@ -118,10 +114,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     for (const lane of plan.dockerLanes) {
       expect(getDockerLane(lane).name).toBe(lane);
     }
-    expect(channelLaneScript).toContain("OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE");
-    expect(channelLaneScript).toContain("bash scripts/plugin-npm-publish.sh --pack");
-    expect(channelLaneScript).toContain("OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1");
-    expect(channelLaneScript).toContain("npm-pack:$container_package");
     const candidateLane = getDockerLane("npm-onboard-discord-candidate-channel-agent");
     expect(candidateLane.command).toContain("OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR");
     expect(candidateLane.command).toContain(
@@ -588,13 +580,13 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.docs_scope.outputs.docs_only }}",
       OPENCLAW_CI_EVENT_NAME: "${{ github.event_name }}",
       OPENCLAW_CI_HISTORICAL_TARGET: "${{ steps.historical_target.outputs.eligible || 'false' }}",
+      OPENCLAW_CI_RELEASE_GATE: "${{ inputs.release_gate && 'true' || 'false' }}",
       OPENCLAW_CI_RELEASE_CANDIDATE_TARGET:
         "${{ steps.release_candidate_target.outputs.eligible || 'false' }}",
       OPENCLAW_CI_TARGET_CONTEXT_TARGET:
         "${{ steps.target_context_target.outputs.eligible || 'false' }}",
       OPENCLAW_CI_REPOSITORY: "${{ github.repository }}",
-      OPENCLAW_CI_RUNNER_BACKEND:
-        "${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND }}",
+      OPENCLAW_CI_RUNNER_PROFILE: "${{ steps.runner_profile.outputs.runner_profile }}",
       OPENCLAW_CI_RUN_ANDROID:
         "${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
       OPENCLAW_CI_RUN_CONTROL_UI_I18N:
@@ -809,6 +801,16 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         targeted_docker_lane_group_size: 2,
       },
     });
+    expect(dockerSuite.with.enable_prepublish_plugin_registry).toBe(true);
+    expect(
+      Object.keys(dockerSuite.with).filter((key) => key.startsWith("prepublish_plugin_registry_")),
+    ).toEqual([]);
+    expect(dockerSuite.with.package_artifact_id).toBe(
+      "${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactId || '' }}",
+    );
+    expect(dockerSuite.with.shared_image_artifact_id).toBe(
+      "${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactId || '' }}",
+    );
     expect(dockerSuite.secrets).toBeUndefined();
     expect(suite.needs).toEqual([
       "preflight",

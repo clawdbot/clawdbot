@@ -36,7 +36,6 @@ export function createE2EVitestConfig(env: Record<string, string | undefined> = 
     test: {
       ...baseTest,
       maxWorkers: e2eWorkers,
-      reporters: ["verbose"],
       silent: !verboseE2E,
       globalSetup: [resolveRepoRootPath("test/vitest/vitest.e2e.global-setup.ts")],
       setupFiles: [

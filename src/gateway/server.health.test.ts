@@ -23,13 +23,14 @@ const FINGERPRINT_TIMEOUT_MS = 3_000;
 const CLI_PRESENCE_TIMEOUT_MS = 3_000;
 
 let harness: GatewayServerHarness;
+let harnessClose: Promise<void> | undefined;
 
 beforeAll(async () => {
   harness = await startGatewayServerHarness();
 });
 
 afterAll(async () => {
-  await harness.close();
+  await (harnessClose ?? harness.close());
 });
 
 describe("gateway server health/presence", () => {
@@ -186,20 +187,6 @@ describe("gateway server health/presence", () => {
     ws.close();
   });
 
-  test("shutdown event is broadcast on close", { timeout: PRESENCE_EVENT_TIMEOUT_MS }, async () => {
-    const localHarness = await startGatewayServerHarness();
-    const { ws } = await localHarness.openClient();
-    const shutdownP = onceMessage(
-      ws,
-      (o) => o.type === "event" && o.event === "shutdown",
-      SHUTDOWN_EVENT_TIMEOUT_MS,
-    );
-    await localHarness.close();
-    const evt = await shutdownP;
-    const evtPayload = evt.payload as { reason?: unknown } | undefined;
-    expect(evtPayload?.reason).toBe("gateway stopping");
-  });
-
   test(
     "presence broadcast reaches multiple clients",
     { timeout: PRESENCE_EVENT_TIMEOUT_MS },
@@ -312,5 +299,20 @@ describe("gateway server health/presence", () => {
     expect(entries.map((entry) => entry.instanceId)).not.toContain(cliId);
 
     ws.close();
+  });
+
+  // Close the suite owner last; another startup would reset process-wide config under live peers.
+  test("shutdown event is broadcast on close", { timeout: PRESENCE_EVENT_TIMEOUT_MS }, async () => {
+    const { ws } = await harness.openClient();
+    const shutdownP = onceMessage(
+      ws,
+      (o) => o.type === "event" && o.event === "shutdown",
+      SHUTDOWN_EVENT_TIMEOUT_MS,
+    );
+    harnessClose = harness.close();
+    await harnessClose;
+    const evt = await shutdownP;
+    const evtPayload = evt.payload as { reason?: unknown } | undefined;
+    expect(evtPayload?.reason).toBe("gateway stopping");
   });
 });

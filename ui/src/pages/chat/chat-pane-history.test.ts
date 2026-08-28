@@ -1,15 +1,27 @@
 /* @vitest-environment jsdom */
 
+import { html } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionCatalogTranscriptItem } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
-import { loadChatHistory } from "./chat-history.ts";
+import { handleChatGatewayEvent } from "./chat-gateway.ts";
+import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
+import { ChatPane } from "./chat-pane-render.ts";
 import { nativeHistoryMessageIdentity } from "./chat-pane-shared.ts";
+import {
+  createInitializationContext,
+  createSessionCapabilityFixture,
+} from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { createPageState } from "./chat-state-page.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
+import type { ChatProps } from "./chat-view.ts";
+import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 type TestChatPane = HTMLElement & {
@@ -40,7 +52,7 @@ type TestChatPane = HTMLElement & {
   transcriptScrollTop: number | null;
   transcript: {
     activeSessionKey: string | null;
-    pendingScrollOffsetFor: (sessionKey: string) => number | null;
+    readonly scrollElement: HTMLDivElement | null;
     revealMessage: (messageId: string) => boolean;
     scrollToOffset: (offset: number) => void;
   };
@@ -98,15 +110,12 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
     chatScrollGeneration: 0,
     chatScrollCommitCleanup: null,
     chatScrollFrame: null,
-    chatScrollGuardFrame: null,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
     chatNewMessagesBelow: false,
-    chatIsProgrammaticScroll: false,
-    chatProgrammaticScrollTarget: 0,
     handleChatScroll: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
   } as unknown as ChatPageHost;
@@ -142,6 +151,7 @@ function appendChatThread(
   Object.defineProperty(thread, "clientHeight", { value: options.clientHeight ?? 500 });
   Object.defineProperty(thread, "scrollHeight", { value: options.scrollHeight ?? 2_000 });
   pane.append(thread);
+  vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
   return thread;
 }
 
@@ -157,6 +167,135 @@ function createNativeShowEarlierPane(request: ReturnType<typeof vi.fn>, scrollTo
 }
 
 describe("chat pane native history pagination", () => {
+  it("preserves the steer split through the refresh callback and later cumulative deltas", async () => {
+    class RefreshChatPane extends ChatPane {
+      chatProps: ChatProps | undefined;
+
+      initialize(context: ApplicationContext) {
+        this.context = context;
+        this.state = createPageState(
+          context,
+          { afterCommit: () => () => {}, invalidate: () => {} },
+          this,
+        );
+        return this.state;
+      }
+
+      protected override renderChatPaneLayout(params: { chatProps: ChatProps }) {
+        this.chatProps = params.chatProps;
+        return html``;
+      }
+    }
+    customElements.define("openclaw-chat-refresh-regression", RefreshChatPane);
+    const pane = document.createElement("openclaw-chat-refresh-regression") as RefreshChatPane;
+    const history = createDeferred<ChatHistoryResult>();
+    const request = vi.fn(() => history.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context: ApplicationContext = {
+      ...createInitializationContext(),
+      sessions: createSessionCapabilityFixture({
+        state: { result: null, agentId: "main", modelOverrides: {} },
+        think: () => undefined,
+        reconcile: vi.fn(),
+      }),
+    };
+    context.gateway.snapshot.client = client;
+    context.gateway.snapshot.phase = "connected";
+    const state = pane.initialize(context);
+    state.client = client;
+    state.connected = true;
+    state.sessionKey = "agent:main:refresh";
+    state.chatRunId = "run-refresh";
+    const original = {
+      role: "user",
+      content: "Start working.",
+      __openclaw: { id: "original-refresh", idempotencyKey: "run-refresh:user", seq: 1 },
+    };
+    const steer = {
+      role: "user",
+      content: "Also check the result.",
+      __openclaw: {
+        id: "steer-refresh",
+        idempotencyKey: "steer-refresh:user",
+        steerTargetRunId: "run-refresh",
+        seq: 3,
+      },
+    };
+    state.chatMessages = [original];
+    const delta = (text: string) =>
+      handleChatGatewayEvent(state, {
+        state: "delta",
+        runId: "run-refresh",
+        sessionKey: state.sessionKey,
+        message: { role: "assistant", content: text },
+      });
+    const renderedText = () =>
+      buildChatItems({
+        paneId: "refresh-regression",
+        sessionKey: state.sessionKey,
+        runId: state.chatRunId,
+        messages: state.chatMessages,
+        toolMessages: state.chatToolMessages,
+        streamSegments: state.chatStreamSegments,
+        stream: state.chatStream,
+        streamStartedAt: state.chatStreamStartedAt,
+        showToolCalls: true,
+      }).flatMap((item) =>
+        item.kind === "group"
+          ? item.messages.map(({ message }) => extractText(message)?.trim())
+          : item.kind === "stream"
+            ? [item.text.trim()]
+            : [],
+      );
+    delta("Saved opening.");
+    applySessionMessagePayload(state, { message: steer }, true, {
+      kind: "live",
+      activeRunId: "run-refresh",
+    });
+    delta("Saved opening. Still working.");
+    const expected = [
+      "Start working.",
+      "Saved opening.",
+      "Also check the result.",
+      "Still working.",
+    ];
+
+    try {
+      expect(renderedText()).toEqual(expected);
+      pane.render();
+      expect(pane.chatProps).toBeDefined();
+      pane.chatProps!.onRefresh();
+      expect(renderedText()).toEqual(expected);
+      history.resolve({
+        messages: [
+          original,
+          {
+            role: "assistant",
+            content: "Saved opening.",
+            __openclaw: { id: "saved-refresh", idempotencyKey: "run-refresh", seq: 2 },
+          },
+          steer,
+        ],
+        sessionInfo: {
+          key: state.sessionKey,
+          kind: "direct",
+          updatedAt: 4,
+          status: "running",
+          hasActiveRun: true,
+          activeRunIds: ["run-refresh"],
+        },
+        inFlightRun: { runId: "run-refresh", text: "Saved opening. Still working." },
+      });
+      await vi.waitFor(() => expect(state.chatLoading).toBe(false));
+      expect(renderedText()).toEqual(expected);
+      delta("Saved opening. Still working. More progress.");
+      expect(renderedText()).toEqual([...expected.slice(0, -1), "Still working. More progress."]);
+    } finally {
+      state.connected = false;
+      history.resolve({ messages: [] });
+    }
+  });
+
   it("resolves an unloaded reply preview through chat.message.get", async () => {
     const message = {
       role: "assistant",
@@ -176,6 +315,87 @@ describe("chat pane native history pagination", () => {
       messageId: "source-message",
       maxChars: 500,
     });
+  });
+
+  it.each(["reconnect", "replacement client"] as const)(
+    "retires a resolved reply preview after %s",
+    async (transition) => {
+      const oldMessage = { role: "assistant", content: "Previous connection's answer" };
+      const newMessage = { role: "assistant", content: "Current connection's answer" };
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, message: oldMessage })
+        .mockResolvedValueOnce({ ok: true, message: newMessage });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+
+      pane.requestReplyMessage("source-message");
+      await vi.waitFor(() => expect(pane.readReplyMessage("source-message")).toBe(oldMessage));
+      if (transition === "reconnect") {
+        pane.connectionGeneration += 1;
+        state.connectionEpoch = pane.connectionGeneration;
+      } else {
+        const replacement = { request } as unknown as GatewayBrowserClient;
+        state.client = replacement;
+        pane.connectedClient = replacement;
+        pane.context.gateway.snapshot.client = replacement;
+      }
+
+      expect(pane.readReplyMessage("source-message")).toBeUndefined();
+      pane.requestReplyMessage("source-message");
+      await vi.waitFor(() => expect(pane.readReplyMessage("source-message")).toBe(newMessage));
+      expect(request).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(["success", "failure"] as const)(
+    "ignores an obsolete reply lookup %s while a reconnected lookup is pending",
+    async (outcome) => {
+      const stale = createDeferred<{ ok: true; message: unknown }>();
+      const fresh = createDeferred<{ ok: true; message: unknown }>();
+      const currentMessage = { role: "assistant", content: "Current answer" };
+      const request = vi.fn().mockReturnValueOnce(stale.promise).mockReturnValueOnce(fresh.promise);
+      const client = { request } as unknown as GatewayBrowserClient;
+      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+
+      pane.requestReplyMessage("source-message");
+      pane.connectionGeneration += 1;
+      state.connectionEpoch = pane.connectionGeneration;
+      pane.requestReplyMessage("source-message");
+      expect(request).toHaveBeenCalledTimes(2);
+      if (outcome === "success") {
+        stale.resolve({ ok: true, message: { role: "assistant", content: "Obsolete answer" } });
+      } else {
+        stale.reject(new Error("Previous connection unavailable"));
+      }
+      await stale.promise.catch(() => {});
+      expect(pane.readReplyMessage("source-message")).toBeUndefined();
+      fresh.resolve({ ok: true, message: currentMessage });
+      await vi.waitFor(() => expect(pane.readReplyMessage("source-message")).toBe(currentMessage));
+      pane.requestReplyMessage("source-message");
+      expect(request).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("retries a previously unavailable reply source after reconnect", async () => {
+    const message = { role: "assistant", content: "Source is available again" };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, unavailableReason: "not_found" })
+      .mockResolvedValueOnce({ ok: true, message });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+
+    pane.requestReplyMessage("source-message");
+    await Promise.resolve();
+    pane.requestReplyMessage("source-message");
+    expect(request).toHaveBeenCalledOnce();
+    pane.connectionGeneration += 1;
+    state.connectionEpoch = pane.connectionGeneration;
+    pane.requestReplyMessage("source-message");
+
+    await vi.waitFor(() => expect(pane.readReplyMessage("source-message")).toBe(message));
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("pages backward until a clicked reply target is loaded, then reveals it", async () => {
@@ -463,6 +683,7 @@ describe("chat pane native history pagination", () => {
     sentinel.className = "chat-history-sentinel";
     thread.append(sentinel);
     pane.append(thread);
+    vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
     const observe = vi.fn();
     class FakeIntersectionObserver {
       constructor(private readonly callback: IntersectionObserverCallback) {}
@@ -522,6 +743,7 @@ describe("chat pane native history pagination", () => {
     sentinel.className = "chat-history-sentinel";
     thread.append(sentinel);
     pane.append(thread);
+    vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
     const observe = vi.fn();
     const disconnect = vi.fn();
     const construct = vi.fn();

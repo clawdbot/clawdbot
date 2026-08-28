@@ -91,6 +91,24 @@ Set `autoJoin: "allowlist"` plus `autoJoinAllowlist` to restrict accepted invite
 }
 ```
 
+### Group join introductions
+
+When the bot joins an allowed group room, it posts one introduction grounded in
+the room name, topic, and up to 100 readable recent room messages. If reading
+history fails, the introduction uses only available metadata and does not invent
+room activity.
+
+Introductions are enabled by default. Set `channels.matrix.joinIntro: false` to
+disable them, or use `channels.matrix.accounts.<accountId>.joinIntro` to override
+one account. Direct rooms never receive introductions. Only an actual join
+transition triggers one: an unaccepted invite, a startup snapshot of an existing
+room, or a profile update while already joined does not. This does not change
+[`autoJoin`](#auto-join), which defaults to `"off"`.
+
+See [group join introductions](/channels#group-join-introductions) for room
+admission, once-per-room behavior, and the no-tools turn that treats room content
+as untrusted.
+
 ### Allowlist target formats
 
 Matrix user IDs are case-sensitive. Copy the exact `@user:server` value Matrix reports for every allowlist, approver, and approval-target field. If an existing config used different casing, update it manually; OpenClaw cannot safely infer or rewrite the intended account because case-distinct IDs can identify different users.
@@ -341,6 +359,8 @@ openclaw matrix account add \
 openclaw matrix verify status
 openclaw matrix verify status --include-recovery-key --json
 ```
+
+With `--include-recovery-key`, text output confirms when a raw recovery key is available and directs you to add `--json`. Text output never prints the key itself; keep JSON output containing a recovery key private.
 
 `verify status` reports three independent trust signals (`--verbose` shows all of them):
 
@@ -885,6 +905,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 
 ### Reply behavior
 
+- `joinIntro`: introduce when the bot joins an allowed group room. Default: `true`. Per-account override: `accounts.<accountId>.joinIntro`.
 - `replyToMode`: `"off"` (default), `"first"`, `"all"`, or `"batched"`.
 - `threadReplies`: `"off"` (top-level default resolves to `"inbound"` unless explicitly set), `"inbound"`, or `"always"`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.

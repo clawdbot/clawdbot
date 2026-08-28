@@ -637,7 +637,7 @@ test("session reads find a retired store only reachable through its deterministi
   expect(await listAgentIdsViaRpc()).toEqual(["main"]);
 });
 
-test("session reads still open stores for the default and configured agents", async () => {
+test("session reads do not provision missing stores for default or configured agents", async () => {
   await setAgentsConfig({ list: [{ id: "main", default: true }, { id: "work" }] });
   for (const agentId of ["main", "work"]) {
     const result = await directSessionReq<{ session: unknown }>("sessions.describe", {
@@ -651,12 +651,14 @@ test("session reads still open stores for the default and configured agents", as
           env: { OPENCLAW_STATE_DIR: requireStateDir() },
         }),
       ),
-    ).toBe(true);
+    ).toBe(false);
   }
 
   expect(
     listOpenClawRegisteredAgentDatabases({
       env: { OPENCLAW_STATE_DIR: requireStateDir() },
-    }).map((entry) => entry.agentId),
-  ).toEqual(expect.arrayContaining(["main", "work"]));
+    })
+      .map((entry) => entry.agentId)
+      .filter((agentId) => agentId === "main" || agentId === "work"),
+  ).toEqual([]);
 });

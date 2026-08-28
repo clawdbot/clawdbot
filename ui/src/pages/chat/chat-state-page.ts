@@ -207,6 +207,7 @@ export function createPageState(
     chatAvatarStatus: null,
     chatAvatarReason: null,
     chatModelSwitchPromises: {},
+    chatModelPickerOpenSessionKey: null,
     chatModelsLoading: false,
     chatMetadataRequestVersion: 0,
     chatModelCatalog: [],
@@ -245,17 +246,15 @@ export function createPageState(
     chatScrollCommitCleanup: null,
     chatStreamRenderFrame: null,
     chatScrollFrame: null,
-    chatScrollGuardFrame: null,
     chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
-    chatIsProgrammaticScroll: false,
-    chatProgrammaticScrollTarget: 0,
     sidebarLayout: normalizeSidebarLayout(settings.sidebarSessionLayouts?.[sidebarSessionKey]),
     sidebarContent: null,
+    attachmentSidebarContent: null,
     sidebarFocusPanelId: settings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "",
     sidebarFocusVersion: 0,
     imageLightbox: null,
@@ -404,26 +403,35 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.handleOpenSidebar = (content) => {
-    let opened = openSlot(state.sidebarLayout, "detail");
-    const detailPanel = opened.columns
+    const attachmentPreview = content?.kind === "attachment";
+    const targetSlot = attachmentPreview ? "workspace" : "detail";
+    let opened = openSlot(state.sidebarLayout, targetSlot);
+    const targetPanel = opened.columns
       .flatMap((column) => column.panels)
-      .find((panel) => panel.slot === "detail");
-    if (detailPanel) {
-      opened = activatePanel(opened, detailPanel.id);
+      .find((panel) => panel.slot === targetSlot);
+    if (targetPanel) {
+      opened = activatePanel(opened, targetPanel.id);
     }
     const availableWidth = page.getBoundingClientRect?.().width ?? 0;
     const fitted =
       availableWidth > 0 && availableWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(opened, availableWidth) ?? opened)
         : opened;
-    state.sidebarContent = content;
+    if (attachmentPreview) {
+      state.attachmentSidebarContent = content;
+    } else {
+      state.sidebarContent = content;
+    }
     state.updateSidebarLayout(fitted);
-    if (detailPanel) {
-      state.updateSidebarActivePanel(detailPanel.id);
+    if (targetPanel) {
+      state.updateSidebarActivePanel(targetPanel.id);
     }
   };
-  state.handleCloseSidebar = () => {
-    state.updateSidebarLayout(closeSlot(state.sidebarLayout, "detail"));
+  state.handleCloseSidebar = (slot) => {
+    if (slot === "workspace") {
+      state.attachmentSidebarContent = null;
+    }
+    state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
   };
   state.beginImageOpen = () => {
     const requestVersion = invalidateImageLightbox(state);

@@ -309,12 +309,13 @@ describe("skill collection reconciliation", () => {
     },
   );
 
-  it("consolidates a collection atomically and preserves one recoverable backup", async () => {
+  it("consolidates a collection atomically and removes usage only for dropped skills", async () => {
     await writeWorkshopOwnedSkills([
       { name: "deploy-one", description: "First deploy notes", body: "# Deploy one\n" },
       { name: "deploy-two", description: "Second deploy notes", body: "# Deploy two\n" },
       { name: "tiny-fragment", description: "One narrow fact", body: "# Tiny\n" },
     ]);
+    seedSkillUsage(["deploy-one", "deploy-two", "tiny-fragment"]);
     const receipt = await readCollectionReceipt();
 
     const result = await reconcileSkillCollection({
@@ -354,6 +355,11 @@ describe("skill collection reconciliation", () => {
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "deploy-one", "SKILL.md"), "utf8"),
     ).resolves.toContain("Deploy, verify, and roll back");
+    expect(
+      openOpenClawStateDatabase({ env: testState.env })
+        .db.prepare("SELECT skill_key, use_count FROM skill_usage ORDER BY skill_key")
+        .all(),
+    ).toEqual([{ skill_key: "deploy-one", use_count: 3 }]);
 
     const backupRoots = await fs.readdir(
       path.join(testState.stateDir, "skill-workshop", "collection-backups"),
@@ -384,6 +390,11 @@ describe("skill collection reconciliation", () => {
       plan: [],
     });
     expect(noOp.backupId).toBe(result.backupId);
+    expect(
+      openOpenClawStateDatabase({ env: testState.env })
+        .db.prepare("SELECT skill_key, use_count FROM skill_usage ORDER BY skill_key")
+        .all(),
+    ).toEqual([{ skill_key: "deploy-one", use_count: 3 }]);
     const backupDir = path.join(
       testState.stateDir,
       "skill-workshop",
@@ -411,11 +422,12 @@ describe("skill collection reconciliation", () => {
     expect(await fs.readdir(backupDir)).toEqual([result.backupId]);
   });
 
-  it("leaves an unlisted skill untouched and records it as kept", async () => {
+  it("preserves recorded usage for rewritten and untouched skills", async () => {
     await writeWorkshopOwnedSkills([
       { name: "changed", description: "Changed procedure", body: "# Before\n" },
       { name: "untouched", description: "Untouched procedure", body: "# Untouched\n" },
     ]);
+    seedSkillUsage(["changed", "untouched"]);
     const receipt = await readCollectionReceipt();
     const untouchedFile = path.join(workspaceDir, "skills", "untouched", "SKILL.md");
     await fs.appendFile(untouchedFile, "\nOperator note.\n");
@@ -439,6 +451,14 @@ describe("skill collection reconciliation", () => {
     expect(
       listSkillCollectionReviewOutcomes(workspaceDir, { env: testState.env })[0],
     ).toMatchObject({ kept: ["untouched"], written: ["changed"], dropped: [] });
+    expect(
+      openOpenClawStateDatabase({ env: testState.env })
+        .db.prepare("SELECT skill_key, use_count FROM skill_usage ORDER BY skill_key")
+        .all(),
+    ).toEqual([
+      { skill_key: "changed", use_count: 3 },
+      { skill_key: "untouched", use_count: 3 },
+    ]);
   });
 
   it.each(["write", "drop"] as const)(
@@ -818,4 +838,25 @@ async function writeWorkshopOwnedSkills(
   }
   dispatchCommittedSkillChangeBestEffort.mockClear();
   snapshotCommittedSkillArtifactBestEffort.mockClear();
+}
+
+function seedSkillUsage(skillNames: readonly string[]): void {
+  const insert = openOpenClawStateDatabase({ env: testState.env }).db.prepare(`
+    INSERT INTO skill_usage (
+      skill_file, skill_key, skill_name, skill_source,
+      first_used_at_ms, last_used_at_ms, use_count, last_agent_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const skillName of skillNames) {
+    insert.run(
+      path.join(workspaceDir, "skills", skillName, "SKILL.md"),
+      skillName,
+      skillName,
+      "openclaw-workspace",
+      1,
+      2,
+      3,
+      null,
+    );
+  }
 }

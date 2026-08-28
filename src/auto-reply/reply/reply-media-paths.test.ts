@@ -154,31 +154,57 @@ describe("createReplyMediaPathNormalizer", () => {
     });
   });
 
-  it("maps sandbox-relative media back to the host sandbox workspace before staging", async () => {
-    ensureSandboxWorkspaceForSession.mockResolvedValue({
-      workspaceDir: "/tmp/sandboxes/session-1",
-      containerWorkdir: "/workspace",
+  it.each([
+    { name: "Docker", containerWorkdir: "/workspace" },
+    { name: "OpenShell", containerWorkdir: "/sandbox" },
+    { name: "custom remote backend", containerWorkdir: "/remote/agent" },
+  ])(
+    "maps $name media to the host sandbox workspace before staging",
+    async ({ containerWorkdir }) => {
+      ensureSandboxWorkspaceForSession.mockResolvedValue({
+        workspaceDir: "/tmp/sandboxes/session-1",
+        containerWorkdir,
+      });
+      const normalize = createTestReplyMediaNormalizer();
+
+      const result = await normalize({
+        mediaUrls: ["./out/photo.png", `file://${containerWorkdir}/screens/final.png`],
+      });
+
+      expectMedia(result, "/tmp/outbound-media/photo.png", [
+        "/tmp/outbound-media/photo.png",
+        "/tmp/outbound-media/final.png",
+      ]);
+      expectOutboundAttachmentCall(
+        0,
+        path.join("/tmp/sandboxes/session-1", "out", "photo.png"),
+        5 * 1024 * 1024,
+      );
+      expectOutboundAttachmentCall(
+        1,
+        path.join("/tmp/sandboxes/session-1", "screens", "final.png"),
+        5 * 1024 * 1024,
+      );
+    },
+  );
+
+  it("maps explicitly supplied backend workdirs without rediscovering the sandbox", async () => {
+    const normalize = createTestReplyMediaNormalizer({
+      sandboxRoot: "/tmp/sandboxes/session-1",
+      sandboxContainerWorkdir: "/sandbox",
     });
-    const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
-      mediaUrls: ["./out/photo.png", "file:///workspace/screens/final.png"],
+      mediaUrls: ["/sandbox/screens/final.png"],
     });
 
-    expectMedia(result, "/tmp/outbound-media/photo.png", [
-      "/tmp/outbound-media/photo.png",
-      "/tmp/outbound-media/final.png",
-    ]);
+    expectMedia(result, "/tmp/outbound-media/final.png", ["/tmp/outbound-media/final.png"]);
     expectOutboundAttachmentCall(
       0,
-      path.join("/tmp/sandboxes/session-1", "out", "photo.png"),
-      5 * 1024 * 1024,
-    );
-    expectOutboundAttachmentCall(
-      1,
       path.join("/tmp/sandboxes/session-1", "screens", "final.png"),
       5 * 1024 * 1024,
     );
+    expect(ensureSandboxWorkspaceForSession).not.toHaveBeenCalled();
   });
 
   it("drops sandbox-mapped media when staging fails instead of retrying the workspace fallback", async () => {

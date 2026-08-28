@@ -1,5 +1,9 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { isHeartbeatContentEffectivelyEmpty } from "../auto-reply/heartbeat.js";
+import {
+  HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
+  isHeartbeatContentEffectivelyEmpty,
+} from "../auto-reply/heartbeat.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readHeartbeatMonitorScratch } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
@@ -125,7 +129,7 @@ export async function resolveHeartbeatPreflight(params: {
     wakeFlags.isCronWake ||
     shouldInspectWakePendingEvents ||
     hasTaggedCronEvents;
-  const shouldBypassFileGates =
+  const shouldBypassScratchGates =
     wakeFlags.isExecEventWake ||
     wakeFlags.isCronWake ||
     wakeFlags.isWakePayload ||
@@ -160,7 +164,7 @@ export async function resolveHeartbeatPreflight(params: {
     // Bypass scopes (cron/exec events and wake payloads) stay
     // self-contained: only the job identity travels so heartbeat_respond can
     // still persist scratch, never the monitor instructions themselves.
-    ...(!shouldBypassFileGates && heartbeatScratchContent !== undefined
+    ...(!shouldBypassScratchGates && heartbeatScratchContent !== undefined
       ? { heartbeatScratchContent }
       : {}),
   } satisfies Omit<HeartbeatPreflight, "skipReason">;
@@ -179,7 +183,7 @@ export async function resolveHeartbeatPreflight(params: {
       skipReason: HEARTBEAT_SKIP_NO_PENDING_EVENT,
     };
   }
-  if (shouldBypassFileGates) {
+  if (shouldBypassScratchGates) {
     return basePreflight;
   }
   // Cron owns task due-ness. Task wakes still receive ordinary scratch prose,
@@ -188,8 +192,8 @@ export async function resolveHeartbeatPreflight(params: {
     return basePreflight;
   }
   if (heartbeatScratchContent === undefined) {
-    // No scratch row preserves the old missing-file behavior: the model still
-    // gets the generic heartbeat prompt and decides whether anything is due.
+    // Without scratch, the model still gets the generic monitor prompt and
+    // decides whether anything needs attention.
     return basePreflight;
   }
   if (isHeartbeatContentEffectivelyEmpty(heartbeatScratchContent)) {
@@ -253,8 +257,8 @@ export function resolveHeartbeatRunPrompt(params: {
       .map((task) => `- ${task.name}: ${task.prompt}`)
       .join("\n");
     const completionInstruction = params.useHeartbeatResponseTool
-      ? "After completing all due tasks, use heartbeat_respond to report the outcome. Set notify=false when nothing needs the user's attention."
-      : "After completing all due tasks, reply HEARTBEAT_OK.";
+      ? `After completing all due tasks:\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`
+      : `After completing all due tasks, reply ${SILENT_REPLY_TOKEN}.`;
     const taskPrompt = `Run the following periodic tasks (only those due based on their intervals):
 
 ${taskList}

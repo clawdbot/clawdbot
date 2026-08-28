@@ -82,9 +82,10 @@ export function refLocator(page: Page, ref: string) {
       ? ref.slice(4)
       : ref;
 
-  if (/^e\d+$/.test(normalized)) {
+  const isRoleRef = /^e\d+$/.test(normalized);
+  if (isRoleRef || AX_REF_PATTERN.test(normalized)) {
     const state = pageStates.get(page);
-    if (state?.roleRefsMode === "aria") {
+    if (isRoleRef && state?.roleRefsMode === "aria") {
       const scope = state.roleRefsFrame ?? page;
       return scope.locator(`aria-ref=${normalized}`);
     }
@@ -95,39 +96,15 @@ export function refLocator(page: Page, ref: string) {
       );
     }
     const scope = state?.roleRefsFrame ?? page;
-    const locAny = scope as unknown as {
-      getByRole: (
-        role: never,
-        opts?: { name?: string; exact?: boolean },
-      ) => ReturnType<Page["getByRole"]>;
-    };
-    const locator = info.name
-      ? locAny.getByRole(info.role as never, { name: info.name, exact: true })
-      : locAny.getByRole(info.role as never);
-    return info.nth !== undefined ? locator.nth(info.nth) : locator;
-  }
-
-  if (AX_REF_PATTERN.test(normalized)) {
-    const state = pageStates.get(page);
-    const info = state?.roleRefs?.[normalized];
-    if (!info) {
-      throw new Error(
-        `Unknown ref "${normalized}". Run a new snapshot and use a ref from that snapshot.`,
-      );
-    }
-    const scope = state.roleRefsFrame ?? page;
-    if (info.domMarker) {
+    if (!isRoleRef && info.domMarker) {
       return scope.locator(`[${BROWSER_REF_MARKER_ATTRIBUTE}="${normalized}"]`);
     }
-    const locAny = scope as unknown as {
-      getByRole: (
-        role: never,
-        opts?: { name?: string; exact?: boolean },
-      ) => ReturnType<Page["getByRole"]>;
-    };
-    const locator = info.name
-      ? locAny.getByRole(info.role as never, { name: info.name, exact: true })
-      : locAny.getByRole(info.role as never);
+    // Playwright omits empty names and names over 900 UTF-16 units from ARIA text.
+    // Match that exact bucket before nth; raw AX names (including "") stay explicit.
+    const locator = scope.getByRole(info.role as never, {
+      name: info.name ?? /^$|^.{901,}$/s,
+      exact: true,
+    });
     return info.nth !== undefined ? locator.nth(info.nth) : locator;
   }
 

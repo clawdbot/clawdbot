@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -15,7 +16,7 @@ import {
   migrateLegacyTuiLastSessions,
 } from "./state-migrations.tui-last-session.js";
 
-type TuiLastSessionTestDatabase = Pick<OpenClawStateKyselyDatabase, "tui_last_sessions">;
+type TuiLastSessionTestDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 
 const tempDirs = createTempDirTracker();
 
@@ -58,11 +59,13 @@ function seedPointer(params: {
     ({ db }) => {
       executeSqliteQuerySync(
         db,
-        getNodeSqliteKysely<TuiLastSessionTestDatabase>(db).insertInto("tui_last_sessions").values({
-          scope_key: params.scopeKey,
-          session_key: params.sessionKey,
-          updated_at: params.updatedAt,
-        }),
+        getNodeSqliteKysely<TuiLastSessionTestDatabase>(db)
+          .insertInto("config_machine_state")
+          .values({
+            state_key: `tui.lastSession.${params.scopeKey}`,
+            value_json: JSON.stringify(params.sessionKey),
+            updated_at_ms: params.updatedAt,
+          }),
       );
     },
     { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
@@ -105,6 +108,11 @@ describe("legacy TUI last-session migration", () => {
     await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
       "agent:main:tui-123",
     );
+    expect(
+      readConfigMachineStateWithMetadata<string>("tui.lastSession.terminal", {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+    ).toEqual({ value: "agent:main:tui-123", updatedAtMs: 100 });
     await expect(readTuiLastSessionKey({ scopeKey: "heartbeat", stateDir })).resolves.toBeNull();
     expect(fs.readdirSync(path.dirname(sourcePath))).not.toContain("last-session.json.migrated");
   });

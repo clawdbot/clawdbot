@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -278,7 +279,12 @@ describe("worker environment service", () => {
 
     await workerService.reconcileEnvironment(environmentId);
 
-    expect(support.testState.store.get(environmentId)?.state).toBe("orphaned");
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      destroyRequestedAtMs: support.testState.nowMs,
+      lastError: "Worker provider no longer recognizes the lease",
+    });
     expect(workerService.validateWorkerConnection(admitted.identity)).toBe("credential-replaced");
   });
 
@@ -588,8 +594,8 @@ describe("worker environment service", () => {
     });
   });
 
-  it("orphans unknown active leases and adopts unknown expected teardown", async () => {
-    support.seedReady("worker-unknown");
+  it("fences unknown leases before stop and retries their durable teardown", async () => {
+    const originalOwner = support.seedReady("worker-unknown");
     support.seedReady("worker-transient");
     support.seedReady("worker-destroyed-unknown");
     support.testState.store.requestDestroy({
@@ -634,7 +640,15 @@ describe("worker environment service", () => {
 
     await workerService.reconcileOnce();
 
-    expect(support.testState.store.get("worker-unknown")?.state).toBe("draining");
+    expect(support.testState.store.get("worker-unknown")).toMatchObject({
+      state: "ready",
+      ownerEpoch: originalOwner.ownerEpoch,
+      leaseId: originalOwner.leaseId,
+      attachedSessionIds: originalOwner.attachedSessionIds,
+      destroyRequestedAtMs: support.testState.nowMs,
+      teardownTerminalState: "failed",
+      lastError: "Worker provider no longer recognizes the lease",
+    });
     expect(support.testState.store.get("worker-destroyed-unknown")?.state).toBe("destroying");
     expect(workerService.validateWorkerConnection(admitted.identity)).toBe("credential-replaced");
     expect(support.testState.store.get("worker-transient")).toMatchObject({
@@ -643,7 +657,11 @@ describe("worker environment service", () => {
     });
     await workerService.reconcileOnce();
     expect(tunnelManager.stop).toHaveBeenCalledTimes(4);
-    expect(support.testState.store.get("worker-unknown")?.state).toBe("orphaned");
+    expect(support.testState.store.get("worker-unknown")).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      lastError: "Worker provider no longer recognizes the lease",
+    });
     expect(support.testState.store.get("worker-destroyed-unknown")).toMatchObject({
       state: "destroyed",
     });
@@ -805,6 +823,100 @@ describe("worker environment service", () => {
       { leaseId: "lease:worker-destroy", profile: { region: "test" } },
       { leaseId: "lease:worker-destroy", profile: { region: "test" } },
     ]);
+  });
+
+  it.each(["destroy", "reconcile"] as const)(
+    "%s preserves the exact attached owner until remote stop is confirmed across restart",
+    async (operation) => {
+      const environmentId = "worker-retained-teardown";
+      support.seedReady(environmentId);
+      const attached = support.testState.store.transition({
+        environmentId,
+        from: "ready",
+        to: "attached",
+        patch: support.attachedPatch(environmentId, "session-retained"),
+      });
+      let disconnected = true;
+      const stop = vi.fn(async (id: string, epoch?: number) => {
+        expect(support.testState.store.get(id)).toMatchObject({
+          state: "attached",
+          attachedSessionIds: ["session-retained"],
+          ownerEpoch: attached.ownerEpoch,
+          destroyRequestedAtMs: expect.any(Number),
+        });
+        expect(epoch).toBe(attached.ownerEpoch);
+        if (disconnected) {
+          throw new Error("node disconnected before stop confirmation");
+        }
+      });
+      const tunnelManager = {
+        stop,
+        stopAll: vi.fn(async () => {}),
+      } as unknown as WorkerTunnelManager;
+      const destroy = vi.fn(async () => {});
+      const provider = support.createProvider({ destroy });
+      const first = support.createService(provider, { tunnelManager });
+      if (operation === "destroy") {
+        await expect(first.destroy(environmentId)).rejects.toThrow("node disconnected");
+      } else {
+        support.testState.store.requestDestroy({ environmentId, state: "attached" });
+        await first.reconcileOnce();
+      }
+      expect(support.testState.store.get(environmentId)).toMatchObject({
+        state: "attached",
+        ownerEpoch: attached.ownerEpoch,
+        attachedSessionIds: ["session-retained"],
+      });
+      expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
+      expect(destroy).not.toHaveBeenCalled();
+
+      await first.stop();
+      disconnected = false;
+      const restarted = support.createService(provider, { tunnelManager });
+      await restarted.reconcileOnce();
+      expect(stop).toHaveBeenCalledTimes(2);
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(support.testState.store.get(environmentId)).toMatchObject({ state: "destroyed" });
+    },
+  );
+
+  it("does not let an awaited old-owner stop retire a replacement attachment", async () => {
+    const environmentId = "worker-replaced-during-stop";
+    support.seedReady(environmentId);
+    const attached = support.testState.store.transition({
+      environmentId,
+      from: "ready",
+      to: "attached",
+      patch: support.attachedPatch(environmentId, "session-old"),
+    });
+    const stopReturned = createDeferred();
+    const stop = vi.fn(async () => await stopReturned.promise);
+    const tunnelManager = {
+      stop,
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const service = support.createService(
+      support.createProvider({ inspect: async () => ({ status: "active", sharedHost: true }) }),
+      { tunnelManager },
+    );
+    const reconciling = service.reconcileOnce();
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledWith(environmentId, attached.ownerEpoch));
+    support.testState.store.transition({ environmentId, from: "attached", to: "idle" });
+    const replacement = support.testState.store.transition({
+      environmentId,
+      from: "idle",
+      to: "attached",
+      patch: support.attachedPatch(environmentId, "session-new"),
+    });
+    stopReturned.resolve();
+    await reconciling;
+
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "attached",
+      ownerEpoch: replacement.ownerEpoch,
+      attachedSessionIds: ["session-new"],
+    });
+    expect(support.testState.store.getCredential(environmentId)?.sessionId).toBe("session-new");
   });
 
   it("adopts an unpersisted provision result before destroying", async () => {

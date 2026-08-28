@@ -317,6 +317,8 @@ export function resolveCustomModelAliasError(params: {
     cfg: params.cfg,
     defaultProvider: DEFAULT_PROVIDER,
     agentId: params.agentId,
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
   });
   const aliasKey = normalizeLowercaseStringOrEmpty(normalized);
   const existing = aliasIndex.byAlias.get(aliasKey);

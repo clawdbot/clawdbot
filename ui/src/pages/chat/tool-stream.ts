@@ -26,6 +26,7 @@ import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
+import { readAssistantStreamSegmentIdentity } from "./chat-thread-run-identity.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
@@ -80,6 +81,7 @@ export type ToolStreamHost = {
   agentsList?: { defaultId?: string | null } | null;
   hello?: { snapshot?: unknown } | null;
   chatRunId: string | null;
+  chatMessages?: unknown[];
   chatRunUsageById?: Map<string, number>;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
@@ -95,7 +97,7 @@ export type ToolStreamHost = {
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   waitingApprovalResolvedIds?: Set<string>;
   requestUpdate?: () => void;
-  sessions: Pick<SessionCapability, "setModelOverride">;
+  sessions: Pick<SessionCapability, "refreshReplacement">;
 };
 
 function resolveModelLabel(provider: unknown, model: unknown): string | null {
@@ -220,35 +222,18 @@ function readLiveDiffStat(value: unknown): DiffStat | undefined {
     : undefined;
 }
 
-function resolveSessionStatusModelOverride(
-  details: Record<string, unknown> | null,
-): string | null | undefined {
-  if (details?.changedModel !== true) {
-    return undefined;
-  }
-  if (Object.hasOwn(details, "modelOverride")) {
-    const override = toTrimmedString(details.modelOverride);
-    return override;
-  }
-  const model = toTrimmedString(details.model);
-  if (!model) {
-    return undefined;
-  }
-  const provider = toTrimmedString(details.modelProvider);
-  return provider ? `${provider}/${model}` : model;
-}
-
-function syncSessionStatusModelOverride(host: ToolStreamHost, data: Record<string, unknown>) {
+function refreshSessionStatusModel(host: ToolStreamHost, data: Record<string, unknown>) {
   const details = readRecord(readRecord(data.result)?.details);
-  const targetSessionKey = toTrimmedString(details?.sessionKey) ?? host.sessionKey;
-  if (!uiSessionEventMatches(host, targetSessionKey, toTrimmedString(details?.agentId))) {
+  if (details?.changedModel !== true) {
     return;
   }
-  const override = resolveSessionStatusModelOverride(details);
-  if (override === undefined) {
+  const targetSessionKey = toTrimmedString(details.sessionKey) ?? host.sessionKey;
+  const agentId = toTrimmedString(details.agentId);
+  if (!agentId || !uiSessionEventMatches(host, targetSessionKey, agentId)) {
     return;
   }
-  host.sessions.setModelOverride(targetSessionKey, override);
+  // Results can be replayed from history; read current truth without replacing pending UI intent.
+  void host.sessions.refreshReplacement(agentId);
 }
 
 function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
@@ -883,6 +868,20 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
     return true;
   }
+  const persisted =
+    progress.itemId &&
+    host.chatMessages?.some((message) => {
+      const identity = readAssistantStreamSegmentIdentity(message);
+      return identity?.itemId === progress.itemId && identity?.runId === payload.runId;
+    });
+  if (persisted) {
+    // A history snapshot or delayed live event can follow the durable row.
+    // Its exact run/item owner already renders the commentary.
+    host.chatStreamSegments = host.chatStreamSegments.filter(
+      (segment) => segment.itemId !== progress.itemId || segment.runId !== payload.runId,
+    );
+    return true;
+  }
   if (progress.itemId && !progress.text.trim()) {
     host.chatStreamSegments = host.chatStreamSegments.filter(
       (segment) => segment.itemId !== progress.itemId,
@@ -1150,7 +1149,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       : undefined;
   const liveDiffStat = phase === "input_delta" ? readLiveDiffStat(data.diff) : undefined;
   if (name === "session_status" && phase === "result") {
-    syncSessionStatusModelOverride(host, data);
+    refreshSessionStatusModel(host, data);
   }
 
   const now = Date.now();

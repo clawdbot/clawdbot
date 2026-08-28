@@ -210,7 +210,7 @@ function resolveSessionRuntime(params: {
         sessionKey: params.sessionKey,
       })
     : params.sessionKey;
-  const acpMeta = readAcpSessionMeta({ sessionKey: acpSessionKey });
+  const acpMeta = readAcpSessionMeta({ cfg: params.cfg, sessionKey: acpSessionKey });
   const runtime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId ?? "",

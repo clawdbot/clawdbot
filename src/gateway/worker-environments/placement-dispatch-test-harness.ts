@@ -452,8 +452,9 @@ export function createHarness(
           }
         : { requiredNodeCommands: [], consumesWorkerSlot: true },
     isCurrentNodePlacement: options.isCurrentNodePlacement ?? (() => true),
-    runReclaimBarrier: async ({ authorize, begin, reclaim }) => {
+    runReclaimBarrier: async ({ authorize, beforeDrain, begin, reclaim }) => {
       authorize?.();
+      beforeDrain?.();
       return await reclaim(options.workspacePath ?? "/gateway/workspace", begin(), authorize);
     },
     runFailedReclaimBarrier: async ({ authorize, reclaim }) => {

@@ -668,6 +668,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("does not retire shared startup when this attempt's initialize wait expires", async () => {
+    vi.useFakeTimers();
     const sharedInitializePluginConfig = {
       ...pluginConfig,
       appServer: { command: "codex", requestTimeoutMs: 1_000 },
@@ -681,13 +682,21 @@ describe("startCodexAttemptThread", () => {
       paths,
     });
     await waitForRequest(harness, "initialize");
+    let markPeerStarted: () => void = () => undefined;
+    const peerStarted = new Promise<void>((resolve) => {
+      markPeerStarted = resolve;
+    });
     const peerAcquire = getLeasedSharedCodexAppServerClient({
       startOptions: appServer.start,
       agentDir: paths.agentDir,
       timeoutMs: 3_000,
+      onStartedClient: markPeerStarted,
     });
+    await peerStarted;
 
-    await expect(run).rejects.toThrow("codex app-server initialize timed out");
+    const rejected = expect(run).rejects.toThrow("codex app-server initialize timed out");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejected;
     expect(harness.stdinDestroyed).toBe(false);
     await answerInitialize(harness);
     await expect(peerAcquire).resolves.toBe(harness.client);

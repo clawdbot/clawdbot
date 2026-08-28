@@ -1,7 +1,7 @@
 // Covers plugin doctor state-migration registry behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -39,9 +39,7 @@ afterEach(() => {
 });
 
 describe("doctor-contract-registry state migrations", () => {
-  beforeEach(async () => {
-    resetRegistryJitiMocks();
-    doctorContractWarnMock.mockReset();
+  beforeAll(async () => {
     vi.resetModules();
     ({ listPluginDoctorLegacyConfigRules, listPluginDoctorStateMigrationEntries } =
       await import("./doctor-contract-registry.js"));
@@ -49,6 +47,17 @@ describe("doctor-contract-registry state migrations", () => {
       clearPluginDoctorContractRegistryCache,
       setPluginDoctorContractRegistryModuleLoaderFactoryForTest,
     } = await import("./doctor-contract-registry.test-fixtures.js"));
+  });
+
+  beforeEach(() => {
+    resetRegistryJitiMocks();
+    doctorContractWarnMock.mockReset();
+    // Loaded once in beforeAll; afterEach guards the same binding optionally because it
+    // can fire when that import never completed. Fail loudly here instead of silently
+    // running a case against the real module loader.
+    if (!setPluginDoctorContractRegistryModuleLoaderFactoryForTest) {
+      throw new Error("doctor contract registry test fixtures were not loaded");
+    }
     setPluginDoctorContractRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginDoctorContractRegistryCache();
   });

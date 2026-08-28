@@ -13,6 +13,7 @@ function captureCrabboxDoctorCheck(): HealthCheck {
   let check: HealthCheck | undefined;
   registerCrabboxWorkerProviderDoctorChecks({
     openclawRoot: OPENCLAW_ROOT,
+    getHealthCheck: () => check,
     registerHealthCheck(value) {
       check = value;
     },

@@ -7,7 +7,9 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { TranscriptEvent } from "./session-accessor.js";
@@ -107,6 +109,23 @@ function agentKysely() {
 }
 
 describe("searchSessionTranscripts", () => {
+  it("searches a populated closed database without reopening a writer", async () => {
+    await appendUserMessage("session-1", "agent:main:main", "readonly search needle");
+    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: env() });
+    closeOpenClawAgentDatabasesForTest();
+
+    expect(search("needle").hits).toHaveLength(1);
+    expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
+  });
+
+  it("returns empty results without creating a missing database", () => {
+    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: env() });
+
+    expect(search("missing")).toEqual({ hits: [], indexing: false, truncated: false });
+    expect(fs.existsSync(databasePath)).toBe(false);
+    expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
+  });
+
   it("indexes appended messages synchronously and returns bounded hits", async () => {
     await appendUserMessage("session-1", "agent:main:main", "the deployment failed on friday");
     await appendAssistantMessage("session-1", "agent:main:main", "the deployment fix is rolling");

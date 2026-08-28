@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { ChatLog } from "./components/chat-log.js";
 import type { TuiBackend } from "./tui-backend.js";
+import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   makeChatLog,
@@ -200,7 +201,19 @@ describe("tui session actions", () => {
       activeChatRunId: "research-run",
       pendingSubmit: acceptedSubmit("research-pending", "private draft"),
       historyLoaded: true,
-      sessionInfo: { displayName: "Research secret", updatedAt: 100, verboseLevel: "full" },
+      sessionInfo: {
+        displayName: "Research secret",
+        updatedAt: 100,
+        modelProvider: "anthropic",
+        model: "private-research-model",
+        thinkingLevel: "high",
+        thinkingLevels: [{ id: "high", label: "high" }],
+        agentRuntime: { id: "private-runtime", source: "agent" },
+        responseUsage: "full",
+        effectiveResponseUsage: "full",
+        contextTokens: 999_999,
+        verboseLevel: "full",
+      },
     });
     sendPendingUser(state, "research-pending", "private draft");
     const chatLog = new ChatLog();
@@ -208,6 +221,7 @@ describe("tui session actions", () => {
     const history = createDeferred<{
       messages: unknown[];
       sessionInfo: { sessionId: string };
+      defaults: { modelProvider: string; model: string; contextTokens: number };
     }>();
     const loadHistory = vi.fn(() => history.promise);
     const invalidateRunOwnership = vi.fn();
@@ -229,7 +243,7 @@ describe("tui session actions", () => {
     expect(state.currentAgentId).toBe("ops");
     expect(state.currentSessionKey).toBe("global");
     expect(state.currentSessionId).toBeNull();
-    expect(state.sessionInfo.displayName).toBeUndefined();
+    expect(state.sessionInfo).toEqual({});
     expect(state.activeChatRunId).toBeNull();
     expect(state.pendingSubmit).toBeNull();
     expect(state.historyLoaded).toBe(false);
@@ -239,9 +253,21 @@ describe("tui session actions", () => {
     expect(clearLocalRunIds).toHaveBeenCalledOnce();
     expect(loadHistory).toHaveBeenCalledWith({ sessionKey: "global", agentId: "ops", limit: 200 });
 
-    history.resolve({ messages: [], sessionInfo: { sessionId: "ops-session" } });
+    history.resolve({
+      messages: [],
+      sessionInfo: { sessionId: "ops-session" },
+      defaults: { modelProvider: "openai", model: "gpt-5.4", contextTokens: 128_000 },
+    });
     await switching;
     expect(state.currentSessionId).toBe("ops-session");
+    expect(state.sessionInfo).toMatchObject({
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 128_000,
+    });
+    expect(state.sessionInfo.thinkingLevel).toBeUndefined();
+    expect(state.sessionInfo.agentRuntime).toBeUndefined();
+    expect(state.sessionInfo.responseUsage).toBeUndefined();
   });
 
   it("returns success after applying a normalized fresh agent roster", async () => {
@@ -366,7 +392,6 @@ describe("tui session actions", () => {
       const invalidateRunOwnership = vi.fn();
       const clearLocalRunIds = vi.fn();
       const clearAll = vi.fn();
-      const clearPendingUsers = vi.fn();
       const btw = createBtwPresenter();
       const { refreshAgents } = createTestSessionActions({
         client: makeTuiBackend({
@@ -378,7 +403,7 @@ describe("tui session actions", () => {
             agents: [{ id: "ops" }],
           }),
         }),
-        chatLog: makeChatLog({ clearAll, clearPendingUsers }),
+        chatLog: makeChatLog({ clearAll }),
         btw,
         state,
         invalidateRunOwnership,
@@ -398,15 +423,14 @@ describe("tui session actions", () => {
         activeChatRunId: null,
         pendingSubmit: null,
         historyLoaded: false,
-        sessionInfo: { updatedAt: null },
+        sessionInfo: {},
       });
-      expect(state.sessionInfo.thinkingLevel).toBe("high");
+      expect(state.sessionInfo.thinkingLevel).toBeUndefined();
       expect(state.sessionInfo.verboseLevel).toBeUndefined();
       expect(state.sessionProjection?.entries).toEqual([]);
       expect(invalidateRunOwnership).toHaveBeenCalledOnce();
       expect(clearLocalRunIds).toHaveBeenCalledOnce();
       expect(clearAll).toHaveBeenCalledOnce();
-      expect(clearPendingUsers).toHaveBeenCalledOnce();
       expect(btw.clear).toHaveBeenCalledOnce();
       expect(loadHistory).not.toHaveBeenCalled();
     },
@@ -1449,108 +1473,226 @@ describe("tui session actions", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("streaming");
   });
 
-  it("retires the previous session run before adopting and finalizing a restored run", async () => {
-    vi.useFakeTimers();
-    try {
-      const previousSessionKey = "agent:main:previous";
-      const nextSessionKey = "agent:main:next";
-      const previousRunId = "run-previous";
-      const nextRunId = "run-next";
+  it.each([
+    {
+      description: "a different session",
+      sameSession: false,
+      activeRunIds: undefined,
+      preservesOld: false,
+    },
+    {
+      description: "a same-session replacement with exact active runs",
+      sameSession: true,
+      activeRunIds: ["run-next"],
+      preservesOld: false,
+    },
+    {
+      description: "a same-session concurrent run",
+      sameSession: true,
+      activeRunIds: ["run-previous", "run-next"],
+      preservesOld: true,
+    },
+    {
+      description: "a same-session run with unknown active membership",
+      sameSession: true,
+      activeRunIds: undefined,
+      preservesOld: true,
+    },
+    {
+      description: "a same-session run with null active membership",
+      sameSession: true,
+      activeRunIds: null,
+      preservesOld: true,
+    },
+    {
+      description: "a same-session run with malformed active membership",
+      sameSession: true,
+      activeRunIds: ["run-next", 42],
+      preservesOld: true,
+    },
+  ])(
+    "reconciles previous run ownership when restoring $description",
+    async ({ sameSession, activeRunIds, preservesOld }) => {
+      vi.useFakeTimers();
+      try {
+        const previousSessionKey = "agent:main:previous";
+        const nextSessionKey = sameSession ? previousSessionKey : "agent:main:next";
+        const previousRunId = "run-previous";
+        const nextRunId = "run-next";
+        const state = createBaseState({
+          currentSessionKey: previousSessionKey,
+          currentSessionId: "session-previous",
+          historyLoaded: true,
+        });
+        const chatLog = new ChatLog();
+        const addPendingSystem = vi.spyOn(chatLog, "addPendingSystem");
+        const tui = makeTui();
+        const setActivityStatus = vi.fn((status: string) => {
+          state.activityStatus = status;
+        });
+        let loadSelectedHistory: () => Promise<TuiHistoryLoadResult> = async () => ({
+          loaded: false,
+        });
+        const handlers = createEventHandlers({
+          chatLog,
+          btw: createBtwPresenter(),
+          tui,
+          state,
+          setActivityStatus,
+          loadHistory: () => loadSelectedHistory(),
+          streamingWatchdogMs: 100,
+        });
+        handlers.handleChatEvent({
+          runId: previousRunId,
+          sessionKey: previousSessionKey,
+          seq: 1,
+          state: "delta",
+          message: { role: "assistant", content: [{ type: "text", text: "old partial" }] },
+        });
+        expect(state.activeChatRunId).toBe(previousRunId);
+
+        const actions = createTestSessionActions({
+          client: makeTuiBackend({
+            listSessions: vi.fn(),
+            loadHistory: vi.fn().mockResolvedValue({
+              sessionId: sameSession ? "session-previous" : "session-next",
+              sessionInfo: {
+                key: nextSessionKey,
+                sessionId: sameSession ? "session-previous" : "session-next",
+                activeRunIds,
+                updatedAt: 1,
+              },
+              messages: [],
+              inFlightRun: { runId: nextRunId, text: "new partial" },
+            }),
+          }),
+          chatLog,
+          state,
+          tui,
+          setActivityStatus,
+          invalidateRunOwnership: handlers.dispose,
+        });
+        loadSelectedHistory = async () => {
+          const reconcileMembership = handlers.captureHistoryRunMembership();
+          const result = await actions.loadHistory();
+          if (result.loaded) {
+            reconcileMembership(result.activeRunIds);
+          }
+          return result;
+        };
+
+        if (sameSession) {
+          handlers.pauseStreamingWatchdog();
+          handlers.reconnectStreamingWatchdog();
+          const recovered = await loadSelectedHistory();
+          expect(recovered.loaded).toBe(true);
+          if (recovered.loaded) {
+            handlers.reconnectStreamingWatchdog(recovered.runOutcome);
+          }
+        } else {
+          await actions.setSession(nextSessionKey);
+        }
+        expect(state.activeChatRunId).toBe(nextRunId);
+
+        handlers.handleChatEvent({
+          runId: nextRunId,
+          sessionKey: nextSessionKey,
+          seq: 2,
+          state: "final",
+          message: { role: "assistant", content: [{ type: "text", text: "new final" }] },
+        });
+
+        expect(state.activeChatRunId).toBe(preservesOld ? previousRunId : null);
+        expect(setActivityStatus).toHaveBeenLastCalledWith(preservesOld ? "running" : "idle");
+        vi.advanceTimersByTime(101);
+        expect(addPendingSystem).toHaveBeenCalledTimes(preservesOld ? 1 : 0);
+        if (sameSession && !preservesOld) {
+          handlers.handleChatEvent({
+            runId: previousRunId,
+            sessionKey: previousSessionKey,
+            seq: 3,
+            state: "final",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "late complete reply" }],
+            },
+          });
+          expect(chatLog.render(120).join("\n")).toContain("late complete reply");
+          expect(state.activeChatRunId).toBeNull();
+        }
+        handlers.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["agent:main:main", "main"])(
+    "preserves run ownership when reselecting the same session as %s",
+    async (selectedKey) => {
+      const sessionKey = "agent:main:main";
+      const activeRunId = "run-active";
+      const pendingRunId = "run-pending";
+      const pendingText = "still waiting for the Gateway";
+      const invalidateRunOwnership = vi.fn();
+      const clearLocalRunIds = vi.fn();
+      const loadHistory = vi.fn();
       const state = createBaseState({
-        currentSessionKey: previousSessionKey,
-        currentSessionId: "session-previous",
+        currentSessionKey: sessionKey,
+        activeChatRunId: activeRunId,
+        pendingSubmit: acceptedSubmit(pendingRunId, pendingText),
+        activityStatus: "streaming",
         historyLoaded: true,
       });
+      sendPendingUser(state, pendingRunId, pendingText);
       const chatLog = new ChatLog();
-      const addPendingSystem = vi.spyOn(chatLog, "addPendingSystem");
-      const tui = makeTui();
-      const setActivityStatus = vi.fn((status: string) => {
-        state.activityStatus = status;
-      });
-      let loadSelectedHistory: () => Promise<TuiHistoryLoadResult> = async () => ({
-        loaded: false,
-      });
-      const handlers = createEventHandlers({
-        chatLog,
-        btw: createBtwPresenter(),
-        tui,
-        state,
-        setActivityStatus,
-        loadHistory: () => loadSelectedHistory(),
-        streamingWatchdogMs: 100,
-      });
-      handlers.handleChatEvent({
-        runId: previousRunId,
-        sessionKey: previousSessionKey,
-        seq: 1,
-        state: "delta",
-        message: { role: "assistant", content: [{ type: "text", text: "old partial" }] },
-      });
-      expect(state.activeChatRunId).toBe(previousRunId);
-
-      const actions = createTestSessionActions({
+      chatLog.addPendingUser(pendingRunId, pendingText);
+      const { setSession } = createTestSessionActions({
         client: makeTuiBackend({
           listSessions: vi.fn(),
-          loadHistory: vi.fn().mockResolvedValue({
-            sessionId: "session-next",
-            sessionInfo: {
-              key: nextSessionKey,
-              sessionId: "session-next",
-              updatedAt: 1,
-            },
-            messages: [],
-            inFlightRun: { runId: nextRunId, text: "new partial" },
-          }),
+          loadHistory,
         }),
         chatLog,
         state,
-        tui,
-        setActivityStatus,
-        invalidateRunOwnership: handlers.dispose,
-      });
-      loadSelectedHistory = actions.loadHistory;
-
-      await actions.setSession(nextSessionKey);
-      expect(state.activeChatRunId).toBe(nextRunId);
-
-      handlers.handleChatEvent({
-        runId: nextRunId,
-        sessionKey: nextSessionKey,
-        seq: 2,
-        state: "final",
-        message: { role: "assistant", content: [{ type: "text", text: "new final" }] },
+        invalidateRunOwnership,
+        clearLocalRunIds,
+        setActivityStatus: (activityStatus) => {
+          state.activityStatus = activityStatus;
+        },
       });
 
-      expect(state.activeChatRunId).toBeNull();
-      expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
-      vi.advanceTimersByTime(101);
-      expect(addPendingSystem).not.toHaveBeenCalled();
-      handlers.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+      await setSession(selectedKey);
 
-  it("preserves run ownership when reloading the same session selection", async () => {
+      expect(state.activeChatRunId).toBe(activeRunId);
+      expect(state.pendingSubmit).toEqual(acceptedSubmit(pendingRunId, pendingText));
+      expect(state.activityStatus).toBe("streaming");
+      expect(chatLog.render(120).join("\n")).toContain(pendingText);
+      expect(invalidateRunOwnership).not.toHaveBeenCalled();
+      expect(clearLocalRunIds).not.toHaveBeenCalled();
+      expect(loadHistory).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reloads the current session when its initial history never loaded", async () => {
     const sessionKey = "agent:main:main";
-    const invalidateRunOwnership = vi.fn();
-    const state = createBaseState({ currentSessionKey: sessionKey });
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      sessionInfo: { key: sessionKey, sessionId: "session-main" },
+      messages: [],
+    });
+    const state = createBaseState({
+      currentSessionKey: sessionKey,
+      historyLoaded: false,
+    });
     const { setSession } = createTestSessionActions({
-      client: makeTuiBackend({
-        listSessions: vi.fn(),
-        loadHistory: vi.fn().mockResolvedValue({
-          sessionId: "session-main",
-          sessionInfo: { key: sessionKey, sessionId: "session-main" },
-          messages: [],
-        }),
-      }),
+      client: makeTuiBackend({ listSessions: vi.fn(), loadHistory }),
       state,
-      invalidateRunOwnership,
     });
 
     await setSession(sessionKey);
 
-    expect(invalidateRunOwnership).not.toHaveBeenCalled();
+    expect(loadHistory).toHaveBeenCalledOnce();
+    expect(state.historyLoaded).toBe(true);
   });
 
   it("adopts an in-flight run with no buffered text (Codex) and shows streaming", async () => {
@@ -1641,13 +1783,15 @@ describe("tui session actions", () => {
 
     await setSession("agent:main:target");
 
-    expect(state.sessionInfo).toMatchObject({
-      displayName: undefined,
-      fastMode: undefined,
-      verboseLevel: undefined,
-      traceLevel: undefined,
-      reasoningLevel: undefined,
-    });
+    for (const key of [
+      "displayName",
+      "fastMode",
+      "verboseLevel",
+      "traceLevel",
+      "reasoningLevel",
+    ] as const) {
+      expect(state.sessionInfo[key]).toBeUndefined();
+    }
   });
 
   it("merges a same-session mode patch without clearing untouched modes", () => {
@@ -2081,6 +2225,103 @@ describe("tui session actions", () => {
     expect(addSystem).toHaveBeenCalledWith("session agent:main:new");
   });
 
+  it.each(["none", "before adoption", "during refresh", "after acknowledgement"])(
+    "keeps the reset acknowledgement with a notification %s",
+    async (notification) => {
+      const state = createBaseState({
+        currentSessionId: "same-session",
+        sessionGeneration: 4,
+        historyLoaded: true,
+        sessionInfo: { updatedAt: 10, totalTokens: 42 },
+      });
+      const entry = { sessionId: "same-session", updatedAt: 20, totalTokens: 0 };
+      const result = { ok: true, key: state.currentSessionKey, entry };
+      const chatLog = makeChatLog();
+      chatLog.addUser("before reset");
+      const tui = makeTui();
+      const btw = createBtwPresenter();
+      const setActivityStatus = (text: string) => {
+        state.activityStatus = text;
+      };
+      const refreshStarted = createDeferred();
+      const refreshResult = createDeferred<TuiSessionList>();
+      const resetResponse = createDeferred<typeof result>();
+      const client = makeTuiBackend({
+        resetSession: vi.fn(() => resetResponse.promise),
+        listSessions: vi.fn(() => {
+          refreshStarted.resolve();
+          return refreshResult.promise;
+        }),
+        loadHistory: vi.fn(async () => ({
+          messages: [],
+          sessionInfo: { key: result.key, ...entry },
+        })),
+      });
+      const actions = createTestSessionActions({ client, chatLog, tui, btw, state });
+      const histories: Array<Promise<TuiHistoryLoadResult>> = [];
+      const events = createEventHandlers({
+        chatLog,
+        tui,
+        btw,
+        state,
+        setActivityStatus,
+        loadHistory: () => {
+          const history = actions.loadHistory();
+          histories.push(history);
+          return history;
+        },
+        refreshSessionInfo: actions.refreshSessionInfo,
+      });
+      const commands = createCommandHandlers({
+        client,
+        chatLog,
+        tui,
+        state,
+        opts: {},
+        deliverDefault: false,
+        openOverlay: (component) => tui.showOverlay(component),
+        closeOverlay: () => tui.hideOverlay(),
+        setActivityStatus,
+        formatSessionKey: (key) => key,
+        requestExit: vi.fn(),
+        ...actions,
+      });
+      const notify = () =>
+        events.handleSessionsChangedEvent({
+          sessionKey: result.key,
+          agentId: "main",
+          reason: "reset",
+          ...entry,
+        });
+      try {
+        const resetting = commands.handleCommand("/reset");
+        resetResponse.resolve(result);
+        if (notification === "before adoption") {
+          notify();
+        } else {
+          await refreshStarted.promise;
+          if (notification === "during refresh") {
+            notify();
+          }
+        }
+        refreshResult.resolve(makeTuiSessionList({ sessions: [{ key: result.key, ...entry }] }));
+        await resetting;
+        if (notification === "after acknowledgement") {
+          notify();
+        }
+        await Promise.all(histories);
+        await vi.waitFor(() => {
+          const rendered = chatLog.render(120).join("\n");
+          expect(rendered).not.toContain("before reset");
+          expect(rendered.match(/session agent:main:main reset/g)).toHaveLength(1);
+        });
+        expect(commands.resolveMessageAdmission("after reset")).toEqual({ status: "allowed" });
+      } finally {
+        events.dispose();
+      }
+    },
+  );
+
   it("fences pre-reset history and session-info reads when reset commits", async () => {
     const history = createDeferred<unknown>();
     const sessionInfo = createDeferred<TuiSessionList>();
@@ -2153,6 +2394,86 @@ describe("tui session actions", () => {
     expect(addUser).not.toHaveBeenCalled();
     expect(clearAll).toHaveBeenCalledOnce();
   });
+
+  it("discards in-flight history when an external event replaces the same session", async () => {
+    const history = createDeferred<unknown>();
+    const { chatLog, addUser, clearAll } = createHistoryChatLog();
+    const state = createBaseState({
+      currentSessionId: "session-before-reset",
+      sessionGeneration: 4,
+      sessionInfo: { model: "model-before-reset" },
+    });
+    const { loadHistory } = createTestSessionActions({
+      client: makeTuiBackend({ loadHistory: vi.fn(() => history.promise) }),
+      chatLog,
+      state,
+    });
+
+    const staleHistory = loadHistory();
+    state.sessionGeneration = 5;
+    state.currentSessionId = "session-after-reset";
+    state.sessionInfo = { model: "model-after-reset" };
+    history.resolve({
+      sessionInfo: {
+        key: "agent:main:main",
+        sessionId: "session-before-reset",
+        model: "private-old-model",
+      },
+      messages: [{ role: "user", content: "PRIVATE OLD HISTORY" }],
+    });
+
+    await expect(staleHistory).resolves.toEqual({ loaded: false });
+    expect(state.currentSessionId).toBe("session-after-reset");
+    expect(state.sessionInfo.model).toBe("model-after-reset");
+    expect(addUser).not.toHaveBeenCalled();
+    expect(clearAll).not.toHaveBeenCalled();
+  });
+
+  it.each(["success", "failure"] as const)(
+    "discards an in-flight session-info %s after an external same-key reset",
+    async (outcome) => {
+      const sessionInfo = createDeferred<TuiSessionList>();
+      const addSystem = vi.fn();
+      const state = createBaseState({
+        currentSessionId: "session-before-reset",
+        sessionGeneration: 4,
+        sessionInfo: { model: "model-before-reset", updatedAt: 10 },
+      });
+      const { refreshSessionInfo } = createTestSessionActions({
+        client: makeTuiBackend({ listSessions: vi.fn(() => sessionInfo.promise) }),
+        chatLog: makeChatLog({ addSystem }),
+        state,
+      });
+
+      const staleSessionInfo = refreshSessionInfo();
+      state.sessionGeneration = 5;
+      state.currentSessionId = "session-after-reset";
+      state.sessionInfo = { model: "model-after-reset", updatedAt: 20 };
+      if (outcome === "failure") {
+        sessionInfo.reject(new Error("private previous-session details"));
+      } else {
+        sessionInfo.resolve(
+          makeTuiSessionList({
+            defaults: {},
+            sessions: [
+              {
+                key: "agent:main:main",
+                sessionId: "session-before-reset",
+                model: "private-old-model",
+                updatedAt: 10,
+              },
+            ],
+          }),
+        );
+      }
+
+      await staleSessionInfo;
+
+      expect(state.currentSessionId).toBe("session-after-reset");
+      expect(state.sessionInfo.model).toBe("model-after-reset");
+      expect(addSystem).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not clear the selected session for another session's reset result", () => {
     const addSystem = vi.fn();
@@ -2415,6 +2736,27 @@ describe("tui session actions", () => {
       aborted: false,
       rejected: true,
     },
+    {
+      name: "successful abort after the same session is replaced",
+      initialKey: "agent:main:main",
+      nextKey: "agent:main:main",
+      aborted: true,
+      rejected: false,
+    },
+    {
+      name: "no-active-run abort after the same session is replaced",
+      initialKey: "agent:main:main",
+      nextKey: "agent:main:main",
+      aborted: false,
+      rejected: false,
+    },
+    {
+      name: "rejected abort after the same session is replaced",
+      initialKey: "agent:main:main",
+      nextKey: "agent:main:main",
+      aborted: false,
+      rejected: true,
+    },
   ])("ignores a $name", async ({ initialKey, nextKey, aborted, rejected }) => {
     const deferred = createDeferred<Awaited<ReturnType<TuiBackend["abortChat"]>>>();
     const abortChat = vi.fn(() => deferred.promise);
@@ -2432,6 +2774,8 @@ describe("tui session actions", () => {
     const state = createBaseState({
       currentSessionKey: initialKey,
       currentAgentId: "main",
+      currentSessionId: "first-session",
+      sessionGeneration: 4,
       activeChatRunId: "first-active-run",
       pendingSubmit: acceptedSubmit("first-pending-run"),
     });
@@ -2440,9 +2784,9 @@ describe("tui session actions", () => {
       chatLog: Object.assign(chatLog, { dropPendingUser }),
       state,
       setActivityStatus,
-      resolveSessionSelection: vi.fn((raw?: string) => ({
+      resolveSessionSelection: vi.fn((raw?: string, agentId?: string) => ({
         key: raw ?? state.currentSessionKey,
-        agentId: state.currentAgentId,
+        agentId: agentId ?? state.currentAgentId,
       })),
     });
 
@@ -2451,10 +2795,12 @@ describe("tui session actions", () => {
       sessionKey: initialKey,
       ...(initialKey === "global" ? { agentId: "main" } : {}),
     });
-    if (initialKey === "global") {
-      state.currentAgentId = "work";
+    if (initialKey === nextKey && initialKey !== "global") {
+      state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
+      state.currentSessionId = "second-session";
+    } else {
+      await setSession(nextKey, initialKey === "global" ? "work" : undefined);
     }
-    await setSession(nextKey);
     state.activeChatRunId = "second-active-run";
     state.pendingSubmit = acceptedSubmit("second-pending-run", "second draft");
     addSystem.mockClear();
@@ -2788,6 +3134,51 @@ describe("tui session actions", () => {
 
     await expect(loadHistory()).resolves.toEqual({ loaded: true, runOutcome });
   });
+
+  it.each([
+    { verboseLevel: "off", showsTool: false, showsOutput: false },
+    { verboseLevel: "on", showsTool: true, showsOutput: false },
+    { verboseLevel: "full", showsTool: true, showsOutput: true },
+  ] as const)(
+    "preserves $verboseLevel tool-output visibility when rebuilding history",
+    async ({ verboseLevel, showsTool, showsOutput }) => {
+      const privateOutput = "TUI_PRIVATE_TOOL_OUTPUT";
+      const chatLog = new ChatLog();
+      const startTool = vi.spyOn(chatLog, "startTool");
+      const state = createBaseState({
+        sessionInfo: { verboseLevel },
+      });
+      const { loadHistory } = createTestSessionActions({
+        client: makeTuiBackend({
+          listSessions: vi.fn(),
+          loadHistory: vi.fn().mockResolvedValue({
+            sessionId: "session-main",
+            sessionInfo: {
+              key: "agent:main:main",
+              sessionId: "session-main",
+              verboseLevel,
+            },
+            messages: [
+              {
+                role: "toolResult",
+                toolCallId: "tool-private",
+                toolName: "read_file",
+                content: [{ type: "text", text: privateOutput }],
+                details: { accessToken: "TUI_PRIVATE_TOOL_DETAILS" },
+              },
+            ],
+          }),
+        }),
+        chatLog,
+        state,
+      });
+
+      await loadHistory();
+
+      expect(startTool).toHaveBeenCalledTimes(showsTool ? 1 : 0);
+      expect(chatLog.render(120).join("\n").includes(privateOutput)).toBe(showsOutput);
+    },
+  );
 
   it("restores attachment-only assistant rows from history without exposing references", async () => {
     const loadHistory = vi.fn().mockResolvedValue({

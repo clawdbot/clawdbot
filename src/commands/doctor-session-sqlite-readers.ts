@@ -12,7 +12,6 @@ import {
 } from "../agents/sessions/session-manager-codec.js";
 import type { FileEntry } from "../agents/sessions/session-manager-types.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
-import type { SqliteTranscriptStorageRow } from "../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
@@ -84,7 +83,7 @@ export function createTranscriptEventReader(
   sessionId: string,
   allowMalformedPrefix = false,
   sourceFingerprint = readTranscriptFingerprint(transcriptPath),
-): (append: (event: TranscriptEvent) => void) => void {
+): (append: (event: TranscriptEvent) => void) => () => void {
   return (append) => {
     for (const event of readTranscriptEventsForImport(
       transcriptPath,
@@ -94,6 +93,7 @@ export function createTranscriptEventReader(
     )) {
       append(event as TranscriptEvent);
     }
+    return () => assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
   };
 }
 
@@ -511,7 +511,7 @@ function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: numbe
   const fd = fs.openSync(filePath, "r");
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const buffer = Buffer.allocUnsafe(JSONL_READ_CHUNK_BYTES);
-  let carry = "";
+  let fragments: string[] = [];
   let lineNumber = 0;
   try {
     while (true) {
@@ -519,19 +519,20 @@ function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: numbe
       if (bytesRead === 0) {
         break;
       }
-      carry += decoder.decode(buffer.subarray(0, bytesRead), { stream: true });
-      const parts = carry.split(/\r?\n/);
-      carry = parts.pop() ?? "";
-      for (const part of parts) {
+      const parts = decoder.decode(buffer.subarray(0, bytesRead), { stream: true }).split("\n");
+      for (let index = 0; index < parts.length - 1; index++) {
+        fragments.push(parts[index]!);
         lineNumber += 1;
-        const text = part.trim();
+        const text = fragments.join("").trim();
+        fragments = [];
         if (text) {
           yield { lineNumber, text };
         }
       }
+      fragments.push(parts.at(-1)!);
     }
-    carry += decoder.decode();
-    const text = carry.trim();
+    fragments.push(decoder.decode());
+    const text = fragments.join("").trim();
     if (text) {
       yield { lineNumber: lineNumber + 1, text };
     }
@@ -554,125 +555,4 @@ function sqliteNumber(value: unknown): number {
 
 function parseJsonlLine(line: { text: string }): unknown {
   return JSON.parse(line.text);
-}
-
-// Schema-tolerant session enumeration for transcript-label migration (avoids post-ship columns).
-// Queries transcript_events table (schema-stable) instead of sessions table.
-// Returns read-only view of all distinct session IDs with events.
-export function readOnlySqliteTranscriptSessionIds(sqlitePath: string): string[] {
-  if (!fs.existsSync(sqlitePath)) {
-    return [];
-  }
-  let database: DatabaseSync | undefined;
-  try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    if (!tableExists(database, "transcript_events")) {
-      return [];
-    }
-    const rows = database
-      .prepare("SELECT DISTINCT session_id FROM transcript_events ORDER BY session_id ASC")
-      .all() as Array<{ session_id?: unknown }>;
-    return rows
-      .filter((row): row is { session_id: string } => typeof row.session_id === "string")
-      .map((row) => row.session_id);
-  } finally {
-    database?.close();
-  }
-}
-
-// Read-only transcript snapshot reader for dry-run detection phase.
-// Avoids opening writable database lifecycle (lease/WAL/schema-ensure).
-// Returns rows only; migration parses per-row during repair.
-type ReadOnlyTranscriptSnapshot =
-  | {
-      ok: true;
-      rows: Array<{ eventJson: string; seq: number }>;
-    }
-  | { ok: false; error: unknown };
-
-export function readOnlySqliteTranscriptSnapshot(
-  sqlitePath: string,
-  sessionId: string,
-): ReadOnlyTranscriptSnapshot {
-  if (!fs.existsSync(sqlitePath)) {
-    return { ok: false, error: new Error(`SQLite database not found: ${sqlitePath}`) };
-  }
-  let database: DatabaseSync | undefined;
-  try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    const rows = database
-      .prepare(
-        "SELECT event_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
-      )
-      .all(sessionId) as Array<{ event_json?: string; seq?: number }>;
-    const validRows = rows.filter(
-      (row): row is { event_json: string; seq: number } =>
-        typeof row.event_json === "string" && typeof row.seq === "number",
-    );
-    return {
-      ok: true,
-      rows: validRows.map((row) => ({ eventJson: row.event_json, seq: row.seq })),
-    };
-  } catch (error) {
-    return { ok: false, error };
-  } finally {
-    database?.close();
-  }
-}
-
-/** Reads exact row metadata for a guarded transcript replacement without opening a writer. */
-export function readOnlySqliteTranscriptStorageSnapshot(
-  sqlitePath: string,
-  sessionId: string,
-):
-  | { ok: true; rows: SqliteTranscriptStorageRow[]; sessionKey?: string }
-  | { ok: false; error: unknown } {
-  if (!fs.existsSync(sqlitePath)) {
-    return { ok: false, error: new Error(`SQLite database not found: ${sqlitePath}`) };
-  }
-  let database: DatabaseSync | undefined;
-  try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    const rows = database
-      .prepare(
-        "SELECT created_at, event_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
-      )
-      .all(sessionId) as Array<{
-      created_at?: unknown;
-      event_json?: unknown;
-      seq?: unknown;
-    }>;
-    const sessionKeyRow = database
-      .prepare("SELECT session_key FROM session_windows WHERE session_id = ? LIMIT 1")
-      .get(sessionId) as { session_key?: unknown } | undefined;
-    const storageRows: SqliteTranscriptStorageRow[] = [];
-    for (const row of rows) {
-      if (
-        typeof row.created_at !== "number" ||
-        typeof row.event_json !== "string" ||
-        typeof row.seq !== "number"
-      ) {
-        return {
-          ok: false,
-          error: new Error(`Invalid transcript row metadata for session ${sessionId}`),
-        };
-      }
-      storageRows.push({
-        createdAt: row.created_at,
-        eventJson: row.event_json,
-        seq: row.seq,
-      });
-    }
-    return {
-      ok: true,
-      rows: storageRows,
-      ...(typeof sessionKeyRow?.session_key === "string"
-        ? { sessionKey: sessionKeyRow.session_key }
-        : {}),
-    };
-  } catch (error) {
-    return { ok: false, error };
-  } finally {
-    database?.close();
-  }
 }

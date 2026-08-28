@@ -203,12 +203,22 @@ describe("new-session model runtime", () => {
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     const container = renderControl(control, context);
-    expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
-      "Loading models",
+    const loadingModelTrigger = container.querySelector<HTMLElement>(
+      '[data-chat-model-select="true"]',
     );
-    expect(
-      container.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled"),
-    ).toBe("true");
+    const loadingSkeleton = loadingModelTrigger?.querySelector(
+      ".skeleton.chat-controls__model-trigger-skeleton",
+    );
+    expect(loadingModelTrigger).not.toBeNull();
+    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("true");
+    expect(loadingModelTrigger?.classList.contains("chat-controls__model-trigger--loading")).toBe(
+      true,
+    );
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe("Chat model: Loading models…");
+    expect(loadingModelTrigger?.getAttribute("aria-disabled")).toBe("false");
+    expect(loadingSkeleton).not.toBeNull();
+    expect(loadingSkeleton?.getAttribute("aria-hidden")).toBe("true");
+    expect(loadingModelTrigger?.textContent).not.toContain("Loading models");
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
     pending.resolve({ models: [] });
   });
@@ -228,12 +238,24 @@ describe("new-session model runtime", () => {
     });
 
     let container = renderControl(control, context, "main", null);
-    const loadingModelTrigger = container.querySelector('[data-chat-model-select="true"]');
-    expect(loadingModelTrigger?.textContent).toContain("Loading models");
-    expect(loadingModelTrigger?.textContent).not.toContain("Default model");
-    expect(container.querySelector('[data-chat-thinking-select="true"]')?.textContent).toContain(
-      "Medium",
+    const loadingModelTrigger = container.querySelector<HTMLElement>(
+      '[data-chat-model-select="true"]',
     );
+    const loadingSkeleton = loadingModelTrigger?.querySelector(
+      ".skeleton.chat-controls__model-trigger-skeleton",
+    );
+    expect(loadingModelTrigger).not.toBeNull();
+    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("true");
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe("Chat model: Loading models…");
+    expect(loadingSkeleton).not.toBeNull();
+    expect(loadingSkeleton?.getAttribute("aria-hidden")).toBe("true");
+    expect(loadingModelTrigger?.textContent).not.toContain("Loading models");
+    expect(loadingModelTrigger?.textContent).not.toContain("Default model");
+    const reservedThinkingControl = container.querySelector<HTMLElement>(
+      '[data-chat-thinking-select="true"]',
+    );
+    expect(reservedThinkingControl).not.toBeNull();
+    expect(reservedThinkingControl?.dataset.chatThinkingDisabled).toBe("true");
     expect(control.selected).toBe("");
     expect(control.thinkingLevel).toBe("");
 
@@ -368,7 +390,7 @@ describe("new-session model runtime", () => {
     );
   });
 
-  it("renders an all-cold catalog as disabled intent with a setup action", async () => {
+  it("renders an all-cold catalog as setup actions", async () => {
     const { context, navigate, request } = contextWith([
       {
         id: "gpt-5.6-luna",
@@ -409,7 +431,8 @@ describe("new-session model runtime", () => {
     ).toBe(true);
     expect(options).toHaveLength(2);
     expect(options[0]?.textContent).toContain("Sign-in needed");
-    expect([...options].every((option) => option.disabled)).toBe(true);
+    expect([...options].every((option) => !option.disabled)).toBe(true);
+    expect([...options].every((option) => option.dataset.chatModelSetup === "true")).toBe(true);
     expect(container.textContent).toContain(
       "Authentication failed. Review the provider credential or sign-in, then retry.",
     );
@@ -633,8 +656,12 @@ describe("new-session model runtime", () => {
     });
 
     let container = renderControl(control, context);
-    expect(container.querySelector('[data-chat-model-catalog-state="refreshing"]')).not.toBeNull();
+    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(2);
+    expect(
+      container.querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')
+        ?.disabled,
+    ).toBe(false);
 
     container
       .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')

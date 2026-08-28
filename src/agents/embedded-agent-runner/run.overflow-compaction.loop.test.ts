@@ -181,6 +181,20 @@ describe("embedded run retry dispatch", () => {
     },
   );
 
+  it.each([undefined, "current-turn-tool-policy"])(
+    "preserves the supplied turn tool authority at dispatch (%s)",
+    async (toolAuthorityFingerprint) => {
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.params.toolAuthorityFingerprint = toolAuthorityFingerprint;
+
+      await dispatchEmbeddedRunAttempt(input);
+
+      expect(mocks.runAttempt.mock.calls[0]?.[0].toolAuthorityFingerprint).toBe(
+        toolAuthorityFingerprint,
+      );
+    },
+  );
+
   it.each([true, false])(
     "settles accepted spawns before a late post-compaction abort (yielded: %s)",
     async (yieldDetected) => {

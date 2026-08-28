@@ -16,7 +16,7 @@ import {
   renderGatewayServiceCleanupHints,
   type ExtraGatewayService,
 } from "../daemon/inspect.js";
-import { isLaunchctlNotLoaded } from "../daemon/launchd.js";
+import { execLaunchctl, isLaunchctlNotLoaded } from "../daemon/launchd-exec.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import { readWindowsStartupFallbackRuntimeForUpdate } from "../daemon/schtasks.js";
@@ -50,15 +50,11 @@ import {
 } from "../daemon/systemd.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import {
-  isGatewayHostServiceEnvironment,
-  NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON,
-} from "../infra/gateway-supervision.js";
+import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
-import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
-import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
+import { resolveGatewayDaemonRuntime, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { isDoctorUpdateRepairMode } from "./doctor-repair-mode.js";
@@ -67,6 +63,7 @@ import {
   EXTERNAL_SERVICE_REPAIR_NOTE,
   isServiceRepairExternallyManaged,
   resolveServiceRepairPolicy,
+  shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
 import {
   UPDATE_IN_PROGRESS_ENV,
@@ -128,47 +125,18 @@ const EXECSTART_REPAIR_CODES = new Set<string>([
 ]);
 const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
 const DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS = 100;
-type LaunchctlCleanupAttempt =
-  | { status: "succeeded"; stdout: string; stderr: string }
-  | { status: "failed"; stdout: string; stderr: string; timedOut: boolean };
-
-const runLaunchctlQuietly = async (
-  args: string[],
-  timeoutMs = DOCTOR_LAUNCHCTL_TIMEOUT_MS,
-): Promise<LaunchctlCleanupAttempt> => {
-  try {
-    const output = await runExec("launchctl", args, {
-      logOutput: false,
-      timeoutMs,
-    });
-    return { status: "succeeded", ...output };
-  } catch (error) {
-    const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
-    const message = typeof record.message === "string" ? record.message : "";
-    return {
-      status: "failed",
-      stdout: typeof record.stdout === "string" ? record.stdout : "",
-      stderr: typeof record.stderr === "string" ? record.stderr : "",
-      timedOut:
-        record.timedOut === true ||
-        record.noOutputTimedOut === true ||
-        /\bcommand timed out\b/i.test(message),
-    };
-  }
-};
-
 async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promise<boolean> {
   const deadline = Date.now() + DOCTOR_LAUNCHCTL_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const remainingMs = Math.max(1, deadline - Date.now());
-    const probe = await runLaunchctlQuietly(
+    const probe = await execLaunchctl(
       ["print", serviceTarget],
       Math.min(DOCTOR_LAUNCHCTL_TIMEOUT_MS, remainingMs),
     );
-    if (probe.status === "failed") {
+    if (probe.code !== 0) {
       // A successful print (including a stopped job) means launchd still owns
       // the label. Unknown errors and probe timeouts stay fail-closed.
-      return !probe.timedOut && isLaunchctlNotLoaded(probe);
+      return isLaunchctlNotLoaded(probe);
     }
     const delayMs = Math.min(DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS, deadline - Date.now());
     if (delayMs <= 0) {
@@ -181,20 +149,6 @@ async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promi
   return false;
 }
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
-
-function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
-  const first = programArguments?.[0];
-  if (first) {
-    const base = normalizeLowercaseStringOrEmpty(path.basename(first));
-    if (base === "bun" || base === "bun.exe") {
-      return DEFAULT_GATEWAY_DAEMON_RUNTIME; // Legacy Bun services cannot open node:sqlite state.
-    }
-    if (base === "node" || base === "node.exe") {
-      return "node";
-    }
-  }
-  return DEFAULT_GATEWAY_DAEMON_RUNTIME;
-}
 
 function findGatewayEntrypoint(programArguments?: string[]): string | null {
   if (!programArguments || programArguments.length === 0) {
@@ -213,15 +167,17 @@ async function buildExpectedGatewayServicePlan(params: {
   serviceInstallEnv: NodeJS.ProcessEnv;
   port: number;
   runtime: GatewayDaemonRuntime;
-  nodePath?: string;
+  runtimePath?: string;
 }) {
+  const managed = resolveManagedGatewayServiceCommand(params.command);
   return buildGatewayInstallPlan({
     env: params.serviceInstallEnv,
     port: params.port,
     runtime: params.runtime,
-    nodePath: params.nodePath,
-    existingEnvironment: params.command.environment,
-    existingEnvironmentValueSources: params.command.environmentValueSources,
+    runtimePath: params.runtimePath,
+    existingCommand: params.command,
+    existingEnvironment: managed?.environment,
+    existingEnvironmentValueSources: managed?.environmentValueSources,
     warn: (message, title) => note(message, title),
     config: params.cfg,
   });
@@ -317,34 +273,24 @@ async function readWindowsGatewayRuntimeForUpdateRepair(params: {
   return await params.service.readRuntime(params.env).catch(() => null);
 }
 
-async function suppressRunningSystemdExecStartRepairs(params: {
-  command: GatewayServiceCommandConfig;
-  issues: { code: string }[];
-}): Promise<boolean> {
-  if (process.platform !== "linux") {
-    return false;
+async function resolveSystemdServiceRewriteBlock(
+  command: GatewayServiceCommandConfig,
+  issues: { code: string }[],
+): Promise<string | undefined> {
+  if (process.platform !== "linux" || !issues.some(isExecStartRepairIssue)) {
+    return undefined;
   }
-  if (!params.issues.some(isExecStartRepairIssue)) {
-    return false;
+  const unitName = resolveSystemdUnitNameFromServicePath(command.sourcePath);
+  const scope = resolveSystemdScopeFromServicePath(command.sourcePath);
+  const active = await isSystemdUnitActive(process.env, unitName, scope);
+  if (!active.ok) {
+    return `Could not determine whether gateway service ${unitName} is active: ${active.error}. Leaving supervisor metadata unchanged. Check \`systemctl${scope === "user" ? " --user" : ""} status ${unitName}\` and rerun doctor.`;
   }
-  const unitName = resolveSystemdUnitNameFromServicePath(params.command.sourcePath);
-  const scope = resolveSystemdScopeFromServicePath(params.command.sourcePath);
-  if (!(await isSystemdUnitActive(process.env, unitName, scope))) {
-    return false;
+  if (!active.value) {
+    return undefined;
   }
-  const before = params.issues.length;
-  params.issues.splice(
-    0,
-    params.issues.length,
-    ...params.issues.filter((issue) => !isExecStartRepairIssue(issue)),
-  );
-  if (params.issues.length !== before) {
-    note(
-      `Gateway service ${unitName} is running; skipped command/entrypoint rewrites for this doctor pass.`,
-      "Gateway service config",
-    );
-  }
-  return true;
+  issues.splice(0, issues.length, ...issues.filter((issue) => !isExecStartRepairIssue(issue)));
+  return `Gateway service ${unitName} is running; skipped command/entrypoint rewrites and leaving supervisor metadata unchanged. Stop the service first or use \`openclaw gateway install --force\` when you want to replace the active launcher.`;
 }
 
 async function filterInactiveExtraGatewayServices(
@@ -359,7 +305,8 @@ async function filterInactiveExtraGatewayServices(
       activeOrLegacy.push(svc);
       continue;
     }
-    if (await isSystemdUnitActive(process.env, svc.label, svc.scope)) {
+    const active = await isSystemdUnitActive(process.env, svc.label, svc.scope);
+    if (!active.ok || active.value) {
       activeOrLegacy.push(svc);
     }
   }
@@ -369,7 +316,7 @@ async function filterInactiveExtraGatewayServices(
 export async function detectExtraGatewayServiceIssues(
   options: Pick<DoctorOptions, "deep"> = {},
 ): Promise<readonly ExtraGatewayService[]> {
-  if (!isDefaultInstallIdentity(process.env) || !isGatewayHostServiceEnvironment()) {
+  if (!isDefaultInstallIdentity(process.env) || !(await shouldManageGatewayService())) {
     return [];
   }
   const detectedExtraServices = await findExtraGatewayServices(process.env, {
@@ -413,8 +360,8 @@ async function cleanupLegacyLaunchdService(params: {
   plistPath: string;
 }): Promise<{ status: "removed"; destination?: string } | { status: "failed"; reason: string }> {
   const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-  await runLaunchctlQuietly(["bootout", domain, params.plistPath]);
-  await runLaunchctlQuietly(["unload", params.plistPath]);
+  await execLaunchctl(["bootout", domain, params.plistPath], DOCTOR_LAUNCHCTL_TIMEOUT_MS);
+  await execLaunchctl(["unload", params.plistPath], DOCTOR_LAUNCHCTL_TIMEOUT_MS);
 
   // bootout/unload can return before launchd finishes stopping the job. A plist
   // must stay in place unless a bounded print probe observes the label gone.
@@ -579,7 +526,9 @@ export async function maybeRepairGatewayServiceConfig(
   }
   const managedDefinition = resolveManagedGatewayServiceCommand(command) ?? command;
   note(
-    formatGatewayHeapLimitReport(inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS)),
+    formatGatewayHeapLimitReport(
+      inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS, {}, command.programArguments),
+    ),
     "Gateway heap",
   );
   const managedWrapperPath = managedDefinition.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
@@ -618,13 +567,16 @@ export async function maybeRepairGatewayServiceConfig(
   }
   const expectedGatewayToken = tokenRefConfigured ? undefined : gatewayTokenResolution.token;
   const port = resolveGatewayPort(cfg, process.env);
-  const runtimeChoice = detectGatewayRuntime(managedDefinition.programArguments);
+  const runtimeChoice = resolveGatewayDaemonRuntime(managedDefinition.programArguments);
+  const installedRuntimePath =
+    runtimeChoice === "bun" ? managedDefinition.programArguments[0] : undefined;
   const expectedPlan = await buildExpectedGatewayServicePlan({
     cfg,
-    command: managedDefinition,
+    command,
     serviceInstallEnv,
     port,
     runtime: runtimeChoice,
+    runtimePath: installedRuntimePath,
   });
   const expectedManagedServiceEnvKeys = readManagedServiceEnvKeysFromEnvironment(
     expectedPlan.environment,
@@ -648,7 +600,7 @@ export async function maybeRepairGatewayServiceConfig(
     });
   }
   const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
-  // Bun-hosted services cannot run some repair paths; migrate through a concrete Node binary.
+  // Unsupported Bun and version-managed Node services migrate through a concrete system Node.
   const systemNodeInfo = needsNodeRuntime
     ? await resolveSystemNodeInfo({ env: process.env })
     : null;
@@ -669,11 +621,11 @@ export async function maybeRepairGatewayServiceConfig(
     needsNodeRuntime && systemNodePath
       ? await buildExpectedGatewayServicePlan({
           cfg,
-          command: managedDefinition,
+          command,
           serviceInstallEnv,
           port,
           runtime: "node",
-          nodePath: systemNodePath,
+          runtimePath: systemNodePath,
         })
       : expectedPlan;
   const { programArguments } = expectedRuntimePlan;
@@ -698,10 +650,10 @@ export async function maybeRepairGatewayServiceConfig(
     });
   }
 
-  const serviceRewriteBlocked = await suppressRunningSystemdExecStartRepairs({
-    command,
-    issues: audit.issues,
-  });
+  const serviceRewriteBlock = await resolveSystemdServiceRewriteBlock(command, audit.issues);
+  if (serviceRewriteBlock) {
+    note(serviceRewriteBlock, "Gateway service config");
+  }
 
   const hasEntrypointMismatch = audit.issues.some(
     (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
@@ -747,11 +699,7 @@ export async function maybeRepairGatewayServiceConfig(
     return cfg;
   }
 
-  if (serviceRewriteBlocked) {
-    note(
-      "Gateway service is running; leaving supervisor metadata unchanged. Stop the service first or use `openclaw gateway install --force` when you want to replace the active launcher.",
-      "Gateway service config",
-    );
+  if (serviceRewriteBlock) {
     return cfg;
   }
 
@@ -933,11 +881,11 @@ export async function maybeRepairGatewayServiceConfig(
   const updatedPort = resolveGatewayPort(cfgForServiceInstall, process.env);
   const updatedPlan = await buildExpectedGatewayServicePlan({
     cfg: cfgForServiceInstall,
-    command: managedDefinition,
+    command,
     serviceInstallEnv,
     port: updatedPort,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
-    nodePath: systemNodePath ?? undefined,
+    runtimePath: needsNodeRuntime && systemNodePath ? systemNodePath : installedRuntimePath,
   });
   // Windows `install` activates the task/login item. Require both a running
   // gateway and parent authorization so `update --no-restart` stays non-disruptive.
@@ -1110,7 +1058,7 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
   if (!systemOwnsGateway) {
     note(
       [
-        "The system-scope unit is not both running and enabled at boot, so the",
+        "Could not verify the system-scope unit is both running and enabled at boot, so the",
         "user-scope unit may be your working gateway. Not removing anything",
         "automatically.",
         "If the system-scope unit is the one you want, activate it and re-run doctor:",
@@ -1124,7 +1072,7 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
   }
   note(
     [
-      "The system-scope unit is the active or boot-enabled supervisor and is",
+      "The system-scope unit is the active and boot-enabled supervisor and is",
       "treated as authoritative; the user-scope unit is the redundant leftover.",
     ].join("\n"),
     "System-scope unit owns the gateway",

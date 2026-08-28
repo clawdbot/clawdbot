@@ -80,10 +80,13 @@ describe("qa scenario catalog causality", () => {
       readFlowAssertExpression(action).includes("finalMatches.length === 1"),
     );
     expect(liveMultiRestart.execution.retryCount).toBe(0);
+    expect(liveMultiRestart.execution.runtime).toBe("openclaw");
+    expect(liveMultiRestart.runtimePairLane).toBeUndefined();
     expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
       '"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]',
     );
-    expect(liveMultiRestartContract).toContain("assistantToolCallCounts.exec");
+    expect(liveMultiRestartContract).toContain("pendingCodeModeExecNeedle");
+    expect(liveMultiRestartContract).toContain("summary.hasPendingCodeModeWait");
     expect(liveMultiRestartContract).toContain("checkpoint");
     expect(liveMultiRestartContract).toContain("restarts=3");
     for (const fixturePath of [
@@ -95,16 +98,23 @@ describe("qa scenario catalog causality", () => {
     ]) {
       expect(liveMultiRestartPrompt).toContain(fixturePath);
     }
-    expect(liveMultiRestartPrompt).toContain("your only work in this turn is the next checkpoint");
     expect(liveMultiRestartPrompt).toContain(
-      "Make exactly one `exec` call with `restartSafe: true`",
+      "On this original user turn, perform only checkpoint 1",
+    );
+    expect(liveMultiRestartPrompt).toContain(
+      "After the third Gateway-recovery system message, perform the audit and final report",
+    );
+    expect(liveMultiRestartPrompt).toContain(
+      "make exactly one `exec` call with `restartSafe: true`",
     );
     expect(liveMultiRestartPrompt).toContain(
       "expired, or aborted `wait` result after restart is expected",
     );
-    expect(liveMultiRestartPrompt).toContain("`CHECKPOINT-N` is internal tool output");
     expect(liveMultiRestartPrompt).toContain(
-      "Do not send any assistant text before the final audit report",
+      "Do not issue another `exec` until a new Gateway-recovery system message arrives",
+    );
+    expect(liveMultiRestartPrompt).toContain(
+      '.some(candidate => candidate.toolName === "qa_restart_unsafe_probe")',
     );
     expect(liveMultiRestartPrompt).toContain("Do not read the `restart-audit/` directory path");
     expect(liveMultiRestartContract).toContain("sendInbound");
@@ -114,6 +124,9 @@ describe("qa scenario catalog causality", () => {
     expect(liveMultiRestartContract).toContain('"saveAs":"inbound"');
     expect(liveMultiRestartContract).toContain("probeText: config.finalMarker");
     expect(liveMultiRestartContract).toContain(
+      "pendingCodeModeExecNeedle: `CHECKPOINT-${checkpoint}`",
+    );
+    expect(liveMultiRestartContract).not.toContain(
       "assistantToolCallCounts.wait ?? 0) > (summary.completedToolCallCounts.wait ?? 0)",
     );
     expect(checkpointTranscriptIndex).toBeGreaterThanOrEqual(0);

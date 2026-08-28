@@ -20,6 +20,9 @@ export type DraftBranches = {
 
 export type DraftRepositoryState =
   | { kind: "idle" }
+  // Selected GitHub projects offer isolation before checkout exists. Local first
+  // turns prepare after admission; remote placement materializes before dispatch.
+  | { kind: "pending-clone"; cloneUrl: string }
   | { kind: "checking"; repoRoot: string }
   | ({ kind: "git" } & DraftBranches)
   | { kind: "direct"; repoRoot: string }
@@ -29,7 +32,6 @@ export type DraftCloudProfile = {
   id: string;
   providerId: string;
   trust?: "persistent" | "disposable";
-  executionMode?: WorkerExecutionMode;
   executionModes?: readonly WorkerExecutionMode[];
   machines?: DraftMachineOption[];
 };
@@ -59,8 +61,6 @@ export type DraftEnvironment = {
   invocableCommands?: string[];
   issues?: RuntimeTargetIssue[];
 };
-
-export type BrowserTarget = { nodeId: string; label: string };
 
 function normalizeTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
@@ -118,7 +118,6 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
         id?: unknown;
         providerId?: unknown;
         trust?: unknown;
-        executionMode?: unknown;
         executionModes?: unknown;
         machines?: unknown;
       };
@@ -131,17 +130,12 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
         profile.trust === "persistent" || profile.trust === "disposable"
           ? profile.trust
           : undefined;
-      const executionMode: WorkerExecutionMode | undefined =
-        profile.executionMode === "worker-turn" || profile.executionMode === "remote-exec"
-          ? profile.executionMode
-          : undefined;
       const machines = readDraftMachineOptions(profile.machines);
       return [
         {
           id,
           providerId,
           trust,
-          executionMode,
           ...(Object.hasOwn(profile, "executionModes")
             ? { executionModes: readDraftCloudProfileExecutionModes(profile.executionModes) }
             : {}),

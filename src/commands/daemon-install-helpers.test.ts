@@ -10,10 +10,13 @@ import {
   buildLaunchAgentPlist,
   readLaunchAgentProgramArgumentsFromFile,
 } from "../daemon/launchd-plist.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => true),
   loadAuthProfileStoreForSecretsRuntime: vi.fn(),
+  resolvePreferredBunPath: vi.fn(),
   resolvePreferredNodePath: vi.fn(),
   resolveGatewayProgramArguments: vi.fn(),
   resolveSystemNodeInfo: vi.fn(),
@@ -22,14 +25,12 @@ const mocks = vi.hoisted(() => ({
   resolveOpenClawWrapperPath: vi.fn(),
   assertNoSystemLaunchDaemonOwnership: vi.fn(),
   execLaunchctl: vi.fn(),
-  loadPluginManifestRegistryCore: vi.fn<
-    (...args: unknown[]) => { diagnostics: unknown[]; plugins: unknown[] }
-  >(() => ({
+  loadPluginManifestRegistryCore: vi.fn<(...args: unknown[]) => PluginManifestRegistry>(() => ({
     diagnostics: [],
     plugins: [],
   })),
   loadPluginManifestRegistryForPluginRegistry: vi.fn<
-    (...args: unknown[]) => { diagnostics: unknown[]; plugins: unknown[] }
+    (...args: unknown[]) => PluginManifestRegistry
   >(() => ({
     diagnostics: [],
     plugins: [],
@@ -45,6 +46,7 @@ vi.mock("./daemon-install-auth-profiles-store.runtime.js", () => ({
 }));
 
 vi.mock("../daemon/runtime-paths.js", () => ({
+  resolvePreferredBunPath: mocks.resolvePreferredBunPath,
   resolvePreferredNodePath: mocks.resolvePreferredNodePath,
   resolveSystemNodeInfo: mocks.resolveSystemNodeInfo,
   renderSystemNodeWarning: mocks.renderSystemNodeWarning,
@@ -238,7 +240,7 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
   mocks.loadPluginManifestRegistryCore.mockReturnValue({
     diagnostics: [],
     plugins: [
-      {
+      createPluginManifestRecordFixture({
         id: "acme-secrets",
         origin: "global",
         rootDir: pluginRoot,
@@ -251,8 +253,8 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
             passEnv: ["ACME_SECRETS_TOKEN"],
           },
         },
-      },
-      {
+      }),
+      createPluginManifestRecordFixture({
         id: "acme-plugin",
         origin: "global",
         rootDir: configuredPluginRoot,
@@ -262,13 +264,13 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
             paths: [{ path: "apiKey", expected: "string" }],
           },
         },
-      },
+      }),
     ],
   });
   mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
     diagnostics: [],
     plugins: [
-      {
+      createPluginManifestRecordFixture({
         id: "acme-plugin",
         origin: "global",
         rootDir: configuredPluginRoot,
@@ -278,7 +280,7 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
             paths: [{ path: "apiKey", expected: "string" }],
           },
         },
-      },
+      }),
     ],
   });
 
@@ -344,14 +346,14 @@ describe("buildGatewayInstallPlan", () => {
     ...env,
   });
 
-  it("uses provided nodePath and returns plan", async () => {
+  it("uses provided runtimePath and returns plan", async () => {
     mockNodeGatewayPlanFixture();
 
     const plan = await buildGatewayInstallPlan({
       env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
-      nodePath: "/custom/node",
+      runtimePath: "/custom/node",
     });
 
     expect(plan.programArguments).toEqual(["node", "gateway"]);
@@ -368,8 +370,50 @@ describe("buildGatewayInstallPlan", () => {
     expect(serviceEnvRequest?.extraPathDirs).toStrictEqual(["/custom"]);
   });
 
-  it("passes only the existing service NODE_OPTIONS to heap resolution", async () => {
+  it("resolves and forwards Bun for a Bun Gateway install plan", async () => {
+    const bunPath = "/home/test/.bun/bin/bun";
     mockNodeGatewayPlanFixture();
+    mocks.resolvePreferredBunPath.mockResolvedValue(bunPath);
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: [bunPath, "/opt/openclaw/dist/index.js", "gateway"],
+    });
+
+    await buildGatewayInstallPlan({
+      env: { HOME: isolatedHome },
+      port: 3000,
+      runtime: "bun",
+    });
+
+    expect(mocks.resolvePreferredBunPath).toHaveBeenCalledWith({
+      env: { HOME: isolatedHome },
+      runtime: "bun",
+    });
+    expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
+    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith({
+      port: 3000,
+      dev: false,
+      runtime: "bun",
+      runtimePath: bunPath,
+      wrapperPath: undefined,
+    });
+    expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
+    expect(firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").runtime).toBe(
+      "bun",
+    );
+  });
+
+  it("passes override ownership to heap resolution without persisting operator options", async () => {
+    mockNodeGatewayPlanFixture();
+    const managedDefinition = {
+      programArguments: ["node", "--max-heap-size=24576", "cli.js", "gateway"],
+      environment: { NODE_OPTIONS: "--max-old-space-size=6144" },
+    };
+    const existingCommand = {
+      ...managedDefinition,
+      environment: { NODE_OPTIONS: "--max-old-space-size=512 --require=/operator/preload.js" },
+      managedDefinition,
+      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+    };
 
     await buildGatewayInstallPlan({
       env: {
@@ -378,14 +422,15 @@ describe("buildGatewayInstallPlan", () => {
       },
       port: 3000,
       runtime: "node",
-      existingEnvironment: {
-        NODE_OPTIONS: "--max-old-space-size=6144",
-      },
+      existingCommand,
     });
 
     expect(
       firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").existingNodeOptions,
     ).toBe("--max-old-space-size=6144");
+    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
+      expect.objectContaining({ existingCommand }),
+    );
   });
 
   it("adds the active openclaw command bin directory to the managed service PATH", async () => {
@@ -399,7 +444,7 @@ describe("buildGatewayInstallPlan", () => {
         env: { HOME: isolatedHome },
         port: 3000,
         runtime: "node",
-        nodePath: "/opt/homebrew/opt/node/bin/node",
+        runtimePath: "/opt/homebrew/opt/node/bin/node",
         platform: "darwin",
       });
     } finally {
@@ -412,14 +457,14 @@ describe("buildGatewayInstallPlan", () => {
     ).toStrictEqual(["/opt/homebrew/opt/node/bin", path.dirname(openclawBinPath)]);
   });
 
-  it("does not prepend '.' when nodePath is a bare executable name", async () => {
+  it("does not prepend '.' when runtimePath is a bare executable name", async () => {
     mockNodeGatewayPlanFixture();
 
     await buildGatewayInstallPlan({
       env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
-      nodePath: "node",
+      runtimePath: "node",
     });
 
     expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
@@ -935,7 +980,7 @@ describe("buildGatewayInstallPlan", () => {
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       diagnostics: [],
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "acme-secrets",
           origin: "global",
           rootDir: pluginRoot,
@@ -947,7 +992,7 @@ describe("buildGatewayInstallPlan", () => {
               passEnv: ["ACME_SECRETS_ADDR", "ACME_SECRETS_TOKEN"],
             },
           },
-        },
+        }),
       ],
     });
 
@@ -1047,7 +1092,7 @@ describe("buildGatewayInstallPlan", () => {
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       diagnostics: [],
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "acme-secrets",
           origin: "global",
           rootDir: pluginRoot,
@@ -1059,7 +1104,7 @@ describe("buildGatewayInstallPlan", () => {
               passEnv: ["ACME_SECRETS_ADDR", "ACME_SECRETS_TOKEN"],
             },
           },
-        },
+        }),
       ],
     });
 

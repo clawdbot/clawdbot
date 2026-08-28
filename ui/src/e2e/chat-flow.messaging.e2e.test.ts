@@ -31,6 +31,27 @@ async function withChatPage(run: (page: Page) => Promise<void>): Promise<void> {
 }
 
 suite.define(() => {
+  it.each([
+    { draft: "Draft from a shared link", name: "a one-shot chat draft" },
+    { draft: undefined, name: "an existing session URL" },
+  ])("preserves remaining URL state while resolving $name", async ({ draft }) => {
+    await withChatPage(async (page) => {
+      await installMockGateway(page, { historyMessages: [] });
+      const sessionUrl = new URL(controlUiSessionUrl(suite.server.baseUrl, "main"));
+      if (draft !== undefined) {
+        sessionUrl.searchParams.set("draft", draft);
+      }
+      sessionUrl.searchParams.set("panel", "details");
+      sessionUrl.hash = "#pane";
+
+      await page.goto(sessionUrl.href);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await expect.poll(() => composer.inputValue()).toBe(draft ?? "");
+      await expect.poll(() => new URL(page.url()).search).toBe("?panel=details");
+      await expect.poll(() => new URL(page.url()).hash).toBe("#pane");
+    });
+  });
+
   it("sends a chat turn through the GUI and renders the final Gateway event", async () => {
     await withChatPage(async (page) => {
       const gateway = await installMockGateway(page, {

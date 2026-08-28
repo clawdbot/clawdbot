@@ -61,7 +61,7 @@ export function deviceUnavailableText(deviceId: string, availability: DeviceWork
     case "disconnected":
       return `device worker node is not connected: ${deviceId}; reconnect it before retrying`;
     case "at-capacity":
-      return `device worker is at capacity (all worker slots in use): ${deviceId}; retry after a running turn completes`;
+      return `device worker is at capacity (all worker slots in use): ${deviceId}; stop an existing worker environment or retry when a slot is free`;
     default:
       return `device worker availability is unknown: ${deviceId}; verify the node host is paired and connected, then retry`;
   }

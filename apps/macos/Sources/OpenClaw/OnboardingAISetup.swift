@@ -22,18 +22,7 @@ final class OnboardingAISetupModel {
     static let providerAuthRequestTimeoutMs: Double = 1_200_000
 
     private(set) var phase: Phase = .idle {
-        didSet {
-            // Close-guard: quitting mid-test is confirmable, not silent.
-            OnboardingController.shared.busyReason = if self.phase == .testing {
-                "OpenClaw is testing your AI connection."
-            } else if self.activeAuthOption != nil {
-                self.isPreparingModel
-                    ? "OpenClaw is preparing a local model."
-                    : "OpenClaw is completing provider sign-in."
-            } else {
-                nil
-            }
-        }
+        didSet { self.updateBusyReason() }
     }
 
     private(set) var candidates: [Candidate] = []
@@ -49,15 +38,7 @@ final class OnboardingAISetupModel {
     private(set) var authStep: WizardStep?
     private(set) var authError: Failure?
     private(set) var authBusy = false {
-        didSet {
-            if self.activeAuthOption != nil {
-                OnboardingController.shared.busyReason = self.isPreparingModel
-                    ? "OpenClaw is preparing a local model."
-                    : "OpenClaw is completing provider sign-in."
-            } else if self.phase != .testing {
-                OnboardingController.shared.busyReason = nil
-            }
-        }
+        didSet { self.updateBusyReason() }
     }
 
     var authText = ""
@@ -76,7 +57,10 @@ final class OnboardingAISetupModel {
 
     var manualProviderID = ""
     var manualKey: String = ""
-    private(set) var manualTesting = false
+    private(set) var manualTesting = false {
+        didSet { self.updateBusyReason() }
+    }
+
     private(set) var manualError: Failure?
     var showManualEntry = false
 
@@ -119,6 +103,21 @@ final class OnboardingAISetupModel {
         self.connectionModeProvider = connectionModeProvider
     }
 
+    private func updateBusyReason() {
+        // Every connection attempt must make quitting mid-setup confirmable.
+        OnboardingController.shared.busyReason = if self.phase == .testing || self.manualTesting ||
+            self.phase == .detecting && self.pendingActivationVerification
+        {
+            "OpenClaw is testing your AI connection."
+        } else if self.activeAuthOption != nil {
+            self.isPreparingModel
+                ? "OpenClaw is preparing a local model."
+                : "OpenClaw is completing provider sign-in."
+        } else {
+            nil
+        }
+    }
+
     func startIfNeeded() {
         if self.waitingForPendingActivationDeadline {
             self.resetForGatewayChange(clearPendingHandoff: false)
@@ -136,6 +135,8 @@ final class OnboardingAISetupModel {
         guard self.configuredGatewayBlocker == nil else { return }
         guard !self.waitingForPendingActivationDeadline else { return }
         if self.pendingActivationVerification {
+            self.detectError = nil
+            self.phase = .detecting
             Task { await self.verifyPendingConfiguredInference() }
             return
         }

@@ -407,11 +407,6 @@ final class NodeAppModel {
     private var gatewaySessionScope: String?
     var gatewayAccentColorHex: String?
     private var focusedChatSessionKey: String?
-    // Two-part unread guard mirroring Android: the opened key survives read
-    // confirmations so later unread episodes on the same open chat re-acknowledge;
-    // the acknowledged key is the per-episode pending flag.
-    @ObservationIgnored private var openedChatSessionKey: String?
-    @ObservationIgnored private var readAcknowledgedChatSessionKey: String?
     var selectedAgentId: String?
     var gatewayDefaultAgentId: String?
     var gatewayAgents: [AgentSummary] = []
@@ -655,13 +650,12 @@ final class NodeAppModel {
         return stableID
     }
 
-    /// Recreation key for the chat view model. Includes the cache gateway
-    /// identity: switching paired gateways while the transport mode stays
-    /// "operator" must rebuild the view model so transcripts are never read
-    /// from or written under another gateway's cache scope.
+    /// Session-list refresh identity. Gateway and agent changes must restart
+    /// requests so no roster or cached projection crosses either owner.
     var chatViewModelIdentityID: String {
         let gatewayID = self.chatTranscriptCacheGatewayIdentityComponent
-        return "\(self.chatTransportModeID)|\(gatewayID)|\(self.chatTranscriptCacheGeneration)"
+        let agentID = self.chatDeliveryAgentId ?? ""
+        return "\(self.chatTransportModeID)|\(gatewayID)|\(agentID)|\(self.chatTranscriptCacheGeneration)"
     }
 
     /// Stable owner key for the long-lived chat view model. Connectivity still
@@ -737,14 +731,37 @@ final class NodeAppModel {
         self.synchronizeTalkSessionKey()
     }
 
-    func loadCachedChatSessions() async -> [OpenClawChatSessionEntry] {
-        guard let cache = self.makeChatOfflineStore() else { return [] }
-        return await cache.loadSessions()
+    func loadCachedChatSessions(
+        gatewayID: String?,
+        agentID: String?) async -> [OpenClawChatSessionEntry]
+    {
+        guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, gatewayID),
+              let cache = self.makeChatOfflineStore(),
+              GatewayStableIdentifier.matches(cache.gatewayID, gatewayID)
+        else { return [] }
+        let sessions = await cache.loadSessions(agentID: agentID)
+        guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, gatewayID),
+              self.chatDeliveryAgentId == agentID
+        else { return [] }
+        return sessions.filter {
+            ChatSessionSidebarModel.isSessionInActiveAgentScope(
+                key: $0.key,
+                agentID: $0.agentId,
+                activeAgentID: agentID)
+        }
     }
 
-    func storeCachedChatSessions(_ sessions: [OpenClawChatSessionEntry]) async {
-        guard let cache = self.makeChatOfflineStore() else { return }
-        await cache.storeSessions(sessions)
+    func storeCachedChatSessions(
+        _ sessions: [OpenClawChatSessionEntry],
+        gatewayID: String?,
+        agentID: String?) async
+    {
+        guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, gatewayID),
+              self.chatDeliveryAgentId == agentID,
+              let cache = self.makeChatOfflineStore(),
+              GatewayStableIdentifier.matches(cache.gatewayID, gatewayID)
+        else { return }
+        await cache.storeSessions(sessions, agentID: agentID)
     }
 
     /// Delete one forgotten gateway's cache and durable state, or both
@@ -1035,12 +1052,7 @@ final class NodeAppModel {
 
         self.voiceWake.configure { [weak self] cmd in
             guard let self else { return }
-            let sessionKey = await MainActor.run { self.mainSessionKey }
-            do {
-                try await self.sendVoiceTranscript(text: cmd, sessionKey: sessionKey)
-            } catch {
-                // Best-effort only.
-            }
+            try await self.sendVoiceTranscript(text: cmd, sessionKey: self.mainSessionKey)
         }
         self.voiceNoteRecorder.onRecordingActiveChanged = { [weak self] isActive in
             self?.voiceWake.setSuppressedByVoiceNote(isActive)
@@ -1592,13 +1604,14 @@ final class NodeAppModel {
             let mainKey = SessionKey.normalizeMainKey(session?["mainKey"] as? String)
             let scope = (session?["scope"] as? String) ?? "per-sender"
             let accentHex = ColorHexSupport.gatewayUserAccentHex(configUI: config["ui"] as? [String: Any])
+            let profileAccentHex = await self.fetchProfileAccentHex(ifCurrentRoute: sourceRoute)
             guard shouldApply(),
                   GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
             else { return }
             await MainActor.run {
                 self.mainSessionBaseKey = mainKey
                 self.gatewaySessionScope = scope
-                self.gatewayAccentColorHex = accentHex
+                self.gatewayAccentColorHex = profileAccentHex ?? accentHex
                 self.synchronizeTalkSessionKey()
             }
         } catch {
@@ -1609,6 +1622,26 @@ final class NodeAppModel {
                 }
             }
             // ignore
+        }
+    }
+
+    /// Caller's per-profile accent (users.prefs.get). nil covers every
+    /// non-authoritative outcome — profile-less connections
+    /// (no_durable_identity), older gateways without the method, and malformed
+    /// stored values — so the gateway accent stays the fallback.
+    private func fetchProfileAccentHex(ifCurrentRoute sourceRoute: GatewayNodeSessionRoute) async -> String? {
+        do {
+            let res = try await operatorGateway.request(
+                method: "users.prefs.get",
+                paramsJSON: #"{"keys":["ui.accent"]}"#,
+                timeoutSeconds: 8,
+                ifCurrentRoute: sourceRoute)
+            guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any],
+                  json["status"] as? String == "ok"
+            else { return nil }
+            return ColorHexSupport.profileAccentHex(entries: json["entries"] as? [String: Any])
+        } catch {
+            return nil
         }
     }
 
@@ -1680,6 +1713,8 @@ final class NodeAppModel {
         }
         if selectedAgentChanged {
             self.focusedChatSessionKey = nil
+            self.shareDeliveryChannel = nil
+            self.shareDeliveryTo = nil
         }
         self.synchronizeTalkSessionKey()
         if let relay = ShareGatewayRelaySettings.loadConfig() {
@@ -1692,6 +1727,13 @@ final class NodeAppModel {
                     sessionKey: mainSessionKey,
                     deliveryChannel: self.shareDeliveryChannel,
                     deliveryTo: self.shareDeliveryTo))
+        }
+        if selectedAgentChanged {
+            // Delivery metadata belongs to the selected agent. Rehydrate it
+            // after the selection commit; request-time identity fences stale replies.
+            Task { [weak self] in
+                await self?.refreshShareRouteFromGateway()
+            }
         }
     }
 
@@ -1748,6 +1790,11 @@ final class NodeAppModel {
             // Persisted config writes (accent, session routing) must reach an
             // already-connected app; the protocol directs clients to re-read via
             // config.get, which the guarded branding refresh already does.
+            await self.refreshBrandingFromGateway(shouldApply: shouldContinue)
+        case "users.prefs.changed":
+            // The gateway targets this event at connections bound to the
+            // caller's own profile, so any receipt means our profile appearance
+            // changed on another device — re-run the guarded branding refresh.
             await self.refreshBrandingFromGateway(shouldApply: shouldContinue)
         case "voicewake.changed":
             struct Payload: Decodable { var triggers: [String] }
@@ -3367,16 +3414,8 @@ extension NodeAppModel {
         self.mainSessionKey
     }
 
-    func openChat(sessionKey: String?, unread: Bool = false) {
+    func openChat(sessionKey: String?) {
         self.focusChatSession(sessionKey)
-        let activeKey = self.chatSessionKey
-        self.openedChatSessionKey = activeKey
-        if self.readAcknowledgedChatSessionKey != activeKey {
-            self.readAcknowledgedChatSessionKey = nil
-        }
-        if unread {
-            self.acknowledgeChatSessionReadIfNeeded(activeKey)
-        }
         self.openChatRequestID &+= 1
     }
 
@@ -3400,47 +3439,6 @@ extension NodeAppModel {
         else { return false }
         self.consumedDashboardNavigationRequestID = requestID
         return true
-    }
-
-    /// One acknowledgement per unread episode: the pending flag clears when a fresh
-    /// snapshot confirms the read (unread != true), so a run finishing while the
-    /// session stays open re-acknowledges without patch loops (the gateway stamps
-    /// lastReadAt server-side, which makes the exchange convergent).
-    func reconcileChatSessionReadState(_ entries: [OpenClawChatSessionEntry]) {
-        guard let openedKey = self.openedChatSessionKey,
-              let entry = entries.first(where: { $0.key == openedKey })
-        else { return }
-        if entry.unread != true {
-            if self.readAcknowledgedChatSessionKey == openedKey {
-                self.readAcknowledgedChatSessionKey = nil
-            }
-            return
-        }
-        // Only the currently open chat auto-acknowledges fresh unread episodes.
-        guard openedKey == self.chatSessionKey else { return }
-        self.acknowledgeChatSessionReadIfNeeded(openedKey)
-    }
-
-    private func acknowledgeChatSessionReadIfNeeded(_ sessionKey: String) {
-        guard self.readAcknowledgedChatSessionKey != sessionKey else { return }
-        self.readAcknowledgedChatSessionKey = sessionKey
-        let transport = self.makeChatTransport()
-        Task { @MainActor in
-            do {
-                try await transport.patchSession(
-                    key: sessionKey,
-                    expectedSessionID: nil,
-                    label: nil,
-                    category: nil,
-                    pinned: nil,
-                    archived: nil,
-                    unread: false)
-            } catch {
-                if self.readAcknowledgedChatSessionKey == sessionKey {
-                    self.readAcknowledgedChatSessionKey = nil
-                }
-            }
-        }
     }
 
     func focusChatSession(_ sessionKey: String?) {
@@ -4083,66 +4081,85 @@ extension NodeAppModel {
             bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
+    private enum GatewayCredentialHandoffError: Error {
+        case missingRoles(Set<String>)
+        case persistenceFailed
+    }
+
     private func completeSuccessfulGatewayAuthHandoff(
         stableID: String,
         routeGeneration: UInt64,
-        issuedRoles: Set<String>,
-        nodeOptions: GatewayConnectOptions) throws -> GatewayConnectOptions?
+        authRoles: (received: Set<String>, persisted: Set<String>),
+        nodeOptions: GatewayConnectOptions) async -> GatewayConnectOptions?
     {
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return nil }
-
-        // Bootstrap authentication is single-use. Do not keep a consumed bootstrap
-        // route alive unless both replacement sessions can authenticate from secure storage.
-        guard issuedRoles.isSuperset(of: ["node", "operator"]) else {
-            return nodeOptions.allowStoredDeviceAuth ? nodeOptions : nil
-        }
-        guard let config = activeGatewayConnectConfig,
-              GatewayStableIdentifier.matches(config.effectiveStableID, stableID)
-        else { return nil }
-        let instanceID = GatewaySettingsStore.currentInstanceID()
-        let deviceAuthGatewayID = nodeOptions.deviceAuthGatewayID ?? stableID
-        if let metadata = GatewaySettingsStore.loadGatewayCredentialMetadata(
-            instanceId: instanceID,
-            gatewayStableID: deviceAuthGatewayID),
-            metadata.suppressStoredDeviceAuth
-        {
-            guard try GatewaySettingsStore.completeGatewayCredentialHandoff(
-                instanceId: instanceID,
-                gatewayStableID: deviceAuthGatewayID)
-            else { return nil }
-        }
-        var reconnectOptions = nodeOptions
-        reconnectOptions.allowStoredDeviceAuth = true
-        self.activeGatewayConnectConfig = GatewayConnectConfig(
-            url: config.url,
-            stableID: config.stableID,
-            tls: config.tls,
-            token: config.token,
-            bootstrapToken: nil,
-            password: config.password,
-            nodeOptions: reconnectOptions)
-
-        if self.operatorGatewayTask == nil,
-           self.shouldStartOperatorGatewayLoop(
-               token: config.token,
-               bootstrapToken: nil,
-               password: config.password,
-               deviceAuthGatewayID: deviceAuthGatewayID,
-               allowStoredDeviceAuth: true)
-        {
-            let sessionBox = config.tls.map {
-                WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0))
+        do {
+            // Bootstrap authentication is single-use. Do not keep a consumed bootstrap
+            // route alive unless both replacement sessions can authenticate from secure storage.
+            let requiredRoles: Set = ["node", "operator"]
+            guard authRoles.persisted.isSuperset(of: requiredRoles) else {
+                if nodeOptions.allowStoredDeviceAuth {
+                    return nodeOptions
+                }
+                let missingRoles = requiredRoles.subtracting(authRoles.received)
+                throw missingRoles.isEmpty
+                    ? GatewayCredentialHandoffError.persistenceFailed
+                    : GatewayCredentialHandoffError.missingRoles(missingRoles)
             }
-            self.startOperatorGatewayLoop(
+            guard let config = activeGatewayConnectConfig,
+                  GatewayStableIdentifier.matches(config.effectiveStableID, stableID)
+            else { return nil }
+            let instanceID = GatewaySettingsStore.currentInstanceID()
+            let deviceAuthGatewayID = nodeOptions.deviceAuthGatewayID ?? stableID
+            if let metadata = GatewaySettingsStore.loadGatewayCredentialMetadata(
+                instanceId: instanceID,
+                gatewayStableID: deviceAuthGatewayID),
+                metadata.suppressStoredDeviceAuth
+            {
+                guard try GatewaySettingsStore.completeGatewayCredentialHandoff(
+                    instanceId: instanceID,
+                    gatewayStableID: deviceAuthGatewayID)
+                else { throw GatewayCredentialHandoffError.persistenceFailed }
+            }
+            var reconnectOptions = nodeOptions
+            reconnectOptions.allowStoredDeviceAuth = true
+            self.activeGatewayConnectConfig = GatewayConnectConfig(
                 url: config.url,
-                stableID: stableID,
+                stableID: config.stableID,
+                tls: config.tls,
                 token: config.token,
                 bootstrapToken: nil,
                 password: config.password,
-                nodeOptions: reconnectOptions,
-                sessionBox: sessionBox)
+                nodeOptions: reconnectOptions)
+
+            if self.operatorGatewayTask == nil,
+               self.shouldStartOperatorGatewayLoop(
+                   token: config.token,
+                   bootstrapToken: nil,
+                   password: config.password,
+                   deviceAuthGatewayID: deviceAuthGatewayID,
+                   allowStoredDeviceAuth: true)
+            {
+                let sessionBox = config.tls.map {
+                    WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0))
+                }
+                self.startOperatorGatewayLoop(
+                    url: config.url,
+                    stableID: stableID,
+                    token: config.token,
+                    bootstrapToken: nil,
+                    password: config.password,
+                    nodeOptions: reconnectOptions,
+                    sessionBox: sessionBox)
+            }
+            return reconnectOptions
+        } catch {
+            await self.handleGatewayCredentialHandoffFailure(
+                stableID: stableID,
+                routeGeneration: routeGeneration,
+                error: error)
+            return nil
         }
-        return reconnectOptions
     }
 
     private func gatewayOptionsAfterSuccessfulConnection(
@@ -4159,35 +4176,18 @@ extension NodeAppModel {
         else {
             return nodeOptions
         }
-        let issuedRoles = await nodeGateway.currentIssuedDeviceAuthRoles()
-        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return nil }
-        let reconnectOptions: GatewayConnectOptions?
-        do {
-            reconnectOptions = try self.completeSuccessfulGatewayAuthHandoff(
-                stableID: stableID,
-                routeGeneration: routeGeneration,
-                issuedRoles: issuedRoles,
-                nodeOptions: nodeOptions)
-        } catch {
-            await self.handleGatewayCredentialHandoffPersistenceFailure(
-                stableID: stableID,
-                routeGeneration: routeGeneration,
-                error: error)
-            return nil
-        }
-        guard let reconnectOptions else {
-            await self.handleGatewayCredentialHandoffPersistenceFailure(
-                stableID: stableID,
-                routeGeneration: routeGeneration)
-            return nil
-        }
-        return reconnectOptions
+        let authRoles = await nodeGateway.currentDeviceAuthRoles()
+        return await self.completeSuccessfulGatewayAuthHandoff(
+            stableID: stableID,
+            routeGeneration: routeGeneration,
+            authRoles: authRoles,
+            nodeOptions: nodeOptions)
     }
 
-    private func handleGatewayCredentialHandoffPersistenceFailure(
+    private func handleGatewayCredentialHandoffFailure(
         stableID: String,
         routeGeneration: UInt64,
-        error: Error? = nil) async
+        error: Error) async
     {
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
         guard self.credentialHandoffFailureGeneration != routeGeneration else { return }
@@ -4200,18 +4200,39 @@ extension NodeAppModel {
         await self.nodeGateway.disconnect()
         await self.operatorGateway.disconnect()
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
-        let technicalDetails = error.map {
-            "Gateway credential handoff persistence failed: \($0.localizedDescription)"
-        } ?? "Gateway credential handoff persistence failed."
+        let problem: GatewayConnectionProblem
+        let technicalDetails: String
+        switch error {
+        case let GatewayCredentialHandoffError.missingRoles(roles):
+            technicalDetails = "Gateway credential handoff missing roles: \(roles.sorted().joined(separator: ", "))."
+            problem = GatewayConnectionProblem(
+                kind: .unknown,
+                owner: .gateway,
+                title: "Gateway setup incomplete",
+                message: """
+                The Gateway did not provide all credentials required by this iPhone. \
+                Generate a new iPhone setup code on the Gateway, then scan it in Settings → Gateway. \
+                Automatic reconnect is paused until you retry setup.
+                """,
+                docsURL: URL(string: "https://docs.openclaw.ai/platforms/ios"),
+                retryable: true,
+                pauseReconnect: true,
+                technicalDetails: technicalDetails)
+        default:
+            technicalDetails = error is GatewayCredentialHandoffError
+                ? "Gateway credential handoff persistence failed."
+                : "Gateway credential handoff persistence failed: \(error.localizedDescription)"
+            problem = GatewayConnectionProblem(
+                kind: .unknown,
+                owner: .iphone,
+                title: "Credential save failed",
+                message: "OpenClaw disconnected because it could not securely save the new gateway credential.",
+                retryable: true,
+                pauseReconnect: true,
+                technicalDetails: technicalDetails)
+        }
         GatewayDiagnostics.log(technicalDetails)
-        self.applyGatewayConnectionProblem(GatewayConnectionProblem(
-            kind: .unknown,
-            owner: .iphone,
-            title: "Credential save failed",
-            message: "OpenClaw disconnected because it could not securely save the new gateway credential.",
-            retryable: true,
-            pauseReconnect: true,
-            technicalDetails: technicalDetails))
+        self.applyGatewayConnectionProblem(problem)
     }
 
     private func refreshBackgroundReconnectSuppressionIfNeeded(source: String) {
@@ -4355,27 +4376,13 @@ extension NodeAppModel {
             bootstrapToken: auth.bootstrapToken,
             password: auth.password)
         if usedBootstrapToken {
-            let issuedRoles = await nodeGateway.currentIssuedDeviceAuthRoles()
-            guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
-            do {
-                guard try self.completeSuccessfulGatewayAuthHandoff(
-                    stableID: stableID,
-                    routeGeneration: routeGeneration,
-                    issuedRoles: issuedRoles,
-                    nodeOptions: nodeOptions) != nil
-                else {
-                    await self.handleGatewayCredentialHandoffPersistenceFailure(
-                        stableID: stableID,
-                        routeGeneration: routeGeneration)
-                    return
-                }
-            } catch {
-                await self.handleGatewayCredentialHandoffPersistenceFailure(
-                    stableID: stableID,
-                    routeGeneration: routeGeneration,
-                    error: error)
-                return
-            }
+            let authRoles = await nodeGateway.currentDeviceAuthRoles()
+            guard await self.completeSuccessfulGatewayAuthHandoff(
+                stableID: stableID,
+                routeGeneration: routeGeneration,
+                authRoles: authRoles,
+                nodeOptions: nodeOptions) != nil
+            else { return }
         }
 
         self.clearGatewayConnectionProblem()
@@ -5217,23 +5224,32 @@ extension NodeAppModel {
         }
 
         do {
+            guard let sourceGatewayID = self.chatTranscriptCacheGatewayID,
+                  let sourceRoute = await operatorGateway.currentRoute(ifGatewayID: sourceGatewayID)
+            else { return }
+            let sourceAgentID = self.chatDeliveryAgentId
+            let sourceMainSessionKey = self.mainSessionKey
             let request = OpenClawChatGatewayRequests.sessionsList(
                 limit: 80,
                 search: nil,
                 archived: false,
+                agentID: sourceAgentID,
                 timeoutMs: 10000)
-            let response = try await operatorGateway.request(request)
+            let response = try await operatorGateway.request(request, ifCurrentRoute: sourceRoute)
             let decoded = try JSONDecoder().decode(SessionsListResult.self, from: response)
-            let currentKey = self.mainSessionKey
             let sorted = decoded.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
             let exactMatch = sorted.first { row in
-                row.key == currentKey && normalize(row.lastChannel) != nil && normalize(row.lastTo) != nil
+                row.key == sourceMainSessionKey && normalize(row.lastChannel) != nil && normalize(row.lastTo) != nil
             }
             let selected = exactMatch
             let channel = normalize(selected?.lastChannel)
             let to = normalize(selected?.lastTo)
 
-            guard shouldApply() else { return }
+            guard shouldApply(),
+                  GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID),
+                  self.chatDeliveryAgentId == sourceAgentID,
+                  self.mainSessionKey == sourceMainSessionKey
+            else { return }
             await MainActor.run {
                 self.shareDeliveryChannel = channel
                 self.shareDeliveryTo = to
@@ -10687,14 +10703,14 @@ extension NodeAppModel {
     }
 
     func _test_completeSuccessfulGatewayAuthHandoff(
-        issuedRoles: Set<String>,
-        nodeOptions: GatewayConnectOptions) throws -> GatewayConnectOptions?
+        authRoles: (received: Set<String>, persisted: Set<String>),
+        nodeOptions: GatewayConnectOptions) async -> GatewayConnectOptions?
     {
         guard let stableID = activeGatewayConnectConfig?.effectiveStableID else { return nil }
-        return try self.completeSuccessfulGatewayAuthHandoff(
+        return await self.completeSuccessfulGatewayAuthHandoff(
             stableID: stableID,
             routeGeneration: self.gatewayRouteGeneration,
-            issuedRoles: issuedRoles,
+            authRoles: authRoles,
             nodeOptions: nodeOptions)
     }
 

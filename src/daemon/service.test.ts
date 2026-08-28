@@ -1,5 +1,6 @@
 // Daemon service tests cover service install, start, stop, and status flows.
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -139,7 +140,9 @@ describe("resolveGatewayService", () => {
 
 describe("readGatewayServiceState", () => {
   it("tracks installed, loaded, and running separately", async () => {
+    const hasInstalledDefinition = vi.fn(async () => false);
     const service = createService({
+      hasInstalledDefinition,
       isLoaded: vi.fn(async () => true),
       readCommand: vi.fn(async () => ({
         programArguments: ["openclaw", "gateway", "run"],
@@ -156,6 +159,29 @@ describe("readGatewayServiceState", () => {
     expect(state.loadState).toEqual({ status: "loaded" });
     expect(state.running).toBe(true);
     expect(state.env.OPENCLAW_GATEWAY_PORT).toBe("18789");
+    expect(hasInstalledDefinition).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "system-scoped OpenClaw service", definition: true, installed: true },
+    { name: "missing OpenClaw service definition", definition: false, installed: false },
+    { name: "failed service definition inspection", failure: true, installed: false },
+  ])("preserves installed ownership for a $name without command details", async (scenario) => {
+    const hasInstalledDefinition = vi.fn(async () => {
+      if (scenario.failure) {
+        throw new Error("service definition inspection failed");
+      }
+      return scenario.definition ?? false;
+    });
+    const service = createService({ hasInstalledDefinition });
+    const env = { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" };
+
+    const state = await readGatewayServiceState(service, { env, timeoutMs: 100 });
+
+    expect(state.installed).toBe(scenario.installed);
+    expect(state.command).toBeNull();
+    expect(state.env).toBe(env);
+    expect(hasInstalledDefinition).toHaveBeenCalledWith({ env, timeoutMs: 100 });
   });
 
   it("keeps the caller-selected service identity when merging persisted env", async () => {
@@ -489,29 +515,128 @@ describe("startGatewayService", () => {
     expect(service.start).toHaveBeenCalledTimes(1);
   });
 
-  it("requests repair before start when the loaded service points at temporary install paths", async () => {
-    const service = createService({
-      readCommand: vi.fn(async () => ({
-        programArguments: [
-          "/private/tmp/openclaw-ai-install-cli-pr118/tools/node/bin/node",
-          "/tmp/openclaw-ai-install-cli-pr118/lib/node_modules/openclaw/dist/index.js",
-          "gateway",
+  describe("service program paths", () => {
+    const entrypoint = path.resolve("openclaw.mjs");
+    const missing = path.resolve("missing-gateway-entrypoint.cjs");
+    const temporary = path.join(os.tmpdir(), "openclaw-service-layout", "index.js");
+    const heapFlag = "--max-old-space-size=16384";
+
+    describe.each([
+      { kind: "missing", program: missing },
+      { kind: "temporary", program: temporary },
+    ])("$kind program", ({ kind, program }) => {
+      it.each([
+        { layout: "runtime executable", args: [program, heapFlag, entrypoint] },
+        { layout: "ordinary entrypoint", args: [process.execPath, program] },
+        { layout: "entrypoint after heap flag", args: [process.execPath, heapFlag, program] },
+        {
+          layout: "entrypoint after a preload named gateway",
+          args: [process.execPath, "--require", "gateway", heapFlag, program],
+        },
+        {
+          layout: "entrypoint after separate heap flag values",
+          args: [
+            process.execPath,
+            "--max-old-space-size",
+            "16384",
+            "--max-semi-space-size",
+            "64",
+            program,
+          ],
+        },
+        {
+          layout: "relative entrypoint after heap flag",
+          args: [process.execPath, heapFlag, path.basename(program)],
+          workingDirectory: path.dirname(program),
+        },
+        { layout: "direct wrapper", args: [program] },
+        {
+          layout: "node-host entrypoint",
+          args: [process.execPath, program],
+          subcommand: ["node", "run"],
+        },
+        {
+          layout: "node-host entrypoint after dev loader",
+          args: [process.execPath, "--import", "tsx", program],
+          subcommand: ["node", "run"],
+        },
+      ])(
+        "requests repair before start for $layout",
+        async ({ args, workingDirectory, subcommand = ["gateway"] }) => {
+          const service = createService({
+            readCommand: vi.fn(async () => ({
+              programArguments: [...args, ...subcommand],
+              workingDirectory,
+            })),
+            isLoaded: vi.fn(async () => true),
+          });
+
+          const result = await startGatewayService(service, { env: {}, stdout: process.stdout });
+
+          expect.soft(result).toMatchObject({
+            outcome: "repair-required",
+            issues: [
+              {
+                code: `${kind}-program`,
+                message: `service command points at a ${kind} path: ${program}`,
+              },
+            ],
+          });
+          expect(service.start).not.toHaveBeenCalled();
+        },
+      );
+    });
+
+    it.each([
+      { layout: "ordinary entrypoint", args: [process.execPath, entrypoint] },
+      {
+        layout: "heap flags and unrelated preload path",
+        args: [
+          process.execPath,
+          "--max-old-space-size",
+          "16384",
+          "--require",
+          temporary,
+          entrypoint,
         ],
-        environment: {},
-      })),
-      isLoaded: vi.fn(async () => true),
-    });
+        workingDirectory: os.tmpdir(),
+      },
+      {
+        layout: "relative entrypoint",
+        args: [process.execPath, heapFlag, path.basename(entrypoint)],
+        workingDirectory: path.dirname(entrypoint),
+      },
+      { layout: "direct wrapper", args: [entrypoint] },
+      {
+        layout: "bare Node runtime for node host",
+        args: ["node", entrypoint],
+        subcommand: ["node", "run"],
+      },
+    ])(
+      "starts $layout without inspecting application paths",
+      async ({ args, workingDirectory, subcommand = ["gateway"] }) => {
+        const service = createService({
+          readCommand: vi.fn(async () => ({
+            programArguments: [
+              ...args,
+              ...subcommand,
+              "--config",
+              missing,
+              "--log-file",
+              temporary,
+              "gateway",
+            ],
+            workingDirectory,
+          })),
+          isLoaded: vi.fn(async () => true),
+        });
 
-    const result = await startGatewayService(service, {
-      env: {},
-      stdout: process.stdout,
-    });
+        const result = await startGatewayService(service, { env: {}, stdout: process.stdout });
 
-    expect(result.outcome).toBe("repair-required");
-    if (result.outcome === "repair-required") {
-      expect(result.issues.map((issue) => issue.code)).toContain("temporary-program");
-    }
-    expect(service.start).not.toHaveBeenCalled();
+        expect(result.outcome).toBe("started");
+        expect(service.start).toHaveBeenCalledOnce();
+      },
+    );
   });
 
   it("falls back to missing-install when start fails and install artifacts are gone", async () => {

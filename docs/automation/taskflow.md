@@ -44,20 +44,29 @@ OpenClaw creates a mirrored one-task flow automatically when a detached ACP or s
 
 ## Flow statuses
 
-| Status      | Meaning                                                                    |
-| ----------- | -------------------------------------------------------------------------- |
-| `queued`    | Created, not yet progressing                                               |
-| `running`   | Flow is actively progressing                                               |
-| `waiting`   | Managed flow is parked on wait metadata (timer, external event)            |
-| `blocked`   | A step finished without a usable result; `blockedTaskId`/summary say which |
-| `succeeded` | Completed successfully                                                     |
-| `failed`    | Completed with an error                                                    |
-| `cancelled` | Cancel requested and all child tasks settled                               |
-| `lost`      | Flow lost its authoritative backing state                                  |
+| Status      | Meaning                                                           |
+| ----------- | ----------------------------------------------------------------- |
+| `queued`    | Created, not yet progressing                                      |
+| `running`   | Flow is actively progressing                                      |
+| `waiting`   | Managed flow is parked on wait metadata (timer, external event)   |
+| `blocked`   | Waiting on a blocking condition, or ended without a usable result |
+| `succeeded` | Completed successfully                                            |
+| `failed`    | Completed with an error                                           |
+| `cancelled` | Cancel requested and all child tasks settled                      |
+| `lost`      | Flow lost its authoritative backing state                         |
+
+`blocked` is the only status whose terminal meaning depends on the record. A
+managed flow with no `endedAt` remains resumable. A `blocked` flow with
+`endedAt` is finished, including mirrored flows whose backing task completed
+with a blocked outcome.
 
 ## Durable state and revision tracking
 
 Flow records persist in the shared SQLite state database (`~/.openclaw/state/openclaw.sqlite`, `flow_runs` table) alongside task records, so progress survives gateway restarts. Each write bumps the flow's `revision`; concurrent writers that pass a stale expected revision get a conflict and must re-read. WAL growth is bounded by SQLite autocheckpointing plus periodic passive checkpoints, with truncate checkpoints on shutdown. The legacy `flows/registry.sqlite` sidecar from older installs is imported by `openclaw doctor`.
+
+Gateway maintenance retains finished flows for 7 days, then prunes them. This
+includes `blocked` flows with `endedAt`; resumable managed `blocked` flows are
+retained regardless of age.
 
 ## Cancel behavior
 

@@ -374,6 +374,7 @@ Operator scopes (`src/gateway/operator-scopes.ts`), the full closed set:
 - `operator.write`
 - `operator.admin`
 - `operator.approvals`
+- `operator.questions`
 - `operator.pairing`
 - `operator.talk`
 - `operator.talk.secrets`
@@ -542,7 +543,7 @@ methods. Treat this as feature discovery, not a full enumeration of
 
   <Accordion title="Models and usage">
     - `models.list` returns the runtime-allowed model catalog. See "`models.list` views" below.
-    - `usage.status` returns provider usage windows/remaining quota summaries.
+    - `usage.status` returns provider usage windows/remaining quota summaries. Clients advertising `usage-refreshing` receive an immediate `refreshing: true` placeholder on a cold cache and must refetch on a bounded schedule; other callers block for the cold provider read.
     - `usage.cost` returns aggregated cost usage summaries for a date range. Pass `agentId` for one agent, or `agentScope: "all"` to aggregate configured agents.
     - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only for an explicit live embedding provider ping. Pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to one agent workspace; omitting it aggregates configured Dreaming workspaces.
     - `doctor.memory.dreamDiary`, `doctor.memory.backfillDreamDiary`, `doctor.memory.resetDreamDiary`, `doctor.memory.resetGroundedShortTerm`, `doctor.memory.repairDreamingArtifacts`, and `doctor.memory.dedupeDreamDiary` accept optional `{ "agentId": "agent-id" }`; omitted, they operate on the configured default agent workspace.
@@ -567,7 +568,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   <Accordion title="Plugin management">
     - `plugins.list` (`operator.read`) returns the installed plugin inventory plus locally curated official picks, diagnostics, and whether the current install mode allows mutations.
     - `plugins.search` (`operator.read`) searches installable ClawHub code-plugin and bundle-plugin families. Pass non-empty `query` and optional `limit` from 1 to 100.
-    - `plugins.install` (`operator.admin`) installs either an official catalog entry with `{ source: "official", pluginId, acknowledgeInstallPolicyWarning? }` or a ClawHub package with `{ source: "clawhub", packageName, version?, acknowledgeClawHubRisk?, acknowledgeInstallPolicyWarning? }`. When install policy returns `warn`, the error `details` include `installPolicyCode: "install_policy_warning_acknowledgement_required"`, the target, reason, and optional findings. After review, retrying the same action with `acknowledgeInstallPolicyWarning: true` approves every warning in that install invocation; each warning is freshly evaluated before installation continues. `block` and policy failures remain terminal. ClawHub installs preserve Gateway trust and integrity checks. Successful installs require a Gateway restart.
+    - `plugins.install` (`operator.admin`) installs either an official catalog entry with `{ source: "official", pluginId, acknowledgeInstallPolicyWarning? }` or a ClawHub package with `{ source: "clawhub", packageName, version?, acknowledgeInstallPolicyWarning? }`. When install policy returns `warn`, the error `details` include `installPolicyCode: "install_policy_warning_acknowledgement_required"`, the target, reason, and optional findings. After review, retrying the same action with `acknowledgeInstallPolicyWarning: true` approves every warning in that install invocation; each warning is freshly evaluated before installation continues. `block` and policy failures remain terminal. ClawHub installs preserve Gateway trust and integrity checks. Successful installs require a Gateway restart.
     - `plugins.setEnabled` (`operator.admin`) changes one installed plugin's enabled policy with `{ pluginId, enabled }`. The response includes the updated catalog entry, restart metadata, and any slot-selection warnings.
     - `plugins.uninstall` (`operator.admin`) removes one externally installed plugin with `{ pluginId }`: config references, the install record, and managed files. Bundled plugins cannot be uninstalled, only disabled. The response lists the removal actions and always requires a Gateway restart.
 
@@ -583,7 +584,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `terminal.open` starts a host PTY for an explicit `agentId` or the default agent and returns the resolved agent, working directory, shell, and confinement state. Passing `sessionKey` binds the PTY to that exact agent session and attaches the calling connection as its first viewer; omitting it creates a connection-owned operator terminal.
     - `terminal.input` and `terminal.resize` operate on sessions owned by the calling connection and agent-owned sessions where that connection is an attached viewer. `terminal.close` kills a connection-owned session, but only detaches the calling viewer from an established agent-owned session. For a new session-bound Control UI terminal, the initiating viewer's close or disconnect discards the PTY until the browser or exact-session agent first adopts it through an authorized operation.
     - `terminal.upload` accepts one base64 file up to 16 MiB, stages it in a private 24-hour temporary directory on the session's Gateway or paired-node host, and returns the absolute path. The caller must still paste or otherwise use that path; the RPC never writes terminal input or executes a command.
-    - `terminal.data` and `terminal.exit` events stream to the connection owner and attached viewers. Task-owned agent terminals close when their authoritative task reaches a terminal state; ordinary conversation-owned agent terminals remain persistent.
+    - `terminal.data` and `terminal.exit` events stream to the connection owner and attached viewers. Conversation-owned terminals remain persistent. The agent-facing `terminal` tool can list, read, resize, or close only terminals an operator opened for its exact session; it cannot open terminals. Agent input follows effective session and exec policy: `full` (YOLO) sends immediately, `guarded` and `workspace` (including accept-only or Guardian-reviewed flows) require explicit one-time approval of that exact input, and `read-only` or `deny` blocks it.
     - Connection-owned sessions whose connection drops are detached, not killed: they stay reattachable for `gateway.terminal.detachedSessionTimeoutSeconds` (default 300; `0` restores kill-on-disconnect) while recent output accumulates in a bounded server-side buffer. Established agent-owned sessions likewise survive viewer disconnect.
     - `terminal.list` returns attachable sessions. `terminal.attach` returns the replay buffer and either rebinds a connection-owned session (tmux-style take-over — a previous live owner receives `terminal.exit` with reason `detached`) or adds the connection as a viewer of an agent-owned session.
     - Every terminal method requires `operator.admin`; `gateway.terminal.enabled` is on by default and refuses every method when set to `false`. Fully sandboxed agents are refused, and an agent policy change closes existing and in-flight PTYs, detached ones included.
@@ -651,7 +652,7 @@ methods. Treat this as feature discovery, not a full enumeration of
 
   <Accordion title="Session control">
     - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured. `hasActiveRun` is the authoritative aggregate direct-session activity fact. When projected, `activeRunIds` is the complete exact active set; an empty array proves the session is idle. If aggregate activity is true while the field is omitted, another runtime owner is active but its exact identities are unavailable. Snapshot omission means identities unavailable. On incremental events, omission means no change, `null` is the event-only tombstone that clears cached exact IDs to unavailable, and an array replaces the cache. Clients correlate only exact IDs they own locally or received from requests, history, or events and never select the first list entry as an owner. When cloud-worker placement is enabled or durable recovery state exists, session rows also include a closed `placement` state (`local`, `requested`, `provisioning`, `syncing`, `starting`, `active`, `draining`, `reconciling`, `reclaimed`, or `failed`) plus state-specific environment, owner-epoch, workspace, bundle, ACK-cursor, or recovery fields. Active placements may include an advisory `diskSpace` sample with `status` (`ok`, `warning`, or `critical`), `availableBytes`, `totalBytes`, and `observedAtMs`. An active paired-device placement also includes `runner: { kind: "device", status: "available" | "offline", deviceId? }`; `deviceId` names the paired device hosting the placement (the selected host for `autoDevice` dispatch), and non-device placements omit the field. This availability is process-current, derived from the exact active environment binding and reconnect-scoped node-runner proof, and starts offline after Gateway restart until that runner reconnects. Inventory changes emit `sessions.changed` so clients refresh the canonical row. Rows carry ownership projections — write-once `createdActor`, the mutable `owner` (actor plus `assignedBy`/`assignedAt`), a bounded `participants` list (owner excluded, up to 4 actors), and the full `participantCount`; actor display labels and avatars are resolved from current profiles and agent identities at read time. Pass `creatorId` to filter by immutable `createdActor.id`; pass `ownerId` to filter by the current assignable owner, falling back to `createdActor` when no owner is assigned. The complete `owners` facet is independent of pagination and remains unfiltered by either query, so clients can render the full owner picker. Authenticated callers can pass `involvingMe: true` to keep only sessions the caller owns or has prompted, evaluated against the full participant history (profile-backed human participants only).
-    - `sessions.subscribe` enables session change events for the current WebSocket client. The subscription ends when that client disconnects.
+    - `sessions.subscribe` enables session change events for the current WebSocket client and accepts the same parameters as `sessions.list` to return an initial list in the same response. Empty `{}` parameters return only the subscription acknowledgment. The subscription ends when that client disconnects. See [Session list bootstrap](/gateway/protocol#session-list-bootstrap).
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session. Pass `includeApprovals: true` to also receive sanitized `session.approval` lifecycle events for approvals whose persisted audience includes that exact session and whose reviewer binding authorizes the subscribing client. The subscribe response then includes a bounded pending `approvalReplay`; it is authoritative when `truncated` is false. The opt-in is per subscribe call, not sticky: re-subscribing to the same session without `includeApprovals: true` removes an existing approval subscription. In addition to normal session-read authority, this opt-in requires `operator.admin`, or `operator.approvals` on a paired device.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one gateway session row for an exact session key.
@@ -722,7 +723,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   </Accordion>
 
   <Accordion title="Approval families">
-    - `approval.history` returns newest-first terminal approvals retained for 30 days for exec, plugin, and system-agent requests (scope `operator.approvals`). It supports cursor pagination plus an optional kind filter; pending approvals are not history rows.
+    - `approval.history` returns newest-first terminal approvals retained for 30 days for exec, plugin, and system-agent requests (scope `operator.approvals`). It supports cursor pagination plus an optional kind filter; pending approvals are not history rows. Treat each cursor as an opaque server token and return the exact value without padding, rewriting, or adding fields.
     - `approval.get` and `approval.resolve` are the kind-agnostic durable approval methods (scope `operator.approvals`). `approval.get` returns a sanitized pending or retained terminal projection with a stable `urlPath`; `approval.resolve` accepts the canonical approval id, an explicit `kind`, and a decision, applies first-answer-wins resolution, and always returns the recorded canonical result.
     - `exec.approval.request`, `exec.approval.get`, `exec.approval.list`, and `exec.approval.resolve` cover one-shot exec approval requests plus pending approval lookup/replay. They are protocol-boundary adapters over the same durable approval registry.
     - `exec.approval.waitDecision` waits on one pending exec approval and returns the final decision (or `null` on timeout).
@@ -747,6 +748,37 @@ methods. Treat this as feature discovery, not a full enumeration of
 
   </Accordion>
 </AccordionGroup>
+
+### Session list bootstrap
+
+Call `sessions.subscribe` with a non-empty `sessions.list` parameter object, such
+as `{ limit: 60, ownerFirst: true }`, to subscribe and load the initial roster in
+one request. A successful WebSocket response has the payload
+`{ subscribed: true, list }`, where `list` is the normal `SessionsListResult`.
+Calling with `{}` preserves the acknowledgment-only response
+`{ subscribed: true }` and does not read a snapshot.
+List parameters select the snapshot; they do not filter the connection's session
+event subscription.
+
+The Gateway registers the subscription before projecting the list. Clients must
+listen for `sessions.changed` before making the request: events can arrive while
+the snapshot is being built. Reconcile those events with the response and issue
+a trailing `sessions.list` refresh when needed, including when an event only
+invalidates the cached list. Reconnects require a new subscription and snapshot.
+
+Both methods accept `ownerFirst: true` to prepend up to 60 matching viewer-owned
+rows (or `limit`, when smaller) to the normal first page, deduplicated by session key. This applies only
+when `offset` is zero or omitted; later pages use normal pagination. Owned rows
+must pass the same visibility and list filters as the shared page. The Gateway
+resolves the viewer from the authenticated connection; no client-supplied
+identity selects these rows. Without an authenticated viewer identity, or when
+`ownerFirst` is false or omitted, the list uses normal ordering.
+
+The shared page still determines `limitApplied`, `offset`, `nextOffset`,
+`hasMore`, and `totalCount`. Prepended rows can make `sessions.length` and `count`
+exceed the shared page size. Use `nextOffset` to advance and deduplicate rows by
+session key across pages; do not derive the next offset from the displayed row
+count.
 
 ### Common event families
 

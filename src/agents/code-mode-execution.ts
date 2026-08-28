@@ -35,6 +35,7 @@ import {
   activeRuns,
   cancelPendingBridgeStates,
   cancelPendingBridgeStatesById,
+  codeModeAbortedResult,
   codeModeWaitingReason,
   createCodeModeBridgeDispatchState,
   createPendingBridgeStates,
@@ -84,6 +85,7 @@ export async function runCodeModeExec(params: {
   }
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config), {
     prepareInput: true,
+    validateInput: true,
   });
   params.onRuntime?.(runtime);
   const bridgeDispatch = createCodeModeBridgeDispatchState();
@@ -120,7 +122,7 @@ export async function runCodeModeExec(params: {
   try {
     const source = await awaitCodeModeDeadline({
       operation: () => prepareSource({ code: params.code, language: params.language, config }),
-      deadlineMs,
+      remainingMs: deadlineMs - Date.now(),
       signal: params.signal,
       createTimeoutError: () => new Error("interrupted"),
       createAbortError: () => new Error("code mode execution aborted"),
@@ -294,16 +296,7 @@ async function settleCodeModeResult(params: {
   // rounds; maxPendingToolCalls stays a per-batch concurrency cap enforced in
   // the worker.
   const settleDeadline = () => params.deadlineMs + params.approvalWait.pausedMs;
-  const abortedResult = () => ({
-    status: "failed" as const,
-    error: "code mode execution aborted",
-    code: "aborted" as const,
-    failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("host" as const),
-    bridgeDispatchStarted: params.bridgeDispatch.started,
-    output: output.slice(deliveredOutputCount),
-    replaySafe: params.replaySafe,
-    telemetry: telemetry(params.runtime),
-  });
+  const abortedResult = () => codeModeAbortedResult({ ...params, output, deliveredOutputCount });
   // Bridge tool calls (search/describe/call/namespace) run through the same
   // policy-checked executor whether the model awaits them one at a time or in a
   // batch, so resolve them inline within the exec deadline and resume the VM
@@ -363,7 +356,7 @@ async function settleCodeModeResult(params: {
           namespaceRuntime: params.namespaceRuntime,
           parentToolCallId: params.parentToolCallId,
           codeModeRunId: params.codeModeReplayId,
-          deadlineMs: settleDeadline(),
+          remainingMs: settleDeadline() - Date.now(),
           activeRunId,
           ctx: params.ctx,
           signal: params.signal,
@@ -407,6 +400,7 @@ async function settleCodeModeResult(params: {
           output,
           deliveredOutputCount,
           bridgeDispatch: params.bridgeDispatch,
+          signal: params.signal,
         });
       }
       // Deliver the settled frontier only. Unresolved sibling promises remain
@@ -499,7 +493,7 @@ async function settleCodeModeResult(params: {
             namespaceRuntime: params.namespaceRuntime,
             parentToolCallId: params.parentToolCallId,
             codeModeRunId: params.codeModeReplayId,
-            deadlineMs: settleDeadline(),
+            remainingMs: settleDeadline() - Date.now(),
             activeRunId,
             ctx: params.ctx,
             signal: params.signal,
@@ -523,6 +517,7 @@ async function settleCodeModeResult(params: {
           output,
           deliveredOutputCount,
           bridgeDispatch: params.bridgeDispatch,
+          signal: params.signal,
         });
       } catch (error) {
         cancelPendingBridgeStates(pending);
@@ -542,7 +537,7 @@ async function settleCodeModeResult(params: {
       catalogProjection: params.catalogProjection,
       namespaceRuntime: params.namespaceRuntime,
       output,
-      deadlineMs: settleDeadline(),
+      remainingMs: settleDeadline() - Date.now(),
       deliveredOutputCount,
       reservedActiveRunSlot: params.reservedActiveRunSlot,
       replaySafe: params.replaySafe,
@@ -611,6 +606,11 @@ export async function runWait(params: {
   // pending calls, the resume worker, and the inline settle phase.
   const deadlineMs = Date.now() + state.config.timeoutMs;
   const approvalWait = observeAgentRunApprovalWait(state.ctx);
+  // Snapshot closure wakes an observing wait even if its guest budget just expired.
+  // Transfer releases this signal; worker execution keeps its normal per-call signal.
+  const parkedSignal = params.signal
+    ? AbortSignal.any([params.signal, state.ownerSignal])
+    : state.ownerSignal;
   let releaseActiveRunSlot: (() => void) | undefined;
   try {
     const ready = await waitForPending(
@@ -618,7 +618,7 @@ export async function runWait(params: {
       state.settlementMode,
       Math.max(1, deadlineMs - Date.now()),
       approvalWait,
-      params.signal,
+      parkedSignal,
     );
     const resumeBudgetMs = ready
       ? usableResumeBudgetMs(deadlineMs + approvalWait.pausedMs, state.config)
@@ -626,7 +626,7 @@ export async function runWait(params: {
     if (!ready || resumeBudgetMs === undefined) {
       // An aborted wait drops the suspended run: nothing will resume it, and
       // parking it would pin a process-global active-run slot until TTL expiry.
-      if (params.signal?.aborted) {
+      if (parkedSignal.aborted) {
         disposeCodeModeRun(state.runId);
         return {
           status: "failed" as const,

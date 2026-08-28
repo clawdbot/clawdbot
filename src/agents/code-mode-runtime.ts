@@ -121,10 +121,12 @@ function readCodeModeRawConfig(config?: OpenClawConfig, agentId?: string): Recor
   return agentRaw ? { ...globalRaw, ...agentRaw } : globalRaw;
 }
 
-function readEnabled(value: unknown): boolean | "auto" {
-  // Shipped default is "auto": code mode engages only for catalog-preferred
-  // models, so unevaluated models keep normal tool exposure by construction.
-  return typeof value === "boolean" || value === "auto" ? value : "auto";
+function readEnabled(raw: Record<string, unknown>): boolean | "auto" {
+  const value = raw.enabled;
+  if (typeof value === "boolean" || value === "auto") {
+    return value;
+  }
+  return Object.keys(raw).some((key) => key !== "enabled") ? "auto" : false;
 }
 
 export function readPositiveInteger(value: unknown, fallback: number): number {
@@ -150,7 +152,7 @@ export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string)
     DEFAULT_MAX_SEARCH_LIMIT,
   );
   return {
-    enabled: readEnabled(raw.enabled),
+    enabled: readEnabled(raw),
     runtime: "quickjs-wasi",
     mode: "only",
     languages: readLanguages(raw.languages),

@@ -292,7 +292,6 @@ export async function resolveCommandsSystemPromptBundle(
     userDate,
     contextFiles: injectedFiles,
     skillsPrompt,
-    heartbeatPrompt: undefined,
     acpEnabled: isAcpRuntimeSpawnAvailable({
       config: params.cfg,
       sandboxed: sandboxRuntime.sandboxed,

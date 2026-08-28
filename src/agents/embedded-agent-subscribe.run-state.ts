@@ -63,6 +63,7 @@ export function createEmbeddedAgentSubscribeState(
     lastReasoningSent: undefined,
     pendingAssistantUsage: undefined,
     assistantUsageCommitted: false,
+    retryUsage: undefined,
     compactionInFlight: false,
     lastCompactionTokensAfter: undefined,
     pendingCompactionRetry: 0,

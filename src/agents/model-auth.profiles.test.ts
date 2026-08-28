@@ -10,6 +10,10 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import {
+  inspectPersistedAuthProfileStoreRaw,
+  writePersistedAuthProfileStoreRaw,
+} from "./auth-profiles/sqlite.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import type {
   AuthProfileCredential,
@@ -17,7 +21,9 @@ import type {
   OAuthCredential,
   RuntimeAuthProfileStore,
 } from "./auth-profiles/types.js";
+import { upsertAuthProfileWithLockOrThrow } from "./auth-profiles/upsert-with-lock.js";
 import { resolveInlineProviderApiKeyUsageId } from "./auth-profiles/usage.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import {
   createRuntimeProviderAuthLookup,
   getApiKeyForModelCore,
@@ -206,6 +212,12 @@ vi.mock("./model-auth-env-vars.js", () => {
   };
 });
 
+const resolveProviderDeprecatedAuthProfileIdsMock = vi.hoisted(() =>
+  vi.fn(({ provider }: { provider: string }) =>
+    provider === "anthropic" || provider === "claude-cli" ? ["anthropic:claude-cli"] : [],
+  ),
+);
+
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: (params: {
     provider: string;
@@ -218,8 +230,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   },
   formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
   refreshProviderOAuthCredentialWithPlugin: async () => null,
-  resolveProviderDeprecatedAuthProfileIds: ({ provider }: { provider: string }) =>
-    provider === "anthropic" || provider === "claude-cli" ? ["anthropic:claude-cli"] : [],
+  resolveProviderDeprecatedAuthProfileIds: resolveProviderDeprecatedAuthProfileIdsMock,
   resolveProviderSyntheticAuthWithPlugin: (params: {
     provider: string;
     context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
@@ -267,6 +278,7 @@ vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 
 beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  resolveProviderDeprecatedAuthProfileIdsMock.mockClear();
   cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
   cliCredentialMocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
 });
@@ -408,6 +420,92 @@ async function resolveDemoLocalApiKey(params: {
   });
 }
 
+describe("shared auth profile read-through", () => {
+  it.each([
+    {
+      name: "resolves a freshly pasted shared API key without an agent-local profile",
+      baseKey: "shared-state-key",
+      legacy: false,
+      localKey: undefined,
+    },
+    {
+      name: "keeps the populated legacy main store authoritative before relocation",
+      baseKey: "legacy-main-key",
+      legacy: true,
+      localKey: undefined,
+    },
+    {
+      name: "lets an agent-local profile override its shared read-through base",
+      baseKey: "shared-state-key",
+      legacy: false,
+      localKey: "agent-local-key",
+    },
+  ])("$name", async ({ baseKey, legacy, localKey }) => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-read-through-",
+        agentEnv: "main",
+        env: { OPENAI_API_KEY: undefined },
+      },
+      async (state) => {
+        const profileId = "openai:manual";
+        const mainAgentDir = state.agentDir();
+        const agentDir = state.agentDir("worker");
+        const credential = {
+          type: "api_key" as const,
+          provider: "openai",
+          key: baseKey,
+        };
+
+        if (legacy) {
+          writePersistedAuthProfileStoreRaw(
+            { version: 1, profiles: { [profileId]: credential } },
+            mainAgentDir,
+          );
+        }
+        await upsertAuthProfileWithLockOrThrow({
+          profileId,
+          credential,
+          agentDir: mainAgentDir,
+        });
+        if (localKey) {
+          writePersistedAuthProfileStoreRaw(
+            {
+              version: 1,
+              profiles: { [profileId]: { ...credential, key: localKey } },
+            },
+            agentDir,
+          );
+        }
+
+        expect(inspectPersistedAuthProfileStoreRaw(mainAgentDir).status).toBe(
+          legacy ? "readable" : "missing",
+        );
+        expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe(
+          localKey ? "readable" : "missing",
+        );
+
+        const inheritedAuthDir = resolveLegacyInheritedAuthDir({}, state.env);
+        const store = ensureAuthProfileStore(agentDir, {
+          allowKeychainPrompt: false,
+          syncExternalCli: false,
+          ...(inheritedAuthDir ? { inheritedAuthDir } : {}),
+        });
+        const resolved = await resolveApiKeyForProviderCore({
+          provider: "openai",
+          cfg: {},
+          agentDir,
+          store,
+        });
+
+        expect(resolved.apiKey).toBe(localKey ?? baseKey);
+        expect(resolved.source).toBe(`profile:${profileId}`);
+      },
+    );
+  });
+});
+
 describe("getApiKeyForModelCore", () => {
   it("reads oauth auth-profiles entries from auth-profiles.json via explicit profile", async () => {
     await withOpenClawTestState(
@@ -518,6 +616,28 @@ describe("getApiKeyForModelCore", () => {
         store,
       }),
     ).rejects.toThrow(/requires an OpenAI API key profile/);
+  });
+
+  it("skips incompatible OpenAI OAuth profiles before loading provider retirement policy", async () => {
+    await withEnvAsync({ OPENAI_API_KEY: "direct-openai-audio-key" }, async () => {
+      const resolved = await resolveApiKeyForProviderCore({
+        provider: "openai",
+        modelApi: "openai-audio-transcriptions",
+        store: {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "oauth",
+              provider: "openai",
+              ...oauthFixture,
+            },
+          },
+        },
+      });
+
+      expect(resolved).toMatchObject({ apiKey: "direct-openai-audio-key", mode: "api-key" });
+      expect(resolveProviderDeprecatedAuthProfileIdsMock).not.toHaveBeenCalled();
+    });
   });
 
   it("rejects an explicit OpenAI API-key profile for the Codex transport", async () => {

@@ -17,6 +17,7 @@ const coreIsolatedFiles = [
   "src/agents/model-selection.plugin-runtime.test.ts",
   "src/agents/models-config.runtime-source-snapshot.test.ts",
   "src/agents/openai-transport-stream.streaming.test.ts",
+  "src/agents/prepared-model-runtime.catalog-recovery.test.ts",
   "src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts",
   "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
 ];

@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PortListener } from "../infra/ports-types.js";
 import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
+import type { ExecResult } from "./exec-file.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
@@ -45,6 +46,7 @@ const state = vi.hoisted(() => ({
   printFailuresRemaining: 0,
   bootstrapError: "",
   bootstrapCode: 1,
+  bootstrapTermination: "exit" as ExecResult["termination"],
   bootstrapLoadsServiceOnFailure: false,
   bootstrapTransient: false,
   kickstartError: "",
@@ -484,7 +486,12 @@ function executeLaunchctlMock(file: string, args: string[]) {
         state.serviceLoaded = true;
         state.serviceRunning = true;
       }
-      return { stdout: "", stderr: detail, code: state.bootstrapCode };
+      return {
+        stdout: "",
+        stderr: detail,
+        code: state.bootstrapCode,
+        termination: state.bootstrapTermination,
+      };
     }
     state.serviceLoaded = true;
     state.serviceRunning = true;
@@ -516,7 +523,7 @@ vi.mock("./exec-file.js", async (importOriginal) => {
     execFileUtf8: vi.fn(async (...args: Parameters<typeof actual.execFileUtf8>) =>
       state.realExecFile
         ? await actual.execFileUtf8(...args)
-        : executeLaunchctlMock(args[0], args[1]),
+        : { termination: "exit" as const, ...executeLaunchctlMock(args[0], args[1]) },
     ),
   };
 });
@@ -678,6 +685,7 @@ beforeEach(() => {
   state.printFailuresRemaining = 0;
   state.bootstrapError = "";
   state.bootstrapCode = 1;
+  state.bootstrapTermination = "exit";
   state.bootstrapLoadsServiceOnFailure = false;
   state.bootstrapTransient = false;
   state.kickstartError = "";
@@ -1509,22 +1517,33 @@ describe("launchd bootstrap repair", () => {
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
-  it("treats 'already exists in domain' bootstrap failures as success and nudges the service when stopped", async () => {
-    state.bootstrapError =
-      "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501";
-    state.serviceRunning = false;
-    const env = createDefaultLaunchdEnv();
+  it.each(["exit", "timeout", "signal"] as const)(
+    "accepts already-loaded bootstrap output only after a completed command (%s)",
+    async (termination) => {
+      state.bootstrapError =
+        "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501";
+      state.bootstrapTermination = termination;
+      state.serviceRunning = false;
+      const env = createDefaultLaunchdEnv();
 
-    const repair = await repairLaunchAgentBootstrap({ env });
+      const repair = await repairLaunchAgentBootstrap({ env });
 
-    const { serviceId } = expectLaunchctlEnableBootstrapOrder(env);
-    expect(repair).toEqual({ ok: true, status: "already-loaded" });
-    expect(state.launchctlCalls.find((call) => call[0] === "kickstart")).toEqual([
-      "kickstart",
-      serviceId,
-    ]);
-    expect(countMatching(state.launchctlCalls, (call) => call[0] === "kickstart")).toBe(1);
-  });
+      const { serviceId } = expectLaunchctlEnableBootstrapOrder(env);
+      if (termination === "exit") {
+        expect(repair).toEqual({ ok: true, status: "already-loaded" });
+        expect(state.launchctlCalls.filter((call) => call[0] === "kickstart")).toEqual([
+          ["kickstart", serviceId],
+        ]);
+      } else {
+        expect(repair).toEqual({
+          ok: false,
+          status: "bootstrap-failed",
+          detail: state.bootstrapError,
+        });
+        expect(launchctlCommandNames()).not.toContain("kickstart");
+      }
+    },
+  );
 
   it("keeps genuine bootstrap failures as failures", async () => {
     state.bootstrapError = "Could not find specified service";
@@ -2135,7 +2154,7 @@ describe("launchd install", () => {
     const apiKey = "secret-api-key";
     await installLaunchAgent(
       defaultLaunchAgentFixture(env, {
-        environment: { TMPDIR: tmpDir, OPENAI_API_KEY: apiKey },
+        environment: { TMPDIR: tmpDir, OPENAI_API_KEY: apiKey, NODE_OPTIONS: "", UNUSED: "" },
       }),
     );
 
@@ -2154,6 +2173,8 @@ describe("launchd install", () => {
     const envFile = state.files.get(envFilePath) ?? "";
     expect(envFile).toContain(`export TMPDIR='${tmpDir}'`);
     expect(envFile).toContain(`export OPENAI_API_KEY='${apiKey}'`);
+    expect(envFile).toContain("export NODE_OPTIONS=''");
+    expect(envFile).not.toContain("UNUSED");
     expect(state.fileModes.get(envFilePath)).toBe(0o600);
     expect(state.fileModes.get(wrapperPath)).toBe(0o700);
     expect(state.dirModes.get("/Users/test/.openclaw/service-env")).toBe(0o700);
@@ -2162,6 +2183,7 @@ describe("launchd install", () => {
     expect(command?.programArguments).toEqual(defaultProgramArguments);
     expect(command?.environment?.TMPDIR).toBe(tmpDir);
     expect(command?.environment?.OPENAI_API_KEY).toBe(apiKey);
+    expect(command?.environment?.NODE_OPTIONS).toBe("");
     expect(command?.environmentValueSources?.TMPDIR).toBe("file");
     expect(command?.environmentValueSources?.OPENAI_API_KEY).toBe("file");
   });
@@ -3187,27 +3209,34 @@ describe("launchd install", () => {
     expect(onMutation).not.toHaveBeenCalledWith({ mode: "bootstrap" });
   });
 
-  it("reloads the LaunchAgent through a transient reload bootstrap failure", async () => {
-    const env = createLaunchdEnvWithGatewayPort("18789");
-    setLaunchAgentPlist(env, "ai.openclaw.gateway", ["node", "gateway.js"]);
-    // launchd answers EIO while the just-booted-out job is still tearing down.
-    state.bootstrapError = "Bootstrap failed: 5: Input/output error";
-    state.bootstrapCode = 5;
-    state.bootstrapTransient = true;
-    const onMutation = vi.fn();
+  it.each(["exit", "timeout", "signal"] as const)(
+    "retries teardown bootstrap output only after a completed command (%s)",
+    async (termination) => {
+      const env = createLaunchdEnvWithGatewayPort("18789");
+      setLaunchAgentPlist(env, "ai.openclaw.gateway", ["node", "gateway.js"]);
+      state.bootstrapError = "Bootstrap failed: 5: Input/output error";
+      state.bootstrapCode = termination === "exit" ? 5 : 1;
+      state.bootstrapTermination = termination;
+      state.bootstrapTransient = true;
+      const onMutation = vi.fn();
 
-    const result = await runRestartLaunchAgentWithFakeTimers(
-      launchAgentControlFixture(env, {
-        onMutation,
-      }),
-    );
+      const result = runRestartLaunchAgentWithFakeTimers(
+        launchAgentControlFixture(env, { onMutation }),
+      );
 
-    // Teardown is transient, so the retry must land a real bootstrap rather than
-    // surfacing an error the operator has to recover from by hand.
-    expect(result).toEqual({ outcome: "completed" });
-    expect(state.serviceLoaded).toBe(true);
-    expect(onMutation).toHaveBeenCalledWith({ mode: "bootstrap" });
-  });
+      if (termination === "exit") {
+        await expect(result).resolves.toEqual({ outcome: "completed" });
+      } else {
+        await expect(result).rejects.toThrow(
+          "launchctl bootstrap failed: Bootstrap failed: 5: Input/output error",
+        );
+      }
+      // Recovery can restore the job after interruption, but must not turn the
+      // failed restart into success by treating partial EIO output as a retry.
+      expect(state.serviceLoaded).toBe(true);
+      expect(onMutation).toHaveBeenCalledWith({ mode: "bootstrap" });
+    },
+  );
 
   it("reports the LaunchAgent as unloaded when bootstrap teardown never clears", async () => {
     const env = createLaunchdEnvWithGatewayPort("18789");
@@ -3279,29 +3308,43 @@ describe("launchd install", () => {
     expect(onMutation).toHaveBeenCalledWith({ mode: "bootstrap" });
   });
 
-  it("treats a concurrent launchd bootstrap as success when the service is loaded", async () => {
-    const env = createLaunchdEnvWithGatewayPort("18789");
-    const plistPath = resolveLaunchAgentPlistPath(env);
-    setLegacyGatewayLaunchAgentPlist(plistPath, [
-      "    <key>StandardOutPath</key>",
-      "    <string>/Users/test/.openclaw-default/logs/gateway.log</string>",
-    ]);
-    state.bootstrapError = "Bootstrap failed: 37: Operation already in progress";
-    state.bootstrapCode = 5;
-    state.bootstrapLoadsServiceOnFailure = true;
+  it.each(["exit", "timeout", "signal"] as const)(
+    "accepts in-progress bootstrap output only after a completed command (%s)",
+    async (termination) => {
+      const env = createLaunchdEnvWithGatewayPort("18789");
+      const plistPath = resolveLaunchAgentPlistPath(env);
+      setLegacyGatewayLaunchAgentPlist(plistPath, [
+        "    <key>StandardOutPath</key>",
+        "    <string>/Users/test/.openclaw-default/logs/gateway.log</string>",
+      ]);
+      state.bootstrapError = "Bootstrap failed: 37: Operation already in progress";
+      state.bootstrapCode = termination === "exit" ? 5 : 1;
+      state.bootstrapTermination = termination;
+      state.bootstrapLoadsServiceOnFailure = true;
+      const onMutation = vi.fn();
 
-    await restartLaunchAgent(launchAgentControlFixture(env));
+      const result = restartLaunchAgent(launchAgentControlFixture(env, { onMutation }));
+      if (termination === "exit") {
+        await expect(result).resolves.toEqual({ outcome: "completed" });
+        expect(onMutation).toHaveBeenCalledWith({ mode: "bootstrap" });
+      } else {
+        await expect(result).rejects.toThrow(
+          "launchctl bootstrap failed: Bootstrap failed: 37: Operation already in progress",
+        );
+        expect(onMutation).not.toHaveBeenCalledWith({ mode: "bootstrap" });
+      }
 
-    expect(launchctlCommandNames()).toEqual([
-      "print",
-      "enable",
-      "bootout",
-      "enable",
-      "bootstrap",
-      "print",
-    ]);
-    expect(launchctlCommandNames()).not.toContain("kickstart");
-  });
+      expect(launchctlCommandNames()).toEqual([
+        "print",
+        "enable",
+        "bootout",
+        "enable",
+        "bootstrap",
+        "print",
+      ]);
+      expect(launchctlCommandNames()).not.toContain("kickstart");
+    },
+  );
 
   it("uses the configured gateway port for stale cleanup", async () => {
     const env = createLaunchdEnvWithGatewayPort("19001");

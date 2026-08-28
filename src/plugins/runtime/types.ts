@@ -23,6 +23,8 @@ type SubagentRunParams = {
   provider?: string;
   model?: string;
   extraSystemPrompt?: string;
+  /** Use the bounded subagent prompt instead of the full conversation prompt. */
+  promptMode?: "minimal";
   lane?: string;
   lightContext?: boolean;
   deliver?: boolean;
@@ -202,6 +204,7 @@ export type PluginRuntime = PluginRuntimeCore & {
 export type CreatePluginRuntimeOptions = {
   dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
   gateway?: PluginRuntime["gateway"];
+  hooks?: PluginRuntime["hooks"];
   subagent?: PluginRuntime["subagent"];
   nodes?: PluginRuntime["nodes"];
   allowGatewaySubagentBinding?: boolean;

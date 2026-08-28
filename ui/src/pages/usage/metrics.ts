@@ -5,6 +5,8 @@ import {
   buildUsageAggregateTail,
   mergeUsageDailyLatency,
   mergeUsageLatency,
+  usageDailyModelIdentity,
+  usageModelIdentity,
 } from "../../../../src/shared/usage-aggregates.js";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -678,7 +680,7 @@ const buildAggregatesFromSessions = (
 
     if (usage.modelUsage) {
       for (const entry of usage.modelUsage) {
-        const modelKey = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+        const modelKey = usageModelIdentity(entry.provider, entry.model);
         const modelExisting = modelMap.get(modelKey) ?? {
           provider: entry.provider,
           model: entry.model,
@@ -744,7 +746,7 @@ const buildAggregatesFromSessions = (
     }
     mergeUsageDailyLatency(dailyLatencyMap, usage.dailyLatency);
     for (const day of usage.dailyModelUsage ?? []) {
-      const key = `${day.date}::${day.provider ?? "unknown"}::${day.model ?? "unknown"}`;
+      const key = usageDailyModelIdentity(day.date, day.provider, day.model);
       const existing = modelDailyMap.get(key) ?? {
         date: day.date,
         provider: day.provider,

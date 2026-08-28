@@ -463,36 +463,53 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     ).rejects.toThrow("turn ended with status interrupted");
   });
 
-  it("forwards one prepared authorization selection to the isolated client", async () => {
-    const fake = createClientFactory();
-    const preparedAuth = { kind: "api-key" as const, apiKey: "test-key" };
+  it.each(["prepared", "profile", "implicit"] as const)(
+    "bridges %s auth into the private home when the configured home is native",
+    async (authSelection) => {
+      const fake = createClientFactory();
+      const preparedAuth = { kind: "api-key" as const, apiKey: "test-key" };
+      const profile = "openai:bounded";
 
-    await runBoundedCodexAppServerTurn({
-      model: { mode: "required", id: "gpt-5.4" },
-      preparedAuth,
-      authRequirement: "api-key",
-      timeoutMs: 5_000,
-      options: {
-        clientFactory: fake.factory,
-        pluginConfig: { appServer: { homeScope: "user" } },
-      },
-      taskLabel: "isolated completion",
-      developerInstructions: "Answer only.",
-      input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
-      requiredModalities: ["text"],
-      isolation: "private-stdio",
-      requireNoExternalCapabilities: true,
-    });
-
-    expect(fake.factory).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preparedAuth,
+      await runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        ...(authSelection === "prepared"
+          ? { preparedAuth }
+          : authSelection === "profile"
+            ? { profile }
+            : {}),
         authRequirement: "api-key",
-        startOptions: expect.objectContaining({ homeScope: "agent" }),
-      }),
-    );
-    expect(vi.mocked(fake.factory).mock.calls[0]?.[0]).not.toHaveProperty("authProfileId");
-  });
+        timeoutMs: 5_000,
+        options: {
+          clientFactory: fake.factory,
+          pluginConfig: { appServer: { homeScope: "user" } },
+        },
+        taskLabel: "isolated completion",
+        developerInstructions: "Answer only.",
+        input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+        requireNoExternalCapabilities: true,
+      });
+
+      expect(fake.factory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ...(authSelection === "prepared"
+            ? { preparedAuth }
+            : { authProfileId: authSelection === "profile" ? profile : undefined }),
+          authRequirement: "api-key",
+          startOptions: expect.objectContaining({
+            homeScope: "agent",
+            env: expect.objectContaining({
+              CODEX_HOME: expect.stringContaining("codex-bounded-turn-"),
+            }),
+          }),
+        }),
+      );
+      expect(vi.mocked(fake.factory).mock.calls[0]?.[0]).not.toHaveProperty(
+        authSelection === "prepared" ? "authProfileId" : "preparedAuth",
+      );
+    },
+  );
 
   it("preserves the configured native model provider when no override is supplied", async () => {
     const fake = createClientFactory();
@@ -500,7 +517,10 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     await runBoundedCodexAppServerTurn({
       model: { mode: "required", id: "gpt-5.4" },
       timeoutMs: 5_000,
-      options: { clientFactory: fake.factory },
+      options: {
+        clientFactory: fake.factory,
+        pluginConfig: { appServer: { homeScope: "user" } },
+      },
       taskLabel: "isolated completion",
       developerInstructions: "Answer only.",
       input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
@@ -511,6 +531,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
     const startParams = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
     expect(startParams).not.toHaveProperty("modelProvider");
+    expect(fake.factory).toHaveBeenCalledWith(
+      expect.objectContaining({ startOptions: expect.objectContaining({ homeScope: "user" }) }),
+    );
   });
 
   it("uses the execution model for required logical model ids", async () => {

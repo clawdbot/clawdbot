@@ -41,47 +41,63 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 
 `openclaw browser batch` runs an array of nested `/act` actions in one `/act` call (the same `kind="batch"` runtime reached through the agent tool), so CLI users and scripts can combine actions like `wait`, `click`, `type`, and `evaluate` into a single replayable plan without per-action round trips. Each entry in `actions[]` is a `BrowserActRequest` — the closed union the `/act` route accepts — not arbitrary `openclaw browser` subcommands. `batch` is not supported on `profile="user"` and other existing-session (chrome-mcp) profiles; send actions individually there.
 
-- CLI: `openclaw browser batch --actions '<json>'`, `--actions-file plan.json`, or `--actions-file -` for stdin. `--continue` sets `stopOnError=false`; default stops on first error.
+- CLI: `openclaw browser batch --actions '<json>'`, `--actions-file plan.json`, or `--actions-file -` for stdin. `--actions-file` and stdin input are capped at 1,000,000 bytes; split larger plans into multiple batch commands. `--continue` sets `stopOnError=false`; default stops on first error.
 - Ref lifecycle: refs come from a `snapshot` run before the batch (snapshot is not a nested action). A nested action that changes page state — such as a `click` that triggers navigation, or an `evaluate` that mutates the DOM — can invalidate earlier refs for the rest of the batch; put state-changing actions first, or split into a follow-up batch after re-snapshotting. Navigation and re-snapshotting happen outside the batch, since `open`, `navigate`, and `snapshot` are not `/act` kinds.
 - Target id: nested actions share the request's tab; an explicit nested `targetId` that resolves to a different tab is rejected with `ACT_TARGET_ID_MISMATCH`.
 - Response: `{ "results": [{ "ok": true } | { "ok": false, "error": "..." }, ...] }` in order; with default `stopOnError` the array ends at the first failure. Any failed entry exits nonzero; use `--json` to preserve the full response in scripts.
 
 ## Code Mode Loop
 
-When `tools.codeMode` is enabled, call the Browser tool from exec cells:
+When `tools.codeMode` is enabled, the Browser tool has no normal turn — it is cataloged behind `exec`/`wait`. Call it from exec cells as an async global, using the callable name the exec quick index advertises for the Browser tool (normally `browser`; colliding names get suffixed, and a client tool can win an identical name). An exact `catalog.search("browser")` returns a handle already bound to the effective callable name, so resolve the handle in each cell and call it instead of hard-coding the literal global; an empty result means the Browser tool is not cataloged in this run.
+
+Keep the same labeled tab through the loop, and alternate reads with actions. Each `exec` cell starts a fresh VM — bindings from a completed cell are gone in the next, and only runs left `waiting` keep their state until `wait` resumes them — so carry comparison state across cells by returning it and re-embedding the returned values in the next cell:
 
 ```javascript
-const browserTool = "openclaw:browser:browser";
-let previousSnapshot = "";
-const callBrowser = async (input) => await tools.call(browserTool, input);
-```
-
-Keep the same labeled tab through the loop, and alternate reads with actions:
-
-```javascript
-const snapshotCall = await callBrowser({
+// previous = the url/newElements returned by the last completed cell (a fresh
+// VM runs this cell, so prior bindings do not exist here).
+const previous = { url: "https://example.com/inbox", newElements: 0 };
+const [browser] = await catalog.search("browser", { limit: 1 });
+const details = await browser({
   action: "snapshot",
+  snapshotFormat: "ai",
   targetId: "task",
   refs: "aria",
   interactive: true,
 });
-const details = snapshotCall?.result?.details ?? {};
-const snapshot = (snapshotCall?.result?.content ?? []).map((block) => block?.text ?? "").join("\n");
-const relevant = snapshot
-  .split("\n")
-  .filter((line) => /submit|dialog|error|\[new\]/i.test(line))
-  .slice(0, 12);
-const changed = snapshot !== previousSnapshot;
-previousSnapshot = snapshot;
-return { targetId: details.targetId, url: details.url, relevant, changed };
+const changed =
+  details?.url !== previous.url ||
+  (details?.newElements ?? 0) > 0 ||
+  details?.blockedByDialog === true;
+return {
+  targetId: details?.targetId,
+  url: details?.url,
+  newElements: details?.newElements,
+  stats: details?.stats,
+  changed,
+};
 ```
 
-- Request interactive-only snapshots and filter them in code before returning.
-- Return only the handful of relevant elements; never return the full tree.
-- Keep `previousSnapshot` between cells when a local diff helps explain a change.
+- Code-mode calls return the tool's structured `details` directly (`targetId`, `url`, `newElements`, `stats`, `blockedByDialog`); rendered page text is not returned to code cells.
+- To read text inside code mode, run a targeted `act` evaluate (requires the evaluate capability; `browser.evaluateEnabled` can disable it) and keep the returned value bounded, because page-script output is untrusted:
+
+```javascript
+const [browser] = await catalog.search("browser", { limit: 1 });
+const read = await browser({
+  action: "act",
+  kind: "evaluate",
+  fn: "() => document.body.innerText.slice(0, 2000)",
+  targetId: "task",
+});
+return { url: read?.url, text: read?.result };
+```
+
+When evaluate is unavailable, keep the loop on structured state only.
+
+- Return only the fields the next step needs; never return the whole details object.
+- Completed cells share no state: re-embed the previous cell's returned `url`/`newElements` in the next cell, or keep the comparison inside one cell. Only `waiting` runs persist, resumed by `wait`.
 - Interleave each act with a URL or tabs check before the next dependent act.
 - If a batch returns `aborted`, take a fresh snapshot before continuing.
-- If `[new]` markers appear, inspect those elements first, then update the saved snapshot.
+- If `newElements` is positive, inspect those elements first, then update the re-embedded state.
 - Use separate act calls when navigation is expected between steps.
 
 ## Tab Hygiene

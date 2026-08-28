@@ -112,6 +112,81 @@ test("process poll waits for completion when timeout is provided", async () => {
   });
 });
 
+test.each([
+  { name: "buffered stdout", stream: "stdout", arrivesDuringWait: false, dropped: false },
+  { name: "buffered stderr", stream: "stderr", arrivesDuringWait: false, dropped: false },
+  { name: "new stdout", stream: "stdout", arrivesDuringWait: true, dropped: false },
+  { name: "new stderr", stream: "stderr", arrivesDuringWait: true, dropped: false },
+  { name: "buffered capped output", stream: "stdout", arrivesDuringWait: false, dropped: true },
+] as const)(
+  "process poll returns $name before the requested wait expires",
+  async ({ name, stream, arrivesDuringWait, dropped }) => {
+    vi.useFakeTimers();
+    const sessionId = `sess-prompt-${name.replaceAll(" ", "-")}`;
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+    const controller = new AbortController();
+    const appendPendingOutput = () => {
+      if (dropped) {
+        appendOversizedPendingOutput(session);
+      } else {
+        appendOutput(session, stream, "interactive prompt\n");
+      }
+    };
+    if (arrivesDuringWait) {
+      setTimeout(appendPendingOutput, 10);
+    } else {
+      appendPendingOutput();
+    }
+
+    let settled = false;
+    const observedPoll = pollSession(
+      processTool,
+      "toolcall-prompt",
+      sessionId,
+      30_000,
+      controller.signal,
+    ).then(
+      (result) => {
+        settled = true;
+        return result;
+      },
+      () => undefined,
+    );
+
+    try {
+      await vi.advanceTimersByTimeAsync(arrivesDuringWait ? 250 : 0);
+      expect(settled).toBe(true);
+
+      const poll = await observedPoll;
+      expect(poll?.details).toMatchObject({ status: "running", sessionId });
+      expect(poll?.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining(
+          dropped ? "earlier output is omitted from this poll" : "interactive prompt",
+        ),
+      });
+      expect(session.pendingOutput).toHaveLength(0);
+    } finally {
+      controller.abort();
+      await observedPoll;
+      vi.useRealTimers();
+    }
+  },
+);
+
+test("process poll rejects an already-aborted signal without consuming buffered output", async () => {
+  const sessionId = "sess-prompt-already-aborted";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+  appendOutput(session, "stdout", "interactive prompt\n");
+  const controller = new AbortController();
+  controller.abort();
+
+  await expect(
+    pollSession(processTool, "toolcall-prompt-aborted", sessionId, 30_000, controller.signal),
+  ).rejects.toMatchObject({ name: "AbortError" });
+  expect(session.pendingOutput).toEqual([{ stream: "stdout", text: "interactive prompt\n" }]);
+});
+
 test("waiting poll returns only output appended since the previous poll", async () => {
   vi.useFakeTimers();
   try {
@@ -363,6 +438,45 @@ test("process poll accepts string timeout values", async () => {
   });
 });
 
+test("terminal polls compact tiny stream chunks and never reopen frozen output", async () => {
+  const sessionId = "sess-compact-terminal";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+  session.maxOutputChars = 3_000;
+  session.pendingMaxOutputChars = 1_000;
+  for (let index = 0; index < 2_000; index += 1) {
+    appendOutput(session, "stdout", "o");
+    appendOutput(session, "stderr", "e");
+  }
+  markExited(session, 0, null, "completed");
+
+  // Retention must release thousands of chunk objects, not just cap their text.
+  expect(session.pendingOutput).toBe("oe".repeat(1_000));
+  expect(session.pendingStdoutChars).toBe(0);
+  expect(session.pendingStderrChars).toBe(0);
+  const terminal = await pollSession(processTool, "compact-first", sessionId);
+  expect(terminal.content[0]).toMatchObject({
+    text:
+      "oe".repeat(1_000) +
+      "\n\n[earlier output was discarded at the retention cap and cannot be recovered]" +
+      "\n\n[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]" +
+      "\n\nProcess exited with code 0.",
+  });
+  appendOutput(session, "stderr", "late".repeat(1_000));
+  const repeated = await pollSession(processTool, "compact-second", sessionId);
+  expect(repeated.content[0]).toMatchObject({
+    text: "(no new output)\n\n[earlier output was discarded at the retention cap and cannot be recovered]\n\nProcess exited with code 0.",
+  });
+  expect(session.totalOutputChars).toBe(4_000);
+  expect(session.pendingOutput).toBe("");
+  expect(session.pendingOutputDropped).toBe(false);
+  const log = await processTool.execute("compact-log", { action: "log", sessionId });
+  expect(log.content[0]).toMatchObject({
+    text:
+      "oe".repeat(1_500) +
+      "\n\n[earlier output was discarded at the retention cap and cannot be recovered]",
+  });
+});
+
 test("process poll warns when the session times out while poll is waiting", async () => {
   vi.useFakeTimers();
   try {
@@ -451,7 +565,7 @@ test.each([
         type: "text",
         text: expect.stringContaining(`Process exited with ${expectedExit}.`),
       });
-      expect(getFinishedSession(sessionId)?.status).toBe(ownerStatus);
+      expect(getFinishedSession(sessionId)?.terminalStatus).toBe(ownerStatus);
 
       const retainedPoll = await pollSession(processTool, "toolcall-terminal-retained", sessionId);
       expect(retainedPoll.details).toMatchObject({ status: ownerStatus });

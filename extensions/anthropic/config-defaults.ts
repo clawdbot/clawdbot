@@ -4,7 +4,6 @@ import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scop
  * model refs and cache-retention params based on configured auth mode.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { CLAUDE_CLI_PROFILE_ID } from "openclaw/plugin-sdk/provider-auth";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -13,7 +12,11 @@ import {
   resolveClaudeCliAnthropicModelRefs,
   resolveKnownAnthropicModelRef,
 } from "./claude-model-refs.js";
-import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-constants.js";
+import {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
+  CLAUDE_CLI_PROFILE_ID,
+} from "./cli-constants.js";
 
 const ANTHROPIC_PROVIDER_API = "anthropic-messages";
 const ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS = [

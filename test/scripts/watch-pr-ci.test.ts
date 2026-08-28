@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { chmodSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildFindRunArgs,
   classifyAttachedCiRun,
@@ -10,8 +13,10 @@ import {
   sanitizeCheckName,
   selectRunAfter,
 } from "../../scripts/watch-pr-ci.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const sha = "a".repeat(40);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("watch-pr-ci", () => {
   it("parses defaults and overrides", () => {
@@ -77,7 +82,7 @@ describe("watch-pr-ci", () => {
       "-f",
       `head_sha=${sha}`,
       "-f",
-      "per_page=1",
+      "per_page=20",
     ]);
   });
 
@@ -88,6 +93,76 @@ describe("watch-pr-ci", () => {
     expect(selectRunAfter(runs, 102)).toBeUndefined();
     expect(selectRunAfter(runs)).toBe(newer);
   });
+
+  it("skips newer draft runs without weakening the --after boundary", () => {
+    const skipped = { id: 103, conclusion: "skipped" };
+    const successful = { id: 102, conclusion: "success" };
+
+    expect(selectRunAfter([skipped, successful])).toBe(successful);
+    expect(selectRunAfter([skipped, successful], 101)).toBe(successful);
+    expect(selectRunAfter([skipped, successful], 102)).toBeUndefined();
+    expect(selectRunAfter([skipped])).toBeUndefined();
+    for (const conclusion of [null, "failure", "cancelled"]) {
+      const attachable = { id: 102, conclusion };
+      expect(selectRunAfter([skipped, attachable])).toBe(attachable);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "attaches to real CI when a newer draft workflow was skipped",
+    () => {
+      const binDir = tempDirs.make("openclaw-watch-pr-ci-");
+      const ghPath = join(binDir, "gh");
+      writeFileSync(
+        ghPath,
+        `#!/usr/bin/env bash
+case "$1 $2" in
+  "pr view") printf '{"state":"OPEN","mergeable":true,"headRefOid":"${sha}"}\\n' ;;
+  "api --method")
+    case " $* " in
+      *" per_page=1 "*) printf '{"workflow_runs":[{"id":202,"conclusion":"skipped"}]}\\n' ;;
+      *) printf '{"workflow_runs":[{"id":202,"conclusion":"skipped"},{"id":201,"conclusion":"success"}]}\\n' ;;
+    esac
+    ;;
+  "run view")
+    if [ "$3" = "202" ]; then
+      printf '{"status":"completed","conclusion":"skipped"}\\n'
+    else
+      printf '{"status":"completed","conclusion":"success"}\\n'
+    fi
+    ;;
+  *) printf 'unexpected gh invocation: %s\\n' "$*" >&2; exit 2 ;;
+esac
+`,
+      );
+      chmodSync(ghPath, 0o755);
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/watch-pr-ci.mjs",
+          "42",
+          sha,
+          "--completion",
+          "ci-run",
+          "--attach-timeout",
+          "1",
+          "--timeout",
+          "1",
+          "--interval",
+          "1",
+        ],
+        {
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
+        },
+      );
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("ATTACHED run=201");
+      expect(result.stdout).toContain("GREEN");
+    },
+  );
 
   it("sanitizes untrusted check names for terminal output", () => {
     expect(sanitizeCheckName("plain ASCII / check (1)")).toBe("plain ASCII / check (1)");

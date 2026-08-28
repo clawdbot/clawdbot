@@ -36,6 +36,7 @@ import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
+  isRestartRecoveryTombstone,
   resolveSessionWorkStartError,
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry,
@@ -97,7 +98,7 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
-import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
@@ -1180,7 +1181,14 @@ export async function performGatewaySessionReset(params: {
         resetPreparationError = errorShape(ErrorCodes.INVALID_REQUEST, placementError.message);
         return;
       }
-      const archivedSessionError = resolveSessionWorkStartError(currentCanonicalKey, currentEntry);
+      // Reset drains pending preparation before replacing the session.
+      const archivedSessionError = resolveSessionWorkStartError(currentCanonicalKey, currentEntry, {
+        allowPendingWorkspace: true,
+        allowRestartTombstoneReplacement:
+          currentEntry !== undefined &&
+          currentEntry.archivedAt === undefined &&
+          isRestartRecoveryTombstone(currentEntry),
+      });
       if (archivedSessionError) {
         resetPreparationError = errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError);
         return;
@@ -1271,7 +1279,13 @@ export async function performGatewaySessionReset(params: {
           error: errorShape(ErrorCodes.INVALID_REQUEST, placementError.message),
         };
       }
-      const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
+      const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry, {
+        allowPendingWorkspace: true,
+        allowRestartTombstoneReplacement:
+          entry !== undefined &&
+          entry.archivedAt === undefined &&
+          isRestartRecoveryTombstone(entry),
+      });
       if (archivedSessionError) {
         return {
           ok: false,
@@ -1483,7 +1497,7 @@ export async function performGatewaySessionReset(params: {
       const lifecyclePromise = resetSessionEntryLifecycle({
         archivePreviousTranscript: false,
         agentId: target.agentId,
-        resetBoundaryReason: boundaryEntry ? params.reason : undefined,
+        resetBoundary: boundaryEntry ? { context: "clear", reason: params.reason } : undefined,
         storePath,
         target: {
           canonicalKey: target.canonicalKey,
@@ -1545,9 +1559,15 @@ export async function performGatewaySessionReset(params: {
                 createdActor: currentEntry.createdActor,
                 createdAt: currentEntry.createdAt,
                 projectId: currentEntry.projectId,
+                ...(currentEntry.sandbox === "required" ? { sandbox: "required" as const } : {}),
               }
             : params.creation
-              ? buildSessionCreationStamp(params.creation)
+              ? {
+                  ...buildSessionCreationStamp(params.creation),
+                  ...(resolveCreatorSandbox(cfg, params.creation) === "required"
+                    ? { sandbox: "required" as const }
+                    : {}),
+                }
               : {};
           const nextEntry: InternalSessionEntry = {
             sessionId: nextSessionId,

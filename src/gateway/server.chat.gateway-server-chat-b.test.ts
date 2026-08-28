@@ -8,6 +8,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vite
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/run-state.js";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
@@ -50,6 +55,7 @@ import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import * as chatDisplayProjection from "./chat-display-projection.js";
 import { assertPluginMetadataSnapshotConsistency } from "./plugin-metadata.test-helpers.js";
 import {
   createDirectChatContext,
@@ -80,7 +86,8 @@ const restartRecoveryMocks = vi.hoisted(() => ({
   retryRestartAbortedMainSessionRecovery: vi.fn<
     typeof import("../agents/main-session-recovery/main-session-restart-recovery.js").retryRestartAbortedMainSessionRecovery
   >(async () => ({
-    recovered: 0,
+    started: 0,
+    settled: 0,
     failed: 1,
     skipped: 0,
   })),
@@ -910,6 +917,191 @@ describe("gateway server chat", () => {
           },
         });
       } finally {
+        testState.sessionStorePath = undefined;
+        clearConfigCache();
+      }
+    },
+  );
+
+  test.each(["chat.history", "chat.startup"] as const)(
+    "%s projects embedded identity through the existing run snapshot",
+    async (method) => {
+      const {
+        createAgentEventHandler,
+        createSessionEventSubscriberRegistry,
+        createSessionMessageSubscriberRegistry,
+      } = await import("./server-chat.js");
+      openDirectChatSession();
+      await writeMainSessionStore();
+      const context = createDirectChatContext();
+      const handler = createAgentEventHandler({
+        broadcast: context.broadcast,
+        broadcastToConnIds: context.broadcastToConnIds,
+        nodeSendToSession: context.nodeSendToSession,
+        agentRunSeq: context.agentRunSeq,
+        chatRunState: context.chatRunState,
+        resolveSessionKeyForRun: () => "main",
+        clearAgentRunContext: vi.fn(),
+        toolEventRecipients: context.chatRunState.toolEventRecipients,
+        sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+      });
+      const handle: EmbeddedAgentQueueHandle = {
+        runId: "run-embedded",
+        startedAtMs: 1_700_000_000_000,
+        abort: () => undefined,
+        isAborted: () => false,
+        isCompacting: () => false,
+        isStreaming: () => true,
+        queueMessage: async () => undefined,
+      };
+      setActiveEmbeddedRun("sess-main", handle, "main");
+      try {
+        handler({
+          runId: "run-embedded",
+          seq: 1,
+          stream: "item",
+          ts: 1_001,
+          data: { kind: "preamble", itemId: "preamble-1", progressText: "Checking files" },
+        });
+        handler({
+          runId: "run-embedded",
+          seq: 2,
+          stream: "tool",
+          ts: 1_002,
+          data: {
+            phase: "start",
+            name: "exec",
+            toolCallId: "tool-1",
+            args: { command: "SECRET_COMMAND" },
+          },
+        });
+        handler({
+          runId: "run-embedded",
+          seq: 3,
+          stream: "tool",
+          ts: 1_003,
+          data: {
+            phase: "input_delta",
+            name: "exec",
+            toolCallId: "tool-1",
+            diff: "SECRET_DIFF",
+          },
+        });
+        handler({
+          runId: "run-embedded",
+          seq: 4,
+          stream: "tool",
+          ts: 1_004,
+          data: {
+            phase: "update",
+            name: "exec",
+            toolCallId: "tool-1",
+            partialResult: "SECRET_PARTIAL",
+          },
+        });
+        handler({
+          runId: "run-embedded",
+          seq: 5,
+          stream: "tool",
+          ts: 1_005,
+          data: {
+            phase: "review",
+            name: "exec",
+            toolCallId: "tool-1",
+            review: { id: "review-1", text: "SECRET_REVIEW" },
+          },
+        });
+        handler({
+          runId: "run-embedded",
+          seq: 6,
+          stream: "tool",
+          ts: 1_006,
+          data: {
+            phase: "result",
+            name: "exec",
+            toolCallId: "tool-1",
+            result: "SECRET_RESULT",
+          },
+        });
+        handler({
+          runId: "run-embedded",
+          seq: 7,
+          stream: "plan",
+          ts: 1_007,
+          data: {
+            phase: "update",
+            steps: [{ step: "Inspect", status: "in_progress" }],
+          },
+        });
+
+        const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+        await callDirectChat(method, {
+          id: method,
+          params: makeMainSessionParams(),
+          respond: captureChatResult(responses),
+          context,
+        });
+
+        expect(responses[0]?.ok).toBe(true);
+        const inFlightRun = (responses[0]?.payload as { inFlightRun?: unknown } | undefined)
+          ?.inFlightRun;
+        expect(inFlightRun).toEqual({
+          runId: "run-embedded",
+          text: "",
+          startedAt: 1_700_000_000_000,
+          sessionAbortable: true,
+          events: [
+            {
+              runId: "run-embedded",
+              seq: 1,
+              stream: "item",
+              ts: 1_001,
+              sessionKey: "main",
+              data: {
+                kind: "preamble",
+                itemId: "preamble-1",
+                progressText: "Checking files",
+              },
+            },
+            {
+              runId: "run-embedded",
+              seq: 2,
+              stream: "tool",
+              ts: 1_002,
+              sessionKey: "main",
+              data: { phase: "start", name: "exec", toolCallId: "tool-1" },
+            },
+            {
+              runId: "run-embedded",
+              seq: 3,
+              stream: "tool",
+              ts: 1_003,
+              sessionKey: "main",
+              data: { phase: "input_delta", name: "exec", toolCallId: "tool-1" },
+            },
+            {
+              runId: "run-embedded",
+              seq: 4,
+              stream: "tool",
+              ts: 1_004,
+              sessionKey: "main",
+              data: { phase: "update", name: "exec", toolCallId: "tool-1" },
+            },
+            {
+              runId: "run-embedded",
+              seq: 6,
+              stream: "tool",
+              ts: 1_006,
+              sessionKey: "main",
+              data: { phase: "result", name: "exec", toolCallId: "tool-1" },
+            },
+          ],
+          plan: { steps: [{ step: "Inspect", status: "in_progress" }] },
+        });
+        expect(JSON.stringify(inFlightRun)).not.toContain("SECRET");
+      } finally {
+        clearActiveEmbeddedRun("sess-main", handle, "main");
         testState.sessionStorePath = undefined;
         clearConfigCache();
       }
@@ -3785,7 +3977,7 @@ describe("gateway server chat", () => {
             abortedLastRun: false,
             updatedAt: Date.now(),
           }));
-          return { recovered: 1, failed: 0, skipped: 0 };
+          return { started: 1, settled: 0, failed: 0, skipped: 0 };
         },
       );
       const context = createDirectChatContext();
@@ -3925,7 +4117,7 @@ describe("gateway server chat", () => {
             restartRecoveryDeliverySourceRunId: "replacement-source",
             updatedAt: Date.now(),
           }));
-          return { recovered: 0, failed: 0, skipped: 0 };
+          return { started: 0, settled: 0, failed: 0, skipped: 0 };
         },
       );
       const context = createDirectChatContext();
@@ -4571,11 +4763,13 @@ describe("gateway server chat", () => {
       });
       let turnAdoptionLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
       let onQueueDisposition: InternalGetReplyOptions["onFollowupQueueDisposition"];
+      let onQueuedFollowupReplyBatch: InternalGetReplyOptions["onQueuedFollowupReplyBatch"];
       const dispatchRelease = createDeferred();
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
         const replyOptions = (args as { replyOptions?: InternalGetReplyOptions }).replyOptions;
         turnAdoptionLifecycle = replyOptions?.turnAdoptionLifecycle;
         onQueueDisposition = replyOptions?.onFollowupQueueDisposition;
+        onQueuedFollowupReplyBatch = replyOptions?.onQueuedFollowupReplyBatch;
         turnAdoptionLifecycle?.onDeferred?.();
         await dispatchRelease.promise;
         return {};
@@ -4619,6 +4813,24 @@ describe("gateway server chat", () => {
           (payload as { state?: string }).state === "final",
       );
       expect(finalEvents).toHaveLength(1);
+      expect(onQueuedFollowupReplyBatch).toBeTypeOf("function");
+      await onQueuedFollowupReplyBatch?.({
+        kind: "queued-followup",
+        runId: "queued-followup-agent-run",
+        originatingChannel: "webchat",
+        payloads: [{ text: "queued follow-up answer" }],
+      });
+      expect(broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({
+          runId: "queued-followup-agent-run",
+          state: "final",
+          message: expect.objectContaining({
+            content: [{ type: "text", text: "queued follow-up answer" }],
+          }),
+        }),
+        { sessionKeys: ["agent:main:main"] },
+      );
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(true);
       expect(isSessionWorkAdmissionActive(storePath, ["agent:main:main", "sess-main"])).toBe(true);
       const { createAgentTurnService } = await import("./agent-turn/agent-turn-service.js");
@@ -4946,6 +5158,19 @@ describe("gateway server chat", () => {
             },
           }),
           JSON.stringify({
+            type: "user",
+            uuid: "skill-meta-1",
+            isMeta: true,
+            sourceToolUseID: "toolu_skill",
+            timestamp: "2026-03-26T16:29:55.000Z",
+            message: {
+              role: "user",
+              content: [
+                { type: "text", text: "Base directory for this skill: /tmp/skills/autoreview" },
+              ],
+            },
+          }),
+          JSON.stringify({
             type: "assistant",
             uuid: "assistant-1",
             timestamp: "2026-03-26T16:29:55.500Z",
@@ -4987,9 +5212,13 @@ describe("gateway server chat", () => {
         const userMessage = expectDefined(messages[0], "oldest imported user message") as {
           role?: string;
           content?: string;
+          provenance?: unknown;
         };
         expect(userMessage.role).toBe("user");
         expect(userMessage.content).toBe("hi");
+        // The operator-authored turn carries no injected provenance.
+        expect(userMessage.provenance).toBeUndefined();
+        expect(JSON.stringify(messages)).not.toContain("Base directory for this skill");
         const assistantMessage = expectDefined(
           messages[1],
           "oldest imported assistant message",
@@ -6867,6 +7096,47 @@ describe("gateway server chat", () => {
       expect(JSON.stringify(olderPage.payload?.messages)).not.toContain("NO_REPLY");
       expect(olderPage.payload?.hasMore).toBe(false);
       expect(olderPage.payload?.nextOffset).toBeUndefined();
+    });
+  });
+
+  test("chat.history fills sparse pages without repeatedly projecting scanned transcript rows", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+      const startedAt = Date.now();
+      const events = Array.from({ length: 1_500 }, (_, index) =>
+        createTextTranscriptEvent(
+          index % 50 === 0 ? "user" : "assistant",
+          index % 50 === 0 ? `visible ${index / 50}` : "NO_REPLY",
+          { timestamp: startedAt + index },
+        ),
+      );
+      await writeMainSessionTranscript(events);
+
+      let projectedRows = 0;
+      const project = chatDisplayProjection.projectChatDisplayMessagesWithState;
+      const projectionSpy = vi
+        .spyOn(chatDisplayProjection, "projectChatDisplayMessagesWithState")
+        .mockImplementation((messages, options) => {
+          projectedRows += messages.length;
+          return project(messages, options);
+        });
+
+      try {
+        const page = await rpcReq<{
+          messages?: Array<{ __openclaw?: { seq?: number } }>;
+          nextOffset?: number;
+          hasMore?: boolean;
+        }>(ws, "chat.history", makeMainSessionParams({ limit: 25, offset: 0 }));
+        expect(page.ok).toBe(true);
+        expect(page.payload?.messages?.map(readOpenClawSeq)).toEqual(
+          Array.from({ length: 25 }, (_, index) => (index + 5) * 50 + 1),
+        );
+        expect(page.payload).toMatchObject({ hasMore: true, nextOffset: 1_250 });
+        expect(projectedRows).toBeGreaterThan(0);
+        expect(projectedRows).toBeLessThanOrEqual(events.length * 2);
+      } finally {
+        projectionSpy.mockRestore();
+      }
     });
   });
 

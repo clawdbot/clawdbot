@@ -43,6 +43,7 @@ export type SkillCollectionReconcileContext = {
   readSkillTreeHashes?: Map<string, string>;
   readSkillBytes?: Map<string, number>;
   readByteCount?: number;
+  assertCurrent?: () => void;
   reconciling?: boolean;
   result?: SkillCollectionReconcileResult;
 };

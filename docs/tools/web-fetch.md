@@ -50,6 +50,19 @@ Truncate output to this many characters. Clamped to `tools.web.fetch.maxCharsCap
 `length` is the wrapped `text` length. `rawLength` is the extracted content length
 before external-content wrapping.
 
+`text`, `title`, and `warning` share `maxChars`, including their content wrappers.
+Titles and warnings retain at most 256 characters each, with a combined wrapped
+allowance of at most 512 characters and half of `maxChars`. Warnings take priority
+over titles; unused metadata space stays available to the body. `truncated` is
+also true when metadata is shortened or omitted; metadata-only truncation does
+not create a body spill file.
+
+JSON framing and protocol metadata are additional overhead. `contentType`,
+`extractor`, and `fetchedAt` are capped at 256, 128, and 64 characters respectively.
+URLs stay whole for follow-up requests: a returned redirect/provider URL longer
+than 2,048 characters falls back to the requested `url` and marks the result
+truncated. The caller's requested URL is preserved.
+
 ## How it works
 
 <Steps>

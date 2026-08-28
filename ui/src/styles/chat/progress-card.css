@@ -2,7 +2,6 @@
   --session-progress-neutral: var(--muted);
   --session-progress-marker-size: 14px;
 
-  box-sizing: border-box;
   min-width: 0;
   color: var(--text);
 }
@@ -193,7 +192,6 @@
 .session-hovercard__creator-avatar,
 .session-hovercard__creator-avatar .viewer-avatar {
   display: block;
-  box-sizing: border-box;
   width: var(--session-hovercard-context-icon-size);
   height: var(--session-hovercard-context-icon-size);
   aspect-ratio: 1;
@@ -400,25 +398,16 @@
   animation: fade-in 0.2s var(--ease-out);
 }
 
-/* Docked in the conversation's right gutter, beside the centered composer.
-   The inline-start edge repeats the composer's own half-width formula
-   (.agent-chat__composer-shell, capped at the transcript width) so the two
-   never overlap at any transcript-width setting; the pane only renders this
-   placement once the measured gutter can hold the card. */
+/* Docked in the conversation's right gutter, below any suggestion tray sharing
+   .chat-gutter-stack. The width is fixed rather than derived from the gutter:
+   the pane only renders this placement once it has measured a gutter wide
+   enough for this card plus the stack's insets, so the clearance is already
+   guaranteed and a stable card beats one that grows with the window.
+   Top-anchored by the stack, so appended steps extend downward instead of
+   shifting the rows already being read. */
 .session-progress-card--dock {
-  position: absolute;
-  z-index: 3;
-  inset-block-end: var(--chat-composer-bottom-gap, 14px);
-  inset-inline-end: var(--chat-thread-gutter);
-  inset-inline-start: calc(
-    50% +
-      min(
-        50% - var(--chat-composer-side-inset, 36px) / 2,
-        var(--chat-thread-max-width, 48rem) / 2
-      ) +
-      var(--space-3)
-  );
-  max-height: min(46%, 420px);
+  width: var(--chat-progress-dock-width);
+  max-height: min(50vh, 420px);
   overflow-y: auto;
   padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
@@ -426,13 +415,6 @@
   background: color-mix(in srgb, var(--accent-subtle) 42%, var(--panel-strong));
   box-shadow: var(--shadow-sm);
   animation: fade-in 0.2s var(--ease-out);
-}
-
-.session-progress-card--rail {
-  flex: 0 0 auto;
-  margin: 10px 14px 0;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
 }
 
 .session-progress-card--board {
@@ -502,7 +484,6 @@
 .session-progress-card__current-marker,
 .session-progress-card__step-marker {
   display: inline-flex;
-  box-sizing: border-box;
   width: var(--session-progress-marker-size);
   height: var(--session-progress-marker-size);
   align-items: center;
@@ -544,13 +525,6 @@
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.session-progress-card__count {
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
 }
 
 .session-progress-card__dismiss {
@@ -637,7 +611,8 @@
   color: var(--session-progress-neutral);
 }
 
-.session-progress-card__step--pending .session-progress-card__step-marker {
+.session-progress-card__step--pending .session-progress-card__step-marker,
+.session-progress-card__step--paused .session-progress-card__step-marker {
   color: var(--session-progress-neutral);
 }
 

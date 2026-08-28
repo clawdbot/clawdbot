@@ -579,13 +579,15 @@ describe("app-tool-stream result blocks", () => {
             details: {
               changedModel: true,
               sessionKey: "main",
+              agentId: "main",
               modelOverride: "openai/gpt-5.6-luna",
             },
           },
         }),
       );
 
-      expect(host.sessions.state.modelOverrides.main).toBe("openai/gpt-5.6-luna");
+      expect(host.sessions.refreshReplacement).toHaveBeenCalledOnce();
+      expect(host.sessions.state.modelOverrides).toEqual({});
     },
   );
 

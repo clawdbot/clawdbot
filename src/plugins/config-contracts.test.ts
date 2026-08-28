@@ -375,7 +375,7 @@ describe("collectPluginConfigContractMatches", () => {
         root,
         pathPattern: "items.1",
       }),
-    ).toEqual([{ path: "items[1]", value: "second" }]);
+    ).toEqual([{ path: "items[1]", value: "second", parent: root.items, key: "1" }]);
     expect(
       collectPluginConfigContractMatches({
         root,
@@ -388,6 +388,63 @@ describe("collectPluginConfigContractMatches", () => {
         pathPattern: "items.01",
       }),
     ).toEqual([]);
+  });
+
+  it("preserves exact dotted wildcard keys and array-index parents", () => {
+    const headers = { "X.Trace": "trace-value" };
+    const entries = [{ headers }];
+
+    expect(
+      collectPluginConfigContractMatches({
+        root: { "sales.eu": { entries } },
+        pathPattern: "*.entries.*.headers.*",
+      }),
+    ).toEqual([
+      {
+        path: '["sales.eu"].entries[0].headers["X.Trace"]',
+        value: "trace-value",
+        parent: headers,
+        key: "X.Trace",
+      },
+    ]);
+    expect(
+      collectPluginConfigContractMatches({
+        root: { entries },
+        pathPattern: "entries.*",
+      }),
+    ).toEqual([{ path: "entries[0]", value: entries[0], parent: entries, key: "0" }]);
+  });
+
+  it.each([
+    { key: "X.Trace", path: 'headers["X.Trace"]' },
+    { key: "0", path: 'headers["0"]' },
+    { key: "01", path: 'headers["01"]' },
+    { key: "value[0]", path: 'headers["value[0]"]' },
+    { key: 'quoted"key', path: 'headers["quoted\\"key"]' },
+    { key: "escaped\\key", path: 'headers["escaped\\\\key"]' },
+    { key: "safe-header", path: "headers.safe-header" },
+  ])("renders wildcard record key $key without path ambiguity", ({ key, path }) => {
+    const headers = { [key]: "value" };
+
+    expect(
+      collectPluginConfigContractMatches({ root: { headers }, pathPattern: "headers.*" }),
+    ).toEqual([{ path, value: "value", parent: headers, key }]);
+  });
+
+  it("keeps dotted wildcard keys distinct from explicitly nested record keys", () => {
+    const root = {
+      "alpha.beta": { token: "dotted" },
+      alpha: { beta: { token: "nested" } },
+    };
+
+    expect(
+      collectPluginConfigContractMatches({ root, pathPattern: "*.token" }).map(({ path }) => path),
+    ).toEqual(['["alpha.beta"].token']);
+    expect(
+      collectPluginConfigContractMatches({ root, pathPattern: "*.*.token" }).map(
+        ({ path }) => path,
+      ),
+    ).toEqual(["alpha.beta.token"]);
   });
 
   it("rejects array indexes outside canonical config path bounds", () => {

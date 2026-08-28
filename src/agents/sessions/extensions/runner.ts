@@ -595,78 +595,42 @@ export class ExtensionRunner {
    * Context values are resolved at call time, so changes via bindCore/bindUI are reflected.
    */
   createContext(): ExtensionContext {
-    const assertActive = () => this.assertActive();
+    const requireActiveRunner = () => {
+      this.assertActive();
+      return this;
+    };
+    // Model selection snapshots its getter; all other context values stay live.
     const getModel = this.getModel;
-    const getUiContext = () => this.uiContext;
-    const hasUiContext = () => this.hasUI();
-    const getCwd = () => this.cwd;
-    const getSessionManager = () => this.sessionManager;
-    const getModelRegistry = () => this.modelRegistry;
-    const isIdle = () => this.isIdleFn();
-    const getSignal = () => this.getSignalFn();
-    const abort = () => this.abortFn();
-    const hasPendingMessages = () => this.hasPendingMessagesFn();
-    const shutdown = () => this.shutdownHandler();
-    const getContextUsage = () => this.getContextUsageFn();
-    const compact = (options?: CompactOptions) => this.compactFn(options);
-    const getSystemPrompt = () => this.getSystemPromptFn();
     return {
       get ui() {
-        assertActive();
-        return getUiContext();
+        return requireActiveRunner().uiContext;
       },
       get hasUI() {
-        assertActive();
-        return hasUiContext();
+        return requireActiveRunner().hasUI();
       },
       get cwd() {
-        assertActive();
-        return getCwd();
+        return requireActiveRunner().cwd;
       },
       get sessionManager() {
-        assertActive();
-        return getSessionManager();
+        return requireActiveRunner().sessionManager;
       },
       get modelRegistry() {
-        assertActive();
-        return getModelRegistry();
+        return requireActiveRunner().modelRegistry;
       },
       get model() {
-        assertActive();
+        requireActiveRunner();
         return getModel();
       },
-      isIdle: () => {
-        assertActive();
-        return isIdle();
-      },
+      isIdle: () => requireActiveRunner().isIdleFn(),
       get signal() {
-        assertActive();
-        return getSignal();
+        return requireActiveRunner().getSignalFn();
       },
-      abort: () => {
-        assertActive();
-        abort();
-      },
-      hasPendingMessages: () => {
-        assertActive();
-        return hasPendingMessages();
-      },
-      shutdown: () => {
-        assertActive();
-        shutdown();
-      },
-      getContextUsage: () => {
-        assertActive();
-        return getContextUsage();
-      },
-      compact: (options) => {
-        assertActive();
-        compact(options);
-      },
-      getSystemPrompt: () => {
-        assertActive();
-        return getSystemPrompt();
-      },
+      abort: () => requireActiveRunner().abortFn(),
+      hasPendingMessages: () => requireActiveRunner().hasPendingMessagesFn(),
+      shutdown: () => requireActiveRunner().shutdownHandler(),
+      getContextUsage: () => requireActiveRunner().getContextUsageFn(),
+      compact: (options) => requireActiveRunner().compactFn(options),
+      getSystemPrompt: () => requireActiveRunner().getSystemPromptFn(),
     };
   }
 
@@ -721,12 +685,15 @@ export class ExtensionRunner {
       ctx: ExtensionContext,
       extensionPath: string,
     ) => Promise<TResult | undefined>,
-    ctx = this.createContext(),
+    ctx?: ExtensionContext,
   ): Promise<TResult | undefined> {
+    let handlerContext = ctx;
     for (const ext of this.extensions) {
       for (const handler of ext.handlers.get(eventType) ?? []) {
+        // Context construction is a runner fault, not an isolated handler failure.
+        handlerContext ??= this.createContext();
         try {
-          const result = await invoke(handler, ctx, ext.path);
+          const result = await invoke(handler, handlerContext, ext.path);
           if (result !== undefined) {
             return result;
           }
@@ -816,7 +783,7 @@ export class ExtensionRunner {
   }
 
   async emitToolCall(event: ToolCallEvent): Promise<ToolCallEventResult | undefined> {
-    const ctx = this.createContext();
+    let ctx: ExtensionContext | undefined;
     let result: ToolCallEventResult | undefined;
 
     for (const ext of this.extensions) {
@@ -826,6 +793,7 @@ export class ExtensionRunner {
       }
 
       for (const handler of handlers) {
+        ctx ??= this.createContext();
         const handlerResult = await handler(event, ctx);
 
         if (handlerResult) {

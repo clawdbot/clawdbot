@@ -2817,8 +2817,9 @@ jobs:
     if: ${{ always() && needs.publish_docker.result == 'success' }}
     uses: ./.github/workflows/vercel-container-registry-publish.yml
     with:
+      advisory: true
       include_browser: ${{ needs.publish_docker.outputs.include_browser == 'true' }}
-      source_refs: ${{ needs.publish_docker.outputs.vcr_source_refs }}
+      source_digests: ${{ needs.publish_docker.outputs.vcr_source_digests }}
       version: ${{ needs.publish_docker.outputs.version }}
     secrets:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}

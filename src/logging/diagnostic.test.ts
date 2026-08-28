@@ -104,6 +104,26 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) 
   return count;
 }
 
+/** Drives a lane that keeps receiving inbound, the traffic that refreshes lastActivity. */
+function advanceLaneWithInbound(params: {
+  sessionId: string;
+  sessionKey: string;
+  totalMs: number;
+  inboundEveryMs: number;
+  onInbound?: () => void;
+}) {
+  const ticks = Math.floor(params.totalMs / params.inboundEveryMs);
+  for (let i = 0; i < ticks; i += 1) {
+    vi.advanceTimersByTime(params.inboundEveryMs);
+    logMessageQueued({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      source: "dispatch",
+    });
+    params.onInbound?.();
+  }
+}
+
 const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
@@ -871,6 +891,130 @@ describe("stuck session diagnostics threshold", () => {
         });
         vi.advanceTimersByTime(1_000);
       }
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.some((event) => event.type === "session.stalled")).toBe(false);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("reports blocked tool calls on a lane whose inbound keeps refreshing the session clock", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+      });
+
+      advanceLaneWithInbound({
+        sessionId: "s1",
+        sessionKey: "main",
+        totalMs: 20 * 60_000,
+        inboundEveryMs: 25_000,
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    const stalled = requireRecord(
+      events.findLast((event) => event.type === "session.stalled"),
+      "stalled event",
+    );
+    expectRecordFields(stalled, {
+      classification: "blocked_tool_call",
+      reason: "blocked_tool_call",
+      activeWorkKind: "tool_call",
+      activeToolName: "bash",
+    });
+    // Both the report and the recovery request carry the progress clock, not the
+    // 25s-old session touch: the ownerless-lane release window measures staleness.
+    expect(stalled.ageMs).toBeGreaterThanOrEqual(15 * 60_000);
+    const recovery = requireFirstMockCallArg(recoverStuckSession, "recoverStuckSession");
+    expect(recovery.ageMs).toBeGreaterThanOrEqual(15 * 60_000);
+  });
+
+  it("keeps a lane with fresh owned progress quiet while inbound keeps arriving", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+      });
+
+      advanceLaneWithInbound({
+        sessionId: "s1",
+        sessionKey: "main",
+        totalMs: 20 * 60_000,
+        inboundEveryMs: 25_000,
+        onInbound: () => {
+          markDiagnosticRunProgressForTest({
+            sessionId: "s1",
+            sessionKey: "main",
+            runId: "run-1",
+            reason: "cli_live:stream_progress",
+          });
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.some((event) => event.type === "session.stalled")).toBe(false);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("leaves a busy lane with no owned work on the session clock", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+      });
+      // Terminal-but-unreleased state: the owner is gone, the activity row is not.
+      // Recording that fact belongs to the run lifecycle, not to this gate.
+      markDiagnosticEmbeddedRunEnded({ sessionId: "s1", sessionKey: "main" });
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" })
+          .activeWorkKind,
+      ).toBeUndefined();
+
+      advanceLaneWithInbound({
+        sessionId: "s1",
+        sessionKey: "main",
+        totalMs: 20 * 60_000,
+        inboundEveryMs: 25_000,
+      });
     } finally {
       unsubscribe();
     }

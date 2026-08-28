@@ -4,11 +4,19 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   currentPluginMetadataConfigIdentityCache,
+  getGatewayPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshotState,
   type CurrentPluginMetadataSnapshotRevision,
 } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import {
+  adoptProcessPluginCache,
+  getPluginMetadataSnapshotCache,
+  getProcessPluginCache,
+  getScopedPluginCache,
+  withPluginCache,
+} from "./plugin-cache.js";
 import {
   resolvePluginControlPlaneFingerprint,
   type ResolvePluginControlPlaneContextParams,
@@ -100,7 +108,11 @@ function resolvePluginMetadataControlPlaneFingerprint(
 function publishCurrentPluginMetadataSnapshot(
   snapshot: PluginMetadataSnapshot | undefined,
   options: CurrentPluginMetadataSnapshotOptions,
+  owner: "gateway" | "operation" = "operation",
 ): CurrentPluginMetadataSnapshotRevision {
+  if (getCurrentPluginMetadataSnapshotState().owner === "gateway") {
+    throw new Error("Gateway plugin metadata can only be replaced after shutdown");
+  }
   currentPluginMetadataConfigIdentityCache.clear();
   const compatiblePolicyHashes = snapshot
     ? options.compatibleConfigs?.map((config) => resolveInstalledPluginIndexPolicyHash(config))
@@ -145,7 +157,8 @@ function publishCurrentPluginMetadataSnapshot(
     configFingerprint,
     compatiblePolicyHashes,
     compatibleConfigFingerprints,
-    defaultDiscoveryCompatible ? snapshot.plugins : undefined,
+    owner === "gateway" || defaultDiscoveryCompatible ? snapshot?.plugins : undefined,
+    owner,
   );
   if (!snapshot) {
     return revision;
@@ -165,14 +178,23 @@ function publishCurrentPluginMetadataSnapshot(
   return revision;
 }
 
-// Single-slot Gateway-owned handoff. Replace or clear it at lifecycle boundaries;
-// never accumulate historical metadata snapshots here.
-export function setCurrentPluginMetadataSnapshot(
+/** Publishes package facts once; config reload only replaces their runtime bindings. */
+export function setGatewayPluginMetadataSnapshot(
   snapshot: PluginMetadataSnapshot | undefined,
   options: CurrentPluginMetadataSnapshotOptions = {},
 ): void {
+  if (!snapshot) {
+    return;
+  }
+  if (snapshot.pluginIds !== undefined) {
+    throw new Error("Gateway plugin metadata must include the complete startup inventory");
+  }
+  if (getCurrentPluginMetadataSnapshotState().owner === "gateway") {
+    throw new Error("Gateway plugin metadata can only be replaced after shutdown");
+  }
+  adoptProcessPluginCache(getPluginMetadataSnapshotCache(snapshot));
   activeTemporaryPluginMetadataSnapshotLease = undefined;
-  publishCurrentPluginMetadataSnapshot(snapshot, options);
+  publishCurrentPluginMetadataSnapshot(snapshot, options, "gateway");
 }
 
 /** Publishes a prepared CLI snapshot without displacing a lifecycle owner. */
@@ -180,10 +202,23 @@ export function adoptCurrentPluginMetadataSnapshotIfAbsent(
   snapshot: PluginMetadataSnapshot,
   options: CurrentPluginMetadataSnapshotOptions = {},
 ): void {
-  if (getCurrentPluginMetadataSnapshotState().snapshot !== undefined) {
+  if (
+    getScopedPluginCache()?.kind === "operation" ||
+    getCurrentPluginMetadataSnapshotState().snapshot !== undefined
+  ) {
     return;
   }
-  setCurrentPluginMetadataSnapshot(snapshot, options);
+  activeTemporaryPluginMetadataSnapshotLease = undefined;
+  publishCurrentPluginMetadataSnapshot(snapshot, options);
+}
+
+function isScopedSnapshotInCurrentCache(scoped: ScopedPluginMetadataSnapshot): boolean {
+  const cache = getScopedPluginCache();
+  return (
+    cache?.kind !== "operation" ||
+    !scoped.snapshot ||
+    getPluginMetadataSnapshotCache(scoped.snapshot) === cache
+  );
 }
 
 function captureCurrentPluginMetadataSnapshotState(): CurrentPluginMetadataSnapshotState {
@@ -203,6 +238,7 @@ function restoreCapturedCurrentPluginMetadataSnapshotState(
     state.compatiblePolicyHashes,
     state.compatibleConfigFingerprints,
     state.manifestModelIdNormalizationRecords,
+    state.owner,
   );
 }
 
@@ -305,17 +341,19 @@ export function withPluginMetadataSnapshotScope<T>(
   for (const config of options.compatibleConfigs ?? []) {
     configIdentities.add(config);
   }
-  return scopedPluginMetadataSnapshot.run(
-    {
-      snapshot,
-      configFingerprint,
-      compatiblePolicyHashes,
-      compatibleConfigFingerprints,
-      hasConfigIdentity: (config) => configIdentities.has(config),
-      immutableRuntimeGeneration: options.trustConfigIdentity === true,
-      parent: scopedPluginMetadataSnapshot.getStore(),
-    },
-    run,
+  return withPluginCache(getPluginMetadataSnapshotCache(snapshot), () =>
+    scopedPluginMetadataSnapshot.run(
+      {
+        snapshot,
+        configFingerprint,
+        compatiblePolicyHashes,
+        compatibleConfigFingerprints,
+        hasConfigIdentity: (config) => configIdentities.has(config),
+        immutableRuntimeGeneration: options.trustConfigIdentity === true,
+        parent: scopedPluginMetadataSnapshot.getStore(),
+      },
+      run,
+    ),
   );
 }
 
@@ -327,6 +365,11 @@ function resolveCompatiblePluginMetadataSnapshot(
   const snapshot = candidate.snapshot;
   if (!snapshot) {
     return undefined;
+  }
+  // Runtime selection projects the boot inventory in memory. Policy, run workspaces,
+  // and narrower scopes must never send a runtime reader back into discovery.
+  if (candidate.immutableRuntimeGeneration) {
+    return snapshot;
   }
   const env = params.env ?? process.env;
   const requestedPluginIds = normalizePluginIdScope(
@@ -345,11 +388,6 @@ function resolveCompatiblePluginMetadataSnapshot(
     params.allowScopedSnapshot !== true
   ) {
     return undefined;
-  }
-  // Immutable runtime generations already selected their executable plugin graph. Nested config
-  // and workspace projections are run data, not authority to reopen lifecycle-owned discovery.
-  if (candidate.immutableRuntimeGeneration) {
-    return snapshot;
   }
   const requestedWorkspaceDir =
     params.workspaceDir ??
@@ -417,10 +455,17 @@ function resolveCompatiblePluginMetadataSnapshot(
 }
 
 export function isCurrentPluginMetadataSnapshotRuntimeGeneration(
-  snapshot: PluginMetadataSnapshot,
+  snapshot: Pick<PluginMetadataSnapshot, "index">,
 ): boolean {
+  const gatewaySnapshot = getGatewayPluginMetadataSnapshot();
+  if (gatewaySnapshot && gatewaySnapshot.index === snapshot.index) {
+    return true;
+  }
   for (let scoped = scopedPluginMetadataSnapshot.getStore(); scoped; scoped = scoped.parent) {
-    if (scoped.snapshot === snapshot && scoped.immutableRuntimeGeneration === true) {
+    if (!isScopedSnapshotInCurrentCache(scoped)) {
+      continue;
+    }
+    if (scoped.snapshot?.index === snapshot.index && scoped.immutableRuntimeGeneration === true) {
       return true;
     }
   }
@@ -431,6 +476,9 @@ export function getCurrentPluginMetadataSnapshot(
   params: CurrentPluginMetadataSnapshotParams = {},
 ): PluginMetadataSnapshot | undefined {
   for (let scoped = scopedPluginMetadataSnapshot.getStore(); scoped; scoped = scoped.parent) {
+    if (!isScopedSnapshotInCurrentCache(scoped)) {
+      continue;
+    }
     // An explicit async owner scope is the discovery context for nested configless readers.
     // Global snapshots still require proof that they match the default discovery context.
     const compatibleScoped = resolveCompatiblePluginMetadataSnapshot(scoped, params, {
@@ -441,8 +489,18 @@ export function getCurrentPluginMetadataSnapshot(
     }
   }
 
-  const { snapshot, configFingerprint, compatiblePolicyHashes, compatibleConfigFingerprints } =
-    getCurrentPluginMetadataSnapshotState();
+  const scopedCache = getScopedPluginCache();
+  if (scopedCache && scopedCache !== getProcessPluginCache()) {
+    return undefined;
+  }
+
+  const {
+    snapshot,
+    owner,
+    configFingerprint,
+    compatiblePolicyHashes,
+    compatibleConfigFingerprints,
+  } = getCurrentPluginMetadataSnapshotState();
   return resolveCompatiblePluginMetadataSnapshot(
     {
       snapshot: snapshot as PluginMetadataSnapshot | undefined,
@@ -450,6 +508,7 @@ export function getCurrentPluginMetadataSnapshot(
       compatiblePolicyHashes,
       compatibleConfigFingerprints,
       hasConfigIdentity: (config) => currentPluginMetadataConfigIdentityCache.has(config),
+      immutableRuntimeGeneration: owner === "gateway",
     },
     params,
   );
@@ -458,4 +517,7 @@ export function getCurrentPluginMetadataSnapshot(
 // Light bridges (plugin-metadata-snapshot.runtime.ts) serve reads through this
 // instance whenever the metadata system is loaded; the require fallback only
 // covers cold processes.
-registerPluginMetadataSnapshotReaders({ getCurrentPluginMetadataSnapshot });
+registerPluginMetadataSnapshotReaders({
+  adoptCurrentPluginMetadataSnapshotIfAbsent,
+  getCurrentPluginMetadataSnapshot,
+});

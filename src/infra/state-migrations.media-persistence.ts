@@ -118,32 +118,36 @@ function assertEventIdentitiesUnchanged(
 function forEachMediaEventBatch(params: {
   database: DatabaseSync;
   table: "trajectory_runtime_events" | "transcript_events";
-  visit: (sessionId: string, rows: Array<{ event_json: string; seq: number }>) => void;
+  visit: (rows: Array<{ event_json: string; seq: number; session_id: string }>) => void;
 }): void {
   const db = getNodeSqliteKysely<MediaMigrationDatabase>(params.database);
-  const sessionIds = executeSqliteQuerySync(
-    params.database,
-    db.selectFrom(params.table).select("session_id").distinct().orderBy("session_id", "asc"),
-  ).rows.map((row) => row.session_id);
-  for (const sessionId of sessionIds) {
-    let afterSeq: number | undefined;
-    while (true) {
-      let query = db
-        .selectFrom(params.table)
-        .select(["seq", "event_json"])
-        .where("session_id", "=", sessionId)
-        .orderBy("seq", "asc")
-        .limit(MEDIA_MIGRATION_ROW_BATCH_SIZE);
-      if (afterSeq !== undefined) {
-        query = query.where("seq", ">", afterSeq);
-      }
-      const rows = executeSqliteQuerySync(params.database, query).rows;
-      if (rows.length === 0) {
-        break;
-      }
-      params.visit(sessionId, rows);
-      afterSeq = rows.at(-1)?.seq;
+  let cursor: { seq: number; sessionId: string } | undefined;
+  while (true) {
+    let query = db
+      .selectFrom(params.table)
+      .select(["session_id", "seq", "event_json"])
+      .orderBy("session_id", "asc")
+      .orderBy("seq", "asc")
+      .limit(MEDIA_MIGRATION_ROW_BATCH_SIZE);
+    const after = cursor;
+    if (after) {
+      // Keep SQLite on a composite primary-key seek. Expanding this tuple into
+      // OR branches restarts the index scan for every page.
+      query = query.where((expression) =>
+        expression(
+          expression.refTuple("session_id", "seq"),
+          ">",
+          expression.tuple(after.sessionId, after.seq),
+        ),
+      );
     }
+    const rows = executeSqliteQuerySync(params.database, query).rows;
+    const last = rows.at(-1);
+    if (!last) {
+      return;
+    }
+    params.visit(rows);
+    cursor = { seq: last.seq, sessionId: last.session_id };
   }
 }
 
@@ -154,43 +158,71 @@ function scanTranscriptRows(params: {
 }): number {
   const { database, pathname, writer } = params;
   const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
-  const sessionRows = executeSqliteQuerySync(
-    database,
-    db.selectFrom("session_windows").select(["session_id", "session_key"]),
-  ).rows;
-  const sessionKeys = new Map(sessionRows.map((row) => [row.session_id, row.session_key]));
-  const changedSessionIds = new Set<string>();
+  let lastChangedSessionId: string | undefined;
+  let changedSessions = 0;
   forEachMediaEventBatch({
     database,
     table: "transcript_events",
-    visit: (sessionId, rows) => {
-      const sessionKey = sessionKeys.get(sessionId);
-      if (!sessionKey) {
-        throw new Error(`${pathname}:${sessionId} has transcript rows without a session window`);
+    visit: (rows) => {
+      const sessionIds = [...new Set(rows.map((row) => row.session_id))];
+      const sessionKeys = new Map(
+        executeSqliteQuerySync(
+          database,
+          db
+            .selectFrom("session_windows")
+            .select(["session_id", "session_key"])
+            .where("session_id", "in", sessionIds),
+        ).rows.map((row) => [row.session_id, row.session_key]),
+      );
+      for (const sessionId of sessionIds) {
+        if (!sessionKeys.has(sessionId)) {
+          throw new Error(`${pathname}:${sessionId} has transcript rows without a session window`);
+        }
       }
-      const rewrites = rows.flatMap((row) => {
-        const owner = `${pathname}:${sessionId}:${row.seq}`;
+      const rewritesBySession = new Map<
+        string,
+        Array<{ event: TranscriptEvent; expectedEventJson: string; seq: number }>
+      >();
+      for (const row of rows) {
+        const owner = `${pathname}:${row.session_id}:${row.seq}`;
         const event = parseTranscriptEvent(row.event_json, owner);
         const transformed = transformTranscriptEvent(event);
         if (!transformed.changed) {
-          return [];
+          continue;
         }
         if (eventIdentity(event) !== eventIdentity(transformed.event)) {
           throw new Error(`${owner} event identity changed during media migration`);
         }
-        changedSessionIds.add(sessionId);
-        return [{ event: transformed.event, expectedEventJson: row.event_json, seq: row.seq }];
-      });
-      if (writer && rewrites.length > 0) {
-        rewriteSqliteTranscriptEventRowsInTransaction(
-          writer,
-          { agentId: writer.agentId, path: pathname, sessionId, sessionKey },
-          rewrites,
-        );
+        if (lastChangedSessionId !== row.session_id) {
+          lastChangedSessionId = row.session_id;
+          changedSessions += 1;
+        }
+        const rewrites = rewritesBySession.get(row.session_id) ?? [];
+        rewrites.push({
+          event: transformed.event,
+          expectedEventJson: row.event_json,
+          seq: row.seq,
+        });
+        rewritesBySession.set(row.session_id, rewrites);
+      }
+      if (writer) {
+        for (const [sessionId, rewrites] of rewritesBySession) {
+          const sessionKey = sessionKeys.get(sessionId);
+          if (!sessionKey) {
+            throw new Error(
+              `${pathname}:${sessionId} has transcript rows without a session window`,
+            );
+          }
+          rewriteSqliteTranscriptEventRowsInTransaction(
+            writer,
+            { agentId: writer.agentId, path: pathname, sessionId, sessionKey },
+            rewrites,
+          );
+        }
       }
     },
   });
-  return changedSessionIds.size;
+  return changedSessions;
 }
 
 function rewriteTrajectoryEventJson(eventJson: string, owner: string): string {
@@ -230,11 +262,11 @@ function scanTrajectoryRows(params: {
   forEachMediaEventBatch({
     database,
     table: "trajectory_runtime_events",
-    visit: (sessionId, rows) => {
+    visit: (rows) => {
       for (const row of rows) {
         const rewrittenEventJson = rewriteTrajectoryEventJson(
           row.event_json,
-          `${pathname}:${sessionId}:${row.seq}`,
+          `${pathname}:${row.session_id}:${row.seq}`,
         );
         if (rewrittenEventJson === row.event_json) {
           continue;
@@ -246,7 +278,7 @@ function scanTrajectoryRows(params: {
             db
               .updateTable("trajectory_runtime_events")
               .set({ event_json: rewrittenEventJson })
-              .where("session_id", "=", sessionId)
+              .where("session_id", "=", row.session_id)
               .where("seq", "=", row.seq),
           );
         }

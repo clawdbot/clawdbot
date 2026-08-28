@@ -47,7 +47,6 @@ import {
   assertStreamScheduleSupport,
   assertSupportedJobSpec,
   assertTriggerSupport,
-  hasConcreteFailureDestination,
 } from "./jobs-validation.js";
 import { normalizeOptionalAgentId, normalizeRequiredName } from "./normalize.js";
 import { mergeCronPayload } from "./payload-merge.js";
@@ -398,23 +397,26 @@ export function applyJobPatch(
   if ("failureAlert" in patch) {
     job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
   }
-  if (
-    job.sessionTarget === "main" &&
-    job.delivery?.mode !== "webhook" &&
-    hasConcreteFailureDestination(job.delivery?.failureDestination)
-  ) {
-    throw new Error(
-      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
-    );
-  }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
-    // Main-session jobs cannot auto-announce; keep only an empty failure
-    // destination object when the patch is clearing nested fields.
+    assertFailureDestinationSupport(job);
+    // Retargeting may discard inherited announce routes, but must not silently
+    // accept a newly authored delivery request before cleanup.
+    const authoredDelivery =
+      patch.delivery && mergeCronDelivery(undefined, patch.delivery, "announce");
+    if (
+      authoredDelivery &&
+      (patch.delivery?.mode !== undefined ||
+        authoredDelivery.channel !== undefined ||
+        authoredDelivery.to !== undefined ||
+        authoredDelivery.threadId !== undefined ||
+        authoredDelivery.accountId !== undefined ||
+        authoredDelivery.completionDestination !== undefined)
+    ) {
+      assertDeliverySupport({ sessionTarget: job.sessionTarget, delivery: authoredDelivery });
+    }
+    // Clear-only failure destinations retain their global-default opt-outs.
     const failureDestination = job.delivery?.failureDestination;
-    job.delivery =
-      failureDestination && !hasConcreteFailureDestination(failureDestination)
-        ? { mode: "none", failureDestination }
-        : undefined;
+    job.delivery = failureDestination ? { mode: "none", failureDestination } : undefined;
   }
   if (patch.state) {
     const statePatch = { ...patch.state } as Partial<CronJobState>;

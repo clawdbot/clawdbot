@@ -445,6 +445,44 @@ date context. Falls back to the host timezone.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). By default, OpenClaw uses `min(16, max(8, available CPU parallelism))`, based on `os.availableParallelism()` with `os.cpus().length` as a fallback.
 
+<a id="agentsdefaultsmodelselectionscope" />
+
+### `agents.defaults.modelSelectionScope`
+
+Optional scope for chat commands and Gateway session model updates without an explicit scope.
+There is no default value: leaving it unset preserves each surface's existing
+behavior.
+
+```json5
+{
+  agents: { defaults: { modelSelectionScope: "session" } },
+}
+```
+
+| Value       | Effect                                                                                                                                                                                                                                             |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"session"` | Change only the current session's model selection.                                                                                                                                                                                                 |
+| `"agent"`   | Also update the current agent's explicit primary at `agents.entries.<agent>.model`, creating that primary when needed. Never change the shared global fallback.                                                                                    |
+| `"global"`  | Also update the shared `agents.defaults.model` fallback. Do not replace other agents' explicit primaries or other sessions' pins.                                                                                                                  |
+| Unset       | Keep the existing surface behavior: direct owner/admin chat commands, Discord pickers, and Gateway session model updates request an effective configured-default update; Telegram callback pickers and the embedded local TUI remain session-only. |
+
+An effective configured-default update writes the agent's explicit primary when
+one exists, otherwise the shared global fallback. Explicit `/model` flags
+`-s`/`--session`, `-a`/`--agent`, and `-g`/`--global` take precedence over the setting.
+Without owner/admin authority, bare commands remain session-only and explicit
+`-a` or `-g` requests are rejected. Telegram callback pickers and the embedded local TUI remain
+session-only even when this setting is configured. There are no per-agent or
+per-channel overrides of this setting.
+
+Agent and global updates can affect new and existing unpinned sessions and cron
+jobs that inherit the changed default on their next run. They do not rewrite
+other sessions' explicit model selections. `/model default -s` clears only the
+current session's selection so it inherits the current configured default.
+Selecting the effective configured default clears the session model pin, but
+agent/global scope still requests a write to the configured target.
+See [Model selection in chat](/concepts/models#model-in-chat) for persistence,
+permissions, and picker behavior.
+
 ### Runtime policy
 
 ```json5
@@ -570,7 +608,7 @@ Periodic heartbeat runs.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and skip workspace bootstrap files. Monitor scratch is injected by the heartbeat runner either way.
 - `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
 - Busy deferral is automatic: scheduled heartbeats wait for main/cron activity, same-agent active runs, and target-session work. Immediate and manual wakes bypass only the broad same-agent active-run precheck.
-- An enrolled agent's Heartbeats system-prompt section is included automatically while that agent's cadence is enabled. Ack suppression uses a fixed 300-character remainder budget, reasoning payloads remain internal, and tool error warnings remain enabled.
+- Heartbeat runs use the ordinary agent system prompt. Acknowledgment suppression uses a fixed 300-character remainder budget, reasoning payloads remain internal, and tool error warnings remain enabled.
 - Per-agent: set `agents.entries.*.heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
@@ -637,9 +675,9 @@ An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a 
 - `postIndexSync`: post-compaction session-memory reindex mode. Default: `"async"`. Use `"await"` for strongest freshness, `"async"` for lower compaction latency, or `"off"` only when session-memory sync is handled elsewhere.
 - `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Leave unset or use `[]` to disable.
 - `model`: optional `provider/model-id` or bare alias from `agents.defaults.models` for compaction summarization only. Bare aliases resolve before dispatch; configured literal model IDs retain precedence on collisions. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
-- `maxActiveTranscriptBytes`: byte threshold (`number` or strings like `"20mb"`) that opts in to normal local compaction before a run when transcript history reaches the threshold. For Codex app-server sessions, the same threshold caps native rollout transcripts and oversized native threads restart fresh. Disabled when unset or `0`. When a context engine returns an explicit compacted successor identity, OpenClaw adopts it; the built-in SQLite compactor keeps the current identity.
+- `maxActiveTranscriptBytes`: byte threshold (`number` or strings like `"20mb"`) that opts in to normal local compaction before a run when the transcript window the model sees (everything since the latest compaction or reset, plus its kept tail) reaches the threshold. For Codex app-server sessions, the same threshold caps native rollout transcripts and oversized native threads restart fresh. Disabled when unset or `0`. When a context engine returns an explicit compacted successor identity, OpenClaw adopts it; the built-in SQLite compactor keeps the current identity.
 - `notifyUser`: when `true`, sends brief context-maintenance notices to the user: when compaction starts and completes (for example, "Compacting context..." and "Compaction complete"), and when a pre-compaction memory flush is exhausted so the reply continues in a degraded state (for example, "Memory maintenance temporarily failed; continuing your reply."). Disabled by default to keep these notices silent.
-- `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. `forceFlushTranscriptBytes` forces the flush when transcript size reaches the threshold even if token counters are stale. Skipped when workspace is read-only.
+- `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. `forceFlushTranscriptBytes` forces the flush when the model-visible transcript window reaches the threshold even if token counters are stale; after compaction, that window includes the retained tail and subsequent turns rather than discarded history. Skipped when workspace is read-only.
 
 Custom compaction instructions are code-owned. Implement a compaction provider
 plugin with `summarize()` for custom summary construction, and use
@@ -736,7 +774,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
     defaults: {
       sandbox: {
         mode: "non-main", // off (default) | non-main | all
-        backend: "docker", // docker (default) | podman | openshell | ssh
+        backend: "docker", // docker (default) | openshell | podman | ssh
         scope: "agent", // session | agent (default) | shared
         workspaceAccess: "none", // none (default) | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
@@ -831,11 +869,13 @@ Defaults shown above (`off`/`docker`/`agent`/`none`/`bookworm-slim` image/`none`
 **Backend:**
 
 - `docker`: local Docker runtime (default)
+- `openshell`: OpenShell-managed local or remote runtime
+- `podman`: local Podman runtime using Docker-compatible settings
 - `ssh`: generic SSH-backed remote runtime
-- `openshell`: OpenShell runtime
 
-When `backend: "openshell"` is selected, runtime-specific settings move to
-`plugins.entries.openshell.config`.
+Plugin-managed backends keep runtime-specific settings under their plugin entries:
+
+- OpenShell: `plugins.entries.openshell.config`; see [OpenShell](/gateway/openshell)
 
 **SSH backend config:**
 
@@ -889,8 +929,10 @@ When `backend: "openshell"` is selected, runtime-specific settings move to
           remoteAgentWorkspaceDir: "/agent",
           gateway: "lab", // optional
           gatewayEndpoint: "https://lab.example", // optional
-          policy: "strict", // optional OpenShell policy id
+          workspace: "research", // optional existing OpenShell workspace
+          policy: "/etc/openclaw/openshell-policy.yaml", // optional host-side YAML file
           providers: ["openai"], // optional
+          gpu: false,
           autoProviders: true,
           timeoutSeconds: 120,
         },
@@ -907,6 +949,7 @@ When `backend: "openshell"` is selected, runtime-specific settings move to
 
 In `remote` mode, host-local edits made outside OpenClaw are not synced into the sandbox automatically after the seed step.
 Transport is SSH into the OpenShell sandbox, but the plugin owns sandbox lifecycle and optional mirror sync.
+`workspace` selects an existing OpenShell control-plane workspace for the whole plugin; it is separate from the agent's filesystem workspace. `policy` must point to a YAML file readable by the OpenClaw Gateway, not a named policy ID. See [OpenShell](/gateway/openshell) for setup, prerequisites, and troubleshooting.
 
 **`setupCommand`** runs once after container creation (via `sh -lc`). Needs network egress, writable root, root user.
 
@@ -965,6 +1008,8 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 ```
 
 For npm installs without a source checkout, see [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for inline `docker build` commands.
+
+<a id="agentsentries-per-agent-overrides" />
 
 ### `agents.entries` (per-agent overrides)
 
@@ -1288,7 +1333,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `suggest`: allow `suggest`, where viewers can submit suggestions for the session owner or an `operator.admin` connection to send, queue, edit, or dismiss without granting direct access to send or manage the session.
   - `drafts`: allow `draft`, which hides the session from non-admin, non-owner session lists and event broadcasts.
 
-Session visibility and membership are maintained as canonical sharing state. Structured `session.sharing` and `session.suggestion` change events refresh connected clients without adding administrative narration to conversation transcripts. These controls coordinate operators sharing one agent; they are not a security boundary between tenants. Use separate Gateways or agents when work requires isolation.
+Session visibility and membership are maintained as canonical sharing state. Structured `session.sharing` events carry an attributed actor; principal-less changes use the additive `session.sharing.evidence` event. Every sharing change also emits the existing `sessions.changed` row refresh, so clients that do not recognize the evidence event still refresh canonical state. These events and `session.suggestion` do not add administrative narration to conversation transcripts. These controls coordinate operators sharing one agent; they are not a security boundary between tenants. Use separate Gateways or agents when work requires isolation.
 
 </Accordion>
 

@@ -554,6 +554,23 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
+  fun explicitMarkReadUsesLegacyCompatiblePayloadOnCurrentGateway() =
+    runTest {
+      val (controller, requests) =
+        chatControllerTestSetup {
+          gatewayAdvertisesCapability = { it == SESSION_UNREAD_ACK_CAPABILITY }
+        }
+
+      assertTrue(controller.patchSession(key = "main", unread = false))
+      advanceUntilIdle()
+
+      val patch = requests.single { it.first == "sessions.patch" }.second.orEmpty()
+      assertTrue(patch.contains("\"unread\":false"))
+      assertFalse(patch.contains("readIntent"))
+      assertFalse(patch.contains("expectedMarkedUnreadAt"))
+    }
+
+  @Test
   fun archivingOrDeletingTheOpenSessionFallsBackToMain() =
     runTest {
       val (controller, requests) =
@@ -602,6 +619,13 @@ class ChatControllerCommandControlsTest {
       )
       advanceUntilIdle()
       assertEquals(1, requests.count { it.first == "sessions.patch" })
+      assertFalse(
+        requests
+          .single { it.first == "sessions.patch" }
+          .second
+          .orEmpty()
+          .contains("expectedMarkedUnreadAt"),
+      )
 
       // Server-confirmed read resets the episode; a stale duplicate must not re-patch.
       controller.handleGatewayEvent(
@@ -615,6 +639,55 @@ class ChatControllerCommandControlsTest {
       )
       advanceUntilIdle()
       assertEquals(2, requests.count { it.first == "sessions.patch" })
+    }
+
+  @Test
+  fun manualUnreadOnOpenSessionSurvivesRunUpdatesUntilReactivation() =
+    runTest {
+      val (controller, requests) =
+        chatControllerTestSetup {
+          gatewayAdvertisesCapability = { it == SESSION_UNREAD_ACK_CAPABILITY }
+          respond(
+            "sessions.list",
+            """{"sessions":[{"key":"main","unread":false},{"key":"other","unread":false}]}""",
+          )
+        }
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+      controller.switchSession("main")
+      advanceUntilIdle()
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","unread":true,"markedUnreadAt":100}}""",
+      )
+      advanceUntilIdle()
+      assertEquals(0, requests.count { it.first == "sessions.patch" })
+      val retained = controller.sessions.value.first { it.key == "main" }
+      assertEquals(true, retained.unread)
+      assertEquals(100L, retained.markedUnreadAt)
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","unread":true,"markedUnreadAt":100,"hasActiveRun":true,"status":"running"}}""",
+      )
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","unread":true,"markedUnreadAt":100,"hasActiveRun":false,"status":"done"}}""",
+      )
+      advanceUntilIdle()
+      assertEquals(0, requests.count { it.first == "sessions.patch" })
+
+      controller.switchSession("other")
+      advanceUntilIdle()
+      controller.switchSession("main")
+      advanceUntilIdle()
+
+      val patch = requests.single { it.first == "sessions.patch" }.second.orEmpty()
+      assertTrue(patch.contains("\"unread\":false"))
+      assertTrue(patch.contains("\"expectedMarkedUnreadAt\":100"))
+      assertFalse(patch.contains("readIntent"))
     }
 
   @Test

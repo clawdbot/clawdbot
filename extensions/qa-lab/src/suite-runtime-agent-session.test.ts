@@ -479,8 +479,8 @@ describe("qa suite runtime agent session helpers", () => {
       sessionId: "session-mirrors",
       message: {
         role: "assistant",
-        content: "Codex plan:\n- inspect\n- build",
-        __openclaw: { mirrorIdentity: "turn-123:plan" },
+        content: "Checking the workspace.",
+        __openclaw: { mirrorIdentity: "turn-123:commentary:message-1" },
       },
     });
 
@@ -494,8 +494,8 @@ describe("qa suite runtime agent session helpers", () => {
     ).resolves.toMatchObject({
       assistantMirrors: [
         {
-          identity: "turn-123:plan",
-          text: "Codex plan:\n- inspect\n- build",
+          identity: "turn-123:commentary:message-1",
+          text: "Checking the workspace.",
         },
       ],
     });
@@ -512,8 +512,8 @@ describe("qa suite runtime agent session helpers", () => {
       message: {
         role: "assistant",
         content: [
-          { type: "toolCall", id: "plan-ok", name: "update_plan", arguments: {} },
-          { type: "toolCall", id: "plan-error", name: "update_plan", arguments: {} },
+          { type: "toolCall", id: "plan-ok", name: "progress_card", arguments: {} },
+          { type: "toolCall", id: "plan-error", name: "progress_card", arguments: {} },
           { type: "toolCall", id: "write-mismatch", name: "write", arguments: {} },
         ],
       },
@@ -522,15 +522,15 @@ describe("qa suite runtime agent session helpers", () => {
       {
         role: "toolResult",
         toolCallId: "plan-ok",
-        toolName: "update_plan",
-        content: [{ type: "text", text: "Plan updated" }],
+        toolName: "progress_card",
+        content: [{ type: "text", text: "Progress card updated" }],
         isError: false,
         timestamp: 100,
       },
       {
         role: "toolResult",
         toolCallId: "plan-ok",
-        toolName: "update_plan",
+        toolName: "progress_card",
         content: [{ type: "text", text: "duplicate" }],
         isError: false,
         timestamp: 200,
@@ -538,7 +538,7 @@ describe("qa suite runtime agent session helpers", () => {
       {
         role: "toolResult",
         toolCallId: "plan-error",
-        toolName: "update_plan",
+        toolName: "progress_card",
         content: [{ type: "text", text: "failed" }],
         isError: true,
         timestamp: 300,
@@ -568,11 +568,134 @@ describe("qa suite runtime agent session helpers", () => {
         sessionKey,
       ),
     ).resolves.toMatchObject({
-      assistantToolCallCounts: { update_plan: 2, write: 1 },
-      completedToolCallCounts: { update_plan: 2 },
-      successfulToolCallCounts: { update_plan: 1 },
-      successfulToolCallEvents: [{ name: "update_plan", timestamp: 100, toolCallId: "plan-ok" }],
+      assistantToolCallCounts: { progress_card: 2, write: 1 },
+      completedToolCallCounts: { progress_card: 2 },
+      successfulToolCallCounts: { progress_card: 1 },
+      successfulToolCallEvents: [{ name: "progress_card", timestamp: 100, toolCallId: "plan-ok" }],
     });
+  });
+
+  it("matches pending Code Mode waits to the exec checkpoint that created their run", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-code-mode-wait-");
+    const sessionKey = "agent:qa:code-mode-wait";
+    const sessionId = "session-code-mode-wait";
+    await seedQaSession({ tempRoot, sessionKey, sessionId });
+
+    for (const message of [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "checkpoint-1-exec",
+            name: "exec",
+            arguments: { code: "await qa_restart_wait(); return 'CHECKPOINT-1';" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "checkpoint-1-exec",
+        toolName: "exec",
+        details: { status: "waiting", runId: "checkpoint-1-run" },
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "checkpoint-1-wait",
+            name: "wait",
+            arguments: { runId: "checkpoint-1-run" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "checkpoint-1-wait",
+        toolName: "wait",
+        details: { status: "completed" },
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "audit-exec",
+            name: "exec",
+            arguments: { code: "return await catalog.search('qa_restart_unsafe_probe');" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "audit-exec",
+        toolName: "exec",
+        details: { status: "waiting", runId: "audit-run" },
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "audit-wait",
+            name: "wait",
+            arguments: { runId: "audit-run" },
+          },
+        ],
+      },
+    ]) {
+      await appendQaTranscriptMessage({ tempRoot, sessionKey, sessionId, message });
+    }
+
+    await expect(
+      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey, {
+        pendingCodeModeExecNeedle: "CHECKPOINT-1",
+      }),
+    ).resolves.toMatchObject({ hasPendingCodeModeWait: false });
+
+    for (const message of [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "checkpoint-2-exec",
+            name: "exec",
+            arguments: { code: "await qa_restart_wait(); return 'CHECKPOINT-2';" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "checkpoint-2-exec",
+        toolName: "exec",
+        details: { status: "waiting", runId: "checkpoint-2-run" },
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "checkpoint-2-wait",
+            name: "wait",
+            arguments: { runId: "checkpoint-2-run" },
+          },
+        ],
+      },
+    ]) {
+      await appendQaTranscriptMessage({ tempRoot, sessionKey, sessionId, message });
+    }
+
+    await expect(
+      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey, {
+        pendingCodeModeExecNeedle: "CHECKPOINT-2",
+      }),
+    ).resolves.toMatchObject({ hasPendingCodeModeWait: true });
   });
 
   it("only exposes authenticated successful tool results with finite owner timestamps", async () => {
@@ -684,13 +807,13 @@ describe("qa suite runtime agent session helpers", () => {
     for (const message of [
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "old-plan", name: "update_plan", arguments: {} }],
+        content: [{ type: "toolCall", id: "old-plan", name: "progress_card", arguments: {} }],
       },
       {
         role: "toolResult",
         toolCallId: "old-plan",
-        toolName: "update_plan",
-        content: [{ type: "text", text: "Plan updated" }],
+        toolName: "progress_card",
+        content: [{ type: "text", text: "Progress card updated" }],
         isError: false,
         timestamp: 100,
       },
@@ -707,7 +830,7 @@ describe("qa suite runtime agent session helpers", () => {
       sessionKey,
     );
     expect(checkpoint.successfulToolCallEvents).toEqual([
-      { name: "update_plan", timestamp: 100, toolCallId: "old-plan" },
+      { name: "progress_card", timestamp: 100, toolCallId: "old-plan" },
     ]);
     await appendQaTranscriptMessage({
       tempRoot,

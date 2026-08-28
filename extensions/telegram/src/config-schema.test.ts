@@ -72,6 +72,19 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+  it("accepts group join introduction overrides per account", () => {
+    const res = TelegramConfigSchema.safeParse({
+      joinIntro: false,
+      accounts: { ops: { joinIntro: true } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.joinIntro).toBe(false);
+      expect(res.data.accounts?.ops?.joinIntro).toBe(true);
+    }
+  });
+
   it("rejects retired group history context mode keys", () => {
     const res = TelegramConfigSchema.safeParse({ includeGroupHistoryContext: "mention-only" });
 

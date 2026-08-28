@@ -19,11 +19,19 @@
 }
 
 .chat-text {
+  font-family: var(--font-chat);
   font-size: var(--chat-text-size);
   line-height: 1.5;
   color: var(--chat-text);
   overflow-wrap: anywhere;
   word-break: break-word;
+  /* Serif chat faces need macOS stem darkening to stay crisp at chat size:
+     the app-wide `antialiased` (base.css body) thins their hairlines into
+     gray smear. applyChatFontSmoothing (app/typography.ts) sets `auto` when
+     the resolved chat typeface is a serif; unset falls back to the inherited
+     app-wide smoothing. */
+  -webkit-font-smoothing: var(--chat-font-smoothing, inherit);
+  -moz-osx-font-smoothing: var(--chat-font-smoothing, inherit);
 }
 
 .chat-message-disclosure {
@@ -166,7 +174,6 @@
 .markdown-table__viewport {
   max-width: 100%;
   overflow-x: auto;
-  scrollbar-width: thin;
 }
 
 .markdown-table--can-scroll-right .markdown-table__viewport {
@@ -300,7 +307,6 @@
     color-mix(in srgb, var(--accent) 6%, var(--secondary))
   );
   color: var(--text-strong);
-  font-family: var(--font-body);
   font-weight: 600;
 }
 
@@ -417,7 +423,6 @@
 }
 
 :is(.chat-text, .chat-thinking) :where(details) {
-  box-sizing: border-box;
   width: 100%;
   padding: var(--space-4);
   border: 1px solid var(--border);
@@ -724,7 +729,6 @@
 
 :is(.chat-text, .sidebar-markdown) .markdown-external-image {
   display: flex;
-  box-sizing: border-box;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;

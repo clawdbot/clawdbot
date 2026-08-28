@@ -247,7 +247,7 @@ export type AgentCommandIngressOpts = Omit<
   | "onAdmittedRunContext"
   | "onPostAdmittedRunContext"
 > & {
-  /** Trusted sender identity bit for command/channel-action auth; defaults false for ingress. */
+  /** @deprecated Public ingress ignores owner claims; use the host-injected channel runtime. */
   senderIsOwner?: boolean;
   /** Ingress callsites must always pass explicit model-override authorization state. */
   allowModelOverride: boolean;

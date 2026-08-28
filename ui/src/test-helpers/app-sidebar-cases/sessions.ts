@@ -310,11 +310,61 @@ describe("AppSidebar session source lifecycle", () => {
     expect(sidebar.sessionData.sessionsAgentId).toBe("main");
   });
 
-  it("clears every cached session view when the Gateway client is replaced", async () => {
+  it("keeps pinned session views while the Gateway client is replaced", async () => {
+    const key = "agent:main:pinned";
     const firstClient = {} as GatewayBrowserClient;
     const gateway = createGatewayHarness(firstClient);
+    const sessions = createSessionsHarness("main", [key]);
+    const pinned = sessions.sessions.state.result?.sessions[0];
+    if (!pinned) {
+      throw new Error("expected pinned session row");
+    }
+    pinned.pinned = true;
+    pinned.pinnedAt = 1;
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.sidebarEntries = [`session:${key}`];
+    await sidebar.updateComplete;
+    const cachedResult = sidebar.sessionData.sessionsResult;
+    const pinnedEntry = () =>
+      sidebar.querySelector(`[data-sidebar-entry="session:${key}"] [data-session-key="${key}"]`);
+
+    expect(pinnedEntry()).not.toBeNull();
+
+    gateway.publish({
+      client: {} as GatewayBrowserClient,
+      phase: "reconnecting",
+    });
+    sessions.publish({ result: null, agentId: null, loading: false });
+    await sidebar.updateComplete;
+
+    expect(sidebar.sessionData.sessionsResult).toBe(cachedResult);
+    expect(sidebar.sessionData.sessionsAgentId).toBe("main");
+    expect(sidebar.sessionData.sessionResultsByAgent.main).toBe(cachedResult);
+    expect(pinnedEntry()).not.toBeNull();
+
+    gateway.publish({ phase: "connected" });
+    const unpinned = createSessionState("main", [key]);
+    sessions.publish({ result: unpinned.result, agentId: unpinned.agentId });
+    await sidebar.updateComplete;
+    expect(pinnedEntry()).not.toBeNull();
+
+    sessions.publishList({ result: unpinned.result, agentId: unpinned.agentId });
+    await sidebar.updateComplete;
+    expect(pinnedEntry()).toBeNull();
+  });
+
+  it("clears cached session views when the Gateway connection changes", async () => {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", ["main-a"]);
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    Object.defineProperty(gateway.gateway, "connection", {
+      configurable: true,
+      value: { ...gateway.gateway.connection, gatewayUrl: "ws://replacement.test" },
+    });
+    Object.defineProperty(gateway.gateway, "connectionRevision", {
+      configurable: true,
+      value: 1,
+    });
 
     gateway.publish({
       client: {} as GatewayBrowserClient,

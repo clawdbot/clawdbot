@@ -3,6 +3,7 @@
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionFacts } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
@@ -24,6 +25,7 @@ import type {
   CronFailureNotificationDetail,
   CronDeliveryStatus,
   CronDeliveryTrace,
+  CronResolvedDeliveryState,
   CronJob,
   CronNextCheckProposal,
   CronJobCreate,
@@ -54,6 +56,7 @@ export type CronEvent = {
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
+  deliverySuppressionReason?: NormalizeReplySkipReason;
   failureNotificationDelivery?: CronFailureNotificationDelivery;
   delivery?: CronDeliveryTrace;
   sessionId?: string;
@@ -163,7 +166,10 @@ export type CronServiceDeps = {
   }) => DeliveryContext | undefined;
   /** Runs timer and startup work inside the owning Gateway's detached scope. */
   runSchedulerOwned?: <T>(run: () => Promise<T>) => Promise<T>;
-  requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
+  requestHeartbeat: (
+    opts: HeartbeatWakeRequest,
+    retry?: Extract<HeartbeatRunResult, { status: "skipped" }>,
+  ) => void;
   runHeartbeatOnce?: (opts?: {
     source?: HeartbeatWakeRequest["source"];
     intent?: HeartbeatWakeRequest["intent"];
@@ -177,6 +183,13 @@ export type CronServiceDeps = {
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
     heartbeat?: HeartbeatWakeRequest["heartbeat"];
   }) => Promise<HeartbeatRunResult>;
+  runSkillCollectionReview?: (params: {
+    agentId: string;
+    abortSignal?: AbortSignal;
+  }) => Promise<
+    | { status: "ok" | "skipped"; summary: string }
+    | { status: "error"; summary: string; error: string }
+  >;
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
    * { status:"skipped", reason:"requests-in-flight" } before falling back to
@@ -205,6 +218,8 @@ export type CronServiceDeps = {
        */
       delivered?: boolean;
       deliveryError?: string;
+      deliverySuppressionReason?: NormalizeReplySkipReason;
+      deliveryState?: CronResolvedDeliveryState;
       /**
        * `true` when announce/direct delivery was attempted for this run, even
        * if the final per-message ack status is uncertain.
@@ -220,6 +235,8 @@ export type CronServiceDeps = {
       delivered?: boolean;
       deliveryAttempted?: boolean;
       deliveryError?: string;
+      deliverySuppressionReason?: NormalizeReplySkipReason;
+      deliveryState?: CronResolvedDeliveryState;
       delivery?: CronDeliveryTrace;
     } & CronRunOutcome
   >;
@@ -232,6 +249,8 @@ export type CronServiceDeps = {
       delivered?: boolean;
       deliveryAttempted?: boolean;
       deliveryError?: string;
+      deliverySuppressionReason?: NormalizeReplySkipReason;
+      deliveryState?: CronResolvedDeliveryState;
       delivery?: CronDeliveryTrace;
       notify?: string;
       wake?: "now" | "next-heartbeat";
@@ -267,6 +286,7 @@ export type CronServiceDeps = {
     accountId?: string;
     threadId?: string | number;
     inheritSessionThread?: false;
+    onDeliveryAttempt?: (reachedRecipient: boolean) => void;
   }) => Promise<void>;
   onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
 };
@@ -316,6 +336,8 @@ export type CronServiceState = {
   lifecycleGeneration: number;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
+  /** Owns scheduled-tick exclusion until startup catch-up publishes deferred slots. */
+  startupCatchup?: object;
   activeManualRunJobIds: Set<string>;
   manualSetupTimeoutNotified: boolean;
   /** Bounds scheduled, manual, and on-exit work with one shared cron limit. */

@@ -62,7 +62,8 @@ function collectSystemdInlineManagedKeys(params: {
     keys.delete(key);
   }
   for (const [rawKey, value] of Object.entries(params.environment ?? {})) {
-    if (typeof value !== "string" || !value.trim()) {
+    // Clearing NODE_OPTIONS must also remove stale env-file flags that override inline values.
+    if (typeof value !== "string" || (!value.trim() && rawKey !== "NODE_OPTIONS")) {
       continue;
     }
     const key = normalizeServiceEnvKey(rawKey);
@@ -549,7 +550,11 @@ async function activateSystemdService(params: { env: GatewayServiceEnv }) {
 
   const runAfterReloadRetry = async (action: "enable" | "restart") => {
     const result = await execSystemctlUser(params.env, [action, unitName]);
-    if (result.code === 0 || !isSystemdUnitMissingDetail(readSystemctlDetail(result))) {
+    if (
+      result.code === 0 ||
+      result.termination !== "exit" ||
+      !isSystemdUnitMissingDetail(readSystemctlDetail(result))
+    ) {
       return result;
     }
     const retryReload = await reloadSystemd();

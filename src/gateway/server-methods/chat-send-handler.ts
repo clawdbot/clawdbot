@@ -6,7 +6,10 @@ import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.j
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
-import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
+import {
+  terminalizeRestartSafeChatAdmission,
+  type RestartSafeChatTerminalState,
+} from "./chat-restart-recovery.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import { handleChatSendSetupError } from "./chat-send-dispatch-errors.js";
@@ -118,10 +121,9 @@ async function handleChatSendWithOptions(
   });
 
   const admissionStartedAt = Date.now();
-  const terminalizeRestartSafeAdmission = async (terminalState: {
-    retryable: boolean;
-    status: "failed" | "killed";
-  }): Promise<boolean> =>
+  const terminalizeRestartSafeAdmission = async (
+    terminalState: RestartSafeChatTerminalState,
+  ): Promise<boolean> =>
     await terminalizeRestartSafeChatAdmission({
       admittedSessionId,
       clientRunId,
@@ -272,6 +274,7 @@ async function handleChatSendWithOptions(
     // post-ACK cleanupAdmittedRun must not race that persist with a discard.
     admitted.value.setDiscardAbandonedPreparedMedia(undefined);
     respond(true, ackPayload, undefined, { runId: clientRunId });
+    context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     startChatDispatch({
       admissionStartedAt,

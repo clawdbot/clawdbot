@@ -13,9 +13,9 @@ import {
   toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
+import type { CachedRuntimeState } from "./manager.runtime-handle-cache.js";
 import type { SessionAcpMeta } from "./manager.types.js";
 import { createUnsupportedControlError } from "./manager.utils.js";
-import type { CachedRuntimeState } from "./runtime-cache.js";
 import {
   buildRuntimeConfigOptionPairs,
   buildRuntimeControlSignature,

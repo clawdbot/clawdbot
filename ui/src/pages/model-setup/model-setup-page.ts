@@ -10,12 +10,13 @@ import type {
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { readSessionDefaults } from "../../app/gateway-store.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import type { ModelSetupDetectionConnection } from "./detect-cache.ts";
@@ -49,6 +50,7 @@ import { ModelSetupWizardRunner } from "./wizard-runner.ts";
 import type { ModelSetupWizardCompletion, ModelSetupWizardStartMethod } from "./wizard-runner.ts";
 
 export type { ModelSetupRouteData } from "./first-run-auto-setup.ts";
+export { resumeFirstRunActivation } from "./first-run-activation-receipt.ts";
 
 const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
 
@@ -353,9 +355,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     this.pendingPrepareOption = null;
     void this.wizard.cancel();
     this.pageState = { phase: "loading" };
-    if (!connection.connected || !connection.client) {
-      return;
-    }
     if (this.canUseSetup(connection.client)) {
       void this.detect();
     }
@@ -393,10 +392,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (pageState.phase !== "ready") {
       return;
     }
-    const available = pageState.result.manualProviders.some(
-      (provider) => provider.id === this.manualProviderId,
-    );
-    if (!available) {
+    if (
+      !pageState.result.manualProviders.some((provider) => provider.id === this.manualProviderId)
+    ) {
       this.manualProviderId = pageState.result.manualProviders[0]?.id ?? "";
     }
   }
@@ -503,7 +501,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     const input = this.renderRoot.querySelector<HTMLInputElement>(
       '.model-setup__manual input[type="password"]',
     );
-    input?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    input?.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
     input?.focus();
   }
 
@@ -671,9 +669,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         canAdmin &&
         !gatewayTooOld &&
         isGatewayMethodAdvertised(snapshot, "openclaw.setup.prepare.start") === true,
-      modelConfigured: snapshot.hello
-        ? readSessionDefaults(snapshot.hello)?.modelConfigured === true
-        : false,
+      modelConfigured: readSessionDefaults(snapshot)?.modelConfigured === true,
       gatewayTooOld,
       refreshWarning: this.setupRefreshWarning,
       actionsDisabled: this.actionsDisabled(),
@@ -683,7 +679,10 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       moreSignInOpen: this.moreSignInOpen,
       firstRun: this.routeData?.firstRun === true,
       iconUrls: this.iconUrls,
-      onDetect: () => void this.detect(),
+      onDetect: () => {
+        this.firstRun.retryDetection();
+        void this.detect();
+      },
       onVerify: () => void this.verifyConnection(),
       onActivateCandidate: (candidate) => this.activateCandidate(candidate),
       onStartAuth: (option: AuthOption) => {
@@ -729,8 +728,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("model-setup")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("model-setup")}
-            ${renderDocsLink(MODEL_SETUP_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("model-setup")} ${renderLearnMoreLink(MODEL_SETUP_DOCS_URL)}
           </div>
         </div>
       </section>

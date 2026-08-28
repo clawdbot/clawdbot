@@ -547,6 +547,42 @@ describe("resolveChannelSetupSelectionContributions", () => {
     expect(lines).toEqual(["Zalo\\nBot — Setup\\nhelp"]);
   });
 
+  it.each([
+    ["empty", "", ""],
+    ["whitespace", " \t ", "Docs:"],
+    ["control-only", "\u001B[2K\u0007", "Docs:"],
+  ] as const)("normalizes %s selection docs prefixes", (_label, prefix, expected) => {
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [
+          {
+            id: "custom-chat",
+            meta: {
+              id: "custom-chat",
+              label: "Custom Chat",
+              selectionLabel: "Custom Chat",
+              docsPath: "/channels/custom-chat",
+              blurb: "External channel.",
+              selectionDocsPrefix: prefix,
+            },
+          },
+        ],
+      }),
+    );
+
+    resolveChannelSelectionNoteLines({
+      cfg: {} as never,
+      installedPlugins: [],
+      selection: ["custom-chat"],
+    });
+
+    const [selectionMeta] = requireFirstMockCall(
+      formatChannelSelectionLine.mock.calls,
+      "selection line",
+    );
+    expect(selectionMeta?.selectionDocsPrefix).toBe(expected);
+  });
+
   it("localizes built-in channel blurbs before selection notes", () => {
     resolveChannelSetupEntries.mockReturnValue(
       makeChannelSetupEntries({

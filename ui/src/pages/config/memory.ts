@@ -4,7 +4,7 @@ import "../../components/agent-select-registration.ts";
 import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
-  renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsDefaultState,
   renderSettingsRow,
   renderSettingsSection,
@@ -403,7 +403,7 @@ export function renderMemory(props: MemoryViewProps) {
         <div class="hub-page-header__title">
           <div class="page-title">${t("tabs.memory")}</div>
           <div class="page-subtitle">
-            ${t("memoryPage.intro")} ${renderDocsLink(MEMORY_DOCS_URL, t("common.learnMore"))}
+            ${t("memoryPage.intro")} ${renderLearnMoreLink(MEMORY_DOCS_URL)}
           </div>
         </div>
         <div class="hub-page-header__tabs">

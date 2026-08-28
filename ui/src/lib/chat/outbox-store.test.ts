@@ -1,11 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import {
-  listStoredChatOutboxes,
-  listStoredDraftScopes,
-  summarizeStoredChatOutboxes,
-} from "./outbox-store-projection.ts";
+import { listStoredChatOutboxes, summarizeStoredChatOutboxes } from "./outbox-store-projection.ts";
 import {
   readProjectedOutboxStore,
   resolveStoredChatOutboxScope,
@@ -245,7 +241,7 @@ describe("stored outbox summaries", () => {
     );
     const state = { settings: { gatewayUrl } };
 
-    expect([...listStoredDraftScopes(state)]).toEqual([
+    expect([...summarizeStoredChatOutboxes(state).draftScopes]).toEqual([
       storedChatOutboxScopeKey(resolveStoredChatOutboxScope(state, "thread-draft")),
     ]);
   });

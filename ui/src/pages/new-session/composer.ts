@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
@@ -8,8 +9,6 @@ import "../../components/tooltip.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
-import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
-import { refreshSlashCommands } from "../chat/chat-commands.ts";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
@@ -23,10 +22,7 @@ import {
   paneDomId,
   scheduleTextareaHeightAdjustment,
 } from "../chat/components/chat-composer-dom.ts";
-import {
-  renderChatComposerPlusMenu,
-  type ChatComposerPlusMenuView,
-} from "../chat/components/chat-composer-plus-menu.ts";
+import type { ChatComposerPlusMenuView } from "../chat/components/chat-composer-plus-menu.ts";
 import {
   createSkillMenuState,
   getActiveSkillMenuOptionId,
@@ -50,17 +46,22 @@ import {
   updateSlashMenu,
 } from "../chat/components/chat-composer-slash-menu.ts";
 import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
-import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
+import { insertComposerDictation } from "../chat/composer-dictation.ts";
+import {
+  renderNewSessionDraftVisibility,
+  renderNewSessionPlusMenu,
+  renderNewSessionSelectionStatus,
+} from "./composer-capability-controls.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
-import type { NewSessionModelControl } from "./model-control.ts";
 
-type NewSessionComposerOptions = {
+export type NewSessionComposerOptions = {
   attachmentLimits?: { maxBytes: number; maxImageBytes: number };
   attachments: ChatAttachment[];
   canSubmit: boolean;
   getAttachments: () => ChatAttachment[];
   message: string;
   modelControl?: TemplateResult | typeof nothing;
+  permissionControl?: TemplateResult | typeof nothing;
   pendingAttachmentReads: number;
   readSignal: AbortSignal;
   requiresModifier: boolean;
@@ -68,6 +69,9 @@ type NewSessionComposerOptions = {
   refreshCommands?: () => void | Promise<void>;
   submitDisabledReason?: string;
   blockedSubmitNotice?: string;
+  dictationActive?: boolean;
+  dictationPreview?: string;
+  dictationStatus?: TemplateResult | typeof nothing;
   terminalAction?: {
     canStart: boolean;
     disabledReason?: string;
@@ -75,6 +79,7 @@ type NewSessionComposerOptions = {
   };
   submitting: boolean;
   textareaController: NewSessionComposerTextareaController;
+  voiceControl?: TemplateResult | typeof nothing;
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
@@ -96,13 +101,17 @@ function submitNewSession(options: NewSessionComposerOptions) {
 
 function renderStartControl(options: NewSessionComposerOptions) {
   const startLabel = options.submitting ? t("newSession.starting") : t("newSession.start");
+  const reasonedBlock = !options.canSubmit && options.submitDisabledReason !== undefined;
   if (!options.terminalAction) {
     return html`
       <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
         <button
           type="button"
-          class="chat-send-btn new-session-page__start-submit"
-          ?disabled=${!options.canSubmit}
+          class="chat-send-btn new-session-page__start-submit ${reasonedBlock
+            ? "new-session-page__start-submit--blocked"
+            : ""}"
+          ?disabled=${!options.canSubmit && !reasonedBlock}
+          aria-disabled=${String(!options.canSubmit)}
           aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
           @click=${() => submitNewSession(options)}
@@ -118,8 +127,11 @@ function renderStartControl(options: NewSessionComposerOptions) {
       <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
         <button
           type="button"
-          class="chat-send-btn new-session-page__start-submit new-session-page__start-primary"
-          ?disabled=${!options.canSubmit}
+          class="chat-send-btn new-session-page__start-submit new-session-page__start-primary ${reasonedBlock
+            ? "new-session-page__start-submit--blocked"
+            : ""}"
+          ?disabled=${!options.canSubmit && !reasonedBlock}
+          aria-disabled=${String(!options.canSubmit)}
           aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
           @click=${() => submitNewSession(options)}
@@ -128,28 +140,15 @@ function renderStartControl(options: NewSessionComposerOptions) {
         </button>
       </openclaw-tooltip>
       <openclaw-tooltip content=${options.terminalAction.disabledReason ?? terminalLabel}>
-        <wa-dropdown class="new-session-page__start-menu" placement="top-end">
-          <button
-            slot="trigger"
-            type="button"
-            class="chat-send-btn new-session-page__start-menu-trigger"
-            ?disabled=${!options.terminalAction.canStart}
-            aria-label=${terminalLabel}
-          >
-            ${icons.chevronUp}
-          </button>
-          <wa-dropdown-item
-            value="start-terminal"
-            ?disabled=${!options.terminalAction.canStart}
-            @click=${() => {
-              if (options.terminalAction?.canStart) {
-                options.terminalAction.onStart();
-              }
-            }}
-          >
-            ${terminalLabel}
-          </wa-dropdown-item>
-        </wa-dropdown>
+        <button
+          type="button"
+          class="chat-send-btn new-session-page__start-menu-trigger"
+          ?disabled=${!options.terminalAction.canStart}
+          aria-label=${terminalLabel}
+          @click=${() => options.terminalAction?.onStart()}
+        >
+          ${icons.squareTerminal}
+        </button>
       </openclaw-tooltip>
     </div>
   `;
@@ -157,6 +156,15 @@ function renderStartControl(options: NewSessionComposerOptions) {
 
 export class NewSessionComposerTextareaController {
   private textarea: HTMLTextAreaElement | null = null;
+  private placeholderFrame: number | null = null;
+  private placeholderStartedAt: number | null = null;
+  private placeholderText = "";
+  private placeholderTarget = "";
+  private placeholderEntered = false;
+  private capturedSelection: { start: number; end: number; value: string } | null = null;
+  private skillCommandClient: GatewayBrowserClient | null = null;
+  private skillCommandAgentId = "";
+  private skillCommandDraftOwnerKey = "";
   readonly skillMenuState = createSkillMenuState();
   readonly slashMenuState = createSlashMenuState();
   capabilityMenuOpen = false;
@@ -166,6 +174,9 @@ export class NewSessionComposerTextareaController {
     const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
     if (this.textarea && this.textarea !== nextTextarea) {
       disconnectTextareaOverflowObserver(this.textarea);
+    }
+    if (this.textarea && !nextTextarea) {
+      this.resetPlaceholder();
     }
     this.textarea = nextTextarea;
     if (nextTextarea) {
@@ -182,9 +193,163 @@ export class NewSessionComposerTextareaController {
     }
   }
 
+  getPlaceholder(target: string, message: string, requestUpdate: () => void) {
+    if (message.length > 0 || this.placeholderEntered) {
+      this.placeholderEntered = true;
+      if (this.placeholderFrame !== null) {
+        globalThis.cancelAnimationFrame?.(this.placeholderFrame);
+        this.placeholderFrame = null;
+      }
+      return target;
+    }
+    if (this.placeholderTarget !== target) {
+      this.resetPlaceholder();
+      this.placeholderTarget = target;
+    }
+    const requestFrame = globalThis.requestAnimationFrame?.bind(globalThis);
+    if (
+      !requestFrame ||
+      (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false)
+    ) {
+      this.placeholderText = target;
+      this.placeholderEntered = true;
+      return target;
+    }
+    if (this.placeholderFrame === null) {
+      const step = (timestamp: number) => {
+        this.placeholderStartedAt ??= timestamp;
+        const elapsed = Math.max(0, timestamp - this.placeholderStartedAt - 180);
+        const length = Math.min(target.length, Math.floor(elapsed / 26));
+        if (length !== this.placeholderText.length) {
+          this.placeholderText = target.slice(0, length);
+          requestUpdate();
+        }
+        if (length < target.length) {
+          this.placeholderFrame = requestFrame(step);
+          return;
+        }
+        this.placeholderFrame = null;
+        this.placeholderEntered = true;
+      };
+      this.placeholderFrame = requestFrame(step);
+    }
+    return this.placeholderText;
+  }
+
+  private resetPlaceholder() {
+    if (this.placeholderFrame !== null) {
+      globalThis.cancelAnimationFrame?.(this.placeholderFrame);
+      this.placeholderFrame = null;
+    }
+    this.placeholderStartedAt = null;
+    this.placeholderText = "";
+    this.placeholderTarget = "";
+    this.placeholderEntered = false;
+  }
+
+  /**
+   * Remembers the live draft and caret before another control takes focus.
+   * Partial previews rewrite the textarea, so commit must keep using this base
+   * snapshot or each successive transcript would be inserted into the last preview.
+   */
+  captureSelection() {
+    const target = this.textarea;
+    this.capturedSelection = target
+      ? { start: target.selectionStart, end: target.selectionEnd, value: target.value }
+      : null;
+  }
+
+  previewTranscript(transcript: string): string | undefined {
+    const target = this.textarea;
+    if (!target) {
+      return undefined;
+    }
+    const selection = this.capturedSelection ?? {
+      start: target.selectionStart,
+      end: target.selectionEnd,
+      value: target.value,
+    };
+    return insertComposerDictation(selection.value, transcript, selection.start, selection.end)
+      .value;
+  }
+
+  /**
+   * Writes a transcript into the draft at the remembered caret and returns the
+   * new draft, or null when there is nothing to insert.
+   *
+   * The captured element value includes keystrokes not yet committed upward.
+   * Writing the final insertion directly grows the box before the next render
+   * commits that same value into the page-owned draft.
+   */
+  insertTranscript(transcript: string): string | null {
+    const target = this.textarea;
+    if (!target) {
+      return null;
+    }
+    const selection = this.capturedSelection ?? {
+      start: target.value.length,
+      end: target.value.length,
+      value: target.value,
+    };
+    this.capturedSelection = null;
+    const insertion = insertComposerDictation(
+      selection.value,
+      transcript,
+      selection.start,
+      selection.end,
+    );
+    if (insertion.value === selection.value) {
+      return null;
+    }
+    target.value = insertion.value;
+    adjustTextareaHeight(target);
+    queueMicrotask(() => {
+      if (!target.isConnected) {
+        return;
+      }
+      target.focus({ preventScroll: true });
+      target.selectionStart = insertion.caret;
+      target.selectionEnd = insertion.caret;
+    });
+    return insertion.value;
+  }
+
   readonly getTextarea = () => this.textarea;
 
+  syncSkillCommandOwner(
+    client: GatewayBrowserClient | null,
+    agentId: string,
+    draftOwnerKey: string,
+  ) {
+    const normalizedAgentId = agentId.trim();
+    if (
+      this.skillCommandClient === client &&
+      this.skillCommandAgentId === normalizedAgentId &&
+      this.skillCommandDraftOwnerKey === draftOwnerKey
+    ) {
+      return;
+    }
+    // The controller survives route, agent, and Gateway changes. Invalidate its
+    // menu generation so a prior owner cannot publish into the next draft.
+    this.skillCommandClient = client;
+    this.skillCommandAgentId = normalizedAgentId;
+    this.skillCommandDraftOwnerKey = draftOwnerKey;
+    resetSkillMenuState(this.skillMenuState);
+  }
+
+  ownsSkillCommands(client: GatewayBrowserClient, agentId: string, draftOwnerKey: string): boolean {
+    return (
+      this.skillCommandClient === client &&
+      this.skillCommandAgentId === agentId.trim() &&
+      this.skillCommandDraftOwnerKey === draftOwnerKey
+    );
+  }
+
   disconnect() {
+    this.resetPlaceholder();
+    this.skillCommandClient = null;
+    this.skillCommandAgentId = "";
+    this.skillCommandDraftOwnerKey = "";
     resetSkillMenuState(this.skillMenuState);
     resetSlashMenuState(this.slashMenuState);
     this.capabilityMenuOpen = false;
@@ -218,6 +383,9 @@ function handleComposerKeydown(
   skillMenuHost: SkillMenuHost,
   slashMenuHost: SlashMenuHost,
 ) {
+  if (options.dictationActive) {
+    return;
+  }
   if (event.isComposing || event.keyCode === 229) {
     return;
   }
@@ -256,97 +424,8 @@ function handleComposerKeydown(
   }
 }
 
-function renderNewSessionPlusMenu(
-  options: NewSessionComposerOptions,
-  attachments: Parameters<typeof renderChatComposerPlusMenu>[0]["attachments"],
-) {
-  const capabilityMenu = options.capabilityMenu;
-  const draftEnabled = options.visibility === "draft";
-  const overrideCount = countSessionToolOverrides(options.toolOverrides);
-  const selectedCount = overrideCount + (draftEnabled ? 1 : 0);
-  const disabled = options.submitting || options.messageLocked === true;
-  const controller = options.textareaController;
-  return renderChatComposerPlusMenu({
-    attachments,
-    capabilityMenu,
-    disabled,
-    open: controller.capabilityMenuOpen,
-    view: controller.capabilityMenuView,
-    toolOverrides: options.toolOverrides,
-    rootToggles: options.draftAvailable
-      ? [
-          {
-            value: "new-session-draft",
-            label: t("newSession.draft"),
-            icon: icons.pencil,
-            checked: draftEnabled,
-            disabled,
-            title: t("newSession.draftDescription"),
-            onChange: (checked) => options.onVisibilityChange?.(checked ? "draft" : "normal"),
-          },
-        ]
-      : undefined,
-    selectedLabel:
-      selectedCount > 0
-        ? t("newSession.composerOptionsSelected", { count: String(selectedCount) })
-        : undefined,
-    onOpenChange: (open) => {
-      controller.capabilityMenuOpen = open;
-      if (!open) {
-        controller.capabilityMenuView = "root";
-      }
-      options.requestUpdate();
-    },
-    onViewChange: (view) => {
-      controller.capabilityMenuView = view;
-      options.requestUpdate();
-    },
-  });
-}
-
-function renderNewSessionSelectionStatus(options: NewSessionComposerOptions) {
-  const draftEnabled = options.visibility === "draft";
-  const overrideCount = countSessionToolOverrides(options.toolOverrides);
-  if (!draftEnabled && overrideCount === 0) {
-    return nothing;
-  }
-  const disabled = options.submitting || options.messageLocked === true;
-  const openMenu = () => {
-    options.textareaController.capabilityMenuView = "root";
-    options.textareaController.capabilityMenuOpen = true;
-    options.requestUpdate();
-  };
-  return html`
-    ${draftEnabled
-      ? html`<button
-          type="button"
-          class="new-session-page__selection-status"
-          ?disabled=${disabled}
-          @click=${openMenu}
-        >
-          ${icons.pencil}${t("newSession.draft")}
-        </button>`
-      : nothing}
-    ${overrideCount > 0
-      ? html`<button
-          type="button"
-          class="new-session-page__selection-status"
-          ?disabled=${disabled}
-          @click=${openMenu}
-        >
-          ${t(
-            overrideCount === 1
-              ? "chat.composer.overrides.countOne"
-              : "chat.composer.overrides.count",
-            { count: String(overrideCount) },
-          )}
-        </button>`
-      : nothing}
-  `;
-}
-
 /** Draft message box styled as the chat composer shell so both pickers match. */
-function renderNewSessionComposer(options: NewSessionComposerOptions) {
+export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const skillMenuState = options.textareaController.skillMenuState;
   const slashMenuState = options.textareaController.slashMenuState;
   const skillMenuHost: SkillMenuHost = {
@@ -360,8 +439,10 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
     paneId: skillMenuHost.paneId,
     getDraft: skillMenuHost.getDraft,
     commitDraft: skillMenuHost.commitDraft,
+    getTextarea: skillMenuHost.getTextarea,
     resolveArgOptions: (command) => command.argOptions ?? [],
     runCommand: () => submitNewSession(options),
+    canRunInlineCommand: () => false,
     refreshCommands: options.refreshCommands,
     commandFilter: (command) => command.executeLocal !== true,
   };
@@ -378,6 +459,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const handleSelect = (event: Event) => {
     const target = event.currentTarget;
     if (target instanceof HTMLTextAreaElement) {
+      updateSlashMenu(target.value, slashMenuState, slashMenuHost, options.requestUpdate);
       updateSkillMenu(
         target.value,
         target.selectionStart,
@@ -387,10 +469,12 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
       );
     }
   };
+  const composerLocked =
+    options.submitting || options.messageLocked === true || options.dictationActive === true;
   const attachmentProps = {
     attachmentLimits: options.attachmentLimits,
     attachments: options.attachments,
-    disabled: options.submitting || options.messageLocked,
+    disabled: composerLocked,
     getAttachments: options.getAttachments,
     draft: options.message,
     getDraft: () => options.message,
@@ -402,13 +486,20 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
   };
   const attachmentDropHandlers = createChatAttachmentDropHandlers({
     ...attachmentProps,
-    canCompose: !options.submitting && !options.messageLocked,
+    canCompose: !composerLocked,
   });
-  options.textareaController.syncDraft(options.message);
-  const skillMenuVisible =
-    !options.submitting && !options.messageLocked && isSkillMenuVisible(skillMenuState);
-  const slashMenuVisible =
-    !options.submitting && !options.messageLocked && isSlashMenuVisible(slashMenuState);
+  const visibleMessage = options.dictationPreview ?? options.message;
+  options.textareaController.syncDraft(visibleMessage);
+  const messagePlaceholder = t("newSession.messagePlaceholder");
+  const animatedPlaceholder = options.dictationActive
+    ? ""
+    : options.textareaController.getPlaceholder(
+        messagePlaceholder,
+        options.message,
+        options.requestUpdate,
+      );
+  const skillMenuVisible = !composerLocked && isSkillMenuVisible(skillMenuState);
+  const slashMenuVisible = !composerLocked && isSlashMenuVisible(slashMenuState);
   const menuVisible = skillMenuVisible || slashMenuVisible;
   const menuListboxId = paneDomId(
     skillMenuHost.paneId,
@@ -429,8 +520,13 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
       @dragleave=${attachmentDropHandlers.onDragleave}
       @dragover=${attachmentDropHandlers.onDragover}
     >
-      <div class="agent-chat__input">
+      <div
+        class="agent-chat__input agent-chat__input--mobile-toolbar${options.dictationActive
+          ? " agent-chat__input--dictating"
+          : ""}"
+      >
         ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
+        <div class="agent-chat__composer-lede">${options.dictationStatus ?? nothing}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
             ${slashMenuVisible
@@ -448,16 +544,21 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
               ${ref(options.textareaController.ref)}
               class="new-session-page__message"
               rows="1"
+              ?autofocus=${globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
               ?disabled=${options.submitting || options.messageLocked}
-              placeholder=${t("newSession.messagePlaceholder")}
-              aria-label=${t("newSession.messagePlaceholder")}
-              .value=${options.message}
+              ?readonly=${options.dictationActive}
+              placeholder=${animatedPlaceholder}
+              aria-label=${messagePlaceholder}
+              .value=${visibleMessage}
               aria-autocomplete="list"
               aria-controls=${ifDefined(menuVisible ? menuListboxId : undefined)}
               aria-expanded=${ifDefined(menuVisible ? "true" : undefined)}
               aria-activedescendant=${ifDefined(activeMenuOptionId ?? undefined)}
               aria-describedby=${menuAnnouncementId}
               @input=${(event: Event) => {
+                if (options.dictationActive) {
+                  return;
+                }
                 const target = event.target as HTMLTextAreaElement;
                 adjustTextareaHeight(target);
                 updateMenus(target);
@@ -467,7 +568,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
               @keydown=${(event: KeyboardEvent) =>
                 handleComposerKeydown(event, options, skillMenuHost, slashMenuHost)}
               @paste=${(event: ClipboardEvent) => {
-                if (!options.submitting && !options.messageLocked) {
+                if (!composerLocked) {
                   handleChatAttachmentPaste(event, attachmentProps);
                 }
               }}
@@ -481,102 +582,43 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
               >${activeMenuOptionLabel}</span
             >
           </div>
-          <div class="agent-chat__composer-actions">${renderStartControl(options)}</div>
         </div>
         <div class="agent-chat__composer-footer">
-          <div class="agent-chat__composer-controls">
+          <div class="agent-chat__composer-lead">
             ${renderNewSessionPlusMenu(options, attachmentProps)}
-            ${options.modelControl && options.modelControl !== nothing
-              ? html`<div class="chat-composer-model-control">${options.modelControl}</div>`
-              : nothing}
+            ${options.permissionControl ?? nothing}
+            ${options.draftAvailable ? renderNewSessionDraftVisibility(options) : nothing}
             ${renderNewSessionSelectionStatus(options)}
           </div>
+          <div class="agent-chat__composer-trail">
+            <div class="agent-chat__composer-controls">
+              ${options.modelControl && options.modelControl !== nothing
+                ? html`<div class="chat-composer-model-control">${options.modelControl}</div>`
+                : nothing}
+            </div>
+            <div class="agent-chat__composer-actions">
+              ${options.voiceControl ?? nothing}${options.dictationActive
+                ? nothing
+                : renderStartControl(options)}
+            </div>
+          </div>
         </div>
-        ${options.blockedSubmitNotice
-          ? html`<div class="new-session-page__blocked-submit" role="status">
-              ${options.blockedSubmitNotice}
-            </div>`
-          : nothing}
         ${options.pendingAttachmentReads > 0
           ? html`<span class="sr-only" role="status">${t("newSession.readingAttachment")}</span>`
           : nothing}
       </div>
+      ${options.blockedSubmitNotice
+        ? html`<div
+            class="new-session-page__blocked-submit agent-chat__composer-underlaps"
+            data-tone="info"
+            role="status"
+          >
+            <div class="agent-chat__composer-status-band">
+              <span class="agent-chat__composer-status-icon" aria-hidden="true">${icons.info}</span>
+              <span class="agent-chat__composer-status-text">${options.blockedSubmitNotice}</span>
+            </div>
+          </div>`
+        : nothing}
     </div>
   `;
-}
-
-export function renderNewSessionDraftComposer(options: {
-  agent?: import("../../api/types.ts").GatewayAgentRow;
-  agentId: string;
-  attachmentDraft: NewSessionAttachmentDraft;
-  canSubmit: boolean;
-  context: import("../../app/context.ts").ApplicationContext | undefined;
-  isCatalogTarget: boolean;
-  message: string;
-  visibility?: NewSessionVisibility;
-  draftAvailable?: boolean;
-  capabilityMenu?: CapabilityMenuProps;
-  toolOverrides?: SessionToolOverrides | null;
-  modelControl: NewSessionModelControl;
-  textareaController: NewSessionComposerTextareaController;
-  requiresModifier: boolean;
-  requestUpdate: () => void;
-  submitDisabledReason?: string;
-  blockedSubmitNotice?: string;
-  terminalAction?: {
-    canStart: boolean;
-    disabledReason?: string;
-    onStart: () => void;
-  };
-  submitting: boolean;
-  messageLocked?: boolean;
-  onInput: (message: string) => void;
-  onOpenImage?: (item: ImageLightboxItem) => void;
-  onVisibilityChange?: (visibility: NewSessionVisibility) => void;
-  onSubmit: () => void;
-}) {
-  const readSignal = options.attachmentDraft.readSignal;
-  const commandClient = options.context?.gateway.snapshot.client;
-  return renderNewSessionComposer({
-    attachmentLimits: options.context?.gateway.snapshot.hello?.policy?.attachments,
-    attachments: options.attachmentDraft.attachments,
-    canSubmit: options.canSubmit,
-    getAttachments: () => options.attachmentDraft.attachments,
-    message: options.message,
-    visibility: options.visibility,
-    draftAvailable: options.draftAvailable,
-    capabilityMenu: options.capabilityMenu,
-    toolOverrides: options.toolOverrides,
-    modelControl: options.isCatalogTarget
-      ? nothing
-      : options.modelControl.render({
-          agent: options.agent,
-          agentId: options.agentId,
-          context: options.context,
-          sending: options.submitting,
-        }),
-    pendingAttachmentReads: options.attachmentDraft.pendingReads,
-    readSignal,
-    requiresModifier: options.requiresModifier,
-    requestUpdate: options.requestUpdate,
-    refreshCommands: commandClient
-      ? () => refreshSlashCommands({ client: commandClient, agentId: options.agentId })
-      : undefined,
-    submitDisabledReason: options.submitDisabledReason,
-    blockedSubmitNotice: options.blockedSubmitNotice,
-    terminalAction: options.terminalAction,
-    submitting: options.submitting,
-    textareaController: options.textareaController,
-    messageLocked: options.messageLocked,
-    onAttachmentsChange: (attachments) => {
-      if (!options.submitting && !options.messageLocked) {
-        options.attachmentDraft.replace(attachments);
-      }
-    },
-    onPendingReadsChange: (delta) => options.attachmentDraft.updatePending(readSignal, delta),
-    onInput: options.onInput,
-    onOpenImage: options.onOpenImage,
-    onVisibilityChange: options.onVisibilityChange,
-    onSubmit: options.onSubmit,
-  });
 }

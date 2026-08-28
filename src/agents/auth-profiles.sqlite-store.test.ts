@@ -166,14 +166,18 @@ describe("auth profile sqlite store", () => {
       const database = new DatabaseSync(resolveOpenClawStateSqlitePath());
       expect(
         database
-          .prepare("SELECT store_key FROM auth_profile_stores WHERE store_key = 'shared'")
+          .prepare(
+            "SELECT state_key FROM config_machine_state WHERE state_key = 'authProfiles.store'",
+          )
           .get(),
-      ).toEqual({ store_key: "shared" });
+      ).toEqual({ state_key: "authProfiles.store" });
       expect(
         database
-          .prepare("SELECT store_key FROM auth_profile_state WHERE store_key = 'shared'")
+          .prepare(
+            "SELECT state_key FROM config_machine_state WHERE state_key = 'authProfiles.state'",
+          )
           .get(),
-      ).toEqual({ store_key: "shared" });
+      ).toEqual({ state_key: "authProfiles.state" });
       expect(
         database
           .prepare(
@@ -220,7 +224,9 @@ describe("auth profile sqlite store", () => {
       ).toBeUndefined();
       expect(
         sharedDatabase
-          .prepare("SELECT store_key FROM auth_profile_stores WHERE store_key = 'shared'")
+          .prepare(
+            "SELECT state_key FROM config_machine_state WHERE state_key = 'authProfiles.store'",
+          )
           .get(),
       ).toBeUndefined();
       sharedDatabase.close();
@@ -314,7 +320,11 @@ describe("auth profile sqlite store", () => {
           .get(),
       ).toBeUndefined();
       expect(
-        after.prepare("SELECT store_key FROM auth_profile_stores WHERE store_key = 'shared'").get(),
+        after
+          .prepare(
+            "SELECT state_key FROM config_machine_state WHERE state_key = 'authProfiles.store'",
+          )
+          .get(),
       ).toBeUndefined();
       after.close();
       expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("readable");

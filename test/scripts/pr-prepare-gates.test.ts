@@ -221,6 +221,7 @@ describe("resolve_pr_gates_remote_mode", () => {
     { value: undefined, expected: "local" },
     { value: "", expected: "local" },
     { value: "testbox", expected: "testbox" },
+    { value: "crabbox-aws", expected: "crabbox-aws" },
   ])("resolves OPENCLAW_PR_GATES_REMOTE=$value to $expected", ({ value, expected }) => {
     const env: NodeJS.ProcessEnv = {};
     if (value !== undefined) {
@@ -245,6 +246,122 @@ describe("resolve_pr_gates_remote_mode", () => {
     });
     expect(result.status).toBe(2);
     expect(result.stdout).toContain("conflicts with OPENCLAW_TESTBOX=1");
+  });
+
+  it("rejects the Crabbox AWS hosted-gates conflict before touching the worktree", () => {
+    const result = runGatesBash("prepare_gates 424242", {
+      env: { OPENCLAW_PR_GATES_REMOTE: "crabbox-aws", OPENCLAW_TESTBOX: "1" },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain("OPENCLAW_PR_GATES_REMOTE=crabbox-aws conflicts");
+  });
+});
+
+describe("remote Crabbox AWS gate contract", () => {
+  it("accepts only a successful released AWS timing stamp", () => {
+    const dir = tempDirs.make("openclaw-pr-gates-aws-stamp-");
+    const log = join(dir, "gate.log");
+    writeFileSync(
+      log,
+      [
+        '{"provider":"aws","leaseId":"cbx_bad","runId":"run_bad","exitCode":1,"runStatus":"failed","leaseStopped":true}',
+        '{"provider":"aws","leaseId":"cbx_ok","runId":"run_ok","exitCode":0,"runStatus":"succeeded","leaseStopped":true}',
+        "",
+      ].join("\n"),
+    );
+    const result = runGatesBash(
+      `read_remote_crabbox_aws_gate_stamp '${log}' | jq -r '[.runId, .leaseId] | @tsv'`,
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("run_ok\tcbx_ok");
+  });
+
+  it("builds the canonical deterministic proof command", () => {
+    const planPath = join(tempDirs.make("openclaw-crabbox-command-"), "plan.json");
+    writeFileSync(
+      planPath,
+      JSON.stringify({
+        baseSha: "a".repeat(40),
+        changedPaths: [{ path: "scripts/pr-lib/gates.sh", status: "M" }],
+        headSha: "b".repeat(40),
+        targets: ["test/scripts/pr-prepare-gates.test.ts"],
+        version: 1,
+      }),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(repoRoot, "scripts/pr-crabbox-gate-publisher.mjs"),
+        "--print-command",
+        planPath,
+        "c".repeat(64),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("umask 022");
+    expect(result.stdout).toContain("pnpm build");
+    expect(result.stdout).toContain("pnpm check");
+    expect(result.stdout).toContain("test/scripts/pr-prepare-gates.test.ts");
+    expect(result.stdout).toContain(`OPENCLAW_CRABBOX_GATE_BASE=${"a".repeat(40)}`);
+    expect(result.stdout).toContain(`OPENCLAW_CRABBOX_GATE_HEAD=${"b".repeat(40)}`);
+    expect(result.stdout).not.toContain("OPENCLAW_CRABBOX_GATE_WORKFLOW=");
+    expect(result.stdout).not.toContain("test/scripts/pr-wrappers.test.ts");
+    expect(result.stdout).not.toContain("OPENCLAW_TEST_PROJECTS_PARALLEL");
+    expect(result.stdout).not.toContain("pnpm test");
+    expect(result.stdout).not.toContain("pnpm check:changed");
+  });
+
+  it("bounds the direct AWS lease for the PR-derived proof", () => {
+    const dir = tempDirs.make("openclaw-pr-gates-aws-run-");
+    const workDir = join(dir, "work");
+    const crabbox = join(dir, "crabbox");
+    mkdirSync(workDir);
+    mkdirSync(join(workDir, ".local"));
+    writeFileSync(
+      crabbox,
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "config" ]; then',
+        `  printf '%s\\n' '{"aws":{"instanceProfile":""},"coordinator":"https://example.test"}'`,
+        "  exit 0",
+        "fi",
+        "printf 'ARG:%s\\n' \"$@\"",
+        `printf '%s\\n' '{"provider":"aws","leaseId":"cbx_stub","runId":"run_stub","exitCode":0,"runStatus":"succeeded","leaseStopped":true}'`,
+      ].join("\n"),
+    );
+    chmodSync(crabbox, 0o755);
+
+    const result = runGatesBash(
+      [
+        "require_active_org_admin_for_crabbox_gate() { printf 'maintainer\\n'; }",
+        `install_crabbox_release_v046() { printf '%s\\n' '${crabbox}'; }`,
+        "git() { printf '#!/bin/sh\\n'; }",
+        "node() {",
+        '  case "$*" in',
+        `    *crabbox-gate-plan.mts*) printf '%s\\n' '{"baseSha":"${"a".repeat(40)}","changedPaths":[],"headSha":"${"b".repeat(40)}","targets":[],"version":1,"digest":"${"c".repeat(64)}"}' ;;`,
+        "    *pr-crabbox-gate-publisher.mjs*) printf 'true\\n' ;;",
+        `    *) command '${process.execPath}' "$@" ;;`,
+        "  esac",
+        "}",
+        `run_remote_crabbox_aws_gate 424242 '${"a".repeat(40)}' '${"b".repeat(40)}' >/dev/null`,
+      ].join("\n"),
+      { cwd: workDir },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const args = readFileSync(join(workDir, ".local/gates-crabbox-aws.log"), "utf8")
+      .split("\n")
+      .filter((line) => line.startsWith("ARG:"))
+      .map((line) => line.slice(4));
+    const idleTimeoutIndex = args.indexOf("--idle-timeout");
+    expect(idleTimeoutIndex).toBeGreaterThan(-1);
+    expect(args.slice(idleTimeoutIndex, idleTimeoutIndex + 4)).toEqual([
+      "--idle-timeout",
+      "90m",
+      "--ttl",
+      "240m",
+    ]);
   });
 });
 

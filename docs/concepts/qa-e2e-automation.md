@@ -467,19 +467,19 @@ These lanes register through the shared QA runner CLI contract. Transport
 plugins may own the registration while QA Lab remains the suite host. They
 accept the same flags:
 
-| Flag                                  | Default                                            | Description                                                                                                                                     |
-| ------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--scenario <id>`                     | -                                                  | Run only this scenario. Repeatable.                                                                                                             |
-| `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/<transport>-<timestamp>` | Where reports, summaries, evidence, transport-specific artifacts, and the output log are written. Relative paths resolve against `--repo-root`. |
-| `--repo-root <path>`                  | `process.cwd()`                                    | Repository root when invoking from a neutral cwd.                                                                                               |
-| `--sut-account <id>`                  | `sut`                                              | Temporary account id inside the QA gateway config.                                                                                              |
-| `--provider-mode <mode>`              | `live-frontier` (Buzz: `mock-openai`)              | `mock-openai`, `aimock`, or `live-frontier`.                                                                                                    |
-| `--model <ref>` / `--alt-model <ref>` | provider default                                   | Primary/alternate model refs.                                                                                                                   |
-| `--fast`                              | off                                                | Provider fast mode where supported.                                                                                                             |
-| `--credential-source <source>`        | `env` (Buzz: `file`)                               | Existing lanes use `env` or `convex`; Buzz uses `file` or `convex`. See [Convex credential pool](#convex-credential-pool).                      |
-| `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                 | Role used when `--credential-source convex`.                                                                                                    |
-| `--credential-file <path>`            | -                                                  | Buzz-only JSON credential file for local runs.                                                                                                  |
-| `--allow-failures`                    | off                                                | Write artifacts without returning a failing exit code when scenarios fail.                                                                      |
+| Flag                                  | Default                                                  | Description                                                                                                                                                                                                                                       |
+| ------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--scenario <id>`                     | -                                                        | Run only this scenario. Repeatable.                                                                                                                                                                                                               |
+| `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/<transport>-<timestamp>`       | Where reports, summaries, evidence, transport-specific artifacts, and the output log are written. Relative paths resolve against `--repo-root`.                                                                                                   |
+| `--repo-root <path>`                  | `process.cwd()`                                          | Repository root when invoking from a neutral cwd.                                                                                                                                                                                                 |
+| `--sut-account <id>`                  | `sut`                                                    | Temporary account id inside the QA gateway config.                                                                                                                                                                                                |
+| `--provider-mode <mode>`              | `live-frontier` (Buzz: `mock-openai`)                    | `mock-openai`, `aimock`, or `live-frontier`.                                                                                                                                                                                                      |
+| `--model <ref>` / `--alt-model <ref>` | provider default                                         | Primary/alternate model refs.                                                                                                                                                                                                                     |
+| `--fast`                              | off                                                      | Provider fast mode where supported.                                                                                                                                                                                                               |
+| `--credential-source <source>`        | shared environment (Buzz: `file` with a credential file) | Existing lanes use `env` or `convex`; Buzz uses a local file when `--credential-file` is set, otherwise it delegates to `OPENCLAW_QA_CREDENTIAL_SOURCE` and the shared environment source. See [Convex credential pool](#convex-credential-pool). |
+| `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                       | Role used when `--credential-source convex`.                                                                                                                                                                                                      |
+| `--credential-file <path>`            | -                                                        | Buzz-only JSON credential file for local runs.                                                                                                                                                                                                    |
+| `--allow-failures`                    | off                                                      | Write artifacts without returning a failing exit code when scenarios fail.                                                                                                                                                                        |
 
 Each lane exits non-zero on any failed scenario. `--allow-failures` writes
 artifacts without setting a failing exit code. Telegram also accepts
@@ -1205,9 +1205,11 @@ provider names.
 ## Transport adapters
 
 `qa-lab` owns a generic transport seam for YAML QA scenarios. `qa-channel` is
-the synthetic default. `crabline` starts local provider-shaped servers and
-runs OpenClaw's normal channel plugins against them. `live` is reserved for
-real provider credentials and external channels.
+the synthetic default. `crabline` starts separate local provider servers and
+runs OpenClaw's normal channel plugins against their provider-shaped REST and
+streaming boundaries; it does not use Crabline's fixture-level local mock
+providers. `live` is reserved for real provider credentials and external
+channels.
 
 At the architecture level, the split is:
 
@@ -1322,7 +1324,10 @@ for machine-readable output). When choosing focused proof for a touched
 behavior or file path, run `pnpm openclaw qa coverage --match <query>`. The
 match report searches scenario metadata, docs refs, code refs, coverage IDs,
 plugins, and provider requirements, then prints matching `qa suite
---scenario ...` targets.
+--scenario ...` targets. Generated commands preserve declared channel-driver
+requirements and separate scenarios with different driver requirements. Without
+a driver requirement, non-QA channels use `live` and `qa-channel` keeps its
+default driver.
 
 Every `qa suite` run writes top-level `qa-evidence.json`,
 `qa-suite-summary.json`, and `qa-suite-report.md` artifacts for the selected

@@ -6,6 +6,7 @@ import {
   resolveBundledPluginsDir,
   resolveSourceCheckoutDependencyDiagnostic,
 } from "./bundled-dir.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -377,7 +378,10 @@ describe("resolveBundledPluginsDir", () => {
     // The diagnostic also scans the real checkout hosting this test run (via
     // module-root resolution), which may itself lack node_modules in nested
     // worktrees; only assert the satisfied fixture is no longer reported.
-    expect(resolveSourceCheckoutDependencyDiagnostic()?.source).not.toBe(repoRoot);
+    expect(
+      withPluginCache(createPluginCache(), () => resolveSourceCheckoutDependencyDiagnostic())
+        ?.source,
+    ).not.toBe(repoRoot);
   });
 
   it("returns a stable empty bundled plugin directory when bundled plugins are disabled", () => {

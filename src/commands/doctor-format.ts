@@ -5,7 +5,6 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
-import { resolveDaemonContainerContext } from "../daemon/container-context.js";
 import { formatRuntimeStatus } from "../daemon/runtime-format.js";
 import { buildPlatformRuntimeLogHints } from "../daemon/runtime-hints.js";
 import {
@@ -45,7 +44,6 @@ export function buildGatewayRuntimeHints(
   }
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
-  const container = Boolean(resolveDaemonContainerContext(env));
   const fileLog = (() => {
     try {
       return getResolvedLoggerSettings().file;
@@ -58,7 +56,7 @@ export function buildGatewayRuntimeHints(
       ...renderSystemdUnavailableHints({
         wsl: isWSLEnv(env),
         kind: classifySystemdUnavailableDetail(runtime.detail),
-        container,
+        env,
       }),
     );
     if (fileLog) {

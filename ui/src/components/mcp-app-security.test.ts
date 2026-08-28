@@ -14,11 +14,14 @@ describe("MCP App sandbox security", () => {
   });
 
   it("advertises update-model-context text support only when the handler path exists", () => {
-    expect(buildMcpAppHostCapabilities(undefined, true, true)).toMatchObject({
+    expect(buildMcpAppHostCapabilities(undefined, true, true, true)).toMatchObject({
       message: { text: {} },
+      serverResources: {},
       updateModelContext: { text: {} },
     });
-    expect(buildMcpAppHostCapabilities(undefined, true, false)).not.toHaveProperty(
+    const readOnly = buildMcpAppHostCapabilities(undefined, false, false, false);
+    expect(readOnly).not.toHaveProperty("serverResources");
+    expect(buildMcpAppHostCapabilities(undefined, true, false, true)).not.toHaveProperty(
       "updateModelContext",
     );
   });

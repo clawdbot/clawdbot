@@ -112,25 +112,20 @@ function trackPendingChatSettingsPatch(
 export function patchChatSessionSettings(
   host: ChatPickerPatchHost,
   sessionKey: string,
-  patch: Pick<
-    SessionPatch,
-    "model" | "contextWindow" | "thinkingLevel" | "fastMode" | "toolOverrides"
-  >,
+  patch: SessionPatch,
   options: {
     agentId?: string;
-    deferModelOverride?: boolean;
     ownsModelOverride?: () => boolean;
     reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
   } = {},
 ): Promise<SessionsPatchResult | null> {
   const previous = getPendingChatPickerPatch(host, sessionKey, options.agentId);
   const operation = (async () => {
-    // Model-dependent settings and sends share this canonical per-session tail.
+    // Run-affecting settings and sends share this canonical per-session tail.
     // The capability captures this route before waiting, so a reconnect cannot
     // redirect queued intent to a replacement Gateway.
     const result = await host.sessions.patch(sessionKey, patch, {
       agentId: options.agentId,
-      deferModelOverride: options.deferModelOverride,
       ownsModelOverride: options.ownsModelOverride,
       waitFor: previous,
     });
@@ -172,7 +167,6 @@ export async function patchChatCommandSessionSettings(
   sessionKey: string,
   patch: SessionPatch,
   options: {
-    deferModelOverride?: boolean;
     ownsModelOverride?: () => boolean;
     reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
   } = {},

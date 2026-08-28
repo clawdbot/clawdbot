@@ -38,6 +38,13 @@ Doctor has five postures:
 
 Use `openclaw doctor --json` when an operator or script wants the advisory Doctor report as JSON. It exits successfully after producing a report; inspect `ok` and `findings` for health state. Use explicit `openclaw doctor --lint --json` when CI should exit nonzero for findings at the selected severity threshold. Prefer `--fix` when a human operator wants Doctor to edit config or state.
 
+After an exec-approval format upgrade, Doctor reports older generated approvals
+that are no longer active because they were not tied to a working directory.
+`openclaw doctor --fix` removes those inactive generated entries and leaves
+manual allowlist rules unchanged. Rerun affected workflows and choose
+**Always allow here** to renew trust for the intended directory. The normal
+`openclaw update` finalization runs this safe repair automatically.
+
 ## Examples
 
 ```bash
@@ -222,6 +229,8 @@ the container normally.
 
 `openclaw doctor --fix` is the only owner for persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Runtime code does not perform lazy imports or fallback reads.
 
+Device Pair and Active Memory legacy JSON imports check namespace capacity before writing. If the missing entries do not fit, doctor warns and leaves the source unchanged. These imports also verify that source keys and pre-existing destination keys remain in SQLite before reporting completion and archiving the source. A retention warning keeps the source available for inspection and retry; do not delete it to silence the warning, because it may contain state that SQLite did not retain. Resolve the capacity problem before rerunning `openclaw doctor --fix`.
+
 Doctor also reports when shared auth still uses the legacy `agents/main/agent/openclaw-agent.sqlite` owner. `openclaw doctor --fix` copies its auth profile and runtime-state rows into `state/openclaw.sqlite`, verifies the exact payloads, removes the source rows, and records the new ownership only after the transaction succeeds. Auth resolution has no dual-read fallback: before migration the legacy database is complete; after migration the shared state database is complete. Once relocated, deleting `main` no longer risks fleet credentials.
 
 For the retired QMD memory backend, including config rewrites and derived
@@ -290,6 +299,18 @@ session rows live in
 imported and archived out of the active sessions directory after successful
 import; archive-tier JSONL files remain support artifacts, not runtime
 fallbacks.
+
+The import stages transcript payloads in a private, temporary SQLite database
+instead of retaining complete batches of histories in memory. Keep free space
+on the system temporary volume as well as the volume holding OpenClaw state.
+Staging is removed when the operation finishes and is never used as a runtime
+store or resumed after an interruption; retries use the original sources and
+committed session data. Individual transcript records are still parsed in memory.
+After import, Doctor checkpoints and incrementally vacuums databases that already
+support auto-vacuum, retaining full integrity and foreign-key checks before and
+after cleanup. Databases without auto-vacuum still need a full `VACUUM` to enable
+it. Incremental cleanup frees unused pages but does not repack partially filled
+pages; explicit session and shared-state `compact` modes still run a full `VACUUM`.
 
 The regular `openclaw doctor` pass also reports canonical SQLite transcripts
 whose initial session header was never persisted. `openclaw doctor --fix`
@@ -442,6 +463,7 @@ compare restored legacy artifacts with the SQLite rows before importing.
 - Doctor reports an info note when Codex-mode agents are configured and personal Codex CLI assets exist in the operator's Codex home. Local Codex app-server launches use isolated per-agent homes; install the Codex plugin first if needed, then use `openclaw migrate plan codex` to inventory assets that should be promoted deliberately.
 - Doctor warns when skills allowed for the default agent are unavailable in the current runtime environment (missing bins, env vars, config, or OS requirements). `doctor --fix` can disable those unavailable skills with `skills.entries.<skill>.enabled=false`; install/configure the missing requirement instead if you want to keep the skill active.
 - If sandbox mode is enabled but Docker is unavailable, doctor reports a high-signal warning with remediation (`install Docker` or `openclaw config set agents.defaults.sandbox.mode off`).
+- Doctor identifies per-agent `agents.entries.<id>.sandbox` Docker, browser, and prune overrides ignored under shared scope. It also warns when an agent's explicit primary model omits fallbacks and therefore disables the defaults' fallback chain; both diagnostics use canonical agent paths after legacy roster normalization.
 - If legacy sandbox registry files or shard directories are present (`~/.openclaw/sandbox/containers.json`, `~/.openclaw/sandbox/browsers.json`, `~/.openclaw/sandbox/containers/`, or `~/.openclaw/sandbox/browsers/`), doctor reports them; `--fix` migrates valid entries into SQLite and quarantines invalid legacy files.
 - If `gateway.auth.token`/`gateway.auth.password` are SecretRef-managed and unavailable in the current command path, doctor reports a read-only warning and does not write plaintext fallback credentials. For exec-backed SecretRefs, doctor skips execution unless `--allow-exec` is present.
 - If channel SecretRef inspection fails in a fix path, doctor continues and reports a warning instead of exiting early.
