@@ -30,6 +30,10 @@ import {
 } from "./podman-runtime.js";
 import { readRegistryEntry, removeRegistryEntry, updateRegistry } from "./registry.js";
 import {
+  resolveSandboxRuntimeActivityKey,
+  withSandboxRuntimeMutations,
+} from "./runtime-activity.js";
+import {
   resolveDockerEnvPolicyEpoch,
   sanitizeExplicitSandboxEnvVars,
 } from "./sanitize-env-vars.js";
@@ -663,7 +667,13 @@ async function ensureSandboxContainerLifecycle(
             : {}),
         });
       } else {
-        await execContainer(engine, ["rm", "-f", containerName], { allowFailure: true });
+        await withSandboxRuntimeMutations(
+          [resolveSandboxRuntimeActivityKey(engine.id, containerName, params.podmanTarget?.key)],
+          async (lifecycle) => {
+            await execContainer(engine, ["rm", "-f", containerName], { allowFailure: true });
+            lifecycle.retire();
+          },
+        );
         hasContainer = false;
         running = false;
       }

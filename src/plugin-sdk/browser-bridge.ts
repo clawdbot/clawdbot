@@ -22,6 +22,7 @@ type BrowserBridgeFacadeModule = {
     port?: number;
     authToken?: string;
     authPassword?: string;
+    acquireRequestActivity?: () => { release(): void } | null;
     onEnsureAttachTarget?: (profile: unknown) => Promise<void>;
     resolveSandboxNoVncToken?: (token: string) => { noVncPort: number; password?: string } | null;
   }): Promise<BrowserBridge>;

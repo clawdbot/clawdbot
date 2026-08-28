@@ -30,6 +30,8 @@ export type SandboxBackendCommandParams = {
   stdin?: Buffer | string;
   allowFailure?: boolean;
   signal?: AbortSignal;
+  /** Owner token for cleanup that must run under an existing exec activity lease. */
+  activityToken?: unknown;
 };
 
 /** Buffered command result returned by sandbox backend shell helpers. */
@@ -61,10 +63,14 @@ export type SandboxBackendHandle = {
   id: SandboxBackendId;
   runtimeId: string;
   runtimeLabel: string;
+  /** Exact provider target + runtime identity used by lifecycle coordination. */
+  runtimeActivityKey?: string;
   workdir: string;
   env?: Record<string, string>;
   configLabel?: string;
   configLabelKind?: string;
+  /** Provider-owned locator required to remove this exact runtime after config changes. */
+  cleanupMetadata?: Record<string, string>;
   /**
    * Remote backends own cwd existence checks because valid runtime paths may
    * not exist in the local workspace mirror. Backend validation must be paired
@@ -85,6 +91,7 @@ export type SandboxBackendHandle = {
     workdir?: string;
     env: Record<string, string>;
     usePty: boolean;
+    signal?: AbortSignal;
   }): Promise<SandboxBackendExecSpec>;
   finalizeExec?: (params: {
     status: "completed" | "failed";
@@ -92,6 +99,8 @@ export type SandboxBackendHandle = {
     timedOut: boolean;
     token?: unknown;
   }) => Promise<void>;
+  /** Ends descendants owned by this exec before its activity lease is released. */
+  terminateExec?: (token: unknown) => Promise<void>;
   runShellCommand(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
   createFsBridge?: (params: { sandbox: SandboxFsBridgeContext }) => SandboxFsBridge;
 };

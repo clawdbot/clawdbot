@@ -281,6 +281,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               env: sandbox.backend?.env ?? sandbox.docker.env,
               buildExecSpec: sandbox.backend?.buildExecSpec.bind(sandbox.backend),
               finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),
+              terminateExec: sandbox.backend?.terminateExec?.bind(sandbox.backend),
             }
           : undefined,
       }),

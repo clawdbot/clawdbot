@@ -26,6 +26,7 @@ export async function spawnSandboxChild(params: {
   onFinalizeError: (error: unknown) => void;
   owners: Set<SandboxChildOwner>;
   terminateRemote?: () => Promise<void>;
+  cleanupRemote?: () => Promise<void>;
 }): Promise<SandboxChildOwner> {
   const [command, ...args] = params.argv;
   const finalize = async (status: "completed" | "failed", exitCode: number | null) =>
@@ -52,6 +53,8 @@ export async function spawnSandboxChild(params: {
   }
 
   let outcome: SandboxChildOutcome | undefined;
+  let remoteCleanup: Promise<void> | undefined;
+  const cleanupRemote = () => (remoteCleanup ??= params.cleanupRemote?.() ?? Promise.resolve());
   const closed = new Promise<SandboxChildOutcome>((resolve) => {
     child.once("close", (code, signal) => resolve((outcome = { exitCode: code ?? 1, signal })));
   });
@@ -61,7 +64,13 @@ export async function spawnSandboxChild(params: {
   const settled = closed.then(async (result) => {
     await terminationCleanup;
     child.stdin.destroy();
-    await (finalizePromise ??= finalize(params.finalizeStatus(result), result.exitCode));
+    try {
+      if (params.cleanupRemote && !terminationCleanup) {
+        await cleanupRemote();
+      }
+    } finally {
+      await (finalizePromise ??= finalize(params.finalizeStatus(result), result.exitCode));
+    }
     return result;
   });
   void settled.catch(params.onFinalizeError);
@@ -73,9 +82,11 @@ export async function spawnSandboxChild(params: {
     terminate: () =>
       (terminationPromise ??= (async () => {
         child.stdin.destroy();
-        terminationCleanup = params.terminateRemote?.().catch((error: unknown) => {
-          terminationError = error instanceof Error ? error : new Error(String(error));
-        });
+        terminationCleanup = (params.terminateRemote ? cleanupRemote() : Promise.resolve()).catch(
+          (error: unknown) => {
+            terminationError = error instanceof Error ? error : new Error(String(error));
+          },
+        );
         await terminationCleanup;
         if (!outcome) {
           if (child.pid) {
@@ -114,16 +125,29 @@ export async function spawnSandboxChild(params: {
 export function prepareSandboxChildExec(
   backend: NonNullable<SandboxContext["backend"]>,
   env: Record<string, string>,
-): { env: Record<string, string>; terminate: () => Promise<void> } {
+): {
+  env: Record<string, string>;
+  bindActivityToken: (token: unknown) => void;
+  terminate: () => Promise<void>;
+} {
   const marker = randomUUID();
+  let activityToken: unknown;
   return {
     env: { ...env, [SANDBOX_EXEC_MARKER]: marker },
+    bindActivityToken: (token) => {
+      activityToken = token;
+    },
     terminate: async () => {
+      if (backend.terminateExec) {
+        await backend.terminateExec(activityToken);
+        return;
+      }
       const result = await backend.runShellCommand({
         script: SANDBOX_REMOTE_TERMINATE_SCRIPT,
         args: [`${SANDBOX_EXEC_MARKER}=${marker}`],
         allowFailure: true,
         signal: AbortSignal.timeout(SANDBOX_CHILD_REAP_TIMEOUT_MS),
+        activityToken,
       });
       if (result.code !== 0) {
         const detail =

@@ -9,12 +9,21 @@ import { stopCachedBrowserBridgesForContainer } from "./browser-bridges.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";
 import {
   readBrowserRegistry,
+  readBrowserRegistryEntry,
+  readRegistryEntry,
   readRegistry,
   removeBrowserRegistryEntry,
+  removeBrowserRegistryEntryIfUnchanged,
   removeRegistryEntry,
+  removeRegistryEntryIfUnchanged,
   type SandboxBrowserRegistryEntry,
   type SandboxRegistryEntry,
 } from "./registry.js";
+import {
+  resolveSandboxRuntimeActivityKey,
+  withSandboxRuntimeMutations,
+} from "./runtime-activity.js";
+import { withSandboxScopeLocks } from "./scope-lock.js";
 import { resolveSandboxAgentId } from "./shared.js";
 
 export type SandboxContainerInfo = SandboxRegistryEntry & {
@@ -107,13 +116,39 @@ export async function removeSandboxContainer(containerName: string): Promise<voi
         `Sandbox backend "${backendId}" is unavailable; enable its plugin before removing this runtime.`,
       );
     }
-    await manager.removeRuntime({
-      entry,
-      config,
-      agentId: resolveSandboxAgentId(entry.sessionKey),
+    let removed = false;
+    await withSandboxScopeLocks([entry.sessionKey], async () => {
+      await withSandboxRuntimeMutations(
+        [
+          resolveSandboxRuntimeActivityKey(
+            backendId,
+            entry.containerName,
+            entry.backendTarget?.key,
+          ),
+        ],
+        async (lifecycle) => {
+          const current = await readRegistryEntry(containerName);
+          if (!current || current.registryGeneration !== entry.registryGeneration) {
+            return;
+          }
+          await manager.removeRuntime({
+            entry: current,
+            config,
+            agentId: resolveSandboxAgentId(current.sessionKey),
+          });
+          lifecycle.retire();
+          await removeRegistryEntryIfUnchanged(current);
+          removed = true;
+        },
+      );
     });
+    if (!removed) {
+      return;
+    }
   }
-  await removeRegistryEntry(containerName);
+  if (!entry) {
+    await removeRegistryEntry(containerName);
+  }
 }
 
 /** Removes one browser sandbox container, registry entry, and any in-process bridge server. */
@@ -121,12 +156,27 @@ export async function removeSandboxBrowserContainer(containerName: string): Prom
   const config = getRuntimeConfig();
   const registry = await readBrowserRegistry();
   const entry = registry.entries.find((item) => item.containerName === containerName);
-  await stopCachedBrowserBridgesForContainer(containerName);
   if (entry) {
-    await dockerSandboxBackendManager.removeRuntime({
-      entry: toBrowserDockerRuntimeEntry(entry),
-      config,
+    await withSandboxScopeLocks([entry.sessionKey], async () => {
+      await withSandboxRuntimeMutations(
+        [resolveSandboxRuntimeActivityKey("docker", entry.containerName)],
+        async (lifecycle) => {
+          const current = await readBrowserRegistryEntry(containerName);
+          if (!current || current.registryGeneration !== entry.registryGeneration) {
+            return;
+          }
+          await stopCachedBrowserBridgesForContainer(containerName);
+          await dockerSandboxBackendManager.removeRuntime({
+            entry: toBrowserDockerRuntimeEntry(current),
+            config,
+          });
+          lifecycle.retire();
+          await removeBrowserRegistryEntryIfUnchanged(current);
+        },
+      );
     });
+  } else {
+    await stopCachedBrowserBridgesForContainer(containerName);
+    await removeBrowserRegistryEntry(containerName);
   }
-  await removeBrowserRegistryEntry(containerName);
 }

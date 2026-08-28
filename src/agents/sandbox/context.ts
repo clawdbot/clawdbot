@@ -18,7 +18,11 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
 import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
-import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "./backend.js";
+import {
+  getSandboxBackendWorkdirResolver,
+  requireSandboxBackendFactory,
+  type SandboxBackendHandle,
+} from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
@@ -26,7 +30,9 @@ import { createSandboxFsBridge } from "./fs-bridge.js";
 import { hashTextSha256 } from "./hash.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
 import { readRegisteredSandboxRuntimeIds, updateRegistry } from "./registry.js";
+import { coordinateSandboxBackendHandle } from "./runtime-activity.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import { withSandboxScopeLocks } from "./scope-lock.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import type { SandboxContext, SandboxIsolationSubject, SandboxWorkspaceInfo } from "./types.js";
@@ -292,28 +298,37 @@ async function resolveProvisionedSandboxContext(
     backendId: resolvedCfg.backend,
     scopeKey,
   });
-  const backend = await backendFactory({
-    sessionKey: rawSessionKey,
-    scopeKey,
-    ...(registeredRuntimeIds.length > 0 ? { registeredRuntimeIds } : {}),
-    workspaceDir,
-    agentWorkspaceDir,
-    skillsWorkspaceDir,
-    cfg: resolvedCfg,
-    ...(params.requireCurrentConfig !== undefined
-      ? { requireCurrentConfig: params.requireCurrentConfig }
-      : {}),
+  let backend: SandboxBackendHandle | undefined;
+  await withSandboxScopeLocks([scopeKey], async () => {
+    backend = coordinateSandboxBackendHandle(
+      await backendFactory({
+        sessionKey: rawSessionKey,
+        scopeKey,
+        ...(registeredRuntimeIds.length > 0 ? { registeredRuntimeIds } : {}),
+        workspaceDir,
+        agentWorkspaceDir,
+        skillsWorkspaceDir,
+        cfg: resolvedCfg,
+        ...(params.requireCurrentConfig !== undefined
+          ? { requireCurrentConfig: params.requireCurrentConfig }
+          : {}),
+      }),
+    );
+    await updateRegistry({
+      containerName: backend.runtimeId,
+      backendId: backend.id,
+      runtimeLabel: backend.runtimeLabel,
+      sessionKey: scopeKey,
+      createdAtMs: Date.now(),
+      lastUsedAtMs: Date.now(),
+      image: backend.configLabel ?? resolvedCfg.docker.image,
+      configLabelKind: backend.configLabelKind ?? "Image",
+      cleanupMetadata: backend.cleanupMetadata,
+    });
   });
-  await updateRegistry({
-    containerName: backend.runtimeId,
-    backendId: backend.id,
-    runtimeLabel: backend.runtimeLabel,
-    sessionKey: scopeKey,
-    createdAtMs: Date.now(),
-    lastUsedAtMs: Date.now(),
-    image: backend.configLabel ?? resolvedCfg.docker.image,
-    configLabelKind: backend.configLabelKind ?? "Image",
-  });
+  if (!backend) {
+    throw new Error(`Sandbox backend "${resolvedCfg.backend}" did not provide a runtime.`);
+  }
 
   const resolvedBrowserConfig = resolvedCfg.browser.enabled
     ? resolveBrowserConfig(params.config?.browser, params.config)

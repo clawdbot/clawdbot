@@ -22,6 +22,9 @@ export type SandboxRegistryEntry = {
   image: string;
   configLabelKind?: string;
   configHash?: string;
+  /** Existing row revision used to fence destructive lifecycle cleanup. */
+  registryGeneration?: number;
+  cleanupMetadata?: Record<string, string>;
 };
 
 type SandboxRegistry = {
@@ -37,6 +40,8 @@ export type SandboxBrowserRegistryEntry = {
   configHash?: string;
   cdpPort: number;
   noVncPort?: number;
+  /** Existing row revision used to fence destructive lifecycle cleanup. */
+  registryGeneration?: number;
 };
 
 type SandboxBrowserRegistry = {
@@ -89,6 +94,7 @@ function rowToContainerEntry(row: SandboxRegistryRow): SandboxRegistryEntry | nu
     ...(row.runtime_label != null ? { runtimeLabel: row.runtime_label } : {}),
     ...(row.config_label_kind != null ? { configLabelKind: row.config_label_kind } : {}),
     ...(row.config_hash != null ? { configHash: row.config_hash } : {}),
+    registryGeneration: row.updated_at,
   } as SandboxRegistryEntry);
 }
 
@@ -110,6 +116,7 @@ function rowToBrowserEntry(row: SandboxRegistryRow): SandboxBrowserRegistryEntry
     cdpPort: row.cdp_port ?? Number(payload.cdpPort ?? 0),
     ...(row.no_vnc_port != null ? { noVncPort: row.no_vnc_port } : {}),
     ...(row.config_hash != null ? { configHash: row.config_hash } : {}),
+    registryGeneration: row.updated_at,
   } as SandboxBrowserRegistryEntry;
 }
 
@@ -123,6 +130,7 @@ function containerEntryToRow(entry: SandboxRegistryEntry, existing?: SandboxRegi
     image: existing?.image ?? entry.image,
     configLabelKind: entry.configLabelKind ?? existing?.configLabelKind,
     configHash: entry.configHash ?? existing?.configHash,
+    cleanupMetadata: entry.cleanupMetadata ?? existing?.cleanupMetadata,
   };
   return {
     registry_kind: "container",
@@ -137,8 +145,8 @@ function containerEntryToRow(entry: SandboxRegistryEntry, existing?: SandboxRegi
     config_hash: next.configHash ?? null,
     cdp_port: null,
     no_vnc_port: null,
-    entry_json: JSON.stringify(next),
-    updated_at: Date.now(),
+    entry_json: JSON.stringify({ ...next, registryGeneration: undefined }),
+    updated_at: Math.max(Date.now(), (existing?.registryGeneration ?? 0) + 1),
   } satisfies SandboxRegistryInsert;
 }
 
@@ -165,8 +173,8 @@ function browserEntryToRow(
     config_hash: next.configHash ?? null,
     cdp_port: next.cdpPort,
     no_vnc_port: next.noVncPort ?? null,
-    entry_json: JSON.stringify(next),
-    updated_at: Date.now(),
+    entry_json: JSON.stringify({ ...next, registryGeneration: undefined }),
+    updated_at: Math.max(Date.now(), (existing?.registryGeneration ?? 0) + 1),
   } satisfies SandboxRegistryInsert;
 }
 
@@ -281,16 +289,21 @@ function readRegistryRowFromDb(
   );
 }
 
-function removeRegistryRow(kind: SandboxRegistryKind, containerName: string): void {
+function removeRegistryRow(
+  kind: SandboxRegistryKind,
+  containerName: string,
+  registryGeneration?: number,
+): void {
   runOpenClawStateWriteTransaction(({ db }) => {
     const stateDb = getSandboxRegistryKysely(db);
-    executeSqliteQuerySync(
-      db,
-      stateDb
-        .deleteFrom("sandbox_registry_entries")
-        .where("registry_kind", "=", kind)
-        .where("container_name", "=", containerName),
-    );
+    let query = stateDb
+      .deleteFrom("sandbox_registry_entries")
+      .where("registry_kind", "=", kind)
+      .where("container_name", "=", containerName);
+    if (registryGeneration !== undefined) {
+      query = query.where("updated_at", "=", registryGeneration);
+    }
+    executeSqliteQuerySync(db, query);
   });
 }
 
@@ -320,6 +333,14 @@ export async function readRegistryEntry(
   const row = readRegistryRow("container", containerName);
   const entry = row ? rowToContainerEntry(row) : null;
   return entry ? normalizeSandboxRegistryEntry(entry) : null;
+}
+
+/** Reads one registered browser sandbox by container name. */
+export async function readBrowserRegistryEntry(
+  containerName: string,
+): Promise<SandboxBrowserRegistryEntry | null> {
+  const row = readRegistryRow("browser", containerName);
+  return row ? rowToBrowserEntry(row) : null;
 }
 
 /** Reads registered runtime IDs for one backend-owned sandbox scope, newest first. */
@@ -352,6 +373,11 @@ export async function removeRegistryEntry(containerName: string) {
   removeRegistryRow("container", containerName);
 }
 
+/** Removes one runtime row only if no use or reprovision updated it since the snapshot. */
+export async function removeRegistryEntryIfUnchanged(entry: SandboxRegistryEntry) {
+  removeRegistryRow("container", entry.containerName, entry.registryGeneration);
+}
+
 /** Reads all registered browser sandbox containers from SQLite. */
 export async function readBrowserRegistry(): Promise<SandboxBrowserRegistry> {
   return {
@@ -380,4 +406,9 @@ export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) 
 /** Removes one browser sandbox registry entry by container name. */
 export async function removeBrowserRegistryEntry(containerName: string) {
   removeRegistryRow("browser", containerName);
+}
+
+/** Removes one browser row only if no use or reprovision updated it since the snapshot. */
+export async function removeBrowserRegistryEntryIfUnchanged(entry: SandboxBrowserRegistryEntry) {
+  removeRegistryRow("browser", entry.containerName, entry.registryGeneration);
 }

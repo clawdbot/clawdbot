@@ -268,6 +268,10 @@ export function createMxcSandboxBackendHandle(params: {
       cleanupLauncherPayloadFile(token);
     },
 
+    async terminateExec() {
+      // MXC containers use destroyOnExit; launcher settlement already proves cleanup.
+    },
+
     createFsBridge: ({ sandbox }) => createMxcFsBridge({ sandbox }),
 
     async runShellCommand(

@@ -249,6 +249,46 @@ describe("sandbox exec preparation failures", () => {
     },
   );
 
+  it("retains sandbox execution ownership until descendants become extinct", async () => {
+    const tree = createDeferred();
+    const finalizeExec = vi.fn(async () => {});
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+      ...runtimeManagedRun(input),
+      waitForExtinction: async () => await tree.promise,
+    }));
+    const run = await runExecProcess({
+      command: "sandbox-command",
+      workdir: "/tmp",
+      env: {},
+      sandbox: {
+        containerName: "sandbox",
+        workspaceDir: "/workspace",
+        containerWorkdir: "/workspace",
+        buildExecSpec: async () => ({
+          argv: ["true"],
+          env: {},
+          stdinMode: "pipe-closed",
+          finalizeToken: "exec",
+        }),
+        finalizeExec,
+      },
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      timeoutSec: null,
+    });
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(finalizeExec).not.toHaveBeenCalled();
+    tree.resolve();
+    await run.promise;
+    expect(finalizeExec).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { mode: "child", usePty: false, cancelCheck: 1, expectedSpawns: 0 },
     { mode: "PTY", usePty: true, cancelCheck: 1, expectedSpawns: 0 },

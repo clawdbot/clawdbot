@@ -274,8 +274,26 @@ export function createOpenShellSandboxBackendManager(params: {
       };
     },
     async removeRuntime({ entry, config }) {
+      const recordedConfig = entry.cleanupMetadata
+        ? resolveOpenShellPluginConfig({
+            mode: entry.cleanupMetadata.mode,
+            command: entry.cleanupMetadata.command,
+            gateway: entry.cleanupMetadata.gateway || undefined,
+            gatewayEndpoint: entry.cleanupMetadata.gatewayEndpoint || undefined,
+            workspace: entry.cleanupMetadata.workspace || undefined,
+            from: entry.cleanupMetadata.from,
+            policy: entry.cleanupMetadata.policy || undefined,
+            providers: entry.cleanupMetadata.providers?.split(",").filter(Boolean),
+            gpu: entry.cleanupMetadata.gpu === "true",
+            autoProviders: entry.cleanupMetadata.autoProviders === "true",
+            remoteWorkspaceDir: entry.cleanupMetadata.remoteWorkspaceDir,
+            remoteAgentWorkspaceDir: entry.cleanupMetadata.remoteAgentWorkspaceDir,
+            timeoutSeconds: Number(entry.cleanupMetadata.timeoutMs) / 1000,
+          })
+        : undefined;
       const execContext: OpenShellExecContext = {
-        config: resolveOpenShellPluginConfigFromConfig(config, params.pluginConfig),
+        config:
+          recordedConfig ?? resolveOpenShellPluginConfigFromConfig(config, params.pluginConfig),
         sandboxName: entry.containerName,
       };
       const result = await runOpenShellCli({
@@ -337,7 +355,8 @@ class OpenShellSandboxBackendImpl {
       return this.handle;
     }
     const runRemoteShellScript = (command: SandboxBackendCommandParams) =>
-      this.params.execContext.config.mode === "mirror"
+      this.params.execContext.config.mode === "mirror" &&
+      !(command.activityToken as PendingExec | undefined)?.workspaceLease
         ? this.runWorkspaceOperation(() => this.runRemoteShellScript(command), command.signal)
         : this.runRemoteShellScript(command);
     const handle: OpenShellSandboxBackend = {
@@ -349,6 +368,13 @@ class OpenShellSandboxBackendImpl {
       mode: this.params.execContext.config.mode,
       configLabel: this.params.execContext.config.from,
       configLabelKind: "Source",
+      cleanupMetadata: Object.fromEntries(
+        Object.entries(this.params.execContext.config).flatMap(([key, value]) =>
+          value === undefined
+            ? []
+            : [[key, Array.isArray(value) ? value.join(",") : String(value)]],
+        ),
+      ),
       workdirValidation: "backend",
       validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
       workdirRoots: [this.params.remoteWorkspaceDir, this.params.remoteAgentWorkspaceDir],

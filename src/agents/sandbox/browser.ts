@@ -55,6 +55,12 @@ import {
   issueNoVncObserverToken,
 } from "./novnc-auth.js";
 import { readBrowserRegistry, updateBrowserRegistry } from "./registry.js";
+import {
+  activateSandboxRuntimeActivity,
+  resolveSandboxRuntimeActivityKey,
+  tryAcquireSandboxRuntimeActivity,
+  withSandboxRuntimeMutations,
+} from "./runtime-activity.js";
 import { buildSandboxContainerName, resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
@@ -268,6 +274,7 @@ async function ensureSandboxBrowserContainer(
   params: EnsureSandboxBrowserParams,
   containerName: string,
 ): Promise<SandboxBrowserContext> {
+  const activityKey = resolveSandboxRuntimeActivityKey("docker", containerName);
   let existing = BROWSER_BRIDGES.get(params.scopeKey);
   const stopExistingForContainer = async () => {
     await stopCachedBrowserBridgesForContainer(containerName);
@@ -330,8 +337,11 @@ async function ensureSandboxBrowserContainer(
       defaultRuntime.log(
         `Removing stale sandbox browser container ${containerName} because it lacks the current CDP relay auth contract; it will be recreated.`,
       );
-      await stopExistingForContainer();
-      await execDocker(["rm", "-f", containerName], { allowFailure: true });
+      await withSandboxRuntimeMutations([activityKey], async (lifecycle) => {
+        await stopExistingForContainer();
+        await execDocker(["rm", "-f", containerName], { allowFailure: true });
+        lifecycle.retire();
+      });
       hasContainer = false;
       running = false;
     }
@@ -365,8 +375,11 @@ async function ensureSandboxBrowserContainer(
           `Sandbox browser config changed for ${containerName} (recently used). Recreate to apply: ${hint}`,
         );
       } else {
-        await stopExistingForContainer();
-        await execDocker(["rm", "-f", containerName], { allowFailure: true });
+        await withSandboxRuntimeMutations([activityKey], async (lifecycle) => {
+          await stopExistingForContainer();
+          await execDocker(["rm", "-f", containerName], { allowFailure: true });
+          lifecycle.retire();
+        });
         hasContainer = false;
         running = false;
       }
@@ -511,6 +524,7 @@ async function ensureSandboxBrowserContainer(
 
   const bridge = canReuse ? (existing?.bridge ?? null) : null;
 
+  const bridgeActivityGeneration = activateSandboxRuntimeActivity(activityKey);
   const ensureBridge = async () => {
     if (bridge) {
       return bridge;
@@ -547,6 +561,8 @@ async function ensureSandboxBrowserContainer(
       }),
       authToken: desiredAuthToken,
       authPassword: desiredAuthPassword,
+      acquireRequestActivity: () =>
+        tryAcquireSandboxRuntimeActivity(activityKey, bridgeActivityGeneration),
       onEnsureAttachTarget,
       resolveSandboxNoVncToken: consumeNoVncObserverToken,
     });
