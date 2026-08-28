@@ -53,10 +53,7 @@ type AgentExecPayload = {
 
 type AgentExecRawPayload = AgentExecPayload & Record<string, unknown>;
 
-type AgentExecRunResult = {
-  payloads?: AgentExecRawPayload[];
-  meta: EmbeddedAgentRunMeta;
-};
+type AgentExecRunResult = { payloads?: AgentExecRawPayload[]; meta: EmbeddedAgentRunMeta };
 
 type AgentExecStatus = "ok" | "error" | "timeout";
 
@@ -80,10 +77,7 @@ export type AgentExecEnvelope = {
   };
 };
 
-type AgentExecCommandResult = {
-  envelope: AgentExecEnvelope;
-  exitCode: 0 | 1 | 2;
-};
+type AgentExecCommandResult = { envelope: AgentExecEnvelope; exitCode: 0 | 1 | 2 };
 
 type AgentExecCommandDeps = {
   stdin?: AsyncIterable<unknown>;
