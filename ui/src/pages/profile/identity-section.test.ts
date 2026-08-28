@@ -3,7 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
-import { setAvatarGatewayOrigin } from "../../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { renderIdentitySection } from "./identity-section.ts";
 
 type IdentitySectionProps = Parameters<typeof renderIdentitySection>[0];

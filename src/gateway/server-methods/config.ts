@@ -23,7 +23,6 @@ import {
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
 } from "../../config/io.js";
-import { projectSourceOntoRuntimeShape } from "../../config/io.write-prepare.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import {
   applyMergePatch,
@@ -35,6 +34,7 @@ import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
 import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
+import { projectSourceOntoRuntimeShape } from "../../config/runtime-source-projection.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
 import {

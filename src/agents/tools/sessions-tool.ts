@@ -56,7 +56,6 @@ const ACTIONS = [
   "group_delete",
 ] as const;
 const GROUP_NAME_MAX_LENGTH = 512;
-const GROUP_NAMES_MAX_ITEMS = 200;
 const SELF_ARCHIVE_MAX_RETRY_DELAY_MS = 5_000;
 const SESSIONS_TOOL_RESULT_MAX_BYTES = 3_840;
 const RESOLVED_OMITTED_REASON = "response_budget_exceeded";
@@ -219,9 +218,6 @@ function readGroupName(value: unknown, label: string): string {
 function readGroupNames(value: unknown): string[] {
   if (!Array.isArray(value)) {
     throw new ToolInputError("names required");
-  }
-  if (value.length > GROUP_NAMES_MAX_ITEMS) {
-    throw new ToolInputError("Too many group names");
   }
   return value.map((name, index) => readGroupName(name, `names[${index}]`));
 }

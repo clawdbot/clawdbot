@@ -129,6 +129,28 @@ function projectChatHistoryMediaBlock(entry: Record<string, unknown>, fact = fal
   return true;
 }
 
+function projectChatHistoryAttachmentBlock(entry: Record<string, unknown>): boolean {
+  if (entry.type !== "attachment") {
+    return false;
+  }
+  const attachment = readRecord(entry.attachment);
+  if (!attachment) {
+    return false;
+  }
+  const projected = { ...attachment };
+  for (const field of MEDIA_PRIVATE_FIELDS) {
+    delete projected[field];
+  }
+  const url = projectChatHistoryMediaReference(projected.url);
+  if (!url) {
+    delete projected.url;
+  } else {
+    projected.url = url;
+  }
+  entry.attachment = projected;
+  return true;
+}
+
 function projectChatHistoryMediaFacts(value: unknown): unknown[] | undefined {
   return Array.isArray(value)
     ? value.map((fact) => {
@@ -207,7 +229,8 @@ export function sanitizeChatHistoryContentBlock(
     changed = true;
   }
   const mediaChanged = projectChatHistoryMediaBlock(entry);
-  changed ||= mediaChanged;
+  const attachmentChanged = projectChatHistoryAttachmentBlock(entry);
+  changed ||= mediaChanged || attachmentChanged;
   return { block: changed ? entry : block, changed, truncated };
 }
 

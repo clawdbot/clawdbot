@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
 import net from "node:net";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -15,6 +16,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.js";
+import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import {
   canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
@@ -587,6 +589,69 @@ async function readConfigProofSnapshot(): Promise<{ identifier: unknown; prefix:
   };
 }
 
+async function captureConfigReadbackFailure(page: Page): Promise<void> {
+  const deadline = new AbortController();
+  try {
+    // Capture fixed name/connection facts, never label text or auth/config state.
+    // The separate deadline must not hide the original click failure.
+    const snapshot = await Promise.race([
+      Promise.all([
+        page.evaluate(() => {
+          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+            "openclaw-app",
+          );
+          const phase = app?.runtime?.context.gateway.snapshot.phase;
+          const phases = [
+            "stopped",
+            "connecting",
+            "starting",
+            "connected",
+            "reconnecting",
+            "reload-required",
+            "offline",
+          ];
+          return {
+            pathname: location.pathname.slice(0, 160),
+            navigationAgeMs: Math.round(performance.now()),
+            gatewayPhase: phases.includes(phase ?? "") ? phase : "unknown",
+            mainInert: document.querySelector("main")?.inert ?? null,
+            outletInert:
+              document.querySelector<HTMLElement>("openclaw-router-outlet")?.inert ?? null,
+            rawButtons: [
+              ...document.querySelectorAll<HTMLButtonElement>(".config-mode-toggle button"),
+            ]
+              .filter((button) => button.textContent?.trim() === "Raw")
+              .slice(0, 3)
+              .map((button) => ({
+                disabled: button.disabled,
+                hasLayout: button.getClientRects().length > 0,
+                inertAncestor: button.closest("[inert]") !== null,
+                label: !button.hasAttribute("aria-label")
+                  ? "absent"
+                  : button.getAttribute("aria-label") === "Raw"
+                    ? "raw"
+                    : "other",
+                labelledBy: button.hasAttribute("aria-labelledby"),
+              })),
+          };
+        }),
+        page.getByRole("button", { name: "Raw", exact: true }).count(),
+        page.getByRole("button", { name: "Raw", exact: true, includeHidden: true }).count(),
+      ])
+        .then(([state, roleMatches, roleMatchesIncludingHidden]) => ({
+          ...state,
+          roleMatches,
+          roleMatchesIncludingHidden,
+        }))
+        .catch(() => "unavailable"),
+      delay(1_000, "timed-out", { signal: deadline.signal }),
+    ]);
+    console.error(`[real-config-readback-failure] ${JSON.stringify(snapshot)}`);
+  } finally {
+    deadline.abort();
+  }
+}
+
 async function waitForConnectionEvidence(
   predicate: (entry: ProxyConnectionEvidence) => boolean,
   evidenceStartIndex: number,
@@ -734,7 +799,12 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
       .locator("openclaw-app-shell")
       .waitFor({ timeout: controlUiSettleTimeoutMs });
     expect((await connected.page.goto(rawSettingsUrl.toString()))?.status()).toBe(200);
-    await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
+    try {
+      await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
+    } catch (error) {
+      await captureConfigReadbackFailure(connected.page).catch(() => {});
+      throw error;
+    }
     const rawEditor = connected.page.locator(".config-raw-field textarea");
     await rawEditor.waitFor();
     await expect.poll(() => rawEditor.inputValue()).toContain(`"${configProofIdentifier}"`);

@@ -484,11 +484,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   };
 };
 
-export type {
-  CostUsageSummary,
-  SessionsUsageResult,
-  SessionUsageTimeSeries,
-} from "../pages/usage/data-types.ts";
+export type { CostUsageSummary, SessionsUsageResult } from "../pages/usage/data-types.ts";
 
 export type CronRunStatus = NonNullable<ProtocolCronRunLogEntry["status"]>;
 export type CronDeliveryStatus = NonNullable<ProtocolCronRunLogEntry["deliveryStatus"]>;
@@ -645,6 +641,8 @@ export type ModelCatalogEntry = {
   alias?: string;
   tags?: string[];
   available?: boolean;
+  unavailableReason?: "missing-auth" | "auth-failed" | "cooldown";
+  unavailableUntil?: number;
   contextWindow?: number;
   contextWindows?: GatewayContextWindowOption[];
   contextWindowDefault?: string;
@@ -659,6 +657,10 @@ export type ModelCatalogEntry = {
 
 export type ModelCatalogProviderOutcome =
   import("../../../packages/gateway-protocol/src/schema/agents-models-skills.js").ModelCatalogProviderOutcome;
+export type ModelCatalogResult = {
+  models: ModelCatalogEntry[];
+  providerOutcomes?: ModelCatalogProviderOutcome[];
+};
 
 export type ToolCatalogProfile =
   import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogProfile;

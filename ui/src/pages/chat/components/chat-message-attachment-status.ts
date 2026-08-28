@@ -4,6 +4,16 @@ import { t } from "../../../i18n/index.ts";
 import { renderAttachmentCardIcon } from "./chat-attachment-card.ts";
 import type { AttachmentItem } from "./chat-message-media.ts";
 
+type AttachmentFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
+
+export function attachmentFailureReason(code: AttachmentFailureCode): string {
+  return code === "file-not-found"
+    ? t("chat.attachments.failureFileNotFound")
+    : code === "unsupported-format"
+      ? t("chat.attachments.failureUnsupportedFormat")
+      : t("chat.attachments.failureDeliveryFailed");
+}
+
 export function renderAssistantAttachmentStatusCard(params: {
   kind: AttachmentItem["attachment"]["kind"];
   label: string;
@@ -41,8 +51,21 @@ export function renderAssistantAttachmentStatusCard(params: {
             >
             <span
               class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta"
-              >${params.badge}${params.reason ? ` · ${params.reason}` : ""}</span
             >
+              <span class="chat-assistant-attachment-card__status-badge">${params.badge}</span>
+              ${params.reason
+                ? html`
+                    <span
+                      class="chat-assistant-attachment-card__status-separator"
+                      aria-hidden="true"
+                      >·</span
+                    >
+                    <span class="chat-assistant-attachment-card__status-reason"
+                      >${params.reason}</span
+                    >
+                  `
+                : nothing}
+            </span>
           </span>
         </div>
         ${params.onRetry

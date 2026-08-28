@@ -1053,14 +1053,10 @@ extension OpenClawChatTransport {
         []
     }
 
-    /// Conveniences for callers that only page a list. Transports must
+    /// Convenience for callers that only select archive state. Transports must
     /// implement the canonical `listSessions(limit:search:archived:)`
-    /// requirement; same-name methods on a conformer are shadowed by these
-    /// sugars and never called through the protocol.
-    public func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse {
-        try await self.listSessions(limit: limit, search: nil, archived: false)
-    }
-
+    /// requirement; same-name methods on a conformer are shadowed by this
+    /// sugar and never called through the protocol.
     public func listSessions(limit: Int?, archived: Bool) async throws -> OpenClawChatSessionsListResponse {
         try await self.listSessions(limit: limit, search: nil, archived: archived)
     }

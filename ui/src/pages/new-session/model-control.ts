@@ -15,10 +15,10 @@ import {
   normalizeChatModelProviderId,
   resolvePreferredServerChatModelValue,
 } from "../../lib/chat/model-ref.ts";
-import { isChatModelUnavailable } from "../../lib/chat/model-select-state.ts";
+import { resolveChatModelUnavailableReason } from "../../lib/chat/model-select-state.ts";
 import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { loadModels } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import {
   renderChatModelControls,
@@ -339,7 +339,7 @@ export class NewSessionModelControl {
       this.agentId
     ) {
       const agentId = this.agentId;
-      void loadModels(metadataClient, {
+      void loadModelCatalog(metadataClient, {
         agentId,
         refreshIfDue: true,
         rejectOnFailure: true,
@@ -480,12 +480,16 @@ export class NewSessionModelControl {
     return this.restoringPreference;
   }
 
-  isModelUnavailable(agent: GatewayAgentRow | undefined): boolean {
-    return (
-      this.metadataState.hasSnapshot &&
-      this.metadataState.status === "ready" &&
-      isChatModelUnavailable(this.selected || agent?.model?.primary, undefined, this.catalog)
-    );
+  modelUnavailableReason(
+    agent: GatewayAgentRow | undefined,
+  ): ModelCatalogEntry["unavailableReason"] {
+    return this.metadataState.hasSnapshot && this.metadataState.status === "ready"
+      ? resolveChatModelUnavailableReason(
+          this.selected || agent?.model?.primary,
+          undefined,
+          this.catalog,
+        )
+      : undefined;
   }
 
   private restorePreference(

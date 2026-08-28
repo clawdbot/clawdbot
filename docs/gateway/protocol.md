@@ -374,6 +374,7 @@ Operator scopes (`src/gateway/operator-scopes.ts`), the full closed set:
 - `operator.write`
 - `operator.admin`
 - `operator.approvals`
+- `operator.questions`
 - `operator.pairing`
 - `operator.talk`
 - `operator.talk.secrets`
@@ -722,7 +723,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   </Accordion>
 
   <Accordion title="Approval families">
-    - `approval.history` returns newest-first terminal approvals retained for 30 days for exec, plugin, and system-agent requests (scope `operator.approvals`). It supports cursor pagination plus an optional kind filter; pending approvals are not history rows.
+    - `approval.history` returns newest-first terminal approvals retained for 30 days for exec, plugin, and system-agent requests (scope `operator.approvals`). It supports cursor pagination plus an optional kind filter; pending approvals are not history rows. Treat each cursor as an opaque server token and return the exact value without padding, rewriting, or adding fields.
     - `approval.get` and `approval.resolve` are the kind-agnostic durable approval methods (scope `operator.approvals`). `approval.get` returns a sanitized pending or retained terminal projection with a stable `urlPath`; `approval.resolve` accepts the canonical approval id, an explicit `kind`, and a decision, applies first-answer-wins resolution, and always returns the recorded canonical result.
     - `exec.approval.request`, `exec.approval.get`, `exec.approval.list`, and `exec.approval.resolve` cover one-shot exec approval requests plus pending approval lookup/replay. They are protocol-boundary adapters over the same durable approval registry.
     - `exec.approval.waitDecision` waits on one pending exec approval and returns the final decision (or `null` on timeout).

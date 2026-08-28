@@ -932,6 +932,96 @@ describe("inline approval card", () => {
 });
 
 describe("chat run error", () => {
+  it("keeps Check delivery reachable when exact history deduplicates the retained bubble", () => {
+    vi.mocked(chatThread.buildCachedChatItems).mockRestore();
+    vi.mocked(chatMessage.renderMessageGroup).mockRestore();
+    const onRetrySessionPlacementStartup = vi.fn();
+    const container = renderChatView({
+      canSend: false,
+      messages: [
+        {
+          role: "user",
+          content: "original prompt",
+          __openclaw: { idempotencyKey: "initial:user" },
+        },
+      ],
+      placementStartup: {
+        sessionKey: "main",
+        phase: "failed",
+        startedAt: 1,
+        retryable: true,
+        action: "check-delivery",
+        initialTurn: {
+          id: "initial",
+          sendRunId: "initial",
+          text: "original prompt",
+          createdAt: 1,
+          sendAttempts: 1,
+          sendState: "unconfirmed",
+        },
+      },
+      onRetrySessionPlacementStartup,
+    });
+    expect(container.querySelectorAll(".chat-group.user")).toHaveLength(1);
+    expect(container.querySelector(".chat-send-status__retry")).toBeNull();
+    const action = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".chat-error button"),
+    ).find((button) => button.textContent?.trim() === "Check delivery");
+    expect(action).toBeDefined();
+    action?.click();
+    expect(onRetrySessionPlacementStartup).toHaveBeenCalledOnce();
+  });
+
+  it.each(["retry", "check-delivery"] as const)(
+    "keeps the retained initial turn's %s action usable while ordinary sending is held",
+    (action) => {
+      vi.mocked(chatThread.buildCachedChatItems).mockRestore();
+      vi.mocked(chatMessage.renderMessageGroup).mockRestore();
+      const onRetrySessionPlacementStartup = vi.fn();
+      const onQueueRetry = vi.fn();
+      const container = renderChatView({
+        canSend: false,
+        queue: [
+          {
+            id: "ordinary",
+            text: "later draft",
+            createdAt: 2,
+            sendAttempts: 1,
+            sendState: "failed",
+          },
+        ],
+        placementStartup: {
+          sessionKey: "agent:main:startup",
+          phase: "failed",
+          startedAt: 1,
+          retryable: true,
+          action,
+          error: "Retained initial turn",
+          initialTurn: {
+            id: "initial",
+            text: "original prompt",
+            createdAt: 1,
+            sendAttempts: 1,
+            sendState: action === "retry" ? "failed" : "unconfirmed",
+          },
+        },
+        onRetrySessionPlacementStartup,
+        onQueueRetry,
+      });
+      expect(container.querySelector(".chat-thread")?.textContent).toContain("original prompt");
+      expect(container.querySelector(".chat-thread")?.textContent).toContain("later draft");
+      const buttons = container.querySelectorAll<HTMLButtonElement>(".chat-send-status__retry");
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0]?.textContent?.trim()).toBe(action === "retry" ? "Retry" : "Check delivery");
+      buttons[0]?.click();
+      expect(onRetrySessionPlacementStartup).toHaveBeenCalledOnce();
+      expect(onQueueRetry).not.toHaveBeenCalled();
+      expect(container.querySelector(".chat-error")?.textContent).toContain(
+        action === "retry" ? "Retained initial turn" : "without resending it or starting a worker",
+      );
+    },
+  );
+
   it.each(["run", "request"])(
     "exposes the complete %s error as selectable text and a copy action",
     (source) => {
@@ -1658,6 +1748,110 @@ describe("chat transcript rendering", () => {
     );
   });
 
+  it("announces named attachment failures in ordinary and completed-run assistant rows", () => {
+    const transcript = createTestTranscript();
+    const container = document.createElement("div");
+    const existing = {
+      testVirtualRow: true,
+      testVirtualKey: "assistant-existing",
+      testVirtualRole: "assistant",
+      role: "assistant",
+      content: "Existing answer",
+    };
+    const renderMessages = (messages: unknown[]) =>
+      renderChatInto(container, { transcript, messages });
+
+    renderMessages([existing]);
+    const attachmentOnly = {
+      testVirtualRow: true,
+      testVirtualKey: "assistant-missing-attachment",
+      testVirtualRole: "assistant",
+      role: "assistant",
+      content: [
+        {
+          type: "attachment_error",
+          attachment: { code: "file-not-found", kind: "document", label: "missing.pdf" },
+        },
+      ],
+    };
+    renderMessages([existing, attachmentOnly]);
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+      "missing.pdf: Not sent. File not found. Check the path and try again.",
+    );
+
+    const mixed = {
+      testVirtualRow: true,
+      testVirtualKey: "assistant-mixed-attachments",
+      testVirtualRole: "assistant",
+      role: "assistant",
+      content: [
+        { type: "text", text: "Partial result" },
+        {
+          type: "attachment_error",
+          attachment: {
+            code: "unsupported-format",
+            kind: "document",
+            label: "settings.toml",
+          },
+        },
+      ],
+    };
+    renderMessages([existing, attachmentOnly, mixed]);
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+      "Partial result settings.toml: Not sent. Rejected by the local attachment allowlist. Send a supported file type.",
+    );
+
+    const runBoundary = {
+      kind: "group" as const,
+      key: "group:user:attachment-run",
+      role: "user" as const,
+      messages: [
+        {
+          key: "user:attachment-run",
+          message: {
+            role: "user",
+            content: "Send the attachment",
+            __openclaw: {
+              id: "user:attachment-run",
+              idempotencyKey: "attachment-run:user",
+            },
+          },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+    const completedFailure = {
+      kind: "group" as const,
+      key: "group:assistant:attachment-run",
+      role: "assistant" as const,
+      messages: [
+        {
+          key: "assistant:attachment-run",
+          message: {
+            role: "assistant",
+            content: attachmentOnly.content,
+            runId: "attachment-run",
+          },
+        },
+      ],
+      timestamp: 2,
+      isStreaming: false,
+      runId: "attachment-run",
+    };
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+      runBoundary,
+      completedFailure,
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+    renderChatInto(container, {
+      transcript,
+      messages: [runBoundary, completedFailure],
+    });
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+      "missing.pdf: Not sent. File not found. Check the path and try again.",
+    );
+  });
+
   it("announces a run preamble and its later terminal answer separately", () => {
     const transcript = createTestTranscript();
     const container = document.createElement("div");
@@ -1854,47 +2048,61 @@ describe("chat goal status", () => {
     expect(goal?.closest(".agent-chat__composer-status-stack")).toBeNull();
   });
 
-  it("dispatches goal commands from the pill controls", () => {
-    const onGoalCommand = vi.fn();
-    const container = renderChatView({ sessions: goalSessions(), onGoalCommand });
+  it("dispatches typed goal actions from the pill controls", () => {
+    const onGoalAction = vi.fn();
+    const container = renderChatView({ sessions: goalSessions(), onGoalAction });
 
     container.querySelector<HTMLButtonElement>('button[aria-label="Pause goal"]')?.click();
     container.querySelector<HTMLButtonElement>('button[aria-label="Clear goal"]')?.click();
 
-    expect(onGoalCommand).toHaveBeenNthCalledWith(1, "/goal pause");
-    expect(onGoalCommand).toHaveBeenNthCalledWith(2, "/goal clear");
+    expect(onGoalAction).toHaveBeenNthCalledWith(1, "goal-1", "pause");
+    expect(onGoalAction).toHaveBeenNthCalledWith(2, "goal-1", "clear");
     expect(container.querySelector('button[aria-label="Resume goal"]')).toBeNull();
   });
 
   it("offers resume instead of pause for paused goals", () => {
-    const onGoalCommand = vi.fn();
+    const onGoalAction = vi.fn();
     const container = renderChatView({
       sessions: goalSessions({ status: "paused", pausedAt: Date.now() }),
-      onGoalCommand,
+      onGoalAction,
     });
 
     expect(container.querySelector('button[aria-label="Pause goal"]')).toBeNull();
     container.querySelector<HTMLButtonElement>('button[aria-label="Resume goal"]')?.click();
-    expect(onGoalCommand).toHaveBeenCalledWith("/goal resume");
+    expect(onGoalAction).toHaveBeenCalledWith("goal-1", "resume");
   });
 
-  it("prefills the composer draft when editing the goal", () => {
-    const onDraftChange = vi.fn();
-    const container = renderChatView({
-      sessions: goalSessions(),
-      onGoalCommand: vi.fn(),
-      onDraftChange,
+  it("edits the plain objective and restores the conversation draft on cancellation", () => {
+    let draft = "Keep my conversation draft";
+    const container = document.createElement("div");
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
     });
+    const draw = () =>
+      renderChatInto(container, {
+        sessions: goalSessions(),
+        draft,
+        getDraft: () => draft,
+        onGoalAction: vi.fn(),
+        onGoalSubmit: vi.fn(async () => true),
+        onDraftChange,
+        onRequestUpdate: draw,
+      });
+    draw();
 
     container.querySelector<HTMLButtonElement>('button[aria-label="Edit goal"]')?.click();
 
-    expect(onDraftChange).toHaveBeenCalledWith("/goal edit Land the web goal UI");
+    expect(onDraftChange).toHaveBeenCalledWith("Land the web goal UI");
+    expect(container.querySelector(".agent-chat__goal-mode")?.textContent).toContain("Edit goal");
+    container.querySelector<HTMLButtonElement>('button[aria-label="Cancel goal entry"]')?.click();
+    expect(draft).toBe("Keep my conversation draft");
+    expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
   });
 
   it("expands goal details on demand", () => {
     const props = createChatProps({
       sessions: goalSessions({ lastStatusNote: "Waiting for CI" }),
-      onGoalCommand: vi.fn(),
+      onGoalAction: vi.fn(),
     });
     const container = document.createElement("div");
     render(renderChat(props), container);
@@ -1917,9 +2125,11 @@ describe("chat goal status", () => {
     expect(detail?.querySelector(".agent-chat__goal-detail-note")?.textContent).toBe(
       "Waiting for CI",
     );
-    expect(detail?.querySelector(".agent-chat__goal-detail-meta")?.textContent?.trim()).toBe(
-      "12k/50k · 15s",
-    );
+    expect(
+      Array.from(detail?.querySelectorAll(".agent-chat__goal-detail-meta > span") ?? []).map(
+        (element) => element.textContent?.trim(),
+      ),
+    ).toEqual(["12k/50k", "·", "15s"]);
     expect(
       container
         .querySelector('button[aria-label="Hide goal details"]')
@@ -1930,7 +2140,7 @@ describe("chat goal status", () => {
   it("hides goal action buttons when the composer cannot send", () => {
     const container = renderChatView({
       sessions: goalSessions(),
-      onGoalCommand: vi.fn(),
+      onGoalAction: vi.fn(),
       connected: false,
     });
 
@@ -3866,6 +4076,81 @@ describe("chat slash menu accessibility", () => {
     inputDraft(container, "/");
 
     expect(onSlashIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["keyboard", "pointer"])(
+    "collects a literal Goal objective after %s selection and retains a rejected draft",
+    async (selection) => {
+      const onGoalSubmit = vi.fn(async () => false);
+      const onSend = vi.fn();
+      const { container } = createReactiveDraftHarness({ onGoalSubmit, onSend });
+      inputDraftAtEnd(container, "/goal");
+      if (selection === "keyboard") {
+        keydownComposer(container, "Enter");
+      } else {
+        container.querySelector<HTMLElement>('.slash-menu-item[role="option"]')?.click();
+      }
+      expect(container.querySelector(".agent-chat__goal-mode")).not.toBeNull();
+      expect(container.querySelector(".slash-menu")).toBeNull();
+      expect(onGoalSubmit).not.toHaveBeenCalled();
+      expect(onSend).not.toHaveBeenCalled();
+      const objective = "  /stop the flaky tests\nthen preserve   every space  ";
+      inputDraftAtEnd(container, objective);
+      expect(container.querySelector(".slash-menu")).toBeNull();
+      keydownComposer(container, "Enter");
+      await vi.waitFor(() =>
+        expect(onGoalSubmit).toHaveBeenCalledExactlyOnceWith(
+          { action: "start", objective },
+          expect.any(KeyboardEvent),
+        ),
+      );
+      expect(getComposerTextarea(container).value).toBe(objective);
+      expect(container.querySelector(".agent-chat__goal-mode")).not.toBeNull();
+      expect(onSend).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(getComposerTextarea(container).readOnly).toBe(false));
+      keydownComposer(container, "Escape");
+      expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
+      expect(getComposerTextarea(container).value).toBe(objective);
+    },
+  );
+
+  it("keeps Tab completion textual and preserves explicit goal command submission", () => {
+    const onGoalSubmit = vi.fn(async () => true);
+    const onSend = vi.fn();
+    const { container } = createReactiveDraftHarness({ onGoalSubmit, onSend });
+    inputDraftAtEnd(container, "/goal");
+    keydownComposer(container, "Tab");
+    expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
+    inputDraftAtEnd(container, "/goal start Fix the tests");
+    keydownComposer(container, "Enter");
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(onGoalSubmit).not.toHaveBeenCalled();
+  });
+
+  it("keeps a new session draft intact when an earlier Goal edit finishes", async () => {
+    const pending = createDeferred<boolean>();
+    const onModeChange = vi.fn();
+    const { container, renderCurrent } = createReactiveDraftHarness({
+      sessionKey: "session-a",
+      goalDraftMode: {
+        action: "edit",
+        sessionId: "id-a",
+        goalId: "goal-a",
+        previousDraft: "Previous session draft",
+      },
+      onGoalDraftModeChange: onModeChange,
+      onGoalSubmit: () => pending.promise,
+    });
+    inputDraftAtEnd(container, "Updated objective");
+    keydownComposer(container, "Enter");
+    renderCurrent({ sessionKey: "session-b", goalDraftMode: null });
+    inputDraftAtEnd(container, "New session draft");
+    pending.resolve(true);
+    await pending.promise;
+    await vi.waitFor(() => expect(getComposerTextarea(container).readOnly).toBe(false));
+    expect(getComposerTextarea(container).value).toBe("New session draft");
+    expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
+    expect(onModeChange).not.toHaveBeenCalled();
   });
 
   it("executes an inline command separately and removes only its token from the draft", () => {
@@ -6175,12 +6460,14 @@ describe("chat model controls", () => {
           name: "GPT-5.6 Sol",
           provider: "openai",
           available: false,
+          unavailableReason: "missing-auth",
         },
         {
           id: "gpt-5.6-luna",
           name: "GPT-5.6 Luna",
           provider: "openai",
           available: false,
+          unavailableReason: "missing-auth",
         },
       ],
     });
@@ -6204,9 +6491,47 @@ describe("chat model controls", () => {
     );
     expect(
       container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
-    ).toContain("Authentication failed. Review the provider credential or sign-in, then retry.");
-    expect(container.textContent).toContain("Review connection");
+    ).toContain("No models available");
+    expect(container.textContent).toContain("Manage models");
     container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
+    expect(onModelSetup).toHaveBeenCalledOnce();
+  });
+
+  it("keeps each alias's auth action tied to its own availability reason", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.6-luna",
+      modelProvider: "openai",
+      models: [
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          available: false,
+          unavailableReason: "missing-auth",
+        },
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "codex",
+          available: false,
+          unavailableReason: "cooldown",
+        },
+      ],
+    });
+    const onModelSetup = vi.fn();
+    const container = renderModelControls(state, { onModelSetup });
+    const cold = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="openai/gpt-5.6-luna"]',
+    );
+    const recovering = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="codex/gpt-5.6-luna"]',
+    );
+    expect(cold?.dataset.chatModelSetup).toBe("true");
+    expect(recovering?.disabled).toBe(true);
+    expect(recovering?.textContent).not.toContain("Sign-in needed");
+    recovering?.click();
+    expect(onModelSetup).not.toHaveBeenCalled();
+    cold?.click();
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
 
@@ -7405,6 +7730,10 @@ describe("chat model controls", () => {
     expect(getThinkingSliderValues(container)).toEqual(["adaptive", "low", "medium", "high"]);
     expect(slider?.value).toBe("3");
     expect(slider?.getAttribute("aria-valuetext")).toBe("Default (High)");
+    const effortValue = container.querySelector<HTMLElement>(".chat-controls__effort-value");
+    expect(effortValue).toBeInstanceOf(HTMLElement);
+    expect(effortValue?.classList.contains("sr-only")).toBe(false);
+    expect(getThinkingReasoningValueLabel(container)).toBe("High");
     expect(container.querySelector(".chat-controls__fast-mode-title")?.textContent?.trim()).toBe(
       "Fast mode",
     );

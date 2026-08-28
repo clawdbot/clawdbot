@@ -92,6 +92,7 @@ JSON=0
 RUN_ONBOARD=0
 SET_NPM_PREFIX=0
 PNPM_CMD=()
+GIT_REF_KIND=""
 FRESH_GIT_MIN_FREE_KIB=$((6 * 1024 * 1024))
 
 print_usage() {
@@ -1024,57 +1025,93 @@ resolve_git_openclaw_ref() {
   esac
 }
 
+verify_git_rebase_recovery() {
+  local repo_dir="$1"
+  local expected_head="$2"
+  local expected_status="$3"
+  local git_dir
+
+  git_dir="$(git -C "$repo_dir" rev-parse --absolute-git-dir)" || return 1
+  if [[ -d "$git_dir/rebase-merge" || -d "$git_dir/rebase-apply" ]]; then
+    git -C "$repo_dir" rebase --abort >/dev/null 2>&1 || return 1
+  fi
+
+  [[ "$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)" == "$expected_head" ]] &&
+    [[ "$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)" == "$expected_status" ]] &&
+    [[ ! -d "$git_dir/rebase-merge" && ! -d "$git_dir/rebase-apply" ]]
+}
+
 checkout_git_openclaw_ref() {
   local repo_dir="$1"
   local ref="$2"
+  local original_head=""
+  local original_status=""
+  local namespaces=(heads tags)
+
+  GIT_REF_KIND=""
 
   if [[ -z "$ref" ]]; then
     return 0
   fi
 
   if [[ "$ref" == "main" ]]; then
-    git -C "$repo_dir" fetch --no-tags origin main
+    git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"
     git -C "$repo_dir" checkout main
     if [[ "$GIT_UPDATE" == "1" ]]; then
-      git -C "$repo_dir" pull --rebase --no-tags || true
+      if ! original_head="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)"; then
+        fail "Could not record repository state before updating from origin/main"
+      fi
+      if ! original_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
+        fail "Could not record repository state before updating from origin/main"
+      fi
+      if ! git -C "$repo_dir" rebase origin/main; then
+        if verify_git_rebase_recovery "$repo_dir" "$original_head" "$original_status"; then
+          fail "Could not update repository from origin/main; the checkout was restored to its pre-update state"
+        fi
+        fail "Could not update repository from origin/main; checkout recovery was not verified. Run git -C \"$repo_dir\" rebase --abort and inspect the checkout before retrying"
+      fi
     fi
+    GIT_REF_KIND="moving"
     return 0
   fi
 
-  if git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
-    git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
-    git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
-    if [[ "$GIT_UPDATE" == "1" ]]; then
-      git -C "$repo_dir" pull --rebase --no-tags || true
+  # Normalized release selectors prefer immutable tags. A same-name branch
+  # remains a fallback for operator-supplied v-prefixed branch names.
+  if [[ "$ref" == v[0-9]* ]]; then
+    namespaces=(tags heads)
+  fi
+
+  local namespace=""
+  local probe_status=0
+  for namespace in "${namespaces[@]}"; do
+    if git -C "$repo_dir" ls-remote --exit-code origin "refs/${namespace}/${ref}" >/dev/null 2>&1; then
+      if [[ "$namespace" == "heads" ]]; then
+        git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
+        git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
+        GIT_REF_KIND="moving"
+      else
+        git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"
+        git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null ||
+          fail "Requested git version is not a commit: ${ref}"
+        git -C "$repo_dir" checkout --detach "refs/tags/${ref}"
+        GIT_REF_KIND="immutable"
+      fi
+      return 0
+    else
+      probe_status=$?
     fi
-    return 0
-  fi
-
-  git -C "$repo_dir" fetch --tags origin
-
-  if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
-    git -C "$repo_dir" checkout --detach "$ref"
-    return 0
-  fi
-
-  if git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
-    git -C "$repo_dir" checkout --detach "$ref"
-    return 0
-  fi
+    (( probe_status == 2 )) || fail "Could not resolve requested git ref: ${ref}"
+  done
 
   fail "Requested git version not found: ${ref}"
 }
 
 git_install_lockfile_flag() {
-  local repo_dir="$1"
-  local ref="$2"
-
-  if [[ "$ref" == "main" ]] || git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
+  if [[ "$1" == "moving" ]]; then
     echo "--no-frozen-lockfile"
-    return 0
+  else
+    echo "--frozen-lockfile"
   fi
-
-  echo "--frozen-lockfile"
 }
 
 repo_pnpm_spec() {
@@ -1646,6 +1683,11 @@ install_openclaw_from_git() {
   else
     log "Repo is dirty; skipping git checkout/update"
     emit_json step name git-update status warn reason dirty
+    if git -C "$repo_dir" symbolic-ref --quiet HEAD >/dev/null; then
+      GIT_REF_KIND="moving"
+    else
+      GIT_REF_KIND="immutable"
+    fi
   fi
 
   if [[ -n "${REQUIRED_COMPATIBLE_VERSION:-}" ]]; then
@@ -1662,7 +1704,7 @@ install_openclaw_from_git() {
   activate_repo_pnpm_version "$repo_dir"
 
   local install_lockfile_flag
-  install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
+  install_lockfile_flag="$(git_install_lockfile_flag "$GIT_REF_KIND")"
   local -a pnpm_prefer_offline_args=()
   if should_prefer_offline_pnpm_install "$repo_dir"; then
     pnpm_prefer_offline_args=(--prefer-offline)
@@ -1730,7 +1772,7 @@ try {
 }
 
 refresh_gateway_service_if_loaded() {
-  local claw="${PREFIX}/bin/openclaw"
+  local claw="${PREFIX}/bin/openclaw" refresh_output
   if [[ ! -x "$claw" ]]; then
     return 0
   fi
@@ -1743,7 +1785,13 @@ refresh_gateway_service_if_loaded() {
   emit_json step name gateway-service status start
   log "Refreshing loaded gateway service..."
 
-  if ! "$claw" gateway install --force >/dev/null 2>&1; then
+  if ! refresh_output="$({ set +x; "$claw" gateway install --force; } 2>&1 | sed -n -e 's/.*SERVICE_DEFINITION_SEALED:.*/ask the privileged deployment owner to manually repair it/p' -e 's/.*SERVICE_DEFINITION_UNKNOWN:.*/inspect service-definition access and manually repair it/p')"; then
+    if [[ -n "$refresh_output" ]]; then
+      emit_json step name gateway-service status warn reason definition-mutation-denied
+      printf '%s\n' "Code installed; gateway service definition left unchanged; ${refresh_output}." >&2
+      printf '%s\n' "Run openclaw gateway status --deep, verify the installation owner, and restart it manually if needed." >&2
+      return 0
+    fi
     emit_json step name gateway-service status warn reason install-failed
     log "Warning: gateway service refresh failed; continuing."
     return 0

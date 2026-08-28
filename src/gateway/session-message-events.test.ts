@@ -1029,6 +1029,10 @@ describe("session.message websocket events", () => {
         agentId: "main",
         agentSessionKey: "cron:job-webchat",
         sourceSessionKey: sessionKey,
+        sourceSessionGeneration: {
+          sessionId,
+          lifecycleRevision: "current-cron-revision",
+        },
         runSessionKey: "cron:job-webchat:run:3000",
         sessionId: "detached-cron-session",
         lifecycleRevision: "detached-cron-revision",
@@ -1043,7 +1047,7 @@ describe("session.message websocket events", () => {
           error: new Error("WebChat uses canonical session events"),
         },
         deliveryRequested: true,
-        skipHeartbeatDelivery: false,
+        undeliveredRunStatus: "ok",
         spawnOnlyHandoff: false,
         sourceDeliveryOutcome: {
           visibleDeliveries: [],

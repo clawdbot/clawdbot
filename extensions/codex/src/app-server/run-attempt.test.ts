@@ -970,35 +970,6 @@ function fastProgressEventSummaries(onAgentEvent: ReturnType<typeof vi.fn>) {
     .map((event) => event.data?.summary);
 }
 
-type ElicitationRequestHandler = (request: {
-  id: string;
-  method: string;
-  params?: unknown;
-}) => Promise<unknown>;
-
-function installElicitationClient(request: ReturnType<typeof vi.fn>) {
-  const state: {
-    handleRequest?: ElicitationRequestHandler;
-    notify: (notification: CodexServerNotification) => Promise<void>;
-  } = { notify: async () => undefined };
-  setCodexAppServerClientFactoryForTest(
-    async () =>
-      ({
-        ...mockClientRuntimeMethods(),
-        request,
-        addNotificationHandler: (handler: typeof state.notify) => {
-          state.notify = handler;
-          return () => undefined;
-        },
-        addRequestHandler: (handler: ElicitationRequestHandler) => {
-          state.handleRequest = handler;
-          return () => undefined;
-        },
-      }) as never,
-  );
-  return state;
-}
-
 async function completeStartedRun(
   run: Promise<unknown>,
   waitForMethod: ReturnType<typeof createStartedThreadHarness>["waitForMethod"],
@@ -1064,6 +1035,31 @@ beforeEach(() => {
 });
 
 describe("runCodexAppServerAttempt", () => {
+  it("drains executable tool cleanup once after a completed attempt", async () => {
+    const cleanup = vi.fn(async (_reason: string) => undefined);
+    const cleanupOwners: boolean[] = [];
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      cleanupOwners.push(options?.registerRunCleanup !== undefined);
+      options?.registerRunCleanup?.(cleanup);
+      return [createRuntimeDynamicTool("message")];
+    });
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(cleanupOwners).toEqual([true, false]);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledWith("completion");
+  });
+
   it("executes and reports the same materialized SecretRef credential", async () => {
     const { sessionFile, workspaceDir, agentDir } = createRunPaths();
     const authProfileId = "openai:work";
@@ -1761,6 +1757,11 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace-tool-events");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, "tool-event-sessions.json"),
+      "tool-event-session",
+    );
     const onRunAgentEvent = vi.fn();
     params.timeoutMs = 60_000;
     params.onAgentEvent = onRunAgentEvent;
@@ -1787,6 +1788,9 @@ describe("runCodexAppServerAttempt", () => {
       contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: python" }],
     });
     expect(replayedResponse).toEqual(firstResponse);
+    expect((await readTranscriptMessagesByIdentity(params)).map((message) => message.role)).toEqual(
+      ["user", "assistant", "toolResult"],
+    );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     expect(onRunAgentEvent).toHaveBeenCalledWith({
@@ -1864,44 +1868,192 @@ describe("runCodexAppServerAttempt", () => {
     }
   });
 
-  it("mirrors the Codex prompt into the transcript when the turn starts", async () => {
-    const sessionFile = path.join(tempDir, "session-early-prompt.jsonl");
-    const storePath = path.join(tempDir, "sessions-early-prompt.json");
-    const workspaceDir = path.join(tempDir, "workspace-early-prompt");
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    await attachSqliteSessionTarget(params, storePath, "session-early-prompt");
-    params.prompt = "external channel prompt";
-    const onUserMessagePersisted = vi.fn();
-    params.onUserMessagePersisted = onUserMessagePersisted;
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await vi.waitFor(async () => {
-      expect(await readTranscriptMessagesByIdentity(params)).toContainEqual(
-        expect.objectContaining({
-          role: "user",
-          content: "external channel prompt",
-          idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+  it.each(["completed", "interrupted", "disconnected"] as const)(
+    "persists completed Codex work before a %s turn ends",
+    async (outcome) => {
+      const sessionFile = path.join(tempDir, "session-early-prompt.jsonl");
+      const storePath = path.join(tempDir, "sessions-early-prompt.json");
+      const workspaceDir = path.join(tempDir, "workspace-early-prompt");
+      const harness = createStartedThreadHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      await attachSqliteSessionTarget(params, storePath, "session-early-prompt");
+      params.prompt = "external channel prompt";
+      const onUserMessagePersisted = vi.fn();
+      params.onUserMessagePersisted = onUserMessagePersisted;
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      await vi.waitFor(async () => {
+        expect(await readTranscriptMessagesByIdentity(params)).toContainEqual(
+          expect.objectContaining({
+            role: "user",
+            content: "external channel prompt",
+            idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+          }),
+        );
+      });
+      await vi.waitFor(() => {
+        expect(onUserMessagePersisted).toHaveBeenCalledWith(
+          expect.objectContaining({
+            role: "user",
+            content: "external channel prompt",
+            idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+          }),
+        );
+      });
+      const messagesBeforeCompletion = await readTranscriptMessagesByIdentity(params);
+      expect(messagesBeforeCompletion.some((message) => message.role === "assistant")).toBe(false);
+      const commentary = {
+        type: "agentMessage",
+        id: "progress-1",
+        phase: "commentary",
+        text: "I found the owning lifecycle.",
+      };
+      await harness.notify(itemNotification("item/started", commentary));
+      await harness.notify({
+        method: "item/agentMessage/delta",
+        params: { threadId: "thread-1", turnId: "turn-1", itemId: commentary.id, delta: "I found" },
+      });
+      const command = {
+        type: "commandExecution",
+        id: "command-1",
+        command: "pwd",
+        cwd: workspaceDir,
+        status: "inProgress",
+      };
+      await harness.notify(itemNotification("item/started", command));
+      expect(await readTranscriptMessagesByIdentity(params)).toEqual(messagesBeforeCompletion);
+      await harness.notify(itemNotification("item/completed", commentary));
+      await harness.notify(
+        itemNotification("item/completed", {
+          ...command,
+          status: "completed",
+          aggregatedOutput: workspaceDir,
+          exitCode: 0,
         }),
       );
-    });
-    await vi.waitFor(() => {
-      expect(onUserMessagePersisted).toHaveBeenCalledWith(
-        expect.objectContaining({
-          role: "user",
-          content: "external channel prompt",
-          idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+      const workBeforeCompletion = await readTranscriptMessagesByIdentity(params);
+      expect(workBeforeCompletion.map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        "assistant",
+        "toolResult",
+      ]);
+      expect(JSON.stringify(workBeforeCompletion)).toContain(commentary.text);
+      expect(JSON.stringify(workBeforeCompletion)).toContain(workspaceDir);
+      if (outcome === "disconnected") {
+        harness.close(new Error("test transport disconnected"));
+      } else {
+        await harness.notify(turnCompleted({ id: "turn-1", status: outcome }));
+      }
+      await run;
+      const messagesAfterCompletion = await readTranscriptMessagesByIdentity(params);
+      expect(messagesAfterCompletion.filter((message) => message.role === "user")).toHaveLength(1);
+      for (const message of workBeforeCompletion) {
+        expect(
+          messagesAfterCompletion.filter(
+            (candidate) => candidate.idempotencyKey === message.idempotencyKey,
+          ),
+        ).toEqual([message]);
+      }
+      expect(onUserMessagePersisted).toHaveBeenCalledTimes(1);
+    },
+  );
+  it.each([true, false])(
+    "checkpoints raw patch output and network provenance with commentary persistence %s",
+    async (persistCommentary) => {
+      const params = createParams(
+        path.join(tempDir, "checkpoint.jsonl"),
+        path.join(tempDir, "workspace"),
+      );
+      await attachSqliteSessionTarget(
+        params,
+        path.join(tempDir, "checkpoint-sessions.json"),
+        "checkpoint-session",
+      );
+      params.config = {
+        ...params.config,
+        ui: { prefs: { chatPersistCommentary: persistCommentary } },
+      };
+      const harness = createStartedThreadHarness();
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      const patchId = "patch-1";
+      await harness.notify(
+        rawItemCompleted({
+          type: "custom_tool_call",
+          call_id: patchId,
+          name: "apply_patch",
+          input: "*** Begin Patch\n*** Add File: example.txt\n+saved\n*** End Patch\n",
         }),
       );
-    });
-    const messagesBeforeCompletion = await readTranscriptMessagesByIdentity(params);
-    expect(messagesBeforeCompletion.some((message) => message.role === "assistant")).toBe(false);
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-    const messagesAfterCompletion = await readTranscriptMessagesByIdentity(params);
-    expect(messagesAfterCompletion.filter((message) => message.role === "user")).toHaveLength(1);
-    expect(onUserMessagePersisted).toHaveBeenCalledTimes(1);
-  });
+      await harness.notify(
+        itemNotification("item/completed", {
+          type: "fileChange",
+          id: patchId,
+          status: "completed",
+          changes: [{ path: "example.txt", kind: { type: "add" } }],
+        }),
+      );
+      const beforeRawOutput = await readTranscriptMessagesByIdentity(params);
+      expect(beforeRawOutput.map((message) => message.role)).toEqual(["user", "assistant"]);
+      await harness.notify(
+        itemNotification("item/completed", {
+          type: "webSearch",
+          id: "search-1",
+          status: "completed",
+          query: "saved file",
+        }),
+      );
+      expect(await readTranscriptMessagesByIdentity(params)).toEqual(beforeRawOutput);
+      await harness.notify(
+        rawItemCompleted({
+          type: "custom_tool_call_output",
+          call_id: patchId,
+          output: "Success. Updated the following files:\nA example.txt",
+        }),
+      );
+      await harness.notify(
+        itemNotification("item/completed", {
+          type: "agentMessage",
+          id: "network-commentary",
+          phase: "commentary",
+          text: "The search confirms the result.",
+        }),
+      );
+      const checkpoint = await readTranscriptMessagesByIdentity(params);
+      expect(checkpoint.map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        "toolResult",
+        "assistant",
+        "toolResult",
+        ...(persistCommentary ? ["assistant"] : []),
+      ]);
+      expect(JSON.stringify(checkpoint[2])).toContain("Success. Updated the following files:");
+      expect(checkpoint[4]).toMatchObject({ __openclaw: { resultContentSource: "network" } });
+      if (persistCommentary) {
+        expect(checkpoint[5]).toMatchObject({ __openclaw: { turnTainted: true } });
+      }
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      const result = await run;
+      const finalMessages = await readTranscriptMessagesByIdentity(params);
+      for (const message of checkpoint) {
+        expect(
+          finalMessages.filter((candidate) => candidate.idempotencyKey === message.idempotencyKey),
+        ).toEqual([message]);
+      }
+      if (persistCommentary) {
+        expect(
+          result.messagesSnapshot.find(
+            (message) => readMirrorIdentity(message) === "turn-1:commentary:network-commentary",
+          ),
+        ).toMatchObject({
+          __openclaw: { turnTainted: true },
+        });
+      }
+    },
+  );
+
   it("does not mirror the Codex prompt early when user message persistence is suppressed", async () => {
     const sessionFile = path.join(tempDir, "session-suppressed-early-prompt.jsonl");
     const storePath = path.join(tempDir, "sessions-suppressed-early-prompt.json");
@@ -5473,7 +5625,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       return {};
     });
-    const elicitation = installElicitationClient(request);
+    const elicitation = createAppServerHarness(request);
     const params = createRunParams();
     await attachSqliteSessionTarget(
       params,
@@ -5489,12 +5641,9 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
     });
-    await vi.waitFor(() => expect(elicitation.handleRequest).toBeTypeOf("function"));
     // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await vi.waitFor(() =>
-      expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-    );
-    const result = await elicitation.handleRequest?.({
+    await elicitation.waitForMethod("turn/start");
+    const result = await elicitation.handleServerRequest({
       id: "request-elicitation-1",
       method: "mcpServer/elicitation/request",
       params: {
@@ -5555,16 +5704,13 @@ describe("runCodexAppServerAttempt", () => {
         response: { action: "decline", content: null, _meta: null },
       });
     const request = createGoogleCalendarRequest();
-    const elicitation = installElicitationClient(request);
+    const elicitation = createAppServerHarness(request);
     const params = createParams(sessionFile, workspaceDir);
     params.agentDir = agentDir;
     const run = runCodexAppServerAttempt(params, { pluginConfig });
-    await vi.waitFor(() => expect(elicitation.handleRequest).toBeTypeOf("function"));
     // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await vi.waitFor(() =>
-      expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-    );
-    const result = await elicitation.handleRequest?.({
+    await elicitation.waitForMethod("turn/start");
+    const result = await elicitation.handleServerRequest({
       id: "request-elicitation-1",
       method: "mcpServer/elicitation/request",
       params: {

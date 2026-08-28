@@ -4,10 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import {
   loadInstalledPluginIndex,
   resolveInstalledPluginIndexPolicyHash,
@@ -244,6 +244,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       configFingerprint: "",
       workspaceDir,
       index,
+      registryIndex: index,
       registryDiagnostics: [],
       manifestRegistry: { plugins: [], diagnostics: [] },
       plugins: [],
@@ -332,6 +333,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
         configFingerprint: "",
         workspaceDir,
         index,
+        registryIndex: index,
         registrySource: "derived",
         registryDiagnostics: [
           {
@@ -415,6 +417,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
         configFingerprint: "",
         workspaceDir,
         index: currentIndex,
+        registryIndex: currentIndex,
         registryDiagnostics: [],
         manifestRegistry: { plugins: [], diagnostics: [] },
         plugins: [],

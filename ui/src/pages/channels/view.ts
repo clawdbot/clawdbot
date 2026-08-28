@@ -28,11 +28,26 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelDetail } from "./view.detail.ts";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
-import { channelEnabled, resolveChannelDisplayState } from "./view.shared.ts";
+import {
+  channelEnabled,
+  renderChannelRefreshAction,
+  resolveChannelDisplayState,
+} from "./view.shared.ts";
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./view.types.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
 type ChannelCardState = "running" | "configured" | "attention";
+
+const RECOMMENDED_CHANNEL_ORDER: ChannelKey[] = [
+  "whatsapp",
+  "telegram",
+  "discord",
+  "googlechat",
+  "slack",
+  "signal",
+  "imessage",
+  "nostr",
+];
 
 export function renderChannels(props: ChannelsProps) {
   const channelOrder = resolveChannelOrder(props.snapshot);
@@ -67,23 +82,11 @@ export function renderChannels(props: ChannelsProps) {
         {
           title: t("channels.hub.connectedTitle"),
           ...(connected.length > 0 ? { count: connected.length } : {}),
-          actions: html`
-            <span class="settings-row__value">
-              ${props.lastSuccessAt
-                ? t("channels.hub.updatedAgo", {
-                    ago: formatRelativeTimestamp(props.lastSuccessAt),
-                  })
-                : t("common.na")}
-            </span>
-            <button
-              type="button"
-              class="btn btn--sm"
-              ?disabled=${props.loading}
-              @click=${() => props.onRefresh(true)}
-            >
-              ${t("common.refresh")}
-            </button>
-          `,
+          actions: renderChannelRefreshAction({
+            updatedAt: props.lastSuccessAt,
+            disabled: props.loading,
+            onRefresh: () => props.onRefresh(true),
+          }),
         },
         connected.length === 0
           ? html`
@@ -159,13 +162,10 @@ function buildChannelData(props: ChannelsProps): ChannelsChannelData {
 }
 
 function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
-  if (snapshot?.channelMeta?.length) {
-    return snapshot.channelMeta.map((entry) => entry.id);
-  }
-  if (snapshot?.channelOrder?.length) {
-    return snapshot.channelOrder;
-  }
-  return ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage", "nostr"];
+  const statusOrder = snapshot?.channelMeta?.length
+    ? snapshot.channelMeta.map((entry) => entry.id)
+    : (snapshot?.channelOrder ?? []);
+  return [...new Set([...statusOrder, ...RECOMMENDED_CHANNEL_ORDER])];
 }
 
 function resolveChannelLabel(snapshot: ChannelsStatusSnapshot | null, key: string): string {

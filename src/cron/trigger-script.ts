@@ -127,10 +127,18 @@ async function prepareTriggerRuntime(
   });
   const workspaceDirRaw = resolveAgentWorkspaceDir(config, agentId);
   const agentDir = resolveAgentDir(config, agentId);
+  const { resolveAcpAgentWorkspaceProvisioningForTurn } =
+    await import("../agents/acp-workspace-provisioning.js");
+  const workspaceProvisioning = await resolveAcpAgentWorkspaceProvisioningForTurn({
+    cfg: config,
+    agentId,
+    workspaceDir: workspaceDirRaw,
+  });
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentDefaults.skipBootstrap,
     skipOptionalBootstrapFiles: agentDefaults.skipOptionalBootstrapFiles,
+    provisioning: workspaceProvisioning,
   });
   params.signal?.throwIfAborted();
   const workspaceDir = workspace.dir;

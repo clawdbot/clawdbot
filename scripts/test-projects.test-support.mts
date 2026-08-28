@@ -1183,12 +1183,13 @@ function resolveExplicitTestPrefixTargets(targetArg: string, cwd: string) {
   }
   const directory = path.posix.dirname(relative);
   const prefix = `${relative}.`;
+  // Bound filesystem probes to matching tests, even with a cached repo-wide inventory.
   const targets = listExplicitTestTargetFilesForCwd(cwd).filter(
     (file) =>
-      fs.existsSync(path.join(cwd, file)) &&
       path.posix.dirname(file) === directory &&
       file.startsWith(prefix) &&
-      isTestFileTarget(file),
+      isTestFileTarget(file) &&
+      fs.existsSync(path.join(cwd, file)),
   );
   return targets.length > 0 ? targets.toSorted((left, right) => left.localeCompare(right)) : null;
 }
@@ -2255,6 +2256,15 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
 
 const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^scripts\/pr$/u, ["pr-merge", "pr-operation-lock", "pr-wrappers"]],
+  [
+    /^scripts\/pr-lib\/crabbox-gate-contract\.mjs$/u,
+    ["pr-crabbox-gate-publisher", "pr-crabbox-merge-bypass"],
+  ],
+  [
+    /^scripts\/pr-lib\/crabbox-gate-plan\.mts$/u,
+    ["pr-crabbox-gate-plan", "pr-crabbox-gate-publisher", "pr-prepare-gates"],
+  ],
+  [/^scripts\/pr-lib\/crabbox-merge-bypass\.sh$/u, ["pr-crabbox-merge-bypass", "pr-merge"]],
   [/^scripts\/lib\/windows-taskkill\.mjs$/u, ["managed-child-process", "run-with-env"]],
   [
     /^scripts\/lib\/config-boundary-guard\.mts$/u,
@@ -2293,6 +2303,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/dockerfile.test.ts",
       "full-release-validation-state",
       "full-release-validation-at-sha",
+      "full-release-candidate-reuse",
       "find-reusable-release-validation",
       "openclaw-npm-extended-stable-full-validation-workflow",
       "release-no-push-workflow",
@@ -2573,7 +2584,14 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ],
   ],
   [/^scripts\/lib\/npm-pack-budget\.mts$/u, [releaseCheck, installDocker]],
-  [/^scripts\/lib\/actions-artifact-archive\.mjs$/u, ["plugin-publication-artifact"]],
+  [
+    /^scripts\/lib\/actions-artifact-archive\.mjs$/u,
+    ["full-release-candidate-reuse", "plugin-publication-artifact"],
+  ],
+  [
+    /^scripts\/(?:lib\/)?full-release-candidate-reuse\.(?:mjs|d\.mts)$/u,
+    ["full-release-candidate-reuse"],
+  ],
   [
     /^scripts\/lib\/static-extension-assets\.(?:mjs|mts)$/u,
     ["bundled-plugin-assets", "runtime-postbuild", runNode, "plugin-npm-runtime-build-args"],

@@ -1,6 +1,5 @@
 import path from "node:path";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   listAgentEntries,
@@ -33,11 +32,7 @@ import {
 } from "./legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import {
-  isModelPolicyCompatSelector,
-  isValidExactModelPolicyRef,
-  parseModelPolicyWildcardRef,
-} from "./model-policy-ref.js";
+import { createModelPolicyRefValidator } from "./model-policy-ref.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { collectRawBundledChannelConfigIssues } from "./validation-channel-rules.js";
 import {
@@ -258,31 +253,13 @@ function validateGatewayTailscaleAuth(config: OpenClawConfig): ConfigValidationI
 function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidationIssue[] {
   const issues: ConfigValidationIssue[] = [];
   const defaultModels = config.agents?.defaults?.models;
-  const collectAliases = (...modelMaps: Array<typeof defaultModels | undefined>): Set<string> => {
-    const aliases = new Set<string>();
-    for (const models of modelMaps) {
-      for (const entry of Object.values(models ?? {})) {
-        const alias = normalizeLowercaseStringOrEmpty(entry?.alias);
-        if (alias) {
-          aliases.add(alias);
-        }
-      }
-    }
-    return aliases;
-  };
   const validateRefs = (
     refs: readonly string[] | undefined,
     configPath: string,
-    aliases: Set<string>,
+    isValidRef: (raw: string) => boolean,
   ) => {
     for (const [index, raw] of (refs ?? []).entries()) {
-      const trimmed = raw.trim();
-      if (
-        aliases.has(normalizeLowercaseStringOrEmpty(trimmed)) ||
-        isModelPolicyCompatSelector(trimmed) ||
-        isValidExactModelPolicyRef(trimmed) ||
-        parseModelPolicyWildcardRef(trimmed)
-      ) {
+      if (isValidRef(raw)) {
         continue;
       }
       issues.push({
@@ -294,11 +271,10 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
     }
   };
 
-  const defaultAliases = collectAliases(defaultModels);
   validateRefs(
     config.agents?.defaults?.modelPolicy?.allow,
     "agents.defaults.modelPolicy.allow",
-    defaultAliases,
+    createModelPolicyRefValidator(defaultModels),
   );
   for (const { entry: agent, source } of listAgentEntriesWithSource(config)) {
     const pathPrefix =
@@ -306,7 +282,7 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
     validateRefs(
       agent.modelPolicy?.allow,
       `${pathPrefix}.modelPolicy.allow`,
-      collectAliases(defaultModels, agent.models),
+      createModelPolicyRefValidator(defaultModels, agent.models),
     );
   }
   return issues;

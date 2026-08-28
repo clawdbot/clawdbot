@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { ProviderRouteOverridePresence } from "../../../plugin-sdk/provider-model-types.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -524,7 +525,10 @@ async function surfaceIncompleteTurn(
         livenessState,
         error: {
           kind: "incomplete_turn",
-          message: "Agent couldn't generate a response.",
+          message:
+            input.attempt.terminal.kind === "failed"
+              ? formatErrorMessage(input.attempt.terminal.error)
+              : "Agent couldn't generate a response.",
           fallbackSafe: input.incompleteTurnFallbackSafe,
           terminalPresentation: input.terminalToolPresentation !== undefined,
         },

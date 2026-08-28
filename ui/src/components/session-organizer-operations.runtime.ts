@@ -162,9 +162,9 @@ export async function archiveSessionWithUndo(
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
 ) {
-  scope.sessions.setArchiveVisibility(session.key, "pending");
+  scope.sessions.setArchivePending(session.key, true);
   const result = await patchSession(host, session, { archived: true }, scope);
-  scope.sessions.setArchiveVisibility(session.key, result === "completed" ? "archived" : undefined);
+  scope.sessions.setArchivePending(session.key, false);
   if (result !== "completed" || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }

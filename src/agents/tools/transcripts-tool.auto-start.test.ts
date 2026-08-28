@@ -6,11 +6,12 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { openClawStateDatabaseCache } from "../../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
-  getOpenClawStateDatabaseIfOpen,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
@@ -52,6 +53,7 @@ describe("transcripts auto-start stop reporting", () => {
   ])("$name preserves state and finishes siblings", async ({ blocked, outcome, manual }) => {
     const stateDir = await fs.realpath(tempDirs.make("openclaw-transcripts-auto-stop-"));
     const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = path.resolve(resolveOpenClawStateSqlitePath(options.env));
     const exportRoot = path.join(stateDir, "transcripts");
     const store = new TranscriptsStore(exportRoot, options);
     const requests = new Map<string, TranscriptStartRequest>();
@@ -150,7 +152,8 @@ describe("transcripts auto-start stop reporting", () => {
         expect(stop).toHaveBeenCalledTimes(2);
         expect(logger.warn.mock.calls.map(([message]) => message)).toEqual(warnings);
 
-        const database = getOpenClawStateDatabaseIfOpen(options)!;
+        const database =
+          openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(databasePath)!;
         expect(database.db.isOpen).toBe(true);
         expect(closeOpenClawStateDatabaseByPath(database.path)).toBe(true);
         expect(database.db.isOpen).toBe(false);
@@ -178,7 +181,9 @@ describe("transcripts auto-start stop reporting", () => {
             ).toContain(capturedText);
           }
         }
-        expect(getOpenClawStateDatabaseIfOpen(options)).not.toBe(database);
+        expect(
+          openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(databasePath),
+        ).not.toBe(database);
         await expect(execute("status")).resolves.toMatchObject({
           details: {
             active:

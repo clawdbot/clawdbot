@@ -9,6 +9,7 @@ import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-c
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionRow, SessionRunStatus } from "../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -273,33 +274,10 @@ export interface QuotaSuspension {
   state: LaneExecutionState; // State machine check for hot-path
 }
 
-export type SessionGoalStatus =
-  | "active"
-  | "paused"
-  | "blocked"
-  | "usage_limited"
-  | "budget_limited"
-  | "complete";
-
-export type SessionGoal = {
-  schemaVersion: 1;
-  id: string;
-  objective: string;
-  status: SessionGoalStatus;
-  createdAt: number;
-  updatedAt: number;
-  tokenStart: number;
-  tokenStartFresh?: boolean;
-  tokensUsed: number;
-  tokenBudget?: number;
-  continuationTurns: number;
-  lastStatusNote?: string;
-  pausedAt?: number;
-  blockedAt?: number;
-  completedAt?: number;
-  usageLimitedAt?: number;
-  budgetLimitedAt?: number;
-};
+export type {
+  SessionGoal,
+  SessionGoalStatus,
+} from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 
 export type RestartRecoveryRun = {
   runId: string;
@@ -396,9 +374,9 @@ type SessionEntryCore = SessionRestartRecoveryState &
     sandbox?: "required";
     /** Mutable responsibility, projected from SQLite; absent means createdActor owns the session. */
     owner?: SessionOwnerAssignment;
-    /** Earliest external prompt actors, projected from the participant table. */
+    /** Retained identities, projected from the participant table before display truncation. */
     participants?: SessionParticipant[];
-    /** Total external prompt actors after excluding the effective owner. */
+    /** Raw retained identity count, including the owner, for admission-bound coverage. */
     participantCount?: number;
     /** Node creation time (ms); unlike sessionStartedAt, survives sessionId rotations. */
     createdAt?: number;
@@ -633,6 +611,13 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   activeWriterRunId?: string;
   /** Canonical remote repository awaiting preparation by this exact session generation. */
   pendingProjectGitUrl?: string;
+  /** Authorized worktree intent awaiting preparation by an admitted turn. */
+  pendingWorktree?: {
+    workspace?: string;
+    name?: string;
+    baseRef?: string;
+    titleSource: string;
+  };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   mainRestartRecovery?: MainRestartRecoveryState;

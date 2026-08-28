@@ -2538,6 +2538,38 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
     });
   });
 
+  it("does not read a canonical session database as JSON during route preview or repair", async () => {
+    const state = await makeTestState();
+    const storePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+    const sessionKey = "agent:main:main";
+    await replaceSessionEntry(
+      { storePath, sessionKey, env: state.env },
+      { sessionId: "canonical-route-session", updatedAt: Date.now() },
+    );
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+    try {
+      for (const shouldRepair of [false, true]) {
+        const result = await maybeRepairCodexSessionRoutes({
+          cfg: { session: { store: storePath } },
+          env: state.env,
+          shouldRepair,
+        });
+        expect(result).toMatchObject({
+          scannedStores: 1,
+          repairedSessions: 0,
+          warnings: [],
+          changes: [],
+        });
+      }
+      expect(readFileSyncSpy.mock.calls.map(([file]) => file)).not.toContain(storePath);
+    } finally {
+      readFileSyncSpy.mockRestore();
+    }
+    expect(loadSessionEntry({ storePath, sessionKey, env: state.env })?.sessionId).toBe(
+      "canonical-route-session",
+    );
+  });
+
   it("previews noncanonical SQLite sessions without mutating or requiring canonical migration", async () => {
     const state = await makeTestState();
     const storePath = path.join(state.sessionsDir(), "sessions.json");

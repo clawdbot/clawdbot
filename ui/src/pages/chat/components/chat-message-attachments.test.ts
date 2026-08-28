@@ -795,6 +795,52 @@ describe("attachment sidebar source ownership", () => {
     container.remove();
   });
 
+  it("renders named attachment failures with separable status and reason text", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment_error",
+            attachment: {
+              code: "unsupported-format",
+              kind: "document",
+              label: "settings.toml",
+            },
+          },
+        ],
+        {},
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-assistant-attachment-card__title")?.textContent).toBe(
+      "settings.toml",
+    );
+    expect(container.querySelectorAll(".chat-assistant-attachment-card")).toHaveLength(1);
+    expect(container.querySelector(".chat-assistant-attachment-card--definitive")).not.toBeNull();
+    expect(
+      container.querySelector(".chat-assistant-attachment-card__status-badge")?.textContent,
+    ).toBe("Not sent");
+    expect(
+      container.querySelector(".chat-assistant-attachment-card__status-separator")?.textContent,
+    ).toBe("·");
+    expect(
+      container
+        .querySelector(".chat-assistant-attachment-card__status-separator")
+        ?.getAttribute("aria-hidden"),
+    ).toBe("true");
+    expect(
+      container.querySelector(".chat-assistant-attachment-card__status-reason")?.textContent,
+    ).toBe("Rejected by the local attachment allowlist. Send a supported file type.");
+    expect(
+      container.querySelector(
+        ".chat-assistant-attachment-card__download, .chat-assistant-attachment-card__expand, .chat-assistant-attachment-card__retry",
+      ),
+    ).toBeNull();
+    container.remove();
+  });
+
   it("keeps normalized base64 audio compact with download and Files actions", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenSidebar = vi.fn();

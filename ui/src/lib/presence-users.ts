@@ -80,14 +80,6 @@ function projectPresenceViewers(
   };
 }
 
-export function projectPresenceEntries(
-  entries: readonly PresenceEntry[],
-  authenticatedSelfUserId?: string,
-  selfInstanceId?: string,
-) {
-  return projectPresenceViewers(entries, authenticatedSelfUserId, selfInstanceId);
-}
-
 let cachedPresencePayload: unknown;
 let cachedAuthenticatedSelfUserId: string | undefined;
 let cachedSelfInstanceId: string | undefined;

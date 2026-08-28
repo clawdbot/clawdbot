@@ -36,11 +36,7 @@ import {
   loadReplySessionInitializationSnapshot,
 } from "../../config/sessions/session-accessor.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
-import {
-  buildSessionCreationStamp,
-  resolveProfileParticipantIdFromSessionCreation,
-  type SessionCreatedActor,
-} from "../../config/sessions/session-entry-provenance.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import type { SessionResetBoundaryRequest } from "../../config/sessions/session-reset-boundary-event.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -73,6 +69,7 @@ import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gat
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
+  isSubagentSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
 import { resolveAgentHarnessSessionContextError } from "../../sessions/agent-harness-session-key.js";
@@ -87,7 +84,8 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
+import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
+import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import {
   recordSessionCreated,
   classifySessionStateActor,
@@ -211,6 +209,7 @@ type InitSessionStateParams = {
   ctx: FinalizedRuntimeMsgContext;
   expectedExistingSessionId?: string;
   pinExpectedExistingSession?: boolean;
+  newlyCreatedSessionId?: string;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   signal?: AbortSignal;
@@ -390,8 +389,14 @@ function selectSessionModelOverride(
   };
 }
 
-function resolveReplySessionRolloverState(entry: SessionEntry): Partial<InternalSessionEntry> {
+function resolveReplySessionRolloverState(
+  entry: SessionEntry,
+  sessionKey: string,
+): Partial<InternalSessionEntry> {
   const preservedSelection = resolveResetPreservedSelection({ entry });
+  // Stable ACP rows predate durable creation stamps. Preserve their restrictions
+  // fail-closed so rollover cannot turn an existing child into a root session.
+  const preserveSpawnLineage = isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey);
   return {
     thinkingLevel: entry.thinkingLevel,
     verboseLevel: entry.verboseLevel,
@@ -408,9 +413,16 @@ function resolveReplySessionRolloverState(entry: SessionEntry): Partial<Internal
     // Notice debt survives rollover: erasing it here would recreate the
     // silent ambiguous-loss outcome the debt exists to prevent.
     pendingDeliveryNotice: entry.pendingDeliveryNotice,
-    spawnedBy: entry.spawnedBy,
-    spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
-    spawnedCwd: entry.spawnedCwd,
+    ...(preserveSpawnLineage
+      ? {
+          spawnedBy: entry.spawnedBy,
+          spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
+          spawnedCwd: entry.spawnedCwd,
+          spawnDepth: entry.spawnDepth,
+          subagentRole: entry.subagentRole,
+          subagentControlScope: entry.subagentControlScope,
+        }
+      : {}),
     parentSessionKey: entry.parentSessionKey,
     parentSessionId: entry.parentSessionId,
     forkedFromParent: entry.forkedFromParent,
@@ -419,13 +431,11 @@ function resolveReplySessionRolloverState(entry: SessionEntry): Partial<Internal
     createdActor: entry.createdActor,
     createdAt: entry.createdAt,
     ...(entry.sandbox === "required" ? { sandbox: "required" } : {}),
-    spawnDepth: entry.spawnDepth,
-    subagentRole: entry.subagentRole,
-    subagentControlScope: entry.subagentControlScope,
   };
 }
 
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
+  prepareChannelParticipantObservation(params.ctx);
   return await runWithSessionInitConflictRetry(
     async () => await initSessionStateAttempt(params, false),
     { signal: params.signal },
@@ -806,9 +816,7 @@ async function initSessionStateAttemptLocked(
       // spawn-applied default (subagent-spawn-thinking.ts) — so unlike model
       // overrides these need no fallback-provenance filtering (#92562).
       // Explicit /new and /reset rotate CLI conversation bindings elsewhere.
-      // Lineage/control facts belong to the session node and survive ANY rollover
-      // from an existing entry, following the #90119 carry pattern.
-      preservedState = resolveReplySessionRolloverState(entry);
+      preservedState = resolveReplySessionRolloverState(entry, sessionKey);
     }
   }
 
@@ -1070,34 +1078,20 @@ async function initSessionStateAttemptLocked(
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
+  // Admission may commit the first row before dispatch. Preserve its Goal and generation
+  // through initialization, then report the first lifecycle only for that winning dispatch.
+  const createdByAdmission =
+    pinExpectedExistingSession &&
+    params.newlyCreatedSessionId === sessionId &&
+    !previousSessionEntry;
+  const isFirstSessionTurn = isNewSession || createdByAdmission;
   if (!isSystemEvent && !isInterSession) {
-    const creation = ctx.SessionCreation;
-    const creationActor = creation?.actor;
-    const profileParticipantId = resolveProfileParticipantIdFromSessionCreation(creation);
-    const senderId = normalizeOptionalString(ctx.SenderId);
-    const participant:
-      | { actor: SessionCreatedActor & { id: string }; source: "profile" | "channel" | "agent" }
-      | undefined = profileParticipantId
-      ? { actor: { type: "human", id: profileParticipantId }, source: "profile" }
-      : creationActor?.type === "agent" && creationActor.id
-        ? {
-            actor: { ...creationActor, id: creationActor.id },
-            source: "agent",
-          }
-        : senderId
-          ? { actor: { type: "human", id: senderId }, source: "channel" }
-          : undefined;
-    if (participant) {
-      recordSessionParticipantBestEffort({
-        actor: participant.actor,
-        agentId,
-        sessionKey,
-        source: participant.source,
-        storePath,
-        promptedAt: now,
-        onError: (error) => log.warn("failed to record session participant", { error }),
-      });
-    }
+    recordAcceptedSessionParticipantInput(ctx, {
+      agentId,
+      sessionKey,
+      storePath,
+      onError: (error) => log.warn("failed to record session participant", { error }),
+    });
   }
   clearBootstrapSnapshotOnSessionBoundary({
     boundaryAppended: resetBoundaryAppended,
@@ -1183,12 +1177,12 @@ async function initSessionStateAttemptLocked(
     agentText: normalizeInboundTextNewlines(bodyStripped ?? sessionCtxForState.agentText),
     BodyStripped: normalizeInboundTextNewlines(bodyStripped ?? sessionCtxForState.agentText),
     SessionId: sessionId,
-    IsNewSession: isNewSession ? "true" : "false",
+    IsNewSession: isFirstSessionTurn ? "true" : "false",
   };
 
   // Run session plugin hooks (fire-and-forget)
   const hookRunner = getGlobalHookRunner();
-  if (hookRunner && isNewSession) {
+  if (hookRunner && isFirstSessionTurn) {
     const effectiveSessionId = sessionId ?? "";
 
     // If replacing an existing session, fire session_end for the old one
@@ -1250,7 +1244,7 @@ async function initSessionStateAttemptLocked(
       sessionStore,
       sessionKey,
       sessionId: sessionId ?? crypto.randomUUID(),
-      isNewSession,
+      isNewSession: isFirstSessionTurn,
       resetTriggered,
       systemSent,
       abortedLastRun,

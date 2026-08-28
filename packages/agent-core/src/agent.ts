@@ -164,6 +164,9 @@ export interface AgentOptions {
 
 class PendingMessageQueue {
   private messages: AgentMessage[] = [];
+  // Drained messages stay owned here until message_end commits them.
+  // A failed run restores them ahead of messages accepted later.
+  private inFlight: AgentMessage[] = [];
   public mode: QueueMode;
 
   constructor(mode: QueueMode) {
@@ -179,23 +182,27 @@ class PendingMessageQueue {
   }
 
   drain(): AgentMessage[] {
-    if (this.mode === "all") {
-      const drained = this.messages.slice();
-      this.messages = [];
-      return drained;
-    }
+    const count = this.mode === "all" ? this.messages.length : 1;
+    const drained = this.messages.splice(0, count);
+    this.inFlight.push(...drained);
+    return drained;
+  }
 
-    // one-at-a-time preserves later queued messages for subsequent loop turns.
-    const first = this.messages[0];
-    if (!first) {
-      return [];
+  commit(message: AgentMessage): void {
+    const index = this.inFlight.indexOf(message);
+    if (index >= 0) {
+      this.inFlight.splice(index, 1);
     }
-    this.messages = this.messages.slice(1);
-    return [first];
+  }
+
+  restore(): void {
+    this.messages = [...this.inFlight, ...this.messages];
+    this.inFlight = [];
   }
 
   clear(): void {
     this.messages = [];
+    this.inFlight = [];
   }
 }
 
@@ -391,8 +398,7 @@ export class Agent {
     this.mutableState.pendingToolCalls = new Set<string>();
     this.mutableState.errorMessage = undefined;
     this.toolLoopRecoveryState.criticalToolLoopSeen = false;
-    this.clearFollowUpQueue();
-    this.clearSteeringQueue();
+    this.clearAllQueues();
   }
 
   /** Start a new prompt from text, a single message, or a batch of messages. */
@@ -587,6 +593,8 @@ export class Agent {
   }
 
   private finishRun(): void {
+    this.steeringQueue.restore();
+    this.followUpQueue.restore();
     this.mutableState.isStreaming = false;
     this.mutableState.streamingMessage = undefined;
     this.mutableState.pendingToolCalls = new Set<string>();
@@ -619,6 +627,8 @@ export class Agent {
       case "message_end":
         this.mutableState.streamingMessage = undefined;
         this.mutableState.messages.push(event.message);
+        this.steeringQueue.commit(event.message);
+        this.followUpQueue.commit(event.message);
         break;
 
       case "tool_execution_start": {

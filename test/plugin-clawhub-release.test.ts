@@ -1283,7 +1283,7 @@ describe("collectPluginClawHubReleasePlan", () => {
 });
 
 describe("buildOpenClawReleaseClawHubPlan", () => {
-  it("emits a dispatch plan that keeps ClawHub children on the release tag", async () => {
+  it("emits a dispatch plan that keeps release bytes separate from protected tooling", async () => {
     const repoDir = createTempPluginRepo({
       extraExtensionIds: ["demo-two", "demo-three"],
     });
@@ -1337,6 +1337,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
         releaseTag: "v2026.4.1-beta.1",
         releaseSha: "a".repeat(40),
         releasePublishBranch: "main",
+        releasePublishFullRef: "refs/heads/main",
         releasePublishRunAttempt: "2",
         releasePublishRunId: "12345",
         pluginPublishScope: "all-publishable",
@@ -1349,19 +1350,24 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       },
     );
 
-    expect(plan.clawHubWorkflowRef).toBe("v2026.4.1-beta.1");
+    expect(plan.clawHubWorkflowRef).toBe(`release-publish/${"d".repeat(12)}-12345`);
     expect(plan.bootstrapWorkflowSha).toBe("d".repeat(40));
     expect(plan.releasePublishBranch).toBe("main");
     expect(plan.normal).toEqual({
       workflow: "plugin-clawhub-release.yml",
-      ref: "v2026.4.1-beta.1",
+      ref: `release-publish/${"d".repeat(12)}-12345`,
       shouldDispatch: true,
       packages: ["@openclaw/demo-plugin"],
       inputs: {
         publish_scope: "selected",
+        ref: "a".repeat(40),
+        release_tag: "v2026.4.1-beta.1",
         plugins: "@openclaw/demo-plugin",
+        release_publish_full_ref: "refs/heads/main",
+        release_publish_run_attempt: "2",
         release_publish_run_id: "12345",
         release_publish_branch: "main",
+        release_publish_workflow_sha: "d".repeat(40),
       },
     });
     expect(plan.bootstrap).toEqual({
@@ -1389,7 +1395,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       missingTrustedPlugins: "@openclaw/demo-three",
     });
     expect(plan.verifier).toEqual({
-      clawHubWorkflowRef: "v2026.4.1-beta.1",
+      clawHubWorkflowRef: `release-publish/${"d".repeat(12)}-12345`,
     });
   });
 
@@ -1425,6 +1431,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
         releaseTag: "v2026.4.1-beta.1",
         releaseSha: "b".repeat(40),
         releasePublishBranch: "release/2026.4.1",
+        releasePublishFullRef: "refs/heads/release/2026.4.1",
         releasePublishRunAttempt: "3",
         releasePublishRunId: "12345",
         pluginPublishScope: "selected",
@@ -1522,6 +1529,8 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       "c".repeat(40),
       "--release-publish-branch",
       "main",
+      "--release-publish-full-ref",
+      "refs/heads/main",
       "--release-publish-run-id",
       "12345",
     ];

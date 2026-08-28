@@ -213,9 +213,14 @@ export class SidebarSessionProjection {
     // Coding does not render, while empty custom/Groups sections remain targets.
     // Headerless means no collapse control, so a stored ungrouped-collapsed
     // preference is deliberately inert here; it re-applies once a peer returns.
-    const ungroupedHasPeerHeader = sections.some(
-      (section) => section.id !== "ungrouped" && (section.id !== "work" || section.rows.length > 0),
-    );
+    // Flat mode ("none") holds every native row, so its "Other" label would
+    // lie; it stays headerless even beside catalog sections.
+    const ungroupedHasPeerHeader =
+      input.grouping !== "none" &&
+      sections.some(
+        (section) =>
+          section.id !== "ungrouped" && (section.id !== "work" || section.rows.length > 0),
+      );
     const expandedRows: SidebarRecentSession[] = [];
     const visibleRows: SidebarRecentSession[] = [];
     const limitedSections: SidebarVisibleSections["sections"] = [];

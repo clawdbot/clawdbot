@@ -1181,7 +1181,9 @@ export async function performGatewaySessionReset(params: {
         resetPreparationError = errorShape(ErrorCodes.INVALID_REQUEST, placementError.message);
         return;
       }
+      // Reset drains pending preparation before replacing the session.
       const archivedSessionError = resolveSessionWorkStartError(currentCanonicalKey, currentEntry, {
+        allowPendingWorkspace: true,
         allowRestartTombstoneReplacement:
           currentEntry !== undefined &&
           currentEntry.archivedAt === undefined &&
@@ -1278,6 +1280,7 @@ export async function performGatewaySessionReset(params: {
         };
       }
       const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry, {
+        allowPendingWorkspace: true,
         allowRestartTombstoneReplacement:
           entry !== undefined &&
           entry.archivedAt === undefined &&

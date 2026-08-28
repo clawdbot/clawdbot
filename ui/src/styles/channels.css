@@ -2,7 +2,20 @@
    detail overlay, and the guided setup wizard dialog. Everything else uses the
    shared settings design language. */
 
-/* Row with a leading 44px art tile (mirrors the plugins hub row anatomy). */
+/* Compact refresh actions should not retain the spacing and top alignment
+   reserved for settings headers with full-size controls. */
+.settings-section:has(.settings-section__actions .btn--xs.btn--icon) {
+  gap: var(--space-2);
+}
+
+@media not all and (max-width: 640px) {
+  .settings-section__header:not(:has(.settings-section__desc)):has(
+    .settings-section__actions .btn--xs.btn--icon
+  ) {
+    align-items: center;
+  }
+}
+
 .channels-empty {
   display: grid;
   place-items: center;
@@ -18,6 +31,7 @@
   text-align: left;
 }
 
+/* Row with a leading 44px art tile (mirrors the plugins hub row anatomy). */
 .channels-tile {
   display: grid;
   width: var(--channels-art-size, 44px);
@@ -291,6 +305,19 @@
 }
 
 .channels-wizard__note--code {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+.channels-wizard__output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+}
+
+.channels-wizard__output--code {
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
 }

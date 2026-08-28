@@ -40,7 +40,9 @@ import {
   buildCommonSmokeSummary,
   expectedPackageBuildCommit,
   expectedPackageTargetVersion,
+  ensureSmokeGuestRuntime,
   extractLastOpenClawVersion,
+  installSmokeRuntimeCompanions,
   npmRegistryEnv,
   packAndServeSmokeArtifact,
   printSmokeTargetSummary,
@@ -260,12 +262,26 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     );
     await this.phase("fresh.reset-state", 180, () => this.resetState());
     await this.phase("fresh.preflight", 90, () => this.logGuestPreflight());
-    await this.phase("fresh.install-latest-bootstrap", 420, () => this.installLatestRelease());
+    await this.phase("fresh.ensure-runtime", 420, () =>
+      ensureSmokeGuestRuntime({
+        runShell: (script) => this.guestBash(script),
+        bootstrap: () => this.installLatestRelease(),
+      }),
+    );
     await this.phase("fresh.install-main", 420, () =>
       this.installMainTgz("openclaw-main-fresh.tgz"),
     );
     this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
     await this.phase("fresh.verify-main-version", 90, () => this.verifyTargetVersion());
+    await this.phase("fresh.install-companions", 600, () =>
+      installSmokeRuntimeCompanions({
+        provider: this.options.provider,
+        readCli: (args) => this.guestExec(["openclaw", ...args]),
+        installCli: (args) => {
+          this.guestExec(["openclaw", ...args]);
+        },
+      }),
+    );
     await this.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
     await this.phase("fresh.inject-bad-plugin", 90, () =>
       this.maybeInjectBadPluginFixture("fresh"),

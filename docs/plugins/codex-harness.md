@@ -191,8 +191,16 @@ capability and `codex.exec-server.stdio.v1` command. If enabling the plugin
 changes an existing node's command surface, reconnect the node, inspect
 `openclaw nodes pending`, and approve the updated pairing with
 `openclaw nodes approve <requestId>`. The persistent command allowlist does not
-replace the normal node invocation approval: deny starts no Codex process, and
-allow-once authorizes exactly one exec-server launch.
+replace launch authorization. Ordinarily, a critical allow-once decision
+authorizes exactly one exec-server launch; deny starts no process. Explicitly
+selected session **Full access** can substitute for that prompt only during
+the exact admitted turn and placement, and only when the node's own
+`tools.exec` policy and exec-approvals floors both allow full/off execution.
+Node-local deny always blocks. Local ask or allowlist restrictions require a
+human decision; Full access does not erase them. If a Full launch is refused
+by local policy, use an ordinary session permission mode to request approval,
+or deliberately change the node's local policy and reconnect it.
+Policy tightening during launch preparation refuses the stale launch.
 
 Codex launches its node exec-server directly rather than starting an OpenClaw
 worker, so a paired host remains eligible when all worker slots are occupied.
@@ -255,8 +263,9 @@ plugin and its pinned platform-native Codex binary. Crabbox validates the
 bundled or prepared installation and preserves its provenance in the disposable
 node's isolated state without installing a plugin during enrollment. The Gateway
 checks the cloud node's current pairing and
-effectively invocable command before starting a Codex process; approve the
-critical allow-once request for each exec-server attempt.
+effectively invocable command before starting a Codex process. The same
+per-attempt approval or explicitly selected Full access rules apply, including
+the cloud node's local exec policy and approvals floors.
 
 Codex runs its managed exec-server over the enrolled node's authenticated
 outbound connection without starting an OpenClaw worker child or consuming a
@@ -1490,6 +1499,8 @@ The Codex harness changes the low-level embedded agent executor only.
   channel history, search, `/new`, `/reset`, and future model or harness
   switching, but does not replace Codex compaction with an OpenClaw or
   context-engine summarizer.
+  Completed commentary and tool activity are saved during the turn rather than
+  waiting for its final answer, preserving completed work across Gateway interruption.
 - Media generation, media understanding, TTS, approvals, and messaging-tool
   output continue through the matching OpenClaw provider/model settings.
 - `tool_result_persist` applies to OpenClaw-owned transcript tool results,

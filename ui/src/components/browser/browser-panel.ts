@@ -100,12 +100,13 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
         window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
       }
     }
-    if (
-      changed.has("suppressed") &&
-      this.dockLayout.setSuppressed(this.suppressed) &&
-      this.browserPanelIsOpen()
-    ) {
-      void this.browserPanelController.refreshAll();
+    if (changed.has("suppressed")) {
+      const restored = this.dockLayout.setSuppressed(this.suppressed);
+      if (this.suppressed) {
+        this.browserPanelController.cancelOverlayPointerGesture();
+      } else if (restored && this.browserPanelIsOpen()) {
+        void this.browserPanelController.refreshAll();
+      }
     }
     const gatewayAvailabilityChanged = changed.has("client") || changed.has("available");
     const presentationChanged =
@@ -182,6 +183,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
         typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
       if (normalizedRequestedUrl) {
         void this.browserPanelController.openUrl(normalizedRequestedUrl, { newTab: true });
+      } else if (detail?.targetId) {
+        void this.browserPanelController.selectTab(detail.targetId);
       } else if (detail?.newTab === true) {
         this.browserPanelController.beginNewTab();
       } else {
@@ -206,6 +209,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       this.dockLayout.setOpen(true);
       if (normalizedRequestedUrl) {
         void this.browserPanelController.openUrl(normalizedRequestedUrl, { newTab: true });
+      } else if (detail?.targetId) {
+        void this.browserPanelController.selectTab(detail.targetId);
       } else if (detail?.newTab === true) {
         this.browserPanelController.beginNewTab();
       } else if (!wasOpen) {
@@ -217,6 +222,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   private closePanel(): void {
+    this.browserPanelController.cancelOverlayPointerGesture();
     this.dockLayout.setOpen(false);
   }
 

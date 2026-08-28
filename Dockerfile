@@ -235,6 +235,8 @@ WORKDIR /app
 # so it must be installed explicitly here. Without it `/etc/ssl/certs/`
 # stays empty and every HTTPS outbound dies at TLS handshake with
 # `error setting certificate file`.
+# The runtime image must include the SSH client because the sandbox backend
+# spawns `ssh` directly, and bookworm-slim does not provide it.
 # Apply current Debian point-release security fixes even when the pinned base
 # digest predates them, without waiting for a base-digest refresh.
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
@@ -242,7 +244,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl git hostname lsof openssl procps python3 tini && \
+      ca-certificates curl git hostname lsof openssh-client openssl procps python3 tini && \
     update-ca-certificates
 
 # Keep npm as an operator-facing capability while replacing the base image's

@@ -35,6 +35,8 @@ type BackgroundSessionResultProvenance = {
 export async function commitBackgroundResultToSession(params: {
   agentId: string;
   sessionKey: string;
+  /** Pins output to the conversation generation that admitted the background run. */
+  expectedGeneration: { sessionId: string; lifecycleRevision: string | undefined };
   text: string;
   idempotencyKey: string;
   provenance: BackgroundSessionResultProvenance;
@@ -51,17 +53,13 @@ export async function commitBackgroundResultToSession(params: {
   const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
   });
-  const initial = loadSessionEntryReadOnly({
-    agentId: params.agentId,
-    sessionKey,
-    storePath,
-    readConsistency: "latest",
-  });
-  const expectedSessionId = normalizeOptionalString(initial?.sessionId);
+  const expectedSessionId = normalizeOptionalString(params.expectedGeneration.sessionId);
   if (!expectedSessionId) {
-    return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
+    return { ok: false, reason: "background session result has an invalid expected generation" };
   }
-  const expectedLifecycleRevision = normalizeOptionalString(initial?.lifecycleRevision);
+  const expectedLifecycleRevision = normalizeOptionalString(
+    params.expectedGeneration.lifecycleRevision,
+  );
   const identities = [sessionKey, expectedSessionId];
 
   return await runExclusiveSessionLifecycleMutation({
@@ -80,8 +78,7 @@ export async function commitBackgroundResultToSession(params: {
       });
       if (
         current?.sessionId !== expectedSessionId ||
-        (expectedLifecycleRevision !== undefined &&
-          current.lifecycleRevision !== expectedLifecycleRevision)
+        normalizeOptionalString(current.lifecycleRevision) !== expectedLifecycleRevision
       ) {
         return { ok: false, reason: `session rebound for sessionKey: ${sessionKey}` };
       }
@@ -121,7 +118,7 @@ export async function commitBackgroundResultToSession(params: {
         agentId: params.agentId,
         sessionKey,
         expectedSessionId,
-        ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
+        expectedLifecycleRevision: expectedLifecycleRevision ?? null,
         idempotencyKey,
         message,
         storePath,

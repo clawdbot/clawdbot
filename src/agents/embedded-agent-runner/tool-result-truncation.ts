@@ -248,7 +248,6 @@ type ToolResultTruncationOptions = {
   suffix?: string | ((truncatedChars: number) => string);
   minKeepChars?: number;
   minimumRawWeight?: number;
-  preserveImportantTail?: boolean;
 };
 
 const DEFAULT_SUFFIX = (truncatedChars: number) =>
@@ -380,11 +379,7 @@ export function truncateToolResultText(
     maxChars - estimateToolResultTextChars(defaultSuffix, budgetOptions),
   );
 
-  if (
-    options.preserveImportantTail !== false &&
-    hasImportantTail(text) &&
-    budget > minKeepChars * 2
-  ) {
+  if (hasImportantTail(text) && budget > minKeepChars * 2) {
     const tailBudget = Math.min(Math.floor(budget * 0.3), 4_000);
     const headBudget =
       budget - tailBudget - estimateToolResultTextChars(MIDDLE_OMISSION_MARKER, budgetOptions);
@@ -480,35 +475,45 @@ export function truncateToolResultMessage(
   options: ToolResultTruncationOptions = {},
 ): AgentMessage {
   const suffixFactory = resolveSuffixFactory(options.suffix);
+  const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
   const minKeepChars = resolveEffectiveMinKeepChars({
     maxChars,
     minKeepChars: options.minKeepChars ?? MIN_KEEP_CHARS,
     suffixFactory,
+    minimumRawWeight: options.minimumRawWeight,
   });
   const content = (msg as { content?: unknown }).content;
   if (!Array.isArray(content)) {
     return msg;
   }
 
-  const totalTextChars = getToolResultTextBudget(msg);
+  const blockTextChars = content.map((block) =>
+    isToolResultTextBlock(block) ? estimateToolResultTextChars(block.text, budgetOptions) : 0,
+  );
+  const totalTextChars = blockTextChars.reduce((sum, chars) => sum + chars, 0);
   if (totalTextChars <= maxChars) {
     return msg;
   }
 
-  const blockTextChars = content.map((block) =>
-    isToolResultTextBlock(block) ? estimateToolResultTextChars(block.text) : 0,
+  // A caller's raw-text safety floor changes cost, not which semantic blocks
+  // are short. Reserve their actual weighted cost before shrinking larger text.
+  const smallBlocks = content.map(
+    (block, index) =>
+      (blockTextChars[index] ?? 0) > 0 &&
+      isToolResultTextBlock(block) &&
+      estimateToolResultTextChars(block.text) <= minKeepChars,
   );
   const blockNoticeChars = content.map((block, index) =>
     (blockTextChars[index] ?? 0) > 0 && isToolResultTextBlock(block)
-      ? estimateToolResultTextChars(suffixFactory(Math.max(1, block.text.length)))
+      ? estimateToolResultTextChars(suffixFactory(Math.max(1, block.text.length)), budgetOptions)
       : 0,
   );
   const smallBlockChars = blockTextChars.reduce(
-    (sum, chars) => sum + (chars > 0 && chars <= minKeepChars ? chars : 0),
+    (sum, chars, index) => sum + (smallBlocks[index] ? chars : 0),
     0,
   );
-  const largeBlockNoticeChars = blockTextChars.reduce(
-    (sum, chars, index) => sum + (chars > minKeepChars ? (blockNoticeChars[index] ?? 0) : 0),
+  const largeBlockNoticeChars = blockNoticeChars.reduce(
+    (sum, chars, index) => sum + (smallBlocks[index] ? 0 : chars),
     0,
   );
   // Preserve short semantic blocks when larger ones can retain a complete truncation notice.
@@ -529,7 +534,7 @@ export function truncateToolResultMessage(
     }
     const textBlock = block;
     const textChars = blockTextChars[index] ?? 0;
-    const preserveBlock = preserveSmallBlocks && textChars > 0 && textChars <= minKeepChars;
+    const preserveBlock = preserveSmallBlocks && smallBlocks[index];
     const blockShare = reducibleChars > 0 ? textChars / reducibleChars : 0;
     const noticeBudget = (blockNoticeChars[index] ?? 0) * noticeScale;
     const blockBudget = preserveBlock
@@ -539,6 +544,7 @@ export function truncateToolResultMessage(
     const truncatedText = truncateToolResultText(textBlock.text, blockBudget, {
       suffix: suffixFactory,
       minKeepChars: blockMinKeepChars,
+      minimumRawWeight: options.minimumRawWeight,
     });
     const nextBlock = Object.assign({}, textBlock, { text: truncatedText });
     if (typeof textBlock.content === "string") {

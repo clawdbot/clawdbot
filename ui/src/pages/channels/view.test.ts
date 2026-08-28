@@ -88,7 +88,77 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
   };
 }
 
+describe("channel hub refresh actions", () => {
+  it("keeps both timestamps in icon-button tooltips", () => {
+    const onRefresh = vi.fn();
+    const onPairingRefresh = vi.fn();
+    const props = createProps({
+      ts: Date.now(),
+      channelOrder: ["slack"],
+      channelLabels: { slack: "Slack" },
+      channels: { slack: { configured: true } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    props.lastSuccessAt = Date.now();
+    props.pairingLastSuccessAt = Date.now();
+    props.onRefresh = onRefresh;
+    props.onPairingRefresh = onPairingRefresh;
+    const container = document.createElement("div");
+
+    render(renderChannels(props), container);
+
+    const refreshButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button[aria-label="Refresh"]'),
+    );
+    expect(refreshButtons).toHaveLength(2);
+    expect(refreshButtons.map((button) => button.textContent?.trim())).toEqual(["", ""]);
+    expect(container.textContent).not.toContain("Updated just now");
+    expect(
+      refreshButtons.map(
+        (button) =>
+          (button.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+            ?.content,
+      ),
+    ).toEqual(["Updated just now", "Updated just now"]);
+
+    refreshButtons[0]!.click();
+    refreshButtons[1]!.click();
+    expect(onPairingRefresh).toHaveBeenCalledOnce();
+    expect(onRefresh).toHaveBeenCalledWith(true);
+  });
+});
+
 describe("channels setup access", () => {
+  it("keeps unconfigured recommended channels available after one channel is configured", () => {
+    const props = createProps({
+      ts: Date.now(),
+      channelOrder: ["slack"],
+      channelLabels: { slack: "Slack" },
+      channelMeta: [{ id: "slack", label: "Slack", detailLabel: "Slack Bot" }],
+      channels: { slack: { configured: true } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    const container = document.createElement("div");
+
+    render(renderChannels(props), container);
+
+    const availableLabels = Array.from(
+      container.querySelectorAll(".channels-item__detail .settings-row__title"),
+      (node) => node.textContent?.trim(),
+    );
+    expect(availableLabels).toEqual([
+      "whatsapp",
+      "telegram",
+      "discord",
+      "googlechat",
+      "signal",
+      "imessage",
+      "nostr",
+    ]);
+  });
+
   it("replaces setup actions with an admin-required notice for non-admin viewers", () => {
     const onStartSetup = vi.fn();
     const props = createProps({
@@ -131,7 +201,7 @@ describe("channels section order", () => {
     const headings = Array.from(container.querySelectorAll(".settings-section__heading"), (node) =>
       node.textContent?.trim(),
     );
-    expect(headings).toEqual(["Your channels", "Add a channel", "DM access requests"]);
+    expect(headings).toEqual(["Connected channels", "Add a channel", "DM access requests"]);
   });
 });
 
@@ -272,16 +342,18 @@ function renderWhatsAppConfigForm(
 }
 
 describe("channel config advanced tier", () => {
-  it("hides advanced channel settings behind the ghost row by default", () => {
+  it("hides advanced channel settings behind the disclosure by default", () => {
     const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(false);
 
     expect(container.textContent).toContain("Enabled");
     expect(container.textContent).not.toContain("Timeout Ms");
-    expect(container.querySelector(".config-advanced-divider")).toBeNull();
-
-    const ghost = container.querySelector<HTMLButtonElement>(".config-advanced-ghost");
-    expect(ghost?.textContent).toContain("2 advanced settings hidden");
-    ghost!.click();
+    const disclosure = container.querySelector<HTMLDetailsElement>(
+      "details.config-advanced-disclosure",
+    );
+    expect(disclosure?.open).toBe(false);
+    expect(disclosure?.querySelector("summary")?.textContent?.trim()).toBe("Advanced settings");
+    disclosure!.open = true;
+    disclosure!.dispatchEvent(new Event("toggle"));
     expect(onShowAdvancedSettings).toHaveBeenCalledWith(true);
   });
 
@@ -290,11 +362,12 @@ describe("channel config advanced tier", () => {
 
     expect(container.textContent).toContain("Enabled");
     expect(container.textContent).toContain("Timeout Ms");
-    expect(container.querySelector(".config-advanced-ghost")).toBeNull();
-
-    const collapse = container.querySelector<HTMLButtonElement>(".config-advanced-divider__toggle");
-    expect(collapse).toBeInstanceOf(HTMLButtonElement);
-    collapse!.click();
+    const disclosure = container.querySelector<HTMLDetailsElement>(
+      "details.config-advanced-disclosure",
+    );
+    expect(disclosure?.open).toBe(true);
+    disclosure!.open = false;
+    disclosure!.dispatchEvent(new Event("toggle"));
     expect(onShowAdvancedSettings).toHaveBeenCalledWith(false);
   });
 
@@ -304,9 +377,12 @@ describe("channel config advanced tier", () => {
       "channels.whatsapp.enabled": { advanced: true },
     });
 
-    const collapse = container.querySelector<HTMLButtonElement>(".config-advanced-divider__toggle");
-    expect(collapse).toBeInstanceOf(HTMLButtonElement);
-    collapse!.click();
+    const disclosure = container.querySelector<HTMLDetailsElement>(
+      "details.config-advanced-disclosure",
+    );
+    expect(disclosure?.open).toBe(true);
+    disclosure!.open = false;
+    disclosure!.dispatchEvent(new Event("toggle"));
     expect(onShowAdvancedSettings).toHaveBeenCalledWith(false);
   });
 

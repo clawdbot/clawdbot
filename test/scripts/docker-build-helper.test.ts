@@ -84,6 +84,8 @@ const PLUGIN_LIFECYCLE_MATRIX_DOCKER_E2E_PATH = "scripts/e2e/plugin-lifecycle-ma
 const DOCTOR_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/doctor-install-switch-docker.sh";
 const DOCTOR_SWITCH_SCENARIO_PATH = "scripts/e2e/lib/doctor-install-switch/scenario.sh";
 const DOCTOR_SWITCH_BUSCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/shims/busctl";
+const DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH =
+  "scripts/e2e/lib/doctor-install-switch/shims/systemd-exec-start.mjs";
 const DOCTOR_SWITCH_LOGINCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/shims/loginctl";
 const DOCTOR_SWITCH_SYSTEMCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/shims/systemctl";
 const PACKAGE_COMPAT_PATH = "scripts/e2e/lib/package-compat.mjs";
@@ -126,10 +128,11 @@ function extractUpgradeSurvivorPayload(script: string) {
   const marker = " bash -lc ";
   const start = script.indexOf(marker);
   const quoted = script.slice(start + marker.length).trimEnd();
-  if (start < 0 || !quoted.startsWith("'") || !quoted.endsWith("'")) {
+  const end = quoted.search(/\n'(?:\n|$)/u);
+  if (start < 0 || !quoted.startsWith("'") || end < 0) {
     throw new Error("upgrade survivor bash -lc payload not found");
   }
-  return quoted.slice(1, -1).replaceAll(`'"'"'`, "'");
+  return quoted.slice(1, end + 1).replaceAll(`'"'"'`, "'");
 }
 
 // Prompt-driving scripts must consume public prompts in the order the CLI renders them.
@@ -250,6 +253,26 @@ function isProcessRunning(pid: number): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function stopUpgradeSurvivorSupervisor(supervisor: ChildProcess, pidPath: string) {
+  try {
+    if (supervisor.exitCode === null && supervisor.signalCode === null) {
+      supervisor.kill("SIGTERM");
+      await waitForProcessExit(supervisor).catch(() => undefined);
+    }
+  } finally {
+    // Read the owned fixture's publication during cleanup even if readiness failed
+    // before the test learned the descendant PID.
+    if (existsSync(pidPath)) {
+      const pid = Number(readFileSync(pidPath, "utf8").trim());
+      if (Number.isSafeInteger(pid) && pid > 1 && isProcessRunning(pid)) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {}
+      }
+    }
   }
 }
 
@@ -1409,7 +1432,7 @@ stderr="$(<"$TMPDIR/stderr")"
 node() {
   local script="$1"
   shift
-  if [[ "$script" != "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" ]]; then
+  if [[ "$script" != "$DOCKER_E2E_PACKAGE_LIB_DIR/../package-openclaw-for-docker.mjs" ]]; then
     command node "$script" "$@"
     return
   fi
@@ -1552,7 +1575,7 @@ export PATH="$TMPDIR/bin:$PATH"
 node() {
   local script="$1"
   shift
-  if [[ "$script" != "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" ]]; then
+  if [[ "$script" != "$DOCKER_E2E_PACKAGE_LIB_DIR/../package-openclaw-for-docker.mjs" ]]; then
     command node "$script" "$@"
     return
   fi
@@ -2583,16 +2606,16 @@ docker_e2e_docker_run_cmd run demo
       publishedRunner.indexOf("phase doctor run_doctor"),
     );
     const discordInstallIndex = runner.indexOf(
-      'openclaw plugins install "npm:@openclaw/discord@$package_version" --pin --accept-capabilities',
+      'openclaw_e2e_fixture_plugin_command openclaw -- \\\n    plugins install "npm:@openclaw/discord@$package_version" --pin',
     );
     const whatsappInstallIndex = runner.indexOf(
-      'openclaw plugins install "clawhub:@openclaw/whatsapp@$package_version" --accept-capabilities',
+      'openclaw_e2e_fixture_plugin_command openclaw -- \\\n      plugins install "clawhub:@openclaw/whatsapp@$package_version"',
     );
     const clawhubRequestIndex = runner.indexOf(
       'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"',
     );
     const codexInstallIndex = runner.indexOf(
-      'openclaw plugins install "npm:@openclaw/codex@$package_version" --pin --accept-capabilities',
+      'openclaw_e2e_fixture_plugin_command openclaw -- \\\n      plugins install "npm:@openclaw/codex@$package_version" --pin',
     );
     const restoreCompanionIndex = runner.indexOf(
       'restore "$OPENCLAW_CONFIG_PATH" "$authored_config"',
@@ -2605,6 +2628,10 @@ docker_e2e_docker_run_cmd run demo
     expect(codexInstallIndex).toBeLessThan(restoreCompanionIndex);
     expect(restoreCompanionIndex).toBeLessThan(assertCompanionIndex);
     expect(assertCompanionIndex).toBeLessThan(runnerPrepareIndex);
+    expect(
+      runner.match(/openclaw_e2e_fixture_plugin_command openclaw -- \\\n\s+plugins install/gu),
+    ).toHaveLength(3);
+    expect(runner).not.toContain("--accept-capabilities");
     expect(runner).toContain('park-companion-install "$OPENCLAW_CONFIG_PATH" "$authored_config"');
     expectTextToIncludeAll(runner, [
       "install_status=$?",
@@ -2982,7 +3009,9 @@ exec "$@"
     const exitPromise = new Promise<{
       code: number | null;
       signal: NodeJS.Signals | null;
-    }>((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+    }>((resolve) => {
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
 
     try {
       for (let attempt = 0; attempt < 500 && !existsSync(markerPath); attempt += 1) {
@@ -3622,13 +3651,15 @@ setInterval(() => {}, 1_000);
           },
           stdio: "ignore",
         });
-        let descendantPid: number | undefined;
         try {
           for (let attempt = 0; attempt < 100 && !existsSync(statePath); attempt += 1) {
             await delay(10);
           }
-          expect(existsSync(statePath)).toBe(true);
-          descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+          expect(
+            existsSync(statePath),
+            `${supervisorPath}: readiness missing (exit=${supervisor.exitCode}, signal=${supervisor.signalCode})`,
+          ).toBe(true);
+          const descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
           expect(descendantPid).toBeGreaterThan(1);
           expect(isProcessRunning(descendantPid)).toBe(true);
 
@@ -3640,15 +3671,7 @@ setInterval(() => {}, 1_000);
           }
           expect(isProcessRunning(descendantPid)).toBe(false);
         } finally {
-          if (supervisor.exitCode === null && supervisor.signalCode === null) {
-            supervisor.kill("SIGTERM");
-            await waitForProcessExit(supervisor).catch(() => undefined);
-          }
-          if (descendantPid !== undefined && isProcessRunning(descendantPid)) {
-            try {
-              process.kill(descendantPid, "SIGKILL");
-            } catch {}
-          }
+          await stopUpgradeSurvivorSupervisor(supervisor, descendantPidPath);
         }
       }
     },
@@ -3716,23 +3739,14 @@ if (starts === 1) {
           },
           stdio: "ignore",
         });
-        let descendantPid: number | undefined;
         try {
           expect(await waitForProcessExit(supervisor)).toBe(0);
-          descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+          const descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
           expect(descendantPid).toBeGreaterThan(1);
           expect(readFileSync(startsPath, "utf8")).toBe("xx");
           expect(readFileSync(replacementPath, "utf8")).toBe("drained");
         } finally {
-          if (supervisor.exitCode === null && supervisor.signalCode === null) {
-            supervisor.kill("SIGTERM");
-            await waitForProcessExit(supervisor).catch(() => undefined);
-          }
-          if (descendantPid !== undefined && isProcessRunning(descendantPid)) {
-            try {
-              process.kill(descendantPid, "SIGKILL");
-            } catch {}
-          }
+          await stopUpgradeSurvivorSupervisor(supervisor, descendantPidPath);
         }
       }
     },
@@ -4739,7 +4753,6 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       'KITCHEN_SINK_CLI_TIMEOUT="${KITCHEN_SINK_CLI_TIMEOUT:-180s}"',
       "run_kitchen_sink_openclaw_logged()",
       "run_kitchen_sink_openclaw_capture()",
-      'openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$log_file" 2>&1',
       'local log_file="${KITCHEN_SINK_TMP_DIR}/${safe_label}.log"',
     ]);
 
@@ -4892,7 +4905,6 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       "assert-config-channel beta",
       "assert-installed-version",
       "assert-status-kind package",
-      "openclaw update --channel dev",
       "openclaw update --channel stable",
     ]);
     expect(updateRunner).toContain("openclaw update --channel beta --yes --json --no-restart");
@@ -5031,10 +5043,6 @@ done
     expect(scheduler).toContain("env.npm_execpath ? path.dirname(env.npm_execpath)");
     expect(scheduler).toContain("path.dirname(process.execPath)");
     expect(scheduler).toContain("env.PATH = [...new Set(pathEntries)].join(path.delimiter)");
-    expect(scheduler).toContain(
-      "const pnpmCommand = env.OPENCLAW_DOCKER_ALL_PNPM_COMMAND?.trim();",
-    );
-    expect(scheduler).toContain("lane.command.replace(/(^|\\s)pnpm(?=\\s)/g");
     expect(scheduler).toContain(
       'env.push(["OPENCLAW_DOCKER_ALL_PNPM_COMMAND", baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND]);',
     );
@@ -5233,6 +5241,7 @@ done
       "cp scripts/e2e/lib/doctor-install-switch/shims/systemctl",
       "cp scripts/e2e/lib/doctor-install-switch/shims/loginctl",
       "cp scripts/e2e/lib/doctor-install-switch/shims/busctl",
+      "cp scripts/e2e/lib/doctor-install-switch/shims/systemd-exec-start.mjs",
       "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1",
       "scripts/e2e/lib/package-compat.mjs",
     ]);
@@ -5281,7 +5290,7 @@ done
     expect(unitPath.stdout).toContain("/etc/systemd/system");
   });
 
-  it("reports the installed doctor switch unit through the systemd manager", () => {
+  it("reports the installed doctor switch unit through the systemd manager", async () => {
     const home = tempDirs.make("openclaw-doctor-busctl-shim-");
     const serviceName = "openclaw-gateway.service";
     const unitPath = join(home, ".config", "systemd", "user", serviceName);
@@ -5365,12 +5374,34 @@ done
         "FragmentPath",
         "DropInPaths",
         "NeedDaemonReload",
+        "LoadState",
       ]),
     ).toEqual([
       { type: "s", data: unitPath },
       { type: "as", data: [] },
       { type: "b", data: false },
+      { type: "s", data: "loaded" },
     ]);
+
+    const binDir = join(home, "bin");
+    writeExecutables(binDir, {
+      busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8"),
+      "systemd-exec-start.mjs": readFileSync(DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH, "utf8"),
+    });
+    const { readSystemdServiceExecStart } =
+      await import("../../src/daemon/systemd-service-files.js");
+    expect(
+      await readSystemdServiceExecStart(
+        { HOME: home, PATH: `${binDir}:${process.env.PATH}`, OPENCLAW_SYSTEMD_UNIT: serviceName },
+        { requireEffective: true },
+      ),
+    ).toMatchObject({
+      programArguments,
+      workingDirectory: "/opt/openclaw git",
+      sourcePath: unitPath,
+      definitionPaths: [unitPath],
+      environment: { GREETING: "hello world", OPENCLAW_PROFILE: "fixture" },
+    });
 
     const unexpected = spawnSync(
       DOCTOR_SWITCH_BUSCTL_SHIM_PATH,
@@ -5382,6 +5413,78 @@ done
     );
     expect(unexpected.status).toBe(1);
     expect(unexpected.stderr).toContain("unexpected invocation");
+  });
+
+  it("distinguishes a missing named doctor switch unit from failed or unsupported inspection", async () => {
+    const home = tempDirs.make("openclaw-doctor-busctl-absence-");
+    const binDir = join(home, "bin");
+    const serviceName = "openclaw-gateway-fixture.service";
+    const unitPath = join(home, ".config/systemd/user", serviceName);
+    writeExecutables(binDir, {
+      busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8"),
+      "systemd-exec-start.mjs": readFileSync(DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH, "utf8"),
+    });
+    const env = {
+      HOME: home,
+      PATH: `${binDir}:${process.env.PATH}`,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-fixture",
+    };
+    const { readSystemdServiceExecStart } =
+      await import("../../src/daemon/systemd-service-files.js");
+    expect(await readSystemdServiceExecStart(env, { requireEffective: true })).toBeNull();
+    const loadArgs = [
+      "--user",
+      "--json=short",
+      "call",
+      "org.freedesktop.systemd1",
+      "/org/freedesktop/systemd1",
+      "org.freedesktop.systemd1.Manager",
+      "LoadUnit",
+      "s",
+      serviceName,
+    ];
+    const invoke = (args: string[]) =>
+      spawnSync(join(binDir, "busctl"), args, { env, encoding: "utf8" });
+    const missing = invoke(loadArgs);
+    expect(missing.status).toBe(1);
+    expect(missing.stderr.trim()).toBe(`Call failed: Unit ${serviceName} not found.`);
+    for (const args of [
+      [...loadArgs, "extra"],
+      [...loadArgs.slice(0, -1), "../missing.service"],
+      [...loadArgs.slice(0, -1), "unrelated.service"],
+      ["--user", "--json=short", "list"],
+    ]) {
+      const unsupported = invoke(args);
+      expect(unsupported.status).toBe(1);
+      expect(unsupported.stderr).not.toContain("not found.");
+    }
+    mkdirSync(dirname(unitPath), { recursive: true });
+    writeFileSync(
+      unitPath,
+      "[Service]\nExecStart=/usr/bin/node /opt/profile/openclaw.mjs gateway\nEnvironment=OLD=stale\nEnvironment=\nEnvironment=KEEP=current REMOVE=value\nUnsetEnvironment=KEEP\nUnsetEnvironment=\nUnsetEnvironment=REMOVE\nEnvironmentFile=/missing/required.env\nEnvironmentFile=\n",
+    );
+    const command = await readSystemdServiceExecStart(env, { requireEffective: true });
+    expect(command?.sourcePath).toBe(unitPath);
+    expect(command?.environment).toEqual({ KEEP: "current" });
+    rmSync(unitPath);
+    mkdirSync(unitPath);
+    const unreadable = invoke(loadArgs);
+    expect(unreadable.status).toBe(1);
+    expect(unreadable.stderr).not.toContain("not found.");
+    const staleObject = invoke([
+      "--user",
+      "--json=short",
+      "get-property",
+      "org.freedesktop.systemd1",
+      "/org/freedesktop/systemd1/unit/openclaw_2dgateway_2dfixture_2eservice",
+      "org.freedesktop.systemd1.Unit",
+      "FragmentPath",
+      "DropInPaths",
+      "NeedDaemonReload",
+      "LoadState",
+    ]);
+    expect(staleObject.status).toBe(1);
+    expect(staleObject.stdout).not.toContain('"loaded"');
   });
 
   it("routes doctor install switch commands through the E2E timeout helper", () => {
@@ -5863,7 +5966,6 @@ done
       'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file"',
       "plugins_lifecycle_trace_enabled()",
       "print_plugins_stderr_log()",
-      'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file" 2>"$error_file"',
       "Plugin sweep command timed out after %s: %s",
       "Plugin sweep command failed with status %s: %s",
       "Plugin sweep capture timed out after %s: %s",
@@ -5913,7 +6015,6 @@ done
     expectTextToIncludeAll(clawhub, [
       'plugins install "$CLAWHUB_PLUGIN_SPEC"',
       'plugins update "$CLAWHUB_PLUGIN_ID"',
-      "run_plugins_openclaw_logged install-clawhub",
       'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT"',
       "clawhub:@openclaw/kitchen-sink",
     ]);

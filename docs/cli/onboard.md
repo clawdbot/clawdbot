@@ -241,6 +241,34 @@ OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 
 `--non-interactive` requires `--accept-risk` (acknowledges that agents are powerful and full system access is risky). `--mode` defaults to `local`.
 
+### Required external plugins
+
+`--accept-risk` does not approve plugin capabilities. If local setup needs an
+external provider or runtime plugin, non-interactive onboarding stops when that
+plugin requires a capability review. Review and preinstall the required plugin,
+then rerun the same onboarding command. For the official Codex runtime used by
+OpenAI setup:
+
+```bash
+# After reviewing the plugin and its declared capabilities:
+openclaw plugins install codex --accept-capabilities
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --auth-choice openai-api-key \
+  --secret-input-mode ref
+```
+
+Set `OPENAI_API_KEY` before running this example. The `codex` selector uses
+OpenClaw's official plugin catalog. If the required plugin is already installed
+but needs approval to enable it, use
+`openclaw plugins enable <plugin-id> --accept-capabilities` instead. The flag
+approves only that plugin operation; it is not a global bypass. The same
+preinstall-and-rerun flow applies to external plugins required by
+`openclaw channels add`. Bundled plugins do not need this review. See
+[Capability consent](/plugins/manage-plugins#capability-consent) and the
+[automation guide](/start/wizard-cli-automation#review-required-plugins).
+
+### Provider setup examples
+
 ```bash
 openclaw onboard --non-interactive --accept-risk --skip-health \
   --agent-name robby \
@@ -295,7 +323,7 @@ With `--secret-input-mode ref`, onboarding stores new credentials as refs instea
 - With `--secret-input-mode ref`, non-interactive `--gateway-password` and `--remote-password` require a matching `OPENCLAW_GATEWAY_PASSWORD`, and `--remote-token` requires a matching `OPENCLAW_GATEWAY_TOKEN`; onboarding stores an env SecretRef and rejects missing or mismatched values before changing state. Interactive setup can also select configured file, exec, or store refs.
 - With `--install-daemon`: a SecretRef-managed `gateway.auth.token` is validated but not persisted as resolved plaintext in supervisor service environment metadata; if the ref is unresolved, install fails closed with remediation guidance. If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install blocks until mode is set explicitly.
 - Local onboarding writes `gateway.mode="local"` into the config. A later config file missing `gateway.mode` indicates config damage or an incomplete manual edit, not a valid local-mode shortcut.
-- Local onboarding installs downloadable plugins the chosen setup path requires (for example a Codex or Copilot runtime plugin for those auth choices). Remote onboarding only writes connection info for the remote Gateway - it never installs local plugin packages.
+- Local onboarding ensures the chosen setup path's required plugins are available (for example the Codex or Copilot runtime). Non-interactive setup cannot approve new capabilities; [review and preinstall required external plugins](#required-external-plugins), then rerun onboarding. Remote onboarding only writes connection info for the remote Gateway - it never installs local plugin packages.
 - `--allow-unconfigured` is a separate `openclaw gateway run` escape hatch; it does not let onboarding skip `gateway.mode`.
 
 ```bash

@@ -29,6 +29,11 @@ import {
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshotState,
+  setCurrentPluginMetadataSnapshotState,
+} from "../plugins/current-plugin-metadata-state.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -56,6 +61,7 @@ import {
   startGatewayConfigReloader,
 } from "./config-reload.js";
 import { commitGatewayConfigWrite } from "./server-methods/config-write-flow.js";
+import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
 import { createTerminalLaunchPolicy } from "./terminal/launch.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -580,6 +586,75 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
+  it.each([
+    [{}, { agents: { defaults: { mediaMaxMb: 4 } } }],
+    [{ agents: { defaults: { mediaMaxMb: 4 } } }, {}],
+    [{ agents: {} }, { agents: { defaults: { mediaMaxMb: 4 } } }],
+    [{ agents: { defaults: { mediaMaxMb: 4 } } }, { agents: {} }],
+    [{ agents: { defaults: { mediaMaxMb: 4 } } }, { agents: { defaults: { mediaMaxMb: 1 } } }],
+  ])("refreshes every channel when the global media limit changes: %j → %j", (prev, next) => {
+    const paths = diffGatewayReloadPaths(prev, next);
+    expect(paths).toContain("agents.defaults.mediaMaxMb");
+    const plan = buildGatewayReloadPlan(paths);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["telegram", "whatsapp", "mattermost"]));
+    expect(plan.restartChannelAccounts).toEqual(new Map());
+  });
+
+  it("global media refresh subsumes scoped restarts without affecting other agent settings", () => {
+    const plan = buildGatewayReloadPlan([
+      "channels.mattermost.accounts.alpha.enabled",
+      "agents.defaults.mediaMaxMb",
+    ]);
+    expect(plan.restartChannels).toEqual(new Set(["telegram", "whatsapp", "mattermost"]));
+    expect(plan.restartChannelAccounts).toEqual(new Map());
+    expect(buildGatewayReloadPlan(["agents.defaults.model"]).restartChannels).toEqual(new Set());
+  });
+
+  it.each([
+    { registration: { restartPrefixes: ["agents.defaults.mediaMaxMb"] }, kind: "restart" },
+    { registration: { hotPrefixes: ["agents.defaults.mediaMaxMb"] }, kind: "hot" },
+    { registration: { noopPrefixes: ["agents.defaults.mediaMaxMb"] }, kind: "none" },
+  ])("preserves an explicit plugin media reload policy: $kind", ({ registration, kind }) => {
+    const path = "agents.defaults.mediaMaxMb";
+    setActivePluginRegistry({
+      ...registry,
+      reloads: [
+        ...registry.reloads,
+        { pluginId: "policy-owner", pluginName: "Policy owner", registration, source: "test" },
+      ],
+    });
+    expect(resolveConfigReloadMetadata(path).kind).toBe(kind);
+    const plan = buildGatewayReloadPlan([path]);
+    expect(plan.restartGateway).toBe(kind === "restart");
+    expect(plan.restartChannels).toEqual(new Set());
+  });
+
+  it.each([
+    {
+      reload: { configPrefixes: ["agents.defaults.mediaMaxMb"] },
+      kind: "hot",
+      channels: ["telegram"],
+    },
+    {
+      reload: { configPrefixes: [], noopPrefixes: ["agents.defaults.mediaMaxMb"] },
+      kind: "none",
+      channels: [],
+    },
+  ])("preserves an explicit channel media reload policy: $kind", ({ reload, kind, channels }) => {
+    const path = "agents.defaults.mediaMaxMb";
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "telegram", plugin: { ...telegramPlugin, reload }, source: "test" },
+        { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+      ]),
+    );
+    expect(resolveConfigReloadMetadata(path).kind).toBe(kind);
+    const plan = buildGatewayReloadPlan([path]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(channels));
+  });
+
   const mattermostAccountConfig = {
     channels: {
       mattermost: {
@@ -695,12 +770,18 @@ describe("buildGatewayReloadPlan", () => {
     ]);
 
     setActivePluginRegistry(emptyRegistry);
+    expect(buildGatewayReloadPlan(["agents.defaults.mediaMaxMb"]).restartChannels).toEqual(
+      new Set(),
+    );
     expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
       restartGateway: true,
       restartChannels: new Set(),
     });
 
     setActivePluginRegistry(channelOnlyRegistry);
+    expect(buildGatewayReloadPlan(["agents.defaults.mediaMaxMb"]).restartChannels).toEqual(
+      new Set(["telegram"]),
+    );
     expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
       restartGateway: false,
       restartChannels: new Set(["telegram"]),
@@ -1037,13 +1118,14 @@ describe("startGatewayConfigReloader include files", () => {
     await symlink(includePath, includeLinkPath);
     const configIo = createConfigIO({
       configPath,
-      env: {},
+      env: { HOME: rootDir, OPENCLAW_STATE_DIR: rootDir },
       homedir: () => rootDir,
       observe: false,
       pluginValidation: "skip",
       logger: { error: vi.fn(), warn: vi.fn() },
     });
     const initialSnapshot = await configIo.readConfigFileSnapshot();
+    expect(initialSnapshot.valid, JSON.stringify(initialSnapshot.issues)).toBe(true);
     const onHotReload = vi.fn(async () => "applied" as const);
     let signalWatcherReady!: () => void;
     const watcherReady = new Promise<void>((resolve) => {
@@ -1137,6 +1219,7 @@ describe("startGatewayConfigReloader", () => {
   });
 
   afterEach(() => {
+    clearCurrentPluginMetadataSnapshot();
     resetGatewayWorkAdmission();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -3246,9 +3329,7 @@ describe("startGatewayConfigReloader", () => {
     });
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(snapshot);
     const { watcher, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
-    const superseded = new Error("config reload superseded by a newer runtime config source");
-    superseded.name = "GatewayConfigReloadSupersededError";
-    onRestart.mockRejectedValueOnce(superseded);
+    onRestart.mockRejectedValueOnce(new GatewayConfigReloadSupersededError());
 
     watcher.emit("change");
     await vi.runAllTimersAsync();
@@ -4794,53 +4875,68 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  it("forces a plugin reload when signaled metadata leaves config and install records identical", async () => {
-    const activeConfig: OpenClawConfig = {
-      gateway: { reload: {} },
-    };
-    const installRecords = {
-      brave: {
-        source: "npm",
-        spec: "@openclaw/brave",
-        installPath: "/tmp/openclaw/plugins/brave",
-      },
-    } satisfies Record<string, PluginInstallRecord>;
-    const readSnapshot = vi.fn(async () =>
-      makeSnapshot({
-        sourceConfig: activeConfig,
-        runtimeConfig: activeConfig,
-        config: activeConfig,
-        hash: "unchanged-config",
-      }),
-    );
-    const readPluginInstallRecords = vi.fn(async () => ({ ...installRecords }));
-    const harness = createReloaderHarness(readSnapshot, {
-      initialConfig: activeConfig,
-      initialCompareConfig: activeConfig,
-      initialPluginInstallRecords: installRecords,
-      readPluginInstallRecords,
-    });
+  it.each(["hybrid", "off"] as const)(
+    "preserves startup metadata when plugin metadata changes without config changes (%s)",
+    async (mode) => {
+      const activeConfig: OpenClawConfig = {
+        gateway: { reload: { mode } },
+      };
+      const installRecords = {
+        brave: {
+          source: "npm",
+          spec: "@openclaw/brave",
+          installPath: "/tmp/openclaw/plugins/brave",
+        },
+      } satisfies Record<string, PluginInstallRecord>;
+      const readSnapshot = vi.fn(async () =>
+        makeSnapshot({
+          sourceConfig: activeConfig,
+          runtimeConfig: activeConfig,
+          config: activeConfig,
+          hash: "unchanged-config",
+        }),
+      );
+      const readPluginInstallRecords = vi.fn(async () => ({ ...installRecords }));
+      const harness = createReloaderHarness(readSnapshot, {
+        initialConfig: activeConfig,
+        initialCompareConfig: activeConfig,
+        initialPluginInstallRecords: installRecords,
+        readPluginInstallRecords,
+      });
+      const startupMetadata = { plugins: [] };
+      setCurrentPluginMetadataSnapshotState(startupMetadata, "startup-metadata");
 
-    harness.reloader.notifyPluginMetadataChanged();
-    await vi.runOnlyPendingTimersAsync();
+      harness.reloader.notifyPluginMetadataChanged();
+      expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(startupMetadata);
+      await vi.runOnlyPendingTimersAsync();
 
-    expect(harness.onRestart).not.toHaveBeenCalled();
-    const [plan, nextConfig] = getOnlyHotReloadCall(harness);
-    expect(plan.changedPaths).toEqual([]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.reloadPlugins).toBe(true);
-    expect(plan.disposeMcpRuntimes).toBe(true);
-    expect(nextConfig).toBe(activeConfig);
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(startupMetadata);
+      if (mode === "off") {
+        expect(harness.onRestart).not.toHaveBeenCalled();
+        await harness.reloader.stop();
+        return;
+      }
+      const [plan, nextConfig] = getOnlyRestartCall(harness);
+      expect(plan.changedPaths).toEqual([]);
+      expect(plan.restartGateway).toBe(true);
+      expect(plan.restartReasons).toEqual(["plugin metadata changed"]);
+      expect(plan.reloadPlugins).toBe(false);
+      expect(plan.disposeMcpRuntimes).toBe(false);
+      expect(nextConfig).toBe(activeConfig);
+      expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(startupMetadata);
 
-    // The refresh is consumed by the committed reload: a later watcher echo of
-    // identical bytes must not replace the plugin runtime generation again.
-    harness.watcher.emit("change");
-    await vi.runOnlyPendingTimersAsync();
-    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
-    expect(harness.onRestart).not.toHaveBeenCalled();
+      // An accepted restart consumes this signal; an unchanged watcher echo must
+      // not request another restart or replace the running metadata.
+      harness.watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      expect(harness.onRestart).toHaveBeenCalledOnce();
+      expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(startupMetadata);
 
-    await harness.reloader.stop();
-  });
+      await harness.reloader.stop();
+    },
+  );
 
   it("keeps external plugin policy-only writes on the hot reload path", async () => {
     const previousConfig: OpenClawConfig = {

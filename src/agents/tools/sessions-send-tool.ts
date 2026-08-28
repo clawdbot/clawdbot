@@ -103,24 +103,6 @@ const SessionsSendToolSchema = Type.Object({
 
 const log = createSubsystemLogger("agents/sessions-send");
 
-function recordSessionsSendParticipant(params: {
-  cfg: OpenClawConfig;
-  requesterAgentId: string;
-  sessionKey: string;
-  targetAgentId: string;
-}): void {
-  recordSessionParticipantBestEffort({
-    actor: { type: "agent", id: params.requesterAgentId },
-    agentId: params.targetAgentId,
-    sessionKey: params.sessionKey,
-    source: "agent",
-    storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
-      agentId: params.targetAgentId,
-    }),
-    onError: (error) => log.warn("failed to record session participant", { error }),
-  });
-}
-
 const SessionsSendDeliverySchema = Type.Object(
   {
     status: Type.Union([Type.Literal("pending"), Type.Literal("skipped")]),
@@ -503,6 +485,7 @@ export function createSessionsSendTool(opts?: {
     outputSchema: SessionsSendOutputSchema,
     prepareArguments: normalizeSessionsSendArguments,
     execute: async (_toolCallId, args) => {
+      const promptedAt = Date.now();
       const params = normalizeSessionsSendArguments(args);
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const message = readToolStringParam(params, "message", { required: true });
@@ -1137,37 +1120,44 @@ export function createSessionsSendTool(opts?: {
             });
           };
 
+          const start = await startAgentRun({
+            callGateway: gatewayCall,
+            runId,
+            sendParams,
+            sessionKey: displayKey,
+            deliveryTimeoutMs: announceTimeoutMs,
+            ...(timeoutSeconds === 0
+              ? {
+                  allowActiveRunQueueDelivery: true,
+                  // An exact-incarnation grant authorizes only this target. Never
+                  // reroute a worker-owned send to a durable Cron parent outside
+                  // the scoped lifecycle admission or replace its stable key.
+                  allowActiveRunQueueFallback: !expectedSessionId,
+                  expectedSessionId,
+                }
+              : {}),
+          });
+          if (!start.ok) {
+            return start.result;
+          }
+          const acceptedTargetSessionKey = start.a2aSessionKey ?? resolvedKey;
+          recordSessionToolActionFact({
+            operation: "send",
+            fact: "committed",
+            targetAgentId,
+            targetSessionKey: acceptedTargetSessionKey,
+          });
+          recordSessionParticipantBestEffort({
+            identity: { type: "agent", id: requesterAgentId },
+            promptedAt,
+            agentId: targetAgentId,
+            sessionKey: acceptedTargetSessionKey,
+            storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
+            onError: (error) => log.warn("failed to record session participant", { error }),
+          });
+          runId = start.runId;
+          const watchField = registerWatchIfRequested(acceptedTargetSessionKey);
           if (timeoutSeconds === 0) {
-            const start = await startAgentRun({
-              callGateway: gatewayCall,
-              runId,
-              sendParams,
-              sessionKey: displayKey,
-              deliveryTimeoutMs: announceTimeoutMs,
-              allowActiveRunQueueDelivery: true,
-              // An exact-incarnation grant authorizes only this target. Never
-              // reroute a worker-owned send to a durable Cron parent outside
-              // the scoped lifecycle admission or replace its stable key.
-              allowActiveRunQueueFallback: !expectedSessionId,
-              expectedSessionId,
-            });
-            if (!start.ok) {
-              return start.result;
-            }
-            recordSessionToolActionFact({
-              operation: "send",
-              fact: "committed",
-              targetAgentId,
-              targetSessionKey: start.a2aSessionKey ?? resolvedKey,
-            });
-            recordSessionsSendParticipant({
-              cfg,
-              requesterAgentId,
-              sessionKey: start.a2aSessionKey ?? resolvedKey,
-              targetAgentId,
-            });
-            runId = start.runId;
-            const watchField = registerWatchIfRequested(start.a2aSessionKey ?? resolvedKey);
             if (!start.activeRunQueue) {
               startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey, true);
             }
@@ -1180,30 +1170,6 @@ export function createSessionsSendTool(opts?: {
             });
           }
 
-          const start = await startAgentRun({
-            callGateway: gatewayCall,
-            runId,
-            sendParams,
-            sessionKey: displayKey,
-            deliveryTimeoutMs: announceTimeoutMs,
-          });
-          if (!start.ok) {
-            return start.result;
-          }
-          recordSessionToolActionFact({
-            operation: "send",
-            fact: "committed",
-            targetAgentId,
-            targetSessionKey: start.a2aSessionKey ?? resolvedKey,
-          });
-          recordSessionsSendParticipant({
-            cfg,
-            requesterAgentId,
-            sessionKey: start.a2aSessionKey ?? resolvedKey,
-            targetAgentId,
-          });
-          runId = start.runId;
-          const watchField = registerWatchIfRequested(resolvedKey);
           const result = await waitForAgentRunAndReadUpdatedAssistantReply({
             runId,
             sessionKey: resolvedKey,

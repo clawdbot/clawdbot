@@ -2737,8 +2737,10 @@ describe("gateway server chat", () => {
           8_000,
         );
         blockedReply.resolve();
-        const settledEvent = await settledSessionChange.catch(() => {
-          throw new Error("Gateway did not publish settled run ownership after chat.send cleanup");
+        const settledEvent = await settledSessionChange.catch((cause: unknown) => {
+          throw new Error("Gateway did not publish settled run ownership after chat.send cleanup", {
+            cause,
+          });
         });
         await waitForAgentRunOk(runId);
         expectRecordFields(settledEvent.payload, {

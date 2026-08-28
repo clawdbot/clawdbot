@@ -65,6 +65,22 @@ public struct GatewayConnectOptions: Sendable {
     }
 }
 
+public struct GatewayNodeSessionCredentials: Sendable, Equatable {
+    public let token: String?
+    public let bootstrapToken: String?
+    public let password: String?
+
+    public init(
+        token: String? = nil,
+        bootstrapToken: String? = nil,
+        password: String? = nil)
+    {
+        self.token = token
+        self.bootstrapToken = bootstrapToken
+        self.password = password
+    }
+}
+
 public enum GatewayAuthSource: String, Sendable {
     case deviceToken = "device-token"
     case sharedToken = "shared-token"

@@ -367,7 +367,7 @@ async function testPreflightCandidates(params: {
       };
       const buildArgs = managerScriptArgs(manager.manager, "build");
       const buildEnv = resolveBuildEnv(
-        manager.env,
+        manager.env ?? params.defaultCommandEnv,
         path.join(params.gitRoot, ".artifacts", "build-all-cache"),
       );
       const configCommand = ["config", "validate", "--json"];

@@ -329,14 +329,16 @@ describe("release validation no-push transport", () => {
     );
     expect(dispatch.run).toContain('-f rerun_group="$RERUN_GROUP"');
     expect(dispatch.run).not.toContain("child_rerun_group");
+    const discovery = job(full, "candidate_discovery");
     const candidate = job(full, "prepare_release_candidate");
-    expect(candidate.if).not.toContain('"release-checks"');
-    expect(candidate.if).toContain(
+    expect(discovery.if).not.toContain('"release-checks"');
+    expect(discovery.if).toContain(
       'contains(fromJSON(\'["all","plugin-prerelease","cross-os","package"]\'), inputs.rerun_group)',
     );
-    expect(candidate.if).toContain(
+    expect(discovery.if).toContain(
       "(inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')",
     );
+    expect(candidate.if).toContain("needs.candidate_discovery.outputs.state == 'miss'");
     expect(capture.run).toContain(
       "release_check_groups=(install-smoke cross-os package qa-parity)",
     );
@@ -953,8 +955,20 @@ describe("release validation no-push transport", () => {
         .filter((candidate) => candidate.name?.startsWith("Checkout trusted "))
         .map((candidate) => ({ candidate, jobName })),
     );
-    expect(trustedCheckouts).toHaveLength(12);
-    for (const { candidate, jobName } of trustedCheckouts) {
+    expect(trustedCheckouts).toHaveLength(13);
+    const binderCheckout = trustedCheckouts.find(
+      ({ jobName }) => jobName === "bind_full_release_candidate_evidence",
+    );
+    expect(binderCheckout?.candidate.with).toMatchObject({
+      repository: "openclaw/openclaw",
+      ref: "main",
+      "persist-credentials": false,
+    });
+    const exactRevisionCheckouts = trustedCheckouts.filter(
+      ({ jobName }) => jobName !== "bind_full_release_candidate_evidence",
+    );
+    expect(exactRevisionCheckouts).toHaveLength(12);
+    for (const { candidate, jobName } of exactRevisionCheckouts) {
       expect(candidate.with, jobName).toMatchObject({
         repository: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",
         ref: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",

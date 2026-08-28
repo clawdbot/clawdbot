@@ -11,6 +11,8 @@ import {
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
+import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
+import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
@@ -3752,8 +3754,28 @@ describe("Tool Search", () => {
     });
     expect(later.catalogReused).toBe(true);
     expect(laterRef.current).not.toBe(catalogAfterFirst);
-    expect(laterRef.current?.entries).toBe(catalogAfterFirst.entries);
+    expect(laterRef.current?.entries).not.toBe(catalogAfterFirst.entries);
+    expect(laterRef.current?.entries).toEqual(catalogAfterFirst.entries);
     expect(laterRef.current?.counterScope).not.toBe(catalogAfterFirst.counterScope);
+  });
+
+  it("rebinds fresh non-MCP executors on same-run reuse", async () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const config = { tools: { toolSearch: true } } as never;
+    const catalogRef = createToolSearchCatalogRef();
+    const first = pluginTool("fake_current_run", "Current-run capability");
+    first.execute = vi.fn(async () => jsonResult({ marker: "first" }));
+    applyToolSearchCatalog({ tools: [codeTool, first], config, catalogRef });
+
+    const second = pluginTool("fake_current_run", "Current-run capability");
+    second.execute = vi.fn(async () => jsonResult({ marker: "second" }));
+    const reused = applyToolSearchCatalog({ tools: [codeTool, second], config, catalogRef });
+
+    expect(reused.catalogReused).toBe(true);
+    const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
+    await expect(runtime.callValue("fake_current_run")).resolves.toEqual({ marker: "second" });
+    expect(first.execute).not.toHaveBeenCalled();
+    expect(second.execute).toHaveBeenCalledOnce();
   });
 
   it.each(["fresh", "same"] as const)(
@@ -3809,9 +3831,13 @@ describe("Tool Search", () => {
       expect(second.catalogRegistered).toBe(true);
       expect(second.catalogReused).toBe(true);
       const restoredCatalog = expectDefined(restoredRef.current, "restored run catalog");
-      expect(restoredCatalog.entries.find((entry) => entry.name === alpha.name)).toBe(
-        firstAlphaEntry,
+      const restoredAlphaEntry = expectDefined(
+        restoredCatalog.entries.find((entry) => entry.name === alpha.name),
+        "restored alpha entry",
       );
+      expect(restoredAlphaEntry).not.toBe(firstAlphaEntry);
+      expect(restoredAlphaEntry).toEqual(firstAlphaEntry);
+      expect(restoredAlphaEntry.tool).toBe(alpha);
       expect(restoredCatalog.counterScope).not.toBe(firstCatalog.counterScope);
       expect(restoredCatalog.searchCount).toBe(0);
       const restoredRuntime = new ToolSearchRuntime(
@@ -3836,42 +3862,153 @@ describe("Tool Search", () => {
     },
   );
 
-  it("does not retain hook-bound catalogs, including prewrapped tools", () => {
+  it("notifies catalog-ref lifecycle hooks across snapshot restore and disposal", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const alpha = pluginTool("fake_lifecycle_alpha", "Alpha tool");
+    const config = { tools: { toolSearch: true } } as never;
+    const sessionId = "session-lifecycle-hooks";
+
+    const firstRef = createToolSearchCatalogRef();
+    const firstChange = vi.fn();
+    firstRef.onChange = firstChange;
+    applyToolSearchCatalog({
+      tools: [codeTool, alpha],
+      config,
+      sessionId,
+      runId: "run-lifecycle-1",
+      catalogRef: firstRef,
+    });
+    expect(firstChange).toHaveBeenCalledOnce();
+
+    const firstDispose = vi.fn();
+    firstRef.onDispose = new Set([firstDispose]);
+    clearToolSearchCatalog({ sessionId, runId: "run-lifecycle-1", catalogRef: firstRef });
+    expect(firstDispose).toHaveBeenCalledOnce();
+    expect(firstRef.onChange).toBeUndefined();
+    expect(firstRef.onDispose).toBeUndefined();
+
+    const secondRef = createToolSearchCatalogRef();
+    const secondChange = vi.fn();
+    secondRef.onChange = secondChange;
+    const second = applyToolSearchCatalog({
+      tools: [codeTool, alpha],
+      config,
+      sessionId,
+      runId: "run-lifecycle-2",
+      catalogRef: secondRef,
+    });
+    expect(second.catalogReused).toBe(true);
+    expect(secondChange).toHaveBeenCalledOnce();
+  });
+
+  it("applies Code Mode projection filtering to restored catalogs", async () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    // The unprojected tool is the stronger match for the query; only projection
+    // filtering can keep it out of a one-result search on the restored catalog.
+    const shadowing = pluginTool("fake_projection_probe", "Projection probe projection probe");
+    shadowing.execute = vi.fn(async () => jsonResult({ marker: "shadowing" }));
+    const projected = pluginTool("fake_projection_secondary", "Projection probe secondary");
+    projected.execute = vi.fn(async () => jsonResult({ marker: "projected" }));
+    const config = { tools: { toolSearch: true } } as never;
+    const sessionId = "session-projection-restore";
+
+    const firstRef = createToolSearchCatalogRef();
+    applyToolSearchCatalog({
+      tools: [codeTool, shadowing, projected],
+      config,
+      sessionId,
+      runId: "run-projection-1",
+      catalogRef: firstRef,
+    });
+    clearToolSearchCatalog({ sessionId, runId: "run-projection-1", catalogRef: firstRef });
+
+    const secondRef = createToolSearchCatalogRef();
+    const second = applyToolSearchCatalog({
+      tools: [codeTool, shadowing, projected],
+      config,
+      sessionId,
+      runId: "run-projection-2",
+      catalogRef: secondRef,
+    });
+    expect(second.catalogReused).toBe(true);
+    const restored = expectDefined(secondRef.current, "restored projection catalog");
+    const projectedId = expectDefined(
+      restored.entries.find((entry) => entry.name === projected.name),
+      "restored projected entry",
+    ).id;
+
+    const runtime = new ToolSearchRuntime(
+      { catalogRef: secondRef },
+      resolveToolSearchConfig(config),
+    );
+    await expect(runtime.search("projection probe", { limit: 1 })).resolves.toEqual([
+      expect.objectContaining({ name: shadowing.name }),
+    ]);
+    const matches = await runtime.search("projection probe", {
+      limit: 1,
+      allowedIds: new Set([projectedId]),
+    });
+    expect(matches).toEqual([expect.objectContaining({ id: projectedId, name: projected.name })]);
+    await expect(runtime.callValue(projected.name)).resolves.toEqual({ marker: "projected" });
+    expect(projected.execute).toHaveBeenCalledOnce();
+    expect(shadowing.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse snapshots for prewrapped input tools across runs", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const config = { tools: { toolSearch: true } } as never;
-    const snapshotsBefore = testing.getReusableCatalogSnapshotCountForTest();
-
-    for (const mode of ["context", "prewrapped"] as const) {
-      const sessionId = `session-hook-bound-${mode}`;
-      const runId = `run-hook-bound-${mode}`;
-      const catalogRef = createToolSearchCatalogRef();
-      const hookContext = {
-        agentId: "agent-main",
-        sessionId,
-        sessionKey: "agent:main:main",
-        runId,
-        onToolOutcome: vi.fn(),
+    const sessionId = "session-prewrapped-tool";
+    const createRunTool = (runId: string, marker: string) => {
+      const target = pluginTool("fake_prewrapped_tool", "Prewrapped run capability");
+      target.execute = vi.fn(async () => jsonResult({ marker }));
+      return {
+        target,
+        wrapped: wrapToolWithBeforeToolCallHook(target, { sessionId, runId }),
       };
-      const target = pluginTool(`fake_hook_bound_${mode}`, "Hook-bound probe tool");
-      const catalogTarget =
-        mode === "prewrapped"
-          ? wrapToolWithAbortSignal(
-              wrapToolWithBeforeToolCallHook(target, hookContext),
-              new AbortController().signal,
-            )
-          : target;
-      applyToolSearchCatalog({
-        tools: [codeTool, catalogTarget],
-        config,
-        sessionId,
-        runId,
-        catalogRef,
-        ...(mode === "context" ? { toolHookContext: hookContext } : {}),
-      });
-      clearToolSearchCatalog({ sessionId, runId, catalogRef });
-    }
+    };
 
-    expect(testing.getReusableCatalogSnapshotCountForTest()).toBe(snapshotsBefore);
+    const firstTool = createRunTool("run-prewrapped-1", "first-run");
+    const firstRef = createToolSearchCatalogRef();
+    const first = applyToolSearchCatalog({
+      tools: [codeTool, firstTool.wrapped],
+      config,
+      sessionId,
+      runId: "run-prewrapped-1",
+      catalogRef: firstRef,
+    });
+    expect(first.catalogReused).toBe(false);
+    const firstRuntime = new ToolSearchRuntime(
+      { catalogRef: firstRef },
+      resolveToolSearchConfig(config),
+    );
+    await expect(firstRuntime.callValue("fake_prewrapped_tool")).resolves.toEqual({
+      marker: "first-run",
+    });
+    clearToolSearchCatalog({
+      sessionId,
+      runId: "run-prewrapped-1",
+      catalogRef: firstRef,
+    });
+
+    const secondTool = createRunTool("run-prewrapped-2", "second-run");
+    const secondRef = createToolSearchCatalogRef();
+    const second = applyToolSearchCatalog({
+      tools: [codeTool, secondTool.wrapped],
+      config,
+      sessionId,
+      runId: "run-prewrapped-2",
+      catalogRef: secondRef,
+    });
+    expect(second.catalogReused).toBe(false);
+    const secondRuntime = new ToolSearchRuntime(
+      { catalogRef: secondRef },
+      resolveToolSearchConfig(config),
+    );
+    await expect(secondRuntime.callValue("fake_prewrapped_tool")).resolves.toEqual({
+      marker: "second-run",
+    });
+    expect(firstTool.target.execute).toHaveBeenCalledOnce();
+    expect(secondTool.target.execute).toHaveBeenCalledOnce();
   });
 
   it("serializes a fresh hook-bound catalog schema only once", () => {
@@ -3938,39 +4075,103 @@ describe("Tool Search", () => {
     ]);
   });
 
-  it("does not reuse when a same-named tool uses a different executable", () => {
+  it("reuses fresh MCP wrappers while executing the current run wrapper", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
-    const original = pluginTool("fake_exec_swap", "Stable description");
     const config = { tools: { toolSearch: true } } as never;
-    const sessionId = "session-tool-exec-change";
+    const sessionId = "session-mcp-wrapper-reuse";
+    const retainedCatalog = {
+      version: 1,
+      generatedAt: 0,
+      servers: {
+        "remote-demo": {
+          serverName: "remote-demo",
+          safeServerName: "remoteDemo",
+          launchSummary: "retained test server",
+          toolCount: 1,
+        },
+      },
+      tools: [
+        {
+          serverName: "remote-demo",
+          safeServerName: "remoteDemo",
+          toolName: "echo",
+          description: "Reuse a remote capability",
+          fallbackDescription: "Reuse a remote capability",
+          inputSchema: {
+            type: "object",
+            properties: { value: { type: "string" } },
+          },
+        },
+      ],
+    } satisfies McpToolCatalog;
+    const mcpRuntime = {
+      sessionId,
+      workspaceDir: "/tmp",
+      configFingerprint: "retained-catalog",
+      createdAt: 0,
+      lastUsedAt: 0,
+      markUsed: () => {},
+      getCatalog: async () => retainedCatalog,
+      peekCatalog: () => retainedCatalog,
+      callTool: vi.fn(async () => ({ content: [{ type: "text" as const, text: "echo" }] })),
+      dispose: async () => {},
+    } satisfies SessionMcpRuntime;
+
+    const firstMaterialized = await materializeBundleMcpToolsForRun({ runtime: mcpRuntime });
+    const secondMaterialized = await materializeBundleMcpToolsForRun({ runtime: mcpRuntime });
+    const firstWrapper = expectDefined(firstMaterialized.tools[0], "first MCP wrapper");
+    const secondWrapper = expectDefined(secondMaterialized.tools[0], "second MCP wrapper");
+    expect(secondWrapper).not.toBe(firstWrapper);
+    expect(secondWrapper.parameters).toBe(firstWrapper.parameters);
+    const firstExecute = firstWrapper.execute;
+    firstWrapper.execute = vi.fn(async (toolCallId, input, signal, onUpdate) => {
+      await firstExecute(toolCallId, input, signal, onUpdate);
+      return jsonResult({ marker: "first-run" });
+    });
+    const secondExecute = secondWrapper.execute;
+    secondWrapper.execute = vi.fn(async (toolCallId, input, signal, onUpdate) => {
+      await secondExecute(toolCallId, input, signal, onUpdate);
+      return jsonResult({ marker: "second-run" });
+    });
     const firstRef = createToolSearchCatalogRef();
 
-    applyToolSearchCatalog({
-      tools: [codeTool, original],
+    const first = applyToolSearchCatalog({
+      tools: [codeTool, firstWrapper],
       config,
       sessionId,
-      runId: "run-exec-1",
+      runId: "run-mcp-1",
       catalogRef: firstRef,
+      toolHookContext: { sessionId, runId: "run-mcp-1" },
     });
+    expect(first.catalogReused).toBe(false);
     clearToolSearchCatalog({
       sessionId,
-      runId: "run-exec-1",
+      runId: "run-mcp-1",
       catalogRef: firstRef,
     });
 
-    const replacement = pluginTool("fake_exec_swap", "Stable description");
     const secondRef = createToolSearchCatalogRef();
     const second = applyToolSearchCatalog({
-      tools: [codeTool, replacement],
+      tools: [codeTool, secondWrapper],
       config,
       sessionId,
-      runId: "run-exec-2",
+      runId: "run-mcp-2",
       catalogRef: secondRef,
+      toolHookContext: { sessionId, runId: "run-mcp-2" },
     });
-    expect(second.catalogReused).toBe(false);
-    expect(secondRef.current?.entries.find((entry) => entry.name === replacement.name)?.tool).toBe(
-      replacement,
+    expect(second.catalogReused).toBe(true);
+
+    const runtime = new ToolSearchRuntime(
+      { catalogRef: secondRef },
+      resolveToolSearchConfig(config),
     );
+    await expect(runtime.callValue("remoteDemo__echo")).resolves.toEqual({
+      marker: "second-run",
+    });
+    expect(firstWrapper.execute).not.toHaveBeenCalled();
+    expect(secondWrapper.execute).toHaveBeenCalledOnce();
+    await firstMaterialized.dispose();
+    await secondMaterialized.dispose();
   });
 
   it("does not reuse when a same-named tool changes parameters", () => {
@@ -4005,7 +4206,11 @@ describe("Tool Search", () => {
     const config = { tools: { toolSearch: true } } as never;
     const sessionId = "session-remote-schema-change";
 
-    applyToolSearchCatalog({ tools: [codeTool, tool], config, sessionId });
+    applyToolSearchCatalog({
+      tools: [codeTool, tool],
+      config,
+      sessionId,
+    });
     tool.parameters = new Proxy(
       { type: "object", properties: {} },
       {
@@ -4015,8 +4220,44 @@ describe("Tool Search", () => {
       },
     );
 
-    const second = applyToolSearchCatalog({ tools: [codeTool, tool], config, sessionId });
+    const second = applyToolSearchCatalog({
+      tools: [codeTool, tool],
+      config,
+      sessionId,
+    });
     expect(second.catalogReused).toBe(false);
+  });
+
+  it("degrades to a miss when a tool disappears from the current run", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const config = { tools: { toolSearch: true } } as never;
+    const sessionId = "session-tool-removed";
+    const firstRef = createToolSearchCatalogRef();
+
+    applyToolSearchCatalog({
+      tools: [
+        codeTool,
+        mcpPluginTool("remote_keep", "Keep a remote capability"),
+        mcpPluginTool("remote_remove", "Remove a remote capability"),
+      ],
+      config,
+      sessionId,
+      runId: "run-tools-1",
+      catalogRef: firstRef,
+    });
+    clearToolSearchCatalog({ sessionId, runId: "run-tools-1", catalogRef: firstRef });
+
+    const secondRef = createToolSearchCatalogRef();
+    const second = applyToolSearchCatalog({
+      tools: [codeTool, mcpPluginTool("remote_keep", "Keep a remote capability")],
+      config,
+      sessionId,
+      runId: "run-tools-2",
+      catalogRef: secondRef,
+    });
+
+    expect(second.catalogReused).toBe(false);
+    expect(secondRef.current?.entries.map((entry) => entry.name)).toEqual(["remote_keep"]);
   });
 
   it("does not reuse when a same-named tool changes its output schema", () => {

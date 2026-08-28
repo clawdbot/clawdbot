@@ -6,7 +6,7 @@ import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
 } from "./app/stale-chunk-reload.ts";
-import { CONTROL_UI_BUILD_INFO } from "./build-info.ts";
+import { CONTROL_UI_BUILD_INFO, controlUiWorkerActivationRetires } from "./build-info.ts";
 
 type ViteImportMeta = ImportMeta & {
   readonly env?: {
@@ -25,7 +25,7 @@ if (isProd && "serviceWorker" in navigator) {
   const swUrl = new URL(inferControlUiPublicAssetPath("sw.js"), window.location.origin);
   swUrl.searchParams.set("v", currentControlUiBuildId);
   navigator.serviceWorker.addEventListener("message", (event) => {
-    if (event.data?.type === "sw-updated" && event.data.version !== currentControlUiBuildId) {
+    if (controlUiWorkerActivationRetires(event.data)) {
       window.location.reload();
     }
   });

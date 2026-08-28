@@ -39,6 +39,35 @@ describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
+  it("keeps the latest browser tab visible when completed dashboard work collapses", async () => {
+    const messages = [
+      { role: "user", content: "Open the example", timestamp: 1_000 },
+      {
+        role: "toolResult",
+        toolCallId: "browser-call",
+        toolName: "browser",
+        timestamp: 2_000,
+        content: "Opened",
+        details: { browserTab: { targetId: "tab-1", title: "Example" } },
+      },
+      { role: "assistant", content: "Done.", timestamp: 3_000 },
+    ];
+    const props = {
+      ...threadProps("pane-browser-work", "agent:main:dashboard:browser", messages),
+      showToolCalls: true,
+    };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    render(renderChatThread(props, transcript), container);
+    transcript.hostUpdated();
+    transcript.hostConnected();
+    await flushDeferredRowPrune();
+    expect(container.querySelector(".chat-work-group")).not.toBeNull();
+    expect(container.querySelectorAll("openclaw-browser-tab-card")).toHaveLength(1);
+    expect(container.querySelector("openclaw-browser-tab-card")?.latest).toBe(true);
+    transcript.hostDisconnected();
+  });
+
   it("renders canonical archive attribution as a timestamped notice without a speech bubble", async () => {
     const sessionKey = "agent:main:archived-notice";
     const archivedSession: GatewaySessionRow = {
@@ -169,7 +198,7 @@ describe("chat transcript rendering", () => {
     transcript.hostDisconnected();
   });
 
-  it("reveals touched metadata across stored and live groups within one transcript", async () => {
+  it("keeps live metadata absent while revealing stored metadata within each transcript", async () => {
     const firstTranscript = createTestTranscript();
     const secondTranscript = createTestTranscript();
     const firstContainer = document.body.appendChild(document.createElement("div"));
@@ -207,6 +236,7 @@ describe("chat transcript rendering", () => {
     touchPointerUp(streamBubble);
     expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
     expect(streamGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+    expect(streamGroup.querySelector(".chat-group-footer")).toBeNull();
 
     touchPointerUp(requireElement(secondGroup, ".chat-bubble"));
     expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(true);

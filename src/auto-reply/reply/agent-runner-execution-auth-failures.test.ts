@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { createCliOutputFailoverError } from "../../agents/cli-runner/output-error.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { MissingProviderAuthError, ProviderAuthError } from "../../agents/model-auth.js";
 import type { TemplateContext } from "../templating.js";
@@ -315,27 +316,31 @@ describe("executeAgentTurn: authentication failures", () => {
     }
   });
 
-  it("surfaces claude-cli re-auth hint over generic provider auth copy for 401 OAuth expiry", async () => {
-    // When the claude subprocess emits a 401 "Failed to authenticate" because
-    // its OAuth token has expired, the error is wrapped as a FailoverError with
-    // reason:"auth" and status:401.  Without the ordering fix, this would be
-    // caught by generic provider-auth mapping before the typed refresh cause,
-    // producing generic provider copy instead of the
-    // targeted claude-cli re-auth command.
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new FailoverError(
-        "Provider claude-cli failed: Failed to authenticate. API Error: 401 Invalid authentication credentials",
-        {
-          reason: "auth",
-          provider: "claude-cli",
-          model: "claude-sonnet-4-20250514",
-          status: 401,
-        },
-      ),
-    );
+  it("surfaces Agent SDK OAuth session expiry in Discord channels", async () => {
+    const error = createCliOutputFailoverError({
+      output: {
+        text: "",
+        errorText: "Failed to authenticate: OAuth session expired and could not be refreshed",
+      },
+      provider: "claude-cli",
+      model: "claude-opus-5",
+    });
+    if (!error) {
+      throw new Error("expected CLI output failure");
+    }
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+    const result = await executeAgentTurn(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "channel",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {

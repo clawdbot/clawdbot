@@ -1,8 +1,9 @@
-/* @vitest-environment jsdom */
-
 import { render } from "lit";
+/* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
-import { resolveAvatarInitials, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { resolveAvatarInitials } from "../lib/identity-avatar.ts";
 import {
   hasMultiplePresenceIdentities,
   hasSessionPresenceViewers,
@@ -154,50 +155,59 @@ type ViewerFacepileElement = HTMLElement & {
   selfInstanceId?: string;
   sessionKey?: string;
   excludeUserId?: string;
-  staticUsers?: readonly PresenceViewer[];
+  staticParticipants?: readonly SessionParticipant[];
   maxVisible: number;
   updateComplete: Promise<boolean>;
 };
 
-it("keeps session facepiles as plain non-interactive avatar clusters", async () => {
-  const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
-  facepile.presencePayload = {
-    presence: [
-      {
-        instanceId: "alice-1",
-        user: { id: "alice", name: "Alice" },
-        watchedSessions: [],
-      },
-    ],
-  };
-  document.body.append(facepile);
+it.each(["first", "second"])(
+  "merges device presence into one non-interactive face watching %s",
+  async (session) => {
+    const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
+    facepile.sessionKey = `agent:main:${session}`;
+    facepile.presencePayload = {
+      presence: [
+        {
+          instanceId: "alice-1",
+          user: { id: "alice", name: "Alice" },
+          watchedSessions: ["agent:main:first"],
+        },
+        {
+          instanceId: "alice-2",
+          user: { id: "alice", name: "Alice" },
+          watchedSessions: ["agent:main:second"],
+        },
+      ],
+    };
+    document.body.append(facepile);
 
-  await vi.waitFor(async () => {
-    await facepile.updateComplete;
-    expect(facepile.querySelector(".viewer-facepile")).not.toBeNull();
-  });
-  expect(facepile.querySelector("button")).toBeNull();
-  expect(facepile.querySelectorAll("openclaw-tooltip")).toHaveLength(1);
-});
+    await vi.waitFor(async () => {
+      await facepile.updateComplete;
+      expect(facepile.querySelector(".viewer-facepile")).not.toBeNull();
+    });
+    expect(facepile.querySelector("button")).toBeNull();
+    expect(facepile.querySelectorAll("openclaw-tooltip")).toHaveLength(1);
+  },
+);
 
 it("renders ordered static participant actors without presence filtering", async () => {
   // SAFETY: the registered custom element exposes the tested reactive properties.
   const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
   facepile.maxVisible = 2;
-  facepile.staticUsers = [
-    { id: "profile-ada", name: "Ada", watchedSessions: [] },
-    { id: "research", name: "Research", watchedSessions: [] },
-    { id: "profile-bob", name: "Bob", watchedSessions: [] },
+  facepile.staticParticipants = [
+    { identity: { type: "profile", id: "profile-ada" }, label: "Ada" },
+    { identity: { type: "agent", id: "research" }, label: "Research" },
+    { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
   ];
   document.body.append(facepile);
 
   await vi.waitFor(async () => {
     await facepile.updateComplete;
     expect(
-      [...facepile.querySelectorAll("[data-viewer-id]")].map((node) =>
-        node.getAttribute("data-viewer-id"),
+      [...facepile.querySelectorAll("openclaw-viewer-avatar .viewer-avatar")].map((node) =>
+        node.getAttribute("aria-label"),
       ),
-    ).toEqual(["profile-ada", "research"]);
+    ).toEqual(["Ada", "Research"]);
   });
   expect(facepile.querySelector(".viewer-avatar--overflow")?.textContent?.trim()).toBe("+1");
 });
@@ -328,17 +338,17 @@ it("keeps collaboration UI dormant for a solo identity", () => {
 });
 
 it("links faces only when the host opts in, so nested facepiles stay plain", async () => {
-  const users: PresenceViewer[] = [
-    { id: "profile-ada", name: "Ada King", watchedSessions: [] },
-    { id: "profile-mira", name: "Mira", watchedSessions: [] },
+  const users: SessionParticipant[] = [
+    { identity: { type: "profile", id: "profile-ada" }, label: "Ada King" },
+    { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
   ];
   const mount = async (personActivity?: { basePath: string; navigate: (id: string) => void }) => {
     const facepile = document.createElement("openclaw-viewer-facepile") as HTMLElement & {
-      staticUsers: readonly PresenceViewer[];
+      staticParticipants: readonly SessionParticipant[];
       personActivity?: { basePath: string; navigate: (id: string) => void };
       updateComplete: Promise<boolean>;
     };
-    facepile.staticUsers = users;
+    facepile.staticParticipants = users;
     if (personActivity) {
       facepile.personActivity = personActivity;
     }

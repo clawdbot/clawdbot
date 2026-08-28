@@ -106,6 +106,9 @@ export const resolveSessionAgentIdsMock = vi.fn(() => ({
   defaultAgentId: "main",
   sessionAgentId: "main",
 }));
+export const resolveAgentConfigMock = vi.fn(
+  (_config?: unknown, _agentId?: string): unknown => undefined,
+);
 export const resolveDefaultAgentDirMock = vi.fn(() => "/tmp/agents/main/agent");
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
@@ -401,19 +404,21 @@ export const buildAgentRuntimePlanMock = vi.fn((params: BuildAgentRuntimePlanPar
   createCompactHooksRuntimePlan(params),
 );
 
+const emptyPluginIndex: PluginMetadataSnapshot["index"] = {
+  version: 1,
+  hostContractVersion: "test",
+  compatRegistryVersion: "test",
+  migrationVersion: 1,
+  policyHash: "",
+  generatedAtMs: 1,
+  installRecords: {},
+  plugins: [],
+  diagnostics: [],
+};
 const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
   policyHash: "",
-  index: {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "",
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  },
+  index: emptyPluginIndex,
+  registryIndex: emptyPluginIndex,
   registryDiagnostics: [],
   manifestRegistry: { plugins: [], diagnostics: [] },
   plugins: [],
@@ -490,6 +495,8 @@ export function resetCompactSessionStateMocks(): void {
   resolveSessionAgentIdMock.mockReturnValue("main");
   resolveSessionAgentIdsMock.mockReset();
   resolveSessionAgentIdsMock.mockReturnValue({ defaultAgentId: "main", sessionAgentId: "main" });
+  resolveAgentConfigMock.mockReset();
+  resolveAgentConfigMock.mockReturnValue(undefined);
   estimateTokensMock.mockReset();
   estimateTokensMock.mockReturnValue(10);
   sessionMessages.splice(0, sessionMessages.length, ...createDefaultSessionMessages());
@@ -679,8 +686,8 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
     getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
+    isCurrentPluginMetadataSnapshotRuntimeGeneration: () => false,
     resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
-    setCurrentPluginMetadataSnapshot: vi.fn(),
     withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
   }));
 
@@ -1008,7 +1015,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../agent-scope.js", () => ({
     listAgentEntries: vi.fn(() => []),
-    resolveAgentConfig: vi.fn(() => undefined),
+    resolveAgentConfig: resolveAgentConfigMock,
     resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agents/${agentId}/agent`),
     resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
     resolveAgentWorkspaceDir: vi.fn(() => "/tmp"),

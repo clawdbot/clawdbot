@@ -1,9 +1,13 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import { readPresenceEntries } from "../app/user-profile.ts";
+import type {
+  SessionParticipant,
+  SessionParticipantIdentity,
+} from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import { t } from "../i18n/index.ts";
 import {
   presenceViewerLabel,
-  projectPresenceEntries,
+  projectPresencePayload,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -42,6 +46,7 @@ type ViewerAvatarVariant = "session" | "footer" | "profile";
 class ViewerAvatar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) user: PresenceViewer | null = null;
   @property() variant: ViewerAvatarVariant = "session";
+  @property({ attribute: false }) identity?: SessionParticipantIdentity;
   // Presence selectors use this marker; owner and menu chrome must opt out.
   @property({ type: Boolean, attribute: false }) markAsViewer = true;
 
@@ -52,6 +57,7 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
     }
     const label = presenceViewerLabel(user);
     const view = resolveIdentityAvatarView({
+      identity: this.identity,
       id: user.id,
       name: user.name,
       username: user.email,
@@ -73,8 +79,11 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) selfInstanceId?: string;
   @property({ attribute: false }) sessionKey?: string;
   @property({ attribute: false }) excludeUserId?: string;
+  @property({ attribute: false }) staticParticipants?: readonly SessionParticipant[];
+  /** Prepared live presence for the collapsed Online section. */
   @property({ attribute: false }) staticUsers?: readonly PresenceViewer[];
   @property({ type: Number, attribute: "max-visible" }) maxVisible = 3;
+  @property({ type: Number, attribute: false }) totalCount?: number;
   /**
    * Opt-in: linking each face to its Activity feed. Facepiles rendered inside an existing
    * anchor or button (sidebar rows, collapsed group headers) must leave this unset — a
@@ -83,31 +92,45 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) personActivity?: PersonActivityRouting;
 
   override render() {
-    const projection = projectPresenceEntries(
-      readPresenceEntries(this.presencePayload) ?? [],
+    const projection = projectPresencePayload(
+      this.presencePayload,
       this.selfUserId,
       this.selfInstanceId,
     );
     const sessionKey = this.sessionKey;
     const excludeUserId = normalized(this.excludeUserId);
-    const users = this.staticUsers
-      ? [...this.staticUsers]
-      : sessionKey
-        ? projection.users.filter(
-            (user) =>
-              user.id !== projection.selfUserId &&
-              user.id !== excludeUserId &&
-              user.watchedSessions.includes(sessionKey),
-          )
-        : projection.users.filter((user) => user.id !== projection.selfUserId);
+    const viewers = sessionKey
+      ? projection.users.filter(
+          (user) =>
+            user.id !== projection.selfUserId &&
+            user.id !== excludeUserId &&
+            user.watchedSessions.includes(sessionKey),
+        )
+      : projection.users.filter((user) => user.id !== projection.selfUserId);
+    const users = this.staticParticipants
+      ? this.staticParticipants.map(({ identity, label, avatarUrl }) => ({
+          identity,
+          id: identity.id,
+          name: label,
+          avatarUrl,
+          watchedSessions: [],
+        }))
+      : (this.staticUsers ?? viewers).map((user) =>
+          Object.assign({}, user, { identity: { type: "profile" as const, id: user.id } }),
+        );
     if (users.length === 0) {
       return nothing;
     }
     const visible = users.slice(0, this.maxVisible);
     const overflow = users.slice(this.maxVisible);
+    const overflowCount = Math.max(users.length, this.totalCount ?? 0) - visible.length;
+    const overflowLabel =
+      overflow.length === overflowCount
+        ? overflow.map(presenceViewerLabel).join("\n")
+        : t("sessionHovercard.moreParticipantsLabel", { count: String(overflowCount) });
     return html`<span
       class="viewer-facepile viewer-facepile--session"
-      data-viewer-count=${users.length}
+      data-viewer-count=${Math.max(users.length, this.totalCount ?? 0)}
       aria-label=${users.map(presenceViewerLabel).join(", ")}
     >
       ${visible.map(
@@ -116,19 +139,21 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
             ${renderStandalonePersonLink(
               html`<openclaw-viewer-avatar
                 .user=${user}
+                .identity=${user.identity}
+                .markAsViewer=${!this.staticParticipants}
                 variant="session"
               ></openclaw-viewer-avatar>`,
-              personActivityLink(user.id, this.personActivity),
+              user.identity?.type === "profile"
+                ? personActivityLink(user.identity.id, this.personActivity)
+                : null,
             )}
           </span>
         </openclaw-tooltip>`,
       )}
-      ${overflow.length > 0
-        ? html`<openclaw-tooltip .content=${overflow.map(presenceViewerLabel).join("\n")}>
-            <span
-              class="viewer-avatar viewer-avatar--overflow"
-              aria-label=${overflow.map(presenceViewerLabel).join(", ")}
-              >+${overflow.length}</span
+      ${overflowCount > 0
+        ? html`<openclaw-tooltip .content=${overflowLabel}>
+            <span class="viewer-avatar viewer-avatar--overflow" aria-label=${overflowLabel}
+              >+${overflowCount}</span
             >
           </openclaw-tooltip>`
         : nothing}

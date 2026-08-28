@@ -298,6 +298,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "docs/**"
+          - ".agents/skills/update-team-server/**"
 
 "r: skill":
   - changed-files:
@@ -375,11 +376,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/copilot-proxy/**"
-"extensions: daytona":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/daytona/**"
-          - "docs/gateway/daytona.md"
 "extensions: diagnostics-otel":
   - changed-files:
       - any-glob-to-any-file:

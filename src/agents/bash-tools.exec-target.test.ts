@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { requireValidExecTarget } from "../infra/exec-approvals.js";
 import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
+import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 
 function expectExecTarget(
   actual: ReturnType<typeof resolveExecTarget>,
@@ -17,6 +19,42 @@ function expectExecTarget(
 }
 
 describe("resolveExecTarget", () => {
+  it("authenticates only the exact deliberate rejection once, not copies or invalid target syntax", () => {
+    let denied: unknown;
+    try {
+      resolveExecTarget({
+        configuredTarget: "gateway",
+        requestedTarget: "node",
+        elevatedRequested: false,
+        sandboxAvailable: false,
+      });
+    } catch (error) {
+      denied = error;
+    }
+    expect(denied).toBeInstanceOf(Error);
+    const error = denied as Error;
+    const serialized = JSON.stringify(error);
+    for (const copy of [
+      new Error(error.message),
+      Object.assign(new Error(error.message), error),
+      structuredClone(error),
+      JSON.parse(serialized),
+    ]) {
+      expect(consumeTrustedToolNoStartError(copy)).toBe(false);
+    }
+    expect(Object.keys(error)).toEqual([]);
+    expect(consumeTrustedToolNoStartError(error)).toBe(true);
+    expect(consumeTrustedToolNoStartError(error)).toBe(false);
+    let invalidError: unknown;
+    try {
+      requireValidExecTarget("invalid-host");
+    } catch (invalid) {
+      invalidError = invalid;
+    }
+    expect(invalidError).toBeInstanceOf(Error);
+    expect(consumeTrustedToolNoStartError(invalidError)).toBe(false);
+  });
+
   it("keeps implicit auto on sandbox when a sandbox runtime is available", () => {
     expectExecTarget(
       resolveExecTarget({

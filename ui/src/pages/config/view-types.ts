@@ -82,6 +82,7 @@ export type ConfigProps = {
   embeddedEditor?: boolean;
   /** Control UI rows that belong to the active schema section but are not Gateway config. */
   sectionPrelude?: TemplateResult;
+  showSectionDocs?: boolean;
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
   activeSection: string | null;
@@ -120,7 +121,6 @@ export type ConfigProps = {
   localeProvenance: ServerUiPrefProvenance;
   localeResetValue?: Locale;
   onLocaleChange: (locale: Locale | undefined) => void;
-  resetLocale: () => void;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   setAccent: (accent: string | undefined) => void;
@@ -171,7 +171,6 @@ export type ConfigProps = {
   chatSendShortcutProvenance: ServerUiPrefProvenance;
   chatSendShortcutResetValue: ChatSendShortcut;
   setChatSendShortcut: (value: ChatSendShortcut) => void;
-  resetChatSendShortcut: () => void;
   chatFollowUpMode: ChatFollowUpMode | undefined;
   chatFollowUpModeOverridden: boolean;
   chatFollowUpModeProvenance: ServerUiPrefProvenance;

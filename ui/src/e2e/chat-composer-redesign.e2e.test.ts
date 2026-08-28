@@ -9,6 +9,88 @@ const suite = createControlUiE2eSuite({
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
+  it.each([
+    {
+      reason: "missing-auth",
+      blocked: true,
+      message: "No provider credential is configured for this model. Set it up in Model Setup.",
+    },
+    {
+      reason: "auth-failed",
+      blocked: true,
+      message: "Authentication failed. Review the provider credential or sign-in, then retry.",
+    },
+    { reason: "cooldown", blocked: false, message: null },
+    { reason: undefined, blocked: false, message: null },
+  ] as const)(
+    "keeps $reason model availability honest in the composer and picker",
+    async ({ reason, blocked, message }) => {
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      await suite.withPage(
+        {
+          viewport: { width: 1280, height: 900 },
+          ...(artifactDir ? { recordVideo: { dir: artifactDir } } : {}),
+        },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5",
+                provider: "openai",
+                available: false,
+                unavailableReason: reason,
+              },
+            ],
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await gateway.waitForRequest("chat.startup");
+          const textarea = page.locator(".agent-chat__composer-combobox textarea");
+          await expect.poll(() => textarea.isDisabled()).toBe(blocked);
+          const statusBand = page.locator(".agent-chat__composer-status-band");
+          if (message) {
+            await expect.poll(() => statusBand.textContent()).toContain(message);
+          } else {
+            await expect.poll(() => statusBand.count()).toBe(0);
+            await textarea.fill("Send while availability recovers");
+            await page.getByRole("button", { name: "Send message" }).click();
+            const send = await gateway.waitForRequest("chat.send");
+            expect(send.params).toMatchObject({ message: "Send while availability recovers" });
+            const runId =
+              typeof send.params === "object" &&
+              send.params !== null &&
+              "idempotencyKey" in send.params
+                ? String(send.params.idempotencyKey)
+                : "";
+            await gateway.emitChatFinal({ runId, text: "The run succeeded." });
+            await expect
+              .poll(() => page.getByText("The run succeeded.").count())
+              .toBeGreaterThan(0);
+          }
+          if (artifactDir) {
+            await page.screenshot({
+              path: `${artifactDir}/model-${reason ?? "unknown"}-composer.png`,
+            });
+          }
+          await page.locator('[data-chat-model-select="true"]').click();
+          const option = page.locator('[data-chat-model-option="openai/gpt-5.5"]');
+          await expect.poll(() => option.isVisible()).toBe(true);
+          if (blocked) {
+            await expect.poll(() => option.getAttribute("data-chat-model-setup")).toBe("true");
+            await option.click();
+            await expect.poll(() => page.url()).toContain("model-setup");
+          } else {
+            expect(await option.isDisabled()).toBe(true);
+            expect(await page.locator(".chat-controls__model-menu").textContent()).not.toContain(
+              "Authentication failed",
+            );
+            expect(await option.textContent()).not.toContain("Sign-in needed");
+          }
+        },
+      );
+    },
+  );
+
   it("keeps offline status in one bounded composer row", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);

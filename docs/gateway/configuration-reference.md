@@ -1004,7 +1004,7 @@ The bundled `crabbox` provider provisions a disposable machine through the local
 - `settings.provider` (required): Crabbox backend passed through `--provider`; `aws` selects the direct AWS backend.
 - `settings.class` (required): Crabbox machine class passed to `--class`.
 - `settings.ttl` and `settings.idleTimeout` (required): positive Go duration strings passed to `--ttl` and `--idle-timeout` as provider-side failsafes.
-- `settings.warmImage`: set to `true` to capture a reusable machine image at each stop and start later workers with the same profile from it; pair with `suspendAfter` so suspended sessions wake warm. Disabled by default because images incur provider snapshot storage charges and retain whatever `setup` wrote outside the scrubbed worker state. Capture adds at most about three minutes to a stop on providers with slow native snapshots, then degrades to cold-only provisioning.
+- `settings.warmImage`: captures a reusable machine image at each stop and starts later workers with the same profile from it; pair with `suspendAfter` so suspended sessions wake warm. Enabled by default, except for profiles that set `setupEnv`, whose forwarded host environment could leave setup-derived credentials in a shared image; set `true` or `false` to choose explicitly. Images incur provider snapshot storage charges and retain machine-level caches, including per-repository Git seeds, alongside whatever `setup` wrote outside the scrubbed worker state. Capture adds at most about three minutes to a stop on providers with slow native snapshots, ten on `machine0`, then degrades to cold-only provisioning.
 - `settings.binary`: optional absolute Crabbox executable path. Without it, OpenClaw checks the sibling Crabbox checkout, then executable entries on `PATH`, and finally invokes `crabbox` so a missing CLI remains a visible provider error.
 
 Unknown settings are rejected. Crabbox credentials and backend-specific account configuration remain owned by Crabbox; do not place them in `settings`. OpenClaw invokes only the local CLI and makes no provider network calls from this plugin. Provisioning passes one deterministic canonical lease ID through `--lease-id`, keeps `--slug` as display metadata only, and always passes `--keep=true`; OpenClaw owns the external lifecycle and destroys the lease with `crabbox stop --id <canonical-id>`. After an ambiguous result, Gateway reconciliation repeats the same fixed-ID operation. Crabbox must return the exactly attested lease or fail closed; OpenClaw never falls back to slug adoption or replacement allocation.
@@ -1573,8 +1573,8 @@ Notes:
 - `file` provider supports `mode: "json"` and `mode: "singleValue"` (`id` must be `"value"` in singleValue mode).
 - File and exec provider paths fail closed when Windows ACL verification is unavailable. Use paths whose ACLs OpenClaw can verify; there is no provider-level bypass.
 - `exec` provider requires an absolute `command` path and uses protocol payloads on stdin/stdout.
-- Symlink command paths are rejected. Configure the resolved absolute binary path instead.
-- If `trustedDirs` is configured, the command path must be inside an approved directory.
+- Symlink command paths are rejected. Configure the resolved absolute binary path instead; it must not be group- or world-writable and, on POSIX, must be owned by the current user.
+- If `trustedDirs` is configured, the command path (after `~` expansion) must be inside an approved directory; symlinked commands are rejected before this check, so the configured path itself is what `trustedDirs` constrains.
 - `exec` child environment is minimal by default; pass required variables explicitly with `passEnv`.
 - Secret refs are resolved at activation time into an in-memory snapshot, then request paths read the snapshot only.
 - Active-surface filtering applies during activation: unresolved refs on enabled surfaces fail startup/reload, while inactive surfaces are skipped with diagnostics.

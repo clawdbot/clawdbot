@@ -292,7 +292,12 @@ export function buildTaskScript({
   }
   if (environment) {
     for (const [key, value] of Object.entries(environment)) {
-      if (!value || key.toUpperCase() === "PATH") {
+      // `set "NODE_OPTIONS="` clears inherited flags before the Node command runs.
+      if (
+        value === undefined ||
+        (!value && key.toUpperCase() !== "NODE_OPTIONS") ||
+        key.toUpperCase() === "PATH"
+      ) {
         continue;
       }
       lines.push(renderCmdSetAssignment(key, value));
@@ -303,7 +308,9 @@ export function buildTaskScript({
   // `process.stdin.isTTY` reports true and interactive permission prompts
   // block forever on a console no one can see (#112173). With stdin at NUL
   // the gateway and its workers correctly take non-interactive paths.
-  lines.push(`${programArguments.map(quoteCmdScriptArg).join(" ")} ${STDIN_NUL_REDIRECT}`);
+  lines.push(
+    `${programArguments.map((arg) => quoteCmdScriptArg(arg)).join(" ")} ${STDIN_NUL_REDIRECT}`,
+  );
   return `${lines.join("\r\n")}\r\n`;
 }
 

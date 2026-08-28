@@ -108,7 +108,7 @@ private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
         self.routeClearReleaseGate.open()
     }
 
-    func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func gatewayConnected(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async {
         self.stopCount += 1
         self.stopGate.open()
@@ -149,7 +149,7 @@ private actor CoordinatorFailingStartWorkerProbe: MacNodeHostWorking {
         true
     }
 
-    func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func gatewayConnected(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async {}
 
     func startCallCount() -> Int {

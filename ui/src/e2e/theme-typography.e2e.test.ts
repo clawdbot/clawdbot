@@ -6,6 +6,7 @@ import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../lib/keyboard-shortcut-contract.ts";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   controlUiBundledGatewayUrl,
   installMockGateway,
@@ -129,25 +130,21 @@ async function openPicker(picker: Locator) {
     ),
     picker.click(),
   ]);
+  await picker.locator('wa-popup [part="popup"]').evaluate(finishElementAnimations);
 }
 
-async function selectPickerOption(picker: Locator, value: string) {
-  await openPicker(picker);
-  await clickPickerOption(picker, value);
-}
-
-async function clickPickerOption(picker: Locator, value: string) {
-  const option = picker.locator(`wa-option[value="${value}"]`);
-  await option.waitFor({ state: "visible" });
-  await Promise.all([
-    picker.evaluate(
-      (select) =>
-        new Promise<void>((resolve) => {
-          select.addEventListener("wa-after-hide", () => resolve(), { once: true });
-        }),
-    ),
-    option.click(),
-  ]);
+async function selectPickerValue(picker: Locator, value: string) {
+  await picker.evaluate(async (element, nextValue) => {
+    const select = element as HTMLElement & {
+      open: boolean;
+      updateComplete: Promise<unknown>;
+      value: string;
+    };
+    select.value = nextValue;
+    select.open = false;
+    await select.updateComplete;
+    select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+  }, value);
 }
 
 suite.define(() => {
@@ -167,7 +164,9 @@ suite.define(() => {
       "Stored in this browser only",
     );
     await page.evaluate(() => document.fonts.ready);
-    expect(new Set(fontRequests())).toEqual(new Set(["dm-sans.css 200", "fraunces.css 200"]));
+    expect(new Set(fontRequests())).toEqual(
+      new Set(["dm-sans.css 200", "fraunces.css 200", "jetbrains-mono.css 200"]),
+    );
     const families = () =>
       preview.evaluate((panel) => ({
         ui: getComputedStyle(panel.querySelector(".settings-typography-preview__caption")!)
@@ -176,9 +175,12 @@ suite.define(() => {
           .fontFamily,
         code: getComputedStyle(panel.querySelector("code")!).fontFamily,
       }));
+    const chatSmoothing = () =>
+      page.evaluate(() => document.documentElement.style.getPropertyValue("--chat-font-smoothing"));
     const initial = await families();
     expect(initial.ui).toContain("DM Sans");
     expect(initial.chat).toContain("Fraunces");
+    expect(await chatSmoothing()).toBe("auto");
     if (captureUiProof) {
       await preview.scrollIntoViewIfNeeded();
     }
@@ -187,11 +189,16 @@ suite.define(() => {
     await ui.locator('wa-option[value="geist"]').waitFor({ state: "visible" });
     await expect.poll(() => fontRequests().length).toBe(9);
     await captureTypography(page, "picker-specimens");
-    await clickPickerOption(ui, "geist");
+    await selectPickerValue(ui, "geist");
     await expect.poll(async () => (await families()).ui).toContain("Geist");
     expect((await families()).chat).toContain("Fraunces");
-    await selectPickerOption(chat, "lora");
+    await selectPickerValue(chat, "geist");
+    await expect.poll(async () => (await families()).chat).toContain("Geist");
+    // A sans chat override on a serif theme drops the serif smoothing opt-in.
+    await expect.poll(chatSmoothing).toBe("");
+    await selectPickerValue(chat, "lora");
     await expect.poll(async () => (await families()).chat).toContain("Lora");
+    await expect.poll(chatSmoothing).toBe("auto");
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -206,10 +213,10 @@ suite.define(() => {
     await waitForControlUiSettingsTakeover(page);
     await expect.poll(async () => (await families()).ui).toContain("Geist");
     await expect.poll(async () => (await families()).chat).toContain("Lora");
-    await selectPickerOption(ui, "system");
+    await selectPickerValue(ui, "system");
     await expect.poll(async () => (await families()).ui).toContain("-apple-system");
-    await selectPickerOption(ui, "theme");
-    await selectPickerOption(chat, "theme");
+    await selectPickerValue(ui, "theme");
+    await selectPickerValue(chat, "theme");
     await expect.poll(families).toEqual(initial);
     expect(
       await page.evaluate(() =>
@@ -221,21 +228,22 @@ suite.define(() => {
   });
 
   it.each([
-    ["claw", "Instrument Sans", "Instrument Sans", ["instrument-sans"]],
-    ["knot", "Geist", "Geist", ["geist"]],
-    ["dash", "DM Sans", "Fraunces", ["dm-sans", "fraunces"]],
-    ["absolutely", "Space Grotesk", "Lora", ["space-grotesk", "lora"]],
-    ["tide", "IBM Plex Sans", "IBM Plex Sans", ["ibm-plex-sans"]],
+    ["claw", "Instrument Sans", "Instrument Sans", ["instrument-sans"], "antialiased"],
+    ["knot", "Geist", "Geist", ["geist"], "antialiased"],
+    ["dash", "DM Sans", "Fraunces", ["dm-sans", "fraunces"], "auto"],
+    ["absolutely", "Space Grotesk", "Lora", ["space-grotesk", "lora"], "auto"],
+    ["tide", "IBM Plex Sans", "IBM Plex Sans", ["ibm-plex-sans"], "antialiased"],
     [
       "beacon",
       "Atkinson Hyperlegible Next",
       "Atkinson Hyperlegible Next",
       ["atkinson-hyperlegible"],
+      "antialiased",
     ],
-    ["phosphor", "JetBrains Mono", "JetBrains Mono", ["jetbrains-mono"]],
+    ["phosphor", "JetBrains Mono", "JetBrains Mono", ["jetbrains-mono"], "antialiased"],
   ] as const)(
     "paints %s chrome and chat prose in its own faces",
-    async (theme, body, chat, faces) => {
+    async (theme, body, chat, faces, chatSmoothing) => {
       const { themeRequests, gateway, page } = await openThemedChat(theme, "dark");
       await page.goto(`${suite.server.baseUrl}chat`);
       await renderAssistantProse(gateway, page);
@@ -248,6 +256,9 @@ suite.define(() => {
           (value.split(",")[0] ?? "").trim().replace(/^["']|["']$/gu, "");
         return {
           chatFontFamily: lastChat ? primary(getComputedStyle(lastChat).fontFamily) : null,
+          chatFontSmoothing: lastChat
+            ? getComputedStyle(lastChat).getPropertyValue("-webkit-font-smoothing")
+            : null,
           bodyFontFamily: primary(getComputedStyle(document.body).fontFamily),
           linkHrefs: [...document.querySelectorAll('link[id^="openclaw-typeface-"]')].map((link) =>
             link.getAttribute("href"),
@@ -256,10 +267,17 @@ suite.define(() => {
         };
       });
 
-      expect(report.linkHrefs).toEqual(faces.map((face) => `/fonts/${face}.css`));
+      // Every theme also declares the mono face: base.css --mono names
+      // JetBrains Mono for code spans regardless of the active family.
+      const expectedFaces = [...new Set([...faces, "jetbrains-mono"])];
+      expect(report.linkHrefs).toEqual(expectedFaces.map((face) => `/fonts/${face}.css`));
       expect(report.bodyFontFamily).toBe(body);
       expect(report.chatFontFamily).toBe(chat);
-      expect(new Set(report.loaded)).toEqual(new Set([body, chat]));
+      // Serif chat faces opt out of the app-wide `antialiased` thinning
+      // (applyChatFontSmoothing) so their hairlines stay crisp.
+      expect(report.chatFontSmoothing).toBe(chatSmoothing);
+      // Mono glyphs on the page pull the always-declared JetBrains Mono face.
+      expect(new Set(report.loaded)).toEqual(new Set([body, chat, "JetBrains Mono"]));
       expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
 
       await captureTypography(page, `${theme}-chat-dark`);

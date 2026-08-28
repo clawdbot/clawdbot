@@ -1,6 +1,7 @@
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
+import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
@@ -16,6 +17,10 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   systemAgentTool?: SystemAgentToolOptions;
   /** Gateway-private lifecycle generation selected before command admission. */
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
+  /** Host-only transfer of attempt terminal resources to the logical turn. */
+  onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
+  /** Aborts the logical turn when its retained embedded handle is cancelled. */
+  onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
 };
 
 export type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {

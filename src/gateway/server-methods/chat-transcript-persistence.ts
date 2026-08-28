@@ -160,7 +160,10 @@ function mergeManagedMediaIntoAssistantContent(params: {
     });
     if (visibleText) {
       const { textSignature: _textSignature, ...rest } = block;
-      merged.push({ ...rest, text: visibleText });
+      merged.push({
+        ...rest,
+        text: visibleText,
+      });
     }
     if (split.mediaUrls?.length && !replaced) {
       merged.push(...managedBlocks);

@@ -6,13 +6,13 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -43,6 +43,7 @@ const TOOLING_CLOSURE = [
   "packages/normalization-core/src/record-coerce.ts",
   "packages/normalization-core/src/string-coerce.ts",
   "packages/plugin-package-contract/src/index.ts",
+  "scripts/lib/canonical-json.mjs",
   "scripts/release-plan-producer.mts",
   "scripts/release-plan-producer-core.mts",
   "scripts/release-plan-contract.mjs",
@@ -321,6 +322,11 @@ type YamlPackageHarnessParams = {
 
 function runYamlPackageSubprocess(
   options: {
+    main?: {
+      intent: "diagnostic" | "main-qualification";
+      validationIntent?: MainQualificationValidationIntent;
+      comparisonStatus: string;
+    };
     beforeProduce?: (params: YamlPackageHarnessParams) => string;
     environment?: (params: YamlPackageHarnessParams) => Record<string, string>;
     mutate?: (params: YamlPackageHarnessParams) => void;
@@ -341,7 +347,9 @@ function runYamlPackageSubprocess(
     };
   }
   const packageRoot = join(fixture.root, "node_modules/yaml");
-  cpSync(realpathSync(resolve("node_modules/yaml")), packageRoot, { recursive: true });
+  cpSync(dirname(createRequire(import.meta.url).resolve("yaml/package.json")), packageRoot, {
+    recursive: true,
+  });
   const sentinelPath = join(fixture.root, "yaml-executed");
   const tempRoot = join(fixture.root, "yaml-temp");
   mkdirSync(tempRoot);
@@ -355,20 +363,23 @@ ${options.beforeImport?.(params) ?? ""}
 const { produceReleasePlan } = await import("./scripts/release-plan-producer.mts");
 ${options.beforeProduce?.(params) ?? ""}
 
-const toolingFullRef = ${JSON.stringify(fixture.toolingFullRef)};
+const toolingFullRef = ${JSON.stringify(options.main ? "refs/heads/main" : fixture.toolingFullRef)};
 const toolingSha = ${JSON.stringify(fixture.toolingSha)};
-produceReleasePlan({
+const plan = produceReleasePlan({
   repoRoot: ${JSON.stringify(fixture.root)},
-  intent: "publish",
+  intent: ${JSON.stringify(options.main?.intent ?? "publish")},
+  validationIntent: ${JSON.stringify(options.main?.validationIntent)},
   candidateSha: ${JSON.stringify(fixture.candidateSha)},
-  candidateRef: ${JSON.stringify(fixture.candidateRef)},
+  candidateRef: ${JSON.stringify(options.main ? fixture.candidateSha : fixture.candidateRef)},
   toolingSha,
   toolingFullRef,
   runGh: () => JSON.stringify({
+    status: ${JSON.stringify(options.main?.comparisonStatus)},
     ref: toolingFullRef,
     object: { type: "commit", sha: ${JSON.stringify(options.remoteToolingSha?.(params) ?? fixture.toolingSha)} },
   }),
 });
+process.stdout.write(JSON.stringify(plan));
 const moduleApi = await import("node:module");
 const harnessRequire = moduleApi.createRequire(import.meta.url);
 const leakedSnapshotCache = Object.keys(harnessRequire.cache).filter(path =>
@@ -585,7 +596,7 @@ describe("release plan producer", () => {
     });
   });
 
-  it("produces tagless diagnostics from trusted main or protected tooling", () => {
+  it("produces tagless diagnostics from protected tooling", () => {
     const fixture = createFixtureRepo();
     expect(produceReleasePlan(sourceParams(fixture, "diagnostic"))).toMatchObject({
       candidate_sha: fixture.candidateSha,
@@ -602,25 +613,64 @@ describe("release plan producer", () => {
         soak: true,
       },
     });
+  });
 
-    expect(
-      produceReleasePlan({
-        ...sourceParams(fixture, "diagnostic"),
-        toolingFullRef: "refs/heads/main",
-        runGh: (args) => {
-          expect(args[1]).toBe(`repos/openclaw/openclaw/compare/${fixture.toolingSha}...main`);
-          return JSON.stringify({ status: "identical" });
+  it.each([
+    ["diagnostic", undefined, "ahead", "diagnostic-full", "full", true],
+    ["main-qualification", "main-daily", "identical", "main-daily", "beta", false],
+    ["main-qualification", "main-weekly", "ahead", "main-weekly", "full", true],
+  ] as const)(
+    "produces trusted-main %s/%s with %s ancestry through the verified child",
+    (intent, validationIntent, comparisonStatus, expectedIntent, profile, soak) => {
+      const { result, fixture } = runYamlPackageSubprocess({
+        main: { intent, validationIntent, comparisonStatus },
+      });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        candidate_sha: fixture.candidateSha,
+        purpose: intent,
+        tag: null,
+        target_context_ref: fixture.candidateSha,
+        tooling: { ref: "refs/heads/main", sha: fixture.toolingSha },
+        validation: {
+          intent: expectedIntent,
+          profile,
+          soak,
+          allowed_groups: ["all", "ci", "package"],
         },
-      }),
-    ).toMatchObject({
-      purpose: "diagnostic",
-      tag: null,
-      target_context_ref: fixture.candidateSha,
-      tooling: {
-        ref: "refs/heads/main",
-        sha: fixture.toolingSha,
+      });
+    },
+  );
+
+  it.each(["diverged", "behind"])(
+    "rejects %s main ancestry before the verified child",
+    (comparisonStatus) => {
+      const { result } = runYamlPackageSubprocess({
+        main: { intent: "diagnostic", comparisonStatus },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "main release tooling SHA is not reachable from current main",
+      );
+    },
+  );
+
+  it("rejects an uncached request from verified tooling", () => {
+    const { result } = runYamlPackageSubprocess({
+      mutateTooling: (fixture) => {
+        const corePath = join(fixture.root, "scripts/release-plan-producer-core.mts");
+        writeFileSync(
+          corePath,
+          readFileSync(corePath, "utf8").replace(
+            "const params = { ...request.params, runGh: runtime.runGh };",
+            'runtime.runGh(["api", "repos/openclaw/openclaw"]);\nconst params = { ...request.params, runGh: runtime.runGh };',
+          ),
+        );
       },
     });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("verified child rejected an uncached GitHub request");
   });
 
   it("requires main qualification producers to choose daily or weekly", () => {
@@ -1115,7 +1165,7 @@ mutateModule.syncBuiltinESMExports();
     );
   });
 
-  it("matches the exact current publisher inventory: 94 npm and 90 ClawHub packages", () => {
+  it("matches the exact current publisher inventory: 93 npm and 89 ClawHub packages", () => {
     const root = tempDirs.make("openclaw-release-plan-current-");
     const candidateSha = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: resolve("."),
@@ -1141,8 +1191,8 @@ mutateModule.syncBuiltinESMExports();
     const clawHubPackages = plan.inventory.packages.filter((entry) =>
       entry.targets.includes("clawhub"),
     );
-    expect(npmPackages).toHaveLength(94);
-    expect(clawHubPackages).toHaveLength(90);
+    expect(npmPackages).toHaveLength(93);
+    expect(clawHubPackages).toHaveLength(89);
     const coreNpmPackages = new Set([
       "@openclaw/ai",
       "@openclaw/gateway-client",

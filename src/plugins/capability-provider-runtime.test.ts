@@ -128,7 +128,7 @@ vi.mock("./bundled-compat.js", () => ({
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
 let resolvePluginCapabilityProvider: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProvider;
 let prepareMediaCapabilityProviders: typeof import("./capability-provider-runtime.js").prepareMediaCapabilityProviders;
-let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
+let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata.test-support.js").setCurrentPluginMetadataSnapshot;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
 
 function expectResolvedCapabilityProviderIds(providers: Array<{ id: string }>, expected: string[]) {
@@ -361,7 +361,8 @@ describe("resolvePluginCapabilityProviders", () => {
       resolvePluginCapabilityProvider,
       resolvePluginCapabilityProviders,
     } = await import("./capability-provider-runtime.js"));
-    ({ setCurrentPluginMetadataSnapshot } = await import("./current-plugin-metadata-snapshot.js"));
+    ({ setCurrentPluginMetadataSnapshot } =
+      await import("./current-plugin-metadata.test-support.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
   });
 
@@ -1596,42 +1597,38 @@ describe("resolvePluginCapabilityProviders", () => {
     });
   });
 
-  it("reloads unprepared manifest metadata while applying bundled compat", () => {
-    const { cfg, enablementCompat } = createCompatChainConfig();
-    setBundledCapabilityFixture("mediaUnderstandingProviders");
-    mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
+  it.each(["same", "equivalent"] as const)(
+    "reuses manifest metadata while applying bundled compat to each %s config",
+    (configIdentity) => {
+      const first = createCompatChainConfig();
+      const second = configIdentity === "same" ? first : createCompatChainConfig();
+      setBundledCapabilityFixture("mediaUnderstandingProviders");
+      mocks.withBundledPluginEnablementCompat.mockReturnValue(first.enablementCompat);
 
-    expectNoResolvedCapabilityProviders(
-      resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders", cfg }),
-    );
-    expectNoResolvedCapabilityProviders(
-      resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders", cfg }),
-    );
+      expectNoResolvedCapabilityProviders(
+        resolvePluginCapabilityProviders({
+          key: "mediaUnderstandingProviders",
+          cfg: first.cfg,
+        }),
+      );
+      expectNoResolvedCapabilityProviders(
+        resolvePluginCapabilityProviders({
+          key: "mediaUnderstandingProviders",
+          cfg: second.cfg,
+        }),
+      );
 
-    expect(mocks.loadPluginManifestRegistryCore).toHaveBeenCalledTimes(2);
-  });
-
-  it("reloads equivalent unprepared manifest metadata while applying bundled compat", () => {
-    const first = createCompatChainConfig();
-    const second = createCompatChainConfig();
-    setBundledCapabilityFixture("mediaUnderstandingProviders");
-    mocks.withBundledPluginEnablementCompat.mockReturnValue(first.enablementCompat);
-
-    expectNoResolvedCapabilityProviders(
-      resolvePluginCapabilityProviders({
-        key: "mediaUnderstandingProviders",
-        cfg: first.cfg,
-      }),
-    );
-    expectNoResolvedCapabilityProviders(
-      resolvePluginCapabilityProviders({
-        key: "mediaUnderstandingProviders",
-        cfg: second.cfg,
-      }),
-    );
-
-    expect(mocks.loadPluginManifestRegistryCore).toHaveBeenCalledTimes(2);
-  });
+      expect(mocks.loadPluginManifestRegistryCore).toHaveBeenCalledOnce();
+      expect(mocks.withBundledPluginEnablementCompat).toHaveBeenNthCalledWith(1, {
+        config: first.cfg,
+        pluginIds: ["openai"],
+      });
+      expect(mocks.withBundledPluginEnablementCompat).toHaveBeenNthCalledWith(2, {
+        config: second.cfg,
+        pluginIds: ["openai"],
+      });
+    },
+  );
 
   it("reuses a compatible active registry even when the capability list is empty", () => {
     const active = createEmptyPluginRegistry();

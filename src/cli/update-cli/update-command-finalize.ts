@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { doctorCommand } from "../../commands/doctor.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
@@ -34,6 +33,7 @@ import {
 } from "./update-command-config.js";
 import {
   completePostCorePluginUpdate,
+  runUpdateFinalizationDoctorInFreshProcess,
   withPrePluginUpdateDoctorEnv,
 } from "./update-command-fresh-doctor.js";
 import {
@@ -197,10 +197,13 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       phaseTimings,
       phase: "doctor",
       run: async () => {
-        await doctorCommand(defaultRuntime, {
-          nonInteractive: true,
-          repair: true,
+        await runUpdateFinalizationDoctorInFreshProcess({
+          phase: "pre-plugin",
+          root,
           yes: opts.yes === true,
+          json: opts.json === true,
+          workspaceSuggestions: true,
+          timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
         });
       },
     });
@@ -239,6 +242,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
               json: opts.json,
               timeout: opts.timeout,
               yes: opts.yes,
+              acceptCapabilities: opts.acceptCapabilities,
               restart: false,
             },
             timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,

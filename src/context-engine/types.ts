@@ -379,6 +379,11 @@ export interface ContextEngine {
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
+    /**
+     * Optional caller cancellation for maintenance work that may block.
+     * Engines should reject promptly when this signal aborts.
+     */
+    abortSignal?: AbortSignal;
   }): Promise<ContextEngineMaintenanceResult>;
 
   /**

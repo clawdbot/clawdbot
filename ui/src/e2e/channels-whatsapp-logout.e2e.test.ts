@@ -20,6 +20,12 @@ const uiProofArtifactDir = path.join(
   "control-ui-e2e",
   "channels-save-failure",
 );
+const wizardUiProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "channel-wizard-continue-spinner",
+);
 
 suite.define(() => {
   it("shows rejected channel configuration saves in the open editor without losing the draft", async () => {
@@ -371,6 +377,9 @@ suite.define(() => {
   });
 
   it("preserves standard channel details and the complete Telegram setup wizard", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(wizardUiProofArtifactDir, { recursive: true });
+    }
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const channelEntries = [
         ["discord", "Discord"],
@@ -483,7 +492,11 @@ suite.define(() => {
       await expect.poll(() => account.getAttribute("disabled")).not.toBeNull();
       const busyButton = wizard.locator('button[aria-busy="true"]');
       await expect.poll(() => busyButton.getAttribute("disabled")).not.toBeNull();
+      await expect.poll(() => busyButton.locator(".btn__label").textContent()).toBe("Continue");
       await expect.poll(() => busyButton.locator(".btn__spinner").count()).toBe(1);
+      if (captureUiProofEnabled) {
+        await wizard.screenshot({ path: path.join(wizardUiProofArtifactDir, "after.png") });
+      }
       await expect
         .poll(() => wizard.locator(".channels-wizard__spinner", { hasText: "Working…" }).count())
         .toBe(0);

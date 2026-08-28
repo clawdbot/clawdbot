@@ -358,6 +358,8 @@ export type ControlUiMockGatewayScenario = {
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
   sessionKey?: string;
+  sessionScope?: "agent" | "global";
+  mainSessionKey?: string;
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
   /** Optional New Session defaults keyed by custom group name. */
@@ -874,6 +876,7 @@ function normalizeScenario(
 ): NormalizedControlUiMockGatewayScenario {
   const defaultAgentId = scenario.defaultAgentId?.trim() || "main";
   const sessionKey = scenario.sessionKey?.trim() || "main";
+  const mainSessionKey = scenario.mainSessionKey?.trim() || sessionKey;
   const basePathValue = scenario.basePath?.trim() ?? "";
   const basePathWithSlash = basePathValue
     ? basePathValue.startsWith("/")
@@ -919,6 +922,7 @@ function normalizeScenario(
     omitFeatureMethods: scenario.omitFeatureMethods ?? false,
     historyMessages: scenario.historyMessages ?? [],
     maxPayload: scenario.maxPayload ?? DEFAULT_MOCK_MAX_PAYLOAD_BYTES,
+    mainSessionKey,
     methodResponses: scenario.methodResponses ?? {},
     webSocketPassthroughPrefixes: scenario.webSocketPassthroughPrefixes ?? [],
     inFlightRun: scenario.inFlightRun ?? null,
@@ -936,6 +940,7 @@ function normalizeScenario(
     sessionInfo: scenario.sessionInfo ?? null,
     sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
     sessionKey,
+    sessionScope: scenario.sessionScope ?? "agent",
     sessionGroups: scenario.sessionGroups ?? [],
     sessionGroupDefaults: scenario.sessionGroupDefaults ?? {},
     terminalEnabled: scenario.terminalEnabled ?? false,
@@ -1762,9 +1767,9 @@ function installControlUiMockGateway(
             sessionDefaults: {
               defaultAgentId: scenario.defaultAgentId,
               mainKey: "main",
-              mainSessionKey: scenario.sessionKey,
+              mainSessionKey: scenario.mainSessionKey,
               modelConfigured: Boolean(scenario.agentModel),
-              scope: "agent",
+              scope: scenario.sessionScope,
             },
           },
           type: "hello-ok",

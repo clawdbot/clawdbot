@@ -257,7 +257,7 @@ export async function runCronIsolatedAgentTurn(params: {
 
   let outcome: "completed" | "error" = "completed";
   let outcomeError: string | undefined;
-  let cronRunSessionCleanupAttempted = false;
+  let cronRunSessionCleanupHandled = false;
   try {
     assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
     const existingRunContext = getAgentRunContext(initialSessionId);
@@ -358,8 +358,8 @@ export async function runCronIsolatedAgentTurn(params: {
       execution,
       abortReason,
       isAborted,
-      markCronRunSessionCleanupAttempted: () => {
-        cronRunSessionCleanupAttempted = true;
+      markCronRunSessionCleanupHandled: () => {
+        cronRunSessionCleanupHandled = true;
       },
       // Self-deleting sessions must release before their own lifecycle mutation.
       // Other runs retain admission through delivery and release in finally.
@@ -426,7 +426,7 @@ export async function runCronIsolatedAgentTurn(params: {
       });
     } finally {
       try {
-        if (!cronRunSessionCleanupAttempted) {
+        if (!cronRunSessionCleanupHandled) {
           await cleanupCronRunSessionAfterRun({
             job: params.job,
             agentSessionKey: prepared.context.agentSessionKey,

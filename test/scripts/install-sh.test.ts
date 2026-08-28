@@ -3576,6 +3576,71 @@ EOF
     }
   });
 
+  it.each([
+    { error: "SERVICE_DEFINITION_SEALED: protected", stream: "stderr" },
+    { error: "SERVICE_DEFINITION_SEALED: protected", stream: "stdout" },
+    { error: "SERVICE_DEFINITION_UNKNOWN: inaccessible", stream: "stderr" },
+    { error: "service manager unavailable", stream: "stderr" },
+  ])("handles a traced $error refresh in $stream", ({ error, stream }) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-install-definition-"));
+    const openclaw = join(root, "openclaw");
+    const secretCanary = "installer-sh-secret-canary-never-render";
+    const commandLog = join(root, "commands.log");
+    writeFileSync(
+      openclaw,
+      [
+        "#!/bin/bash",
+        'printf "%s\\n" "$*" >> "$COMMAND_LOG"',
+        'if [[ "$*" == "gateway install --force" ]]; then',
+        '  if [[ "$SERVICE_STREAM" == stdout ]]; then printf "%s\\n" "$SERVICE_ERROR"; else printf "%s\\n" "$SERVICE_ERROR" >&2; fi',
+        '  printf "%s\\n" "$SECRET_CANARY" >&2; exit 1',
+        "fi",
+      ].join("\n"),
+    );
+    chmodSync(openclaw, 0o755);
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `OPENCLAW_BIN=${JSON.stringify(openclaw)}`,
+          "is_gateway_daemon_loaded() { return 0; }",
+          "set -x",
+          "refresh_gateway_service_if_loaded",
+          "printf 'INSTALL_COMPLETE\\n'",
+        ].join("\n"),
+        {
+          COMMAND_LOG: commandLog,
+          SECRET_CANARY: secretCanary,
+          SERVICE_ERROR: error,
+          SERVICE_STREAM: stream,
+          TERM: "dumb",
+        },
+      );
+
+      const denied = error.startsWith("SERVICE_DEFINITION_");
+      expect(readFileSync(commandLog, "utf8").split("\n")).not.toContain("gateway restart");
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("+ refresh_gateway_service_if_loaded");
+      expect(result.stdout + result.stderr).not.toContain(secretCanary);
+      if (denied) {
+        expect(result.stdout).toContain("gateway service definition left unchanged");
+        expect(result.stdout).toContain(
+          error.includes("SEALED")
+            ? "privileged deployment owner"
+            : "inspect service-definition access",
+        );
+        expect(result.stdout).toContain("INSTALL_COMPLETE");
+      } else {
+        expect(result.stdout).toContain("Gateway service refresh failed; continuing");
+        expect(result.stdout).toContain("INSTALL_COMPLETE");
+      }
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("refreshes the shell command cache after loading a persisted PATH update", () => {
     const result = runInstallShell(`
       set -euo pipefail
@@ -3618,39 +3683,270 @@ EOF
     expect(result.stdout).toContain("main=main");
   });
 
-  it("fetches moving git refs without tags for git installs", () => {
-    expect(script).toContain('git -C "$repo_dir" fetch --no-tags origin main');
+  it("keeps ref resolution and rebase failures explicit", () => {
+    expect(script).toContain(
+      'git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"',
+    );
     expect(script).toContain(
       'git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"',
     );
-    expect(script).toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
+    expect(script).toContain('git -C "$repo_dir" ls-remote --exit-code origin');
+    expect(script).toContain(
+      'run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "refs/tags/${ref}"',
+    );
+    expect(script).toContain('git -C "$repo_dir" rebase origin/main');
+    expect(script).not.toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
+  });
 
-    const branchCheckIndex = script.indexOf('ls-remote --exit-code --heads origin "$ref"');
-    const tagFetchIndex = script.indexOf("fetch --tags origin");
-    expect(branchCheckIndex).toBeGreaterThan(-1);
-    expect(tagFetchIndex).toBeGreaterThan(-1);
-    expect(branchCheckIndex).toBeLessThan(tagFetchIndex);
+  it("prefers a release tag over a same-named branch", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      run_quiet_step() {
+        shift
+        "$@"
+      }
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      ref=v2026.5.12
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'tag\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm tag
+      tag_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git -C "$seed" tag "$ref"
+      git -C "$seed" push -q origin "refs/tags/$ref"
+      git -C "$seed" checkout -qb "$ref"
+      printf 'branch\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam branch
+      branch_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" push -q origin "refs/heads/$ref"
+      git clone -q "$remote" "$repo"
+      checkout_git_openclaw_ref "$repo" "$ref"
+      selected="$(git -C "$repo" rev-parse HEAD)"
+      printf 'selected=%s tag=%s branch=%s kind=%s\n' "$selected" "$tag_head" "$branch_head" "$GIT_REF_KIND"
+      [[ "$selected" == "$tag_head" && "$selected" != "$branch_head" && "$GIT_REF_KIND" == "immutable" ]]
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("kind=immutable");
+    expect(result.stdout).toContain("selected=");
+  });
+
+  it("falls back to a v-prefixed branch when no matching release tag exists", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      run_quiet_step() {
+        shift
+        "$@"
+      }
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      ref=v2-hotfix
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'base\\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm base
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git -C "$seed" checkout -qb "$ref"
+      printf 'branch\\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam branch
+      branch_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" push -q origin "refs/heads/$ref"
+      git clone -q "$remote" "$repo"
+      checkout_git_openclaw_ref "$repo" "$ref"
+      selected="$(git -C "$repo" rev-parse HEAD)"
+      printf 'selected=%s branch=%s kind=%s\\n' "$selected" "$branch_head" "$GIT_REF_KIND"
+      [[ "$selected" == "$branch_head" && "$GIT_REF_KIND" == "moving" ]]
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("kind=moving");
+    expect(result.stdout).toContain("selected=");
+  });
+
+  it("updates a stale existing main checkout from the remote tracking ref", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      source_repo="$tmp/source"
+      repo="$tmp/repo"
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$source_repo"
+      git -C "$source_repo" config user.email test@example.invalid
+      git -C "$source_repo" config user.name test
+      printf 'base\\n' > "$source_repo/state.txt"
+      git -C "$source_repo" add state.txt
+      git -C "$source_repo" commit -qm base
+      git -C "$source_repo" remote add origin "$remote"
+      git -C "$source_repo" push -q -u origin main
+      git --git-dir="$remote" symbolic-ref HEAD refs/heads/main
+      git clone -q "$remote" "$repo"
+      git -C "$repo" config user.email test@example.invalid
+      git -C "$repo" config user.name test
+      printf 'target\\n' > "$source_repo/state.txt"
+      git -C "$source_repo" commit -qam target
+      git -C "$source_repo" push -q origin main
+      base="$(git -C "$repo" rev-parse HEAD)"
+      stale_tracking="$(git -C "$repo" rev-parse refs/remotes/origin/main)"
+      [[ "$base" == "$stale_tracking" ]]
+      run_quiet_step() { shift; "$@"; }
+      GIT_UPDATE=1
+      checkout_git_openclaw_ref "$repo" main
+      head="$(git -C "$repo" rev-parse HEAD)"
+      tracking="$(git -C "$repo" rev-parse refs/remotes/origin/main)"
+      remote_head="$(git --git-dir="$remote" rev-parse refs/heads/main)"
+      printf 'head=%s\\ntracking=%s\\nremote=%s\\n' "$head" "$tracking" "$remote_head"
+      [[ "$head" == "$remote_head" && "$tracking" == "$remote_head" && "$head" != "$base" ]]
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("head=");
+    expect(result.stdout).toContain("tracking=");
+    expect(result.stdout).toContain("remote=");
+  });
+
+  it("restores an existing main checkout after a failed rebase", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'base\\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm base
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git --git-dir="$remote" symbolic-ref HEAD refs/heads/main
+      git clone -q "$remote" "$repo"
+      git -C "$repo" config user.email test@example.invalid
+      git -C "$repo" config user.name test
+      printf 'remote\\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam remote
+      git -C "$seed" push -q origin main
+      printf 'local\\n' > "$repo/state.txt"
+      git -C "$repo" commit -qam local
+      printf 'keep this user change\\n' > "$repo/user-note.txt"
+      expected_head="$(git -C "$repo" rev-parse HEAD)"
+      expected_status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
+      set +e
+      output="$(checkout_git_openclaw_ref "$repo" main 2>&1)"
+      status=$?
+      set -e
+      [[ "$status" -ne 0 ]]
+      actual_head="$(git -C "$repo" rev-parse HEAD)"
+      actual_status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
+      rebase_merge="$(git -C "$repo" rev-parse --git-path rebase-merge)"
+      rebase_apply="$(git -C "$repo" rev-parse --git-path rebase-apply)"
+      [[ "$actual_head" == "$expected_head" ]]
+      [[ "$actual_status" == "$expected_status" ]]
+      [[ "$(cat "$repo/user-note.txt")" == "keep this user change" ]]
+      [[ ! -d "$rebase_merge" && ! -d "$rebase_apply" ]]
+      [[ "$output" == *"restored to its pre-update state"* ]]
+      printf 'recovery=head-restored status-clean rebase-state-cleared\\n'
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("recovery=head-restored status-clean rebase-state-cleared");
+  });
+
+  it("verifies unchanged state when a hook refuses rebase before it starts", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      run_quiet_step() { shift; "$@"; }
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'base\\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm base
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git --git-dir="$remote" symbolic-ref HEAD refs/heads/main
+      git clone -q "$remote" "$repo"
+      printf 'remote\\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam remote
+      git -C "$seed" push -q origin main
+      git -C "$repo" config user.email test@example.invalid
+      git -C "$repo" config user.name test
+      printf 'local\\n' > "$repo/local.txt"
+      git -C "$repo" add local.txt
+      git -C "$repo" commit -qm local
+      cat > "$repo/.git/hooks/pre-rebase" <<'HOOK'
+#!/usr/bin/env bash
+exit 42
+HOOK
+      chmod +x "$repo/.git/hooks/pre-rebase"
+      printf 'keep this user change\\n' > "$repo/user-note.txt"
+      expected_head="$(git -C "$repo" rev-parse HEAD)"
+      expected_status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
+      set +e
+      output="$(GIT_UPDATE=1 checkout_git_openclaw_ref "$repo" main 2>&1)"
+      status=$?
+      set -e
+      actual_head="$(git -C "$repo" rev-parse HEAD)"
+      actual_status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
+      rebase_merge="$(git -C "$repo" rev-parse --git-path rebase-merge)"
+      rebase_apply="$(git -C "$repo" rev-parse --git-path rebase-apply)"
+      [[ "$status" -ne 0 ]]
+      [[ "$actual_head" == "$expected_head" ]]
+      [[ "$actual_status" == "$expected_status" ]]
+      [[ "$(cat "$repo/user-note.txt")" == "keep this user change" ]]
+      [[ ! -d "$rebase_merge" && ! -d "$rebase_apply" ]]
+      [[ "$output" == *"restored to its pre-update state"* ]]
+      printf 'hook-refusal=head-verified status-verified rebase-state-absent\\n'
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "hook-refusal=head-verified status-verified rebase-state-absent",
+    );
   });
 
   it("uses non-frozen lockfile installs only for moving git refs", () => {
     const result = runInstallShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
-      git() {
-        if [[ "$1" == "-C" && "$3" == "ls-remote" && "\${7:-}" == "feature" ]]; then
-          return 0
-        fi
-        return 1
-      }
-      printf 'main=%s\\n' "$(git_install_lockfile_flag /repo main)"
-      printf 'branch=%s\\n' "$(git_install_lockfile_flag /repo feature)"
-      printf 'tag=%s\\n' "$(git_install_lockfile_flag /repo v2026.5.12)"
+      printf 'moving=%s\\n' "$(git_install_lockfile_flag moving)"
+      printf 'immutable=%s\\n' "$(git_install_lockfile_flag immutable)"
     `);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("main=--no-frozen-lockfile");
-    expect(result.stdout).toContain("branch=--no-frozen-lockfile");
-    expect(result.stdout).toContain("tag=--frozen-lockfile");
+    expect(result.stdout).toContain("moving=--no-frozen-lockfile");
+    expect(result.stdout).toContain("immutable=--frozen-lockfile");
     expect(script).toContain(
       'CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"',
     );

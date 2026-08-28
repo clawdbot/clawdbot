@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildSessionTranscriptProjection,
-  type SessionTranscriptProjectionSourceRow,
-} from "./session-transcript-projection-rebuild.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { prepareSessionTranscriptProjection } from "./session-transcript-projection-rebuild.js";
+
+type SessionTranscriptProjectionSourceRow = { seq: number; event: unknown; createdAt: number };
 
 const SESSION_ID = "projection-session";
 
@@ -15,11 +15,20 @@ function row(
 }
 
 function projection(rows: SessionTranscriptProjectionSourceRow[]) {
-  return buildSessionTranscriptProjection({
-    rows,
-    sessionId: SESSION_ID,
-    sourceTranscriptUpdatedAt: 42,
-  });
+  const db = openNodeSqliteDatabase(":memory:");
+  try {
+    db.exec(`CREATE TABLE session_windows (session_id TEXT PRIMARY KEY, transcript_updated_at INTEGER);
+      CREATE TABLE transcript_events (session_id TEXT, seq INTEGER, event_json TEXT, created_at INTEGER,
+        PRIMARY KEY (session_id, seq));`);
+    db.prepare("INSERT INTO session_windows VALUES (?, ?)").run(SESSION_ID, 42);
+    const insert = db.prepare("INSERT INTO transcript_events VALUES (?, ?, ?, ?)");
+    for (const sourceRow of rows) {
+      insert.run(SESSION_ID, sourceRow.seq, JSON.stringify(sourceRow.event), sourceRow.createdAt);
+    }
+    return prepareSessionTranscriptProjection(db, SESSION_ID)!;
+  } finally {
+    db.close();
+  }
 }
 
 describe("canonical session transcript projection", () => {

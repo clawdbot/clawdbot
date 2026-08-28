@@ -16,6 +16,7 @@ import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import type { PackageManifest } from "./manifest.js";
 import { resolvePackageSetupSource } from "./package-entry-resolution.js";
 import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   cleanupTrackedTempDirs,
@@ -3271,7 +3272,7 @@ describe("discoverOpenClawPlugins", () => {
     );
   });
 
-  it("keeps strict global package manifests fresh between standalone discovery calls", () => {
+  it("keeps strict global package manifests fixed until a fresh operation", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "fresh-package");
     createPackagePluginWithEntry({
@@ -3300,13 +3301,13 @@ describe("discoverOpenClawPlugins", () => {
     expect(replacementStat.size).toBe(originalStat.size);
     expect(replacementStat.mtimeMs).toBe(originalStat.mtimeMs);
 
-    const second = discoverWithEnv({ env });
+    const second = withPluginCache(createPluginCache(), () => discoverWithEnv({ env }));
     expect(requireCandidateById(second.candidates, "fresh-package").packageName).toBe(
       "@openclaw/cache-two",
     );
   });
 
-  it("does not cache missing manifests for mutable external roots with relaxed hardlink checks", () => {
+  it("observes newly installed package manifests only in a fresh operation", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "fresh-package");
     mkdirSafe(pluginDir);
@@ -3324,13 +3325,13 @@ describe("discoverOpenClawPlugins", () => {
       extensions: ["./index.js"],
     });
 
-    const second = discoverWithEnv({ env });
+    const second = withPluginCache(createPluginCache(), () => discoverWithEnv({ env }));
     expect(requireCandidateById(second.candidates, "fresh-package").packageName).toBe(
       "@openclaw/fresh-package",
     );
   });
 
-  it("reflects plugin root changes on the next discovery call", () => {
+  it("reflects removed plugin roots in a fresh operation", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "fresh");
     createPackagePluginWithEntry({
@@ -3345,7 +3346,7 @@ describe("discoverOpenClawPlugins", () => {
 
     fs.rmSync(pluginDir, { recursive: true, force: true });
 
-    const second = discoverWithEnv({ env });
+    const second = withPluginCache(createPluginCache(), () => discoverWithEnv({ env }));
     expect(second.candidates.map((candidate) => candidate.idHint)).not.toContain("fresh");
   });
 

@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setAvatarGatewayOrigin } from "../../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { invalidateChatAvatarCache, refreshChatAvatar, renderChatAvatar } from "./chat-avatar.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 

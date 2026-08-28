@@ -182,6 +182,7 @@ export function createFeishuBroadcastIngressSettlement(params: {
             lane.status = "deferred";
             defer();
           },
+          onDeferredHeartbeat: () => params.lifecycle?.onDeferredHeartbeat?.(),
           onAdoptionFinalizing: beginFinalizing,
           onAbandoned: async () => {
             if (

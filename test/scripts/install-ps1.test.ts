@@ -758,10 +758,18 @@ describe("install.ps1 failure handling", () => {
           '$sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-transactional-clone-" + [guid]::NewGuid().ToString("N"))',
           "New-Item -ItemType Directory -Path $sandbox | Out-Null",
           "$script:CloneMode = 'success'",
+          "$script:GitFilterSupport = $true",
+          "$script:LastCloneArgs = @()",
           "$script:ConcurrentRepo = $null",
           "$script:AliasPath = $null",
           "$script:AliasReplacement = $null",
           "function git {",
+          "  if ($args[0] -eq 'clone' -and $args[1] -eq '-h') {",
+          "    if ($script:GitFilterSupport) { Write-Output '  --[no-]filter <args>' }",
+          "    $global:LASTEXITCODE = 129",
+          "    return",
+          "  }",
+          "  if ($args[0] -eq 'clone') { $script:LastCloneArgs = @($args) }",
           "  $target = $args[-1]",
           "  New-Item -ItemType Directory -Force -Path (Join-Path $target '.git') | Out-Null",
           "  Set-Content -LiteralPath (Join-Path $target 'checkout.marker') -Value 'complete'",
@@ -781,11 +789,14 @@ describe("install.ps1 failure handling", () => {
           "  $successRepo = Join-Path $sandbox 'success'",
           "  New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $successRepo",
           "  if (-not (Test-Path -LiteralPath (Join-Path $successRepo 'checkout.marker'))) { throw 'complete checkout was not published' }",
+          "  if ($script:LastCloneArgs -notcontains '--filter=blob:none') { throw 'supported Git did not use a filtered clone' }",
           "",
           "  $emptyRepo = Join-Path $sandbox 'empty'",
           "  New-Item -ItemType Directory -Path $emptyRepo | Out-Null",
+          "  $script:GitFilterSupport = $false",
           "  New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $emptyRepo",
           "  if (-not (Test-Path -LiteralPath (Join-Path $emptyRepo 'checkout.marker'))) { throw 'empty destination was not populated' }",
+          "  if ($script:LastCloneArgs -contains '--filter=blob:none') { throw 'unsupported Git used a filtered clone' }",
           "",
           "  $aliasTarget = Join-Path $sandbox 'alias-target'",
           "  $script:AliasReplacement = Join-Path $sandbox 'alias-replacement'",
@@ -1291,6 +1302,7 @@ describe("install.ps1 failure handling", () => {
     const pnpmVersionBody = extractFunctionBody(source, "Get-RepoPnpmVersion");
     const pnpmVersionMatchBody = extractFunctionBody(source, "Test-PnpmCommandMatchesVersion");
     const ensurePnpmBody = extractFunctionBody(source, "Ensure-Pnpm");
+    const gitFilterSupportBody = extractFunctionBody(source, "Test-GitFilterSupport");
     const transactionalCloneBody = extractFunctionBody(source, "New-TransactionalGitCheckout");
     const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
     const nodeOptionsBody = extractFunctionBody(source, "Resolve-NodeOptionsWithMinOldSpace");
@@ -1318,7 +1330,10 @@ describe("install.ps1 failure handling", () => {
     expect(ensurePnpmBody).toContain(
       'Invoke-NpmCommand -Arguments @("install", "-g", "--force", $pnpmSpec)',
     );
-    expect(transactionalCloneBody).toContain("git clone $RepoUrl $stagingDir");
+    expect(gitFilterSupportBody).toContain("git clone -h");
+    expect(gitFilterSupportBody).toContain("filter");
+    expect(transactionalCloneBody).toContain('$cloneArgs += "--filter=blob:none"');
+    expect(transactionalCloneBody).toContain("& git @cloneArgs");
     expect(gitInstallBody.indexOf("New-TransactionalGitCheckout")).toBeLessThan(
       gitInstallBody.indexOf("Ensure-Pnpm -RepoDir $RepoDir"),
     );

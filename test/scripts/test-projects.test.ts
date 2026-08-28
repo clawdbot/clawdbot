@@ -22,6 +22,7 @@ import {
   formatNoChangedTestTargetLines,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
+  parseTestProjectsArgs,
   resolveChangedTestTargetPlanForArgs,
   resolveChangedTestTargetPlan,
   resolveChangedTargetArgs,
@@ -57,7 +58,14 @@ describe("test runtime prerequisites", () => {
       ["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts"],
       "runtime",
     ],
-    ["ordinary QA unit test", ["extensions/qa-lab/src/gateway-child-command.test.ts"], undefined],
+    ["Active Memory Gateway", ["src/gateway/gateway-active-memory.test.ts"], "runtime"],
+    ["concurrent Gateway streams", ["src/gateway/gateway-concurrent-streams.test.ts"], "runtime"],
+    ["Gateway directory", ["src/gateway"], "runtime"],
+    ["Gateway core config", ["test/vitest/vitest.gateway-core.config.ts"], "runtime"],
+    ["Gateway umbrella config", ["test/vitest/vitest.gateway.config.ts"], "runtime"],
+    ["agentic config", ["test/vitest/vitest.full-agentic.config.ts"], "runtime"],
+    ["ordinary Gateway unit test", ["src/gateway/net.test.ts"], undefined],
+    ["ordinary QA unit test", ["extensions/qa-lab/src/gateway-child.test.ts"], undefined],
     [
       "model reader",
       ["src/agents/embedded-agent-runner/model-resolution-consistency.test.ts"],
@@ -200,6 +208,71 @@ describe("scripts/test-projects changed-target routing", () => {
       "packages/normalization-core/src/string-normalization.test.ts",
       "src/utils/provider-utils.test.ts",
     ]);
+  });
+
+  it("bounds extensionless prefix probes while excluding deleted cached matches", () => {
+    const target = "src/selector/topic";
+    const rejectedFiles = [
+      "src/other/topic.test.ts",
+      "src/selector/topic-other.test.ts",
+      "src/selector/topic.helper.ts",
+      "src/selector/topic.child/nested.test.ts",
+    ];
+    const files = Object.fromEntries(
+      [`${target}.test.ts`, `${target}.extra.spec.mts`, ...rejectedFiles].map((file) => [file, ""]),
+    );
+    withTinyGitRepo(files, (tempDir) => {
+      const cwd = fs.realpathSync(tempDir);
+      const candidatePaths = new Set(Object.keys(files).map((file) => path.join(cwd, file)));
+      const rejectedPaths = new Set(rejectedFiles.map((file) => path.join(cwd, file)));
+      const candidateProbes: string[] = [];
+      const originalExistsSync = fs.existsSync;
+      fs.existsSync = (file) => {
+        if (typeof file === "string" && candidatePaths.has(file)) {
+          candidateProbes.push(file);
+        }
+        return originalExistsSync(file);
+      };
+      try {
+        const parsed = [
+          parseTestProjectsArgs(["--changed", "origin/main"], cwd),
+          parseTestProjectsArgs(["--changed", "origin/main"], cwd),
+        ];
+        for (const result of parsed) {
+          expect(result).toStrictEqual({
+            forwardedArgs: ["--changed", "origin/main"],
+            targetArgs: [],
+            watchMode: false,
+          });
+        }
+        expect(candidateProbes).toHaveLength(0);
+
+        expectSingleVitestRunPlan(buildVitestRunPlans([target], cwd), {
+          config: "test/vitest/vitest.unit.config.ts",
+          forwardedArgs: [`${target}.extra.spec.mts`, `${target}.test.ts`],
+        });
+        expect(findUnmatchedExplicitTestTargets([target], cwd)).toEqual([]);
+
+        fs.unlinkSync(path.join(cwd, `${target}.extra.spec.mts`));
+        expectSingleVitestRunPlan(buildVitestRunPlans([target], cwd), {
+          config: "test/vitest/vitest.unit.config.ts",
+          forwardedArgs: [`${target}.test.ts`],
+        });
+        expect(findUnmatchedExplicitTestTargets([target], cwd)).toEqual([]);
+
+        fs.unlinkSync(path.join(cwd, `${target}.test.ts`));
+        expect(findUnmatchedExplicitTestTargets([target], cwd)).toEqual([
+          {
+            target,
+            reason: "path-does-not-exist",
+            includePattern: `${target}{,.*}.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts}`,
+          },
+        ]);
+        expect(candidateProbes.filter((file) => rejectedPaths.has(file))).toHaveLength(0);
+      } finally {
+        fs.existsSync = originalExistsSync;
+      }
+    });
   });
 
   it.each([
@@ -410,7 +483,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps extension batch runner edits on extension script tests", () => {
     expectChangedTargets(
       ["scripts/test-extension-batch.mts"],
-      ["test/scripts/test-extension.test.ts"],
+      ["test/scripts/test-extension.test.ts", "test/scripts/test-projects-build-admission.test.ts"],
     );
   });
 
@@ -516,6 +589,28 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("keeps Crabbox gate trust-boundary scripts on their owner tests", () => {
+    expectChangedTargets(
+      ["scripts/pr-lib/crabbox-gate-contract.mjs"],
+      [
+        "test/scripts/pr-crabbox-gate-publisher.test.ts",
+        "test/scripts/pr-crabbox-merge-bypass.test.ts",
+      ],
+    );
+    expectChangedTargets(
+      ["scripts/pr-lib/crabbox-gate-plan.mts"],
+      [
+        "test/scripts/pr-crabbox-gate-plan.test.ts",
+        "test/scripts/pr-crabbox-gate-publisher.test.ts",
+        "test/scripts/pr-prepare-gates.test.ts",
+      ],
+    );
+    expectChangedTargets(
+      ["scripts/pr-lib/crabbox-merge-bypass.sh"],
+      ["test/scripts/pr-crabbox-merge-bypass.test.ts", "test/scripts/pr-merge.test.ts"],
+    );
+  });
+
   it("keeps build stamp script edits on the build stamp regression test", () => {
     expectChangedTargets(["scripts/build-stamp.mts"], ["src/infra/build-stamp.test.ts"]);
   });
@@ -542,8 +637,11 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/authorized-beta-focused-evidence.test.ts",
         "test/scripts/changed-path-facts.test.ts",
         "test/scripts/ci-changed-node-test-plan.test.ts",
+        "test/scripts/full-release-validation-state.test.ts",
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/pr-crabbox-merge-bypass.test.ts",
+        "test/scripts/pr-merge.test.ts",
         "test/scripts/run-additional-boundary-checks.test.ts",
       ],
     );
@@ -556,6 +654,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/dockerfile.test.ts",
         "test/scripts/full-release-validation-state.test.ts",
         "test/scripts/full-release-validation-at-sha.test.ts",
+        "test/scripts/full-release-candidate-reuse.test.ts",
         "test/scripts/find-reusable-release-validation.test.ts",
         "test/scripts/openclaw-npm-extended-stable-full-validation-workflow.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
@@ -565,11 +664,20 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/check-workflows.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
         "test/scripts/frv-proof-broker.test.ts",
+        "test/scripts/frv.test.ts",
+        "test/scripts/full-release-validation-continuation-workflow.test.ts",
         "test/scripts/openclaw-performance-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
         "test/scripts/validate-full-release-validation-evidence.test.ts",
       ],
     );
+  });
+
+  it.each([
+    "scripts/lib/full-release-candidate-reuse.mjs",
+    "scripts/lib/full-release-candidate-reuse.d.mts",
+  ])("routes candidate reuse library changes through the owner test for %s", (changedPath) => {
+    expectChangedTargets([changedPath], ["test/scripts/full-release-candidate-reuse.test.ts"]);
   });
 
   it("unions semantic workflow owners with bounded direct references", () => {
@@ -1741,6 +1849,7 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: [
           "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
+          "test/scripts/mcp-channels-seed.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
         ],
@@ -1929,6 +2038,7 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: [
           "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
+          "test/scripts/mcp-channels-seed.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
         ],

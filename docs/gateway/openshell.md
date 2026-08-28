@@ -372,10 +372,10 @@ remote workspace for that scope, and the next use seeds a fresh one from
 local. For `mirror` mode, recreate mainly resets the remote execution
 environment since local stays canonical.
 
-Sandbox CLI commands activate the configured backend's owning plugin before
-looking up runtime status or deleting a sandbox. Unrelated plugins are not
-loaded for these operations, and browser-only commands remain independent of
-the OpenShell backend.
+Sandbox list and recreate commands activate the configured backend's owning
+plugin plus the owner of each recorded runtime before inspecting or deleting
+it. Unrelated plugins are not loaded for these operations, and browser-only
+commands remain independent of the OpenShell backend.
 
 OpenClaw keeps a registered sandbox's shipped legacy runtime name after an
 upgrade so its remote workspace remains addressable. Recreating that scope
@@ -421,8 +421,9 @@ Workspace synchronization excludes `.git`, `hooks`, and `git-hooks` in both
 directions. Repository credentials, history, and trusted hook code remain on
 the OpenClaw Gateway host instead of being copied into an untrusted sandbox.
 
-Mirror synchronization never copies symlinks into either workspace. Existing
-host symlinks remain intact at every depth, along with their parent directories,
+Mirror synchronization never copies entries it cannot represent, such as
+symlinks, FIFOs, or Unix sockets, into either workspace. Existing host entries
+of those types remain intact at every depth, along with their parent directories,
 even if the sandbox deletes those directories or replaces them with files.
 Remote replacements that conflict with these preserved host paths are ignored;
 ordinary files and directories still receive remote changes and deletions.

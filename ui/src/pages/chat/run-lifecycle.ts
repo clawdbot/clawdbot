@@ -59,6 +59,7 @@ type RunLifecycleHost = Omit<
   agentsList?: { mainKey?: string | null } | null;
   hello?: { snapshot?: unknown } | null;
   chatRunId?: string | null;
+  chatRunLifecycleGeneration?: number;
   chatRunSessionAbortable?: boolean;
   chatStream?: string | null;
   chatStreamStartedAt?: number | null;
@@ -145,6 +146,27 @@ function setChatError(state: ChatAbortRunState, error: string | null) {
 
 export function isChatBusy(host: { chatSending?: boolean; chatRunId?: string | null }) {
   return Boolean(host.chatSending || host.chatRunId);
+}
+
+export function adoptStartedChatRun(
+  host: RunLifecycleHost,
+  runId: string,
+  startedAt: number,
+): void {
+  // A terminal event may beat the request ACK; never resurrect that completed run.
+  if (host.chatRunStatus?.runId === runId || host.lastLocalTerminalReconcile?.runId === runId) {
+    return;
+  }
+  const adopted = host.chatRunId === runId;
+  const adoptedStream = adopted && typeof host.chatStream === "string";
+  host.chatRunId = runId;
+  if (!adopted) {
+    host.chatRunStartup = null;
+  }
+  if (!adoptedStream) {
+    host.chatStream = "";
+    host.chatStreamStartedAt = startedAt;
+  }
 }
 
 export function setChatRunError(
@@ -476,6 +498,9 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
     host.chatStreamStartedAt = null;
   }
   if (options.clearLocalRun) {
+    if (host.chatRunId) {
+      host.chatRunLifecycleGeneration = (host.chatRunLifecycleGeneration ?? 0) + 1;
+    }
     host.chatRunId = null;
     host.chatRunSessionAbortable = undefined;
   }

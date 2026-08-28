@@ -16,7 +16,10 @@ import {
   selectLaterExpiringManagedAttachment,
   type ManagedAttachmentAvailability,
 } from "./chat-message-attachment-availability.ts";
-import { renderAssistantAttachmentStatusCard } from "./chat-message-attachment-status.ts";
+import {
+  attachmentFailureReason,
+  renderAssistantAttachmentStatusCard,
+} from "./chat-message-attachment-status.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
   buildAssistantAttachmentUrl,
@@ -30,6 +33,7 @@ import {
   observeChatMediaResource,
   scheduleChatMediaResourceRefresh,
   type AttachmentItem,
+  type AssistantAttachmentItem,
   type ArtifactDownloadResolver,
   type ChatMediaResource,
   type ImageRenderOptions,
@@ -353,7 +357,7 @@ function retryManagedAttachmentAvailability(
 }
 
 export function renderAssistantAttachments(
-  attachments: AttachmentItem[],
+  attachments: AssistantAttachmentItem[],
   options: ImageRenderOptions,
   onOpenSidebar?: (content: SidebarContent) => void,
   onAssistantAttachmentLoaded?: () => void,
@@ -371,7 +375,18 @@ export function renderAssistantAttachments(
     onOpenImage,
     resolveArtifactDownload,
   } = options;
-  const renderAttachment = ({ attachment }: AttachmentItem) => {
+  const renderAttachment = (item: AssistantAttachmentItem) => {
+    if (item.type === "attachment_error") {
+      const { attachment } = item;
+      return renderAssistantAttachmentStatusCard({
+        kind: attachment.kind,
+        label: attachment.label,
+        mimeType: attachment.mimeType,
+        badge: t("chat.attachments.notSent"),
+        reason: attachmentFailureReason(attachment.code),
+      });
+    }
+    const { attachment } = item;
     const localSource = isLocalAssistantAttachmentSource(attachment.url);
     const assistantAvailability = resolveAssistantAttachmentAvailability(
       attachment.url,

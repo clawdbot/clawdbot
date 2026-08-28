@@ -116,8 +116,8 @@ To force code mode on for every tool-capable run, regardless of model:
 
 Object form works too: `tools.codeMode.enabled` accepts the same `false`,
 `true`, and `"auto"` values. Code mode stays off when `tools.codeMode` is
-omitted, `false`, or an empty object. An object that configures other Code Mode
-options but omits `enabled` preserves the earlier `"auto"` behavior.
+omitted, `false`, or an object without an explicit `enabled` value. Configuring
+limits or other Code Mode options does not enable it.
 
 See [Automatic per-model activation](#automatic-per-model-activation) for the
 exact semantics and the shipped model list.
@@ -187,13 +187,20 @@ and correct across successive turns. A failed `exec` or `wait` does not automati
 end the agent run when OpenClaw's host execution record proves that no potentially
 mutating nested action started, including before a suspended run resumed.
 
+An exec host-policy rejection can carry this proof even after hooks, approval
+resolution, and tool implementation entry: the host owns the narrower fact that
+no command process or remote dispatch started. A corrected call runs the ordinary
+hooks and approvals again. Consumed voice confirmations stay consumed; recovery
+does not restore a grant or authorize replay.
+
 Catalog search, handle `describe()`, `skills.list()`, and `skills.read()` are
 read-only discovery. A guest error after only these operations still allows
 ordinary recovery from a failed `exec`; discovery does not count as a mutation.
 
 OpenClaw does not automatically replay a failed program. If earlier calls
 may have changed state or a failed call may have partially applied, OpenClaw
-first limits recovery to an authorized read-only inspection of the current state. It does
+deliberately permits one temporary read-only recovery attempt to inspect the
+current state. The internal instruction identifies OpenClaw as its source. It does
 not expose writes, sends, shell commands, or other mutations during that
 reconciliation. Cancellation, explicitly terminal tool outcomes, sandbox
 restrictions, approval requirements, and tool-policy denials retain their
@@ -277,10 +284,9 @@ Provider-owned tools such as remote Python sandboxes are separate tools. See
 
 ## Configuration
 
-`tools.codeMode.enabled` is the activation gate. With no Code Mode
-configuration, it defaults to `false`. If an object configures another Code
-Mode field but omits `enabled`, it preserves the `"auto"` tier and may engage
-for catalog-preferred models.
+`tools.codeMode.enabled` is the activation gate. It defaults to `false`,
+including when the Code Mode object configures other fields. Set `true` or
+`"auto"` explicitly to enable it.
 
 | Field                 | Default                        | Clamp                                           |
 | --------------------- | ------------------------------ | ----------------------------------------------- |
@@ -306,8 +312,7 @@ an engaged run never silently falls back to broad direct tool exposure.
 
 `tools.codeMode.enabled` accepts three values:
 
-- `false` (default when Code Mode is otherwise unconfigured): code mode is off
-  for every run.
+- `false` (default): code mode is off for every run.
 - `true`: code mode engages for every tool-capable run, regardless of model.
 - `"auto"`: code mode engages only when the run's model is flagged as a
   preferred code-mode performer in its provider catalog.
@@ -527,6 +532,24 @@ forcing one model tool call per await.
 `exec` returns `completed` only when the guest VM has no pending work and the
 final value is JSON-compatible after OpenClaw's output adapter runs.
 
+### Source in session history
+
+In the built-in OpenClaw runtime, the JSON Code Mode tool executes the original
+input. Session history preserves computations such as `const API_TOKEN = computeToken();`
+and boolean or null initializers in the outer call's JavaScript or TypeScript
+`code` and `command` fields, while masking credential literals, recognizable
+tokens, registered secrets, and configured redaction patterns. Credential
+assignments use full masks so repeated storage redaction stays stable.
+
+This treatment does not extend to shell commands, nested tool calls, unrelated
+argument strings, or assistant prose. Large or unrecognized source syntax
+remains subject to diagnostic masking. Stored source is a redacted record, not
+a place to recover credentials; no additional setting is required.
+This applies to new calls; already-redacted source cannot be reconstructed.
+The Copilot runtime's separate transcript journal does not yet preserve this
+source structure. Native Codex uses a separate freeform source path; this
+behavior does not describe its storage.
+
 ## `wait`
 
 `wait` continues a suspended code-mode VM.
@@ -664,6 +687,12 @@ type ToolCatalog = {
   all(): readonly ToolCatalogHandle[];
 };
 ```
+
+`catalog.search(...)` returns a frozen array of callable handles, or an empty
+array when no tools match. If the matching callable names exceed the output
+budget, search rejects with guidance to narrow the query or lower `limit`.
+It never silently substitutes an empty or partial match list. A narrower search
+remains available after the error.
 
 Paired Gateway nodes are available through the `nodes` global:
 
@@ -897,7 +926,9 @@ type CodeModeOutput = { type: "text"; text: string } | { type: "json"; value: un
 
 Rules: output order matches guest calls. Nested tool results, cumulative guest
 output, and the final value share the `maxOutputBytes` serialized UTF-8 budget.
-When a successful result exceeds the budget, OpenClaw returns a bounded value
+Catalog search rejects when its callable-name array cannot fit this budget;
+narrow the query or lower `limit` and retry. For other successful results that
+exceed the budget, OpenClaw returns a bounded value
 with `truncated: true`, a UTF-8-safe `prefix`, `omittedBytes`, and guidance to
 rerun with narrower arguments. Treat that marker as a successful partial result:
 reduce the search scope, paginate, select fewer files, or return a smaller
@@ -1185,8 +1216,8 @@ does not use a `node:vm` child as the sandbox.
 Code mode coverage should prove:
 
 - disabled config leaves existing tool exposure unchanged
-- omitted `enabled`, including object config that sets other fields, inherits
-  `"auto"` and engages only for catalog-preferred models
+- omitted `enabled`, including object config that sets other fields, stays
+  disabled
 - enabled config exposes `exec`, `wait`, and only required direct-only tools to
   the model when tools are active for the run
 - raw no-tool runs, `disableTools`, and empty allowlists do not trigger

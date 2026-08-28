@@ -89,6 +89,10 @@ export function syncTypefaceStylesheets(faces: TypefacePair): void {
   }
   loadTypefaceStylesheet(faces.ui);
   loadTypefaceStylesheet(faces.chat);
+  // base.css --mono names JetBrains Mono for every theme's code spans, but only
+  // the @font-face declaration here makes that true; the woff2 itself downloads
+  // lazily on the first rendered code glyph, so this costs one small stylesheet.
+  loadTypefaceStylesheet("jetbrains-mono");
 }
 
 export function loadTypefaceSpecimens(): void {
@@ -105,5 +109,17 @@ export function applyTypefaceOverrides(ui?: TypefaceId, chat?: TypefaceId): void
     } else {
       document.documentElement.style.removeProperty(property);
     }
+  }
+}
+
+/* Serif hairlines at chat size need macOS stem darkening; the app-wide
+   `antialiased` smoothing (base.css body) thins them into gray smear, so serif
+   chat faces opt chat prose back into `auto` (.chat-text consumes the
+   variable). Sans and mono faces keep the inherited app default. */
+export function applyChatFontSmoothing(chat: TypefaceId): void {
+  if (TYPEFACE_METADATA[chat].kind === "serif") {
+    document.documentElement.style.setProperty("--chat-font-smoothing", "auto");
+  } else {
+    document.documentElement.style.removeProperty("--chat-font-smoothing");
   }
 }

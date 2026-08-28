@@ -1,8 +1,8 @@
 import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json-schema";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 // Compiles plugin manifest schemas for validation without runtime loading.
-import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import { Format } from "typebox/format";
+import { Compile, type Validator as TypeBoxValidator } from "typebox/schema";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -157,7 +157,8 @@ function checkSchemaWithCurrentFormats(
   if (validate.Check(value)) {
     return null;
   }
-  return [...validate.Errors(value)] as TypeBoxValidationError[];
+  // The schema-only compiler returns [valid, errors], without loading value codecs.
+  return validate.Errors(value)[1];
 }
 
 function isDefaultActivatedConditionalFailure(params: {

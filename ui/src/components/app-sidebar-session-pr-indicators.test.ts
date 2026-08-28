@@ -91,63 +91,83 @@ describe("SessionPullRequestIndicatorsController", () => {
     expect(host.requestUpdate).not.toHaveBeenCalled();
   });
 
-  it("subscribes visible rows and keeps the last indicator through backoff", async () => {
-    vi.useFakeTimers();
-    const host = new TestHost();
-    const harness = createGatewayHarness();
-    const row = {
-      key: "agent:main:demo",
-      isChild: false,
-      worktreeId: "wt-demo",
-    } as SidebarRecentSession;
-    const controller = new SessionPullRequestIndicatorsController(host, {
-      getConnected: () => true,
-      getRows: () => [row],
-      getSelectedAgentId: () => "main",
-      getGateway: () => harness.gateway,
-      getSessions: () => undefined,
-    });
+  it.each(["open", "draft", "merged", "closed"] as const)(
+    "subscribes visible rows and keeps the %s summary through backoff",
+    async (state) => {
+      vi.useFakeTimers();
+      const host = new TestHost();
+      const harness = createGatewayHarness();
+      const row = {
+        key: "agent:main:demo",
+        isChild: false,
+        worktreeId: "wt-demo",
+      } as SidebarRecentSession;
+      const controller = new SessionPullRequestIndicatorsController(host, {
+        getConnected: () => true,
+        getRows: () => [row],
+        getSelectedAgentId: () => "main",
+        getGateway: () => harness.gateway,
+        getSessions: () => undefined,
+      });
 
-    controller.hostConnected();
-    controller.hostUpdated();
-    await vi.advanceTimersByTimeAsync(0);
-    await Promise.resolve();
-    expect(harness.request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [row.key],
-    });
+      controller.hostConnected();
+      controller.hostUpdated();
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      expect(harness.request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
+        sessionKeys: [row.key],
+      });
 
-    harness.emit({
-      sessions: {
-        [row.key]: {
-          pullRequests: [
-            {
-              number: 1,
-              owner: "openclaw",
-              repo: "openclaw",
-              branch: "feature/demo",
-              title: "Demo",
-              url: "https://example.test/pr/1",
-              state: "open",
-            },
-          ],
-          rateLimited: true,
-          status: "rate-limited",
+      harness.emit({
+        sessions: {
+          [row.key]: {
+            pullRequests: [
+              { number: 2, state: state === "closed" ? "closed" : "merged" },
+              {
+                number: 1,
+                owner: "openclaw",
+                repo: "openclaw",
+                branch: "feature/demo",
+                title: "Demo",
+                url: "https://example.test/pr/1",
+                state,
+              },
+            ],
+            rateLimited: true,
+            status: "rate-limited",
+          },
         },
-      },
-    });
-    expect(controller.state(row.key, row.worktreeId ?? "")).toBe("open");
+      });
+      expect(controller.summary(row.key, row.worktreeId ?? "")).toEqual({
+        numbers: [1, 2],
+        state,
+      });
 
-    harness.emit({
-      sessions: {
-        [row.key]: {
-          pullRequests: [],
-          rateLimited: true,
-          status: "rate-limited",
+      harness.emit({
+        sessions: {
+          [row.key]: {
+            pullRequests: [],
+            rateLimited: true,
+            status: "rate-limited",
+          },
         },
-      },
-    });
-    expect(controller.state(row.key, row.worktreeId ?? "")).toBe("open");
-  });
+      });
+      expect(controller.summary(row.key, row.worktreeId ?? "")).toEqual({
+        numbers: [1, 2],
+        state,
+      });
+
+      harness.emit({
+        sessions: {
+          [row.key]: { pullRequests: [], rateLimited: false, status: "ready" },
+        },
+      });
+      expect(
+        controller.summary(row.key, row.worktreeId ?? "", { numbers: [99], state }),
+      ).toBeUndefined();
+      controller.hostDisconnected();
+    },
+  );
 
   it("clears alias indicators when the selected agent changes", async () => {
     vi.useFakeTimers();
@@ -184,13 +204,16 @@ describe("SessionPullRequestIndicatorsController", () => {
         },
       },
     });
-    expect(controller.state(row.key, row.worktreeId ?? "")).toBe("open");
+    expect(controller.summary(row.key, row.worktreeId ?? "")).toEqual({
+      numbers: [1],
+      state: "open",
+    });
 
     selectedAgentId = "work";
     controller.hostUpdated();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(controller.state(row.key, row.worktreeId ?? "")).toBe("none");
+    expect(controller.summary(row.key, row.worktreeId ?? "")).toBeUndefined();
   });
 
   it("clears a structural session's indicator while replacement data is pending", async () => {
@@ -227,11 +250,14 @@ describe("SessionPullRequestIndicatorsController", () => {
         },
       },
     });
-    expect(controller.state(row.key, row.worktreeId ?? "")).toBe("open");
+    expect(controller.summary(row.key, row.worktreeId ?? "")).toEqual({
+      numbers: [1],
+      state: "open",
+    });
 
     harness.emit({ sessionKey: row.key, agentId: "main", reason: "rewind" }, "sessions.changed");
 
-    expect(controller.state(row.key, row.worktreeId ?? "")).toBe("none");
+    expect(controller.summary(row.key, row.worktreeId ?? "")).toBeUndefined();
     expect(setPullRequestSummary).toHaveBeenCalledExactlyOnceWith(row.key, undefined, epoch);
   });
 });

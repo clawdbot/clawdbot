@@ -4,7 +4,7 @@ import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as markdown from "../../../components/markdown.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts";
 import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { chatStartupStatusLabel } from "../chat-run-startup.ts";
@@ -868,32 +868,46 @@ describe("grouped chat rendering", () => {
   });
 
   it.each([
-    { state: "failed", label: "Not sent" },
-    { state: "unconfirmed", label: "Delivery unconfirmed" },
-  ] as const)("shows a $state footer with its diagnostic and retry action", ({ state, label }) => {
-    const container = document.createElement("div");
-    const onRetryQueuedMessage = vi.fn();
-    renderGroupedMessage(
-      container,
-      createUserMessage("Attempted message", {
-        __openclaw: {
-          id: "attempted-send",
-          kind: "pending-send",
-          state,
-          error: "Delivery diagnostic",
+    { state: "failed", label: "Not sent", actionLabel: undefined },
+    { state: "unconfirmed", label: "Delivery unconfirmed", actionLabel: undefined },
+    { state: "unconfirmed", label: "Delivery unconfirmed", actionLabel: "Check delivery" },
+  ] as const)(
+    "shows a $state footer with its diagnostic and retry action ($actionLabel)",
+    ({ state, label, actionLabel }) => {
+      const container = document.createElement("div");
+      const onRetryQueuedMessage = vi.fn();
+      renderGroupedMessage(
+        container,
+        createUserMessage("Attempted message", {
+          __openclaw: {
+            id: "attempted-send",
+            kind: "pending-send",
+            state,
+            error: "Delivery diagnostic",
+          },
+        }),
+        "user",
+        {
+          onRetryQueuedMessage,
+          queuedMessageAction: actionLabel
+            ? { id: "attempted-send", label: actionLabel }
+            : undefined,
         },
-      }),
-      "user",
-      { onRetryQueuedMessage },
-    );
+      );
 
-    const status = expectElement(container, ".chat-group.user .chat-send-status", HTMLElement);
-    expect(status.dataset.sendState).toBe(state);
-    expect(status.title).toBe("Delivery diagnostic");
-    expect(status.textContent?.replace(/\s+/g, " ").trim()).toBe(`· ${label} · Retry`);
-    status.querySelector<HTMLButtonElement>(".chat-send-status__retry")?.click();
-    expect(onRetryQueuedMessage).toHaveBeenCalledWith("attempted-send");
-  });
+      const status = expectElement(container, ".chat-group.user .chat-send-status", HTMLElement);
+      expect(status.dataset.sendState).toBe(state);
+      expect(status.title).toBe("Delivery diagnostic");
+      expect(status.textContent?.replace(/\s+/g, " ").trim()).toBe(
+        `· ${label} · ${actionLabel ?? "Retry"}`,
+      );
+      expect(status.querySelector("button")?.getAttribute("aria-label")).toBe(
+        actionLabel ?? "Retry queued message",
+      );
+      status.querySelector<HTMLButtonElement>(".chat-send-status__retry")?.click();
+      expect(onRetryQueuedMessage).toHaveBeenCalledWith("attempted-send");
+    },
+  );
 
   it("orders peer footer actions after the sender name and timestamp", () => {
     const container = document.createElement("div");
@@ -983,27 +997,40 @@ describe("grouped chat rendering", () => {
     });
   });
 
-  it("collapses long user messages and toggles their disclosure state", () => {
+  it("collapses long image-bearing user messages and toggles their disclosure state", () => {
     const container = document.createElement("div");
     const collapsedLines = ["Inspect AGENTS.md:188 first.", "a".repeat(1_201)];
     const expandedTail = "Full prompt tail after the disclosure boundary.";
     const markdownContent = [...collapsedLines, expandedTail].join("\n");
+    const message = createUserMessage(
+      [
+        { type: "text", text: markdownContent },
+        createMediaBlock({
+          url: "data:image/png;base64,cG5n",
+          alt: "Sent image",
+          width: 640,
+          height: 640,
+        }),
+      ],
+      { timestamp: 1001 },
+    );
     const onToggleUserMessageExpanded = vi.fn();
     markdownRenderMock
       .mockImplementationOnce(renderMarkdownHtml)
       .mockImplementationOnce(renderMarkdownHtml);
 
-    renderGroupedMessage(
-      container,
-      createUserMessage(markdownContent, { timestamp: 1001 }),
-      "user",
-      {
-        isUserMessageExpanded: () => false,
-        onToggleUserMessageExpanded,
-      },
-    );
+    renderGroupedMessage(container, message, "user", {
+      isUserMessageExpanded: () => false,
+      onToggleUserMessageExpanded,
+    });
 
     const disclosure = expectElement(container, ".chat-message-disclosure", HTMLDivElement);
+    expect(
+      expectElement(container, ".chat-bubble", HTMLDivElement).classList.contains(
+        "chat-bubble--with-images",
+      ),
+    ).toBe(true);
+    expect(container.querySelector(".chat-message-image")).not.toBeNull();
     const toggle = expectElement(disclosure, ".chat-message-disclosure__toggle", HTMLButtonElement);
     const collapsedText = expectElement(disclosure, ".chat-text", HTMLDivElement);
     const collapsedFileLink = expectElement(
@@ -1021,15 +1048,10 @@ describe("grouped chat rendering", () => {
     toggle.click();
     expect(onToggleUserMessageExpanded).toHaveBeenCalledWith("user-message:user-message");
 
-    renderGroupedMessage(
-      container,
-      createUserMessage(markdownContent, { timestamp: 1001 }),
-      "user",
-      {
-        isUserMessageExpanded: () => true,
-        onToggleUserMessageExpanded,
-      },
-    );
+    renderGroupedMessage(container, message, "user", {
+      isUserMessageExpanded: () => true,
+      onToggleUserMessageExpanded,
+    });
 
     const expandedDisclosure = expectElement(container, ".chat-message-disclosure", HTMLDivElement);
     const collapseToggle = expectElement(
@@ -1511,7 +1533,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑214.5k");
   });
 
-  it("renders relative labels while preserving absolute message and streaming timestamps", () => {
+  it("renders relative labels while preserving absolute message and settled stream timestamps", () => {
     vi.useFakeTimers();
     const timestamp = Date.UTC(2026, 3, 24, 18, 30);
     vi.setSystemTime(timestamp + 5 * 60 * 1000);
@@ -1528,9 +1550,9 @@ describe("grouped chat rendering", () => {
         {
           kind: "stream",
           key: `stream:${timestamp}`,
-          text: "Working",
+          text: "Done",
           startedAt: timestamp,
-          isStreaming: true,
+          isStreaming: false,
         },
       ]),
       container,
@@ -1567,7 +1589,7 @@ describe("grouped chat rendering", () => {
     );
   });
 
-  it("uses the earliest segment timestamp for a multi-segment stream footer", () => {
+  it("uses the earliest segment timestamp for a settled multi-segment stream footer", () => {
     const container = document.createElement("div");
 
     render(
@@ -1580,7 +1602,7 @@ describe("grouped chat rendering", () => {
           startedAt: 10,
           isStreaming: false,
         },
-        { kind: "stream", key: "stream:s:live", text: "third", startedAt: 30, isStreaming: true },
+        { kind: "stream", key: "stream-seg:s:2", text: "third", startedAt: 30, isStreaming: false },
       ]),
       container,
     );
@@ -1711,6 +1733,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
       "Working…",
     );
+    expect(container.querySelector(".chat-group-footer")).toBeNull();
 
     renderAssistantMessage(container, message, {
       turnRecap: { runtimeMs: 5_000, outputTokens: 42 },
@@ -1722,6 +1745,7 @@ describe("grouped chat rendering", () => {
       "Done in 5 seconds",
     );
     expect(container.querySelector(".chat-tasks-status__claw")).toBeNull();
+    expect(container.querySelector(".chat-group-footer")).not.toBeNull();
   });
 
   it.each([
@@ -1835,7 +1859,7 @@ describe("grouped chat rendering", () => {
     expect(group?.classList.contains("chat-group--working")).toBe(false);
     expect(group?.classList.contains("chat-group--with-footer")).toBe(true);
     expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
-    expect(container.querySelectorAll(".chat-group-footer")).toHaveLength(1);
+    expect(container.querySelector(".chat-group-footer")).toBeNull();
     expect(container.querySelectorAll(".chat-working-indicator")).toHaveLength(1);
     expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
   });
@@ -4995,8 +5019,11 @@ describe("grouped chat rendering", () => {
     expect(fetchMock).toHaveBeenCalledWith(thumbnailUrl, expect.anything());
 
     const imageActions = container.querySelectorAll<HTMLButtonElement>(".chat-image-action");
-    expect(imageActions).toHaveLength(3);
-    imageActions[1]?.click();
+    expect([...imageActions].map((action) => action.getAttribute("aria-label"))).toEqual([
+      "Download image",
+      "Copy image",
+    ]);
+    imageActions[0]?.click();
     await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
     expect(clickedDownloads[0]).toBe("Ticketed image.png");
 

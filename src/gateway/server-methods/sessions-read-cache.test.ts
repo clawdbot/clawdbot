@@ -909,6 +909,7 @@ describe("sessions.list single-flight", () => {
             {
               sessionId: `profile-${index}`,
               updatedAt: index + 1,
+              createdVia: "operator",
               createdActor: { type: "human", id: client.authenticatedUserProfile!.profileId },
             },
           );

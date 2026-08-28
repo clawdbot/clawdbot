@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
@@ -1810,6 +1811,48 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       ok: false,
       code: "session-rebound",
     });
+  });
+
+  it("rejects revision materialization between the initial check and SQLite append", async () => {
+    await writeTranscriptStore({ lifecycleRevision: undefined });
+    const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.storePath(), {
+      agentId: "main",
+    }).path;
+    let revisionMaterialized = false;
+
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      expectedLifecycleRevision: null,
+      expectedSessionId: sessionId,
+      storePath: fixture.storePath(),
+      beforeMessageWrite: ({ message }) => {
+        const external = new DatabaseSync(databasePath);
+        try {
+          const row = external
+            .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+            .get(sessionKey) as { entry_json: string };
+          const replacement = {
+            ...(JSON.parse(row.entry_json) as SessionEntry),
+            lifecycleRevision: "replacement-revision",
+            updatedAt: 2,
+          };
+          external
+            .prepare(
+              "UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?",
+            )
+            .run(JSON.stringify(replacement), replacement.updatedAt, sessionKey);
+          revisionMaterialized = true;
+        } finally {
+          external.close();
+        }
+        return message;
+      },
+      message: createExactAssistantMessage({ text: "late output" }),
+    });
+
+    expect(revisionMaterialized).toBe(true);
+    expect(result).toMatchObject({ ok: false, code: "session-rebound" });
+    expect(await loadFixtureMessages()).toEqual([]);
   });
 
   it("rejects a superseded writer claim and accepts the admitted writer", async () => {
