@@ -12,6 +12,23 @@ vi.mock("../../../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: readChannelAllowFromStoreMock,
 }));
 
+// The real lookup materializes a bundled channel plugin to read declared doctor
+// capabilities. These mirror the values the plugins actually declare (matrix is
+// "nestedOnly"; signal declares none and takes the "topOnly" default) so the repair
+// logic is exercised unchanged without paying plugin load per call.
+vi.mock("../channel-capabilities.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channel-capabilities.js")>();
+  return {
+    ...actual,
+    getDoctorChannelCapabilities: (channelName?: string) => ({
+      dmAllowFromMode: channelName === "matrix" ? "nestedOnly" : "topOnly",
+      groupModel: "sender",
+      groupAllowFromFallbackToAllowFrom: true,
+      warnOnEmptyGroupSenderAllowlist: true,
+    }),
+  };
+});
+
 describe("doctor allowlist-policy repair", () => {
   beforeEach(() => {
     readChannelAllowFromStoreMock.mockReset();
