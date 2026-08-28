@@ -4,10 +4,8 @@ import { defaultCodexAppInventoryCache } from "./app-server/app-inventory-cache.
 import type { CodexAppsInstalledParams } from "./app-server/protocol-control-plane.js";
 import type { v2 } from "./app-server/protocol.js";
 import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
-import {
-  handleCodexPluginsSubcommand,
-  type CodexPluginsManagementIO,
-} from "./command-plugins-management.js";
+import type { CodexPluginsManagementIO } from "./command-plugin-config.js";
+import { handleCodexPluginsSubcommand } from "./command-plugins-management.js";
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
 
 const ctx: PluginCommandContext = {

@@ -20,6 +20,7 @@ import {
   resolveInstalledPluginKey,
   type CodexPluginConfigEntry,
   type CodexPluginsConfigBlock,
+  type CodexPluginsManagementIO,
 } from "./command-plugin-config.js";
 import {
   formatCodexPluginReadiness,
@@ -37,21 +38,6 @@ import {
   type CodexAvailablePlugin,
   type CodexPluginMarketplaceListRequest,
 } from "./plugin-marketplace-discovery.js";
-
-export type { CodexPluginsConfigBlock } from "./command-plugin-config.js";
-
-/**
- * Lightweight read/write surface over the Openclaw config file. Plugged in by
- * the command registration site so this module stays decoupled from the
- * concrete `mutateConfigFile` import in tests.
- */
-export type CodexPluginsManagementIO = {
-  readConfig: () => Promise<{
-    enabled?: boolean;
-    plugins?: Record<string, CodexPluginConfigEntry>;
-  }>;
-  mutate: (update: (block: CodexPluginsConfigBlock) => void) => Promise<void>;
-};
 
 type CodexPluginsManagementRuntime = {
   workspaceDir: () => Promise<string>;
