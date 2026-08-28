@@ -1,4 +1,5 @@
 // Failure alerts must describe only cron outcomes that survived durable persistence.
+import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   createDueIsolatedJob,
@@ -7,6 +8,7 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { markCronJobActive } from "../active-jobs.js";
+import { createCronExecutionId } from "../run-id.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { readCronTaskRunHistoryPage } from "../task-run-history.js";
@@ -64,6 +66,7 @@ async function finalizeAlertOutcome(params: {
   error: string;
   startedAt: number;
   endedAt: number;
+  taskRunId?: string;
 }) {
   await finalizeCompletedCronRunOutcomes(params.state, [
     {
@@ -76,6 +79,7 @@ async function finalizeAlertOutcome(params: {
       }),
       startedAt: params.startedAt,
       endedAt: params.endedAt,
+      ...(params.taskRunId !== undefined ? { taskRunId: params.taskRunId } : {}),
     },
   ]);
 }
@@ -438,5 +442,104 @@ describe("cron failure alert persistence", () => {
         lastFailureNotificationDeliveryStatus: "not-requested",
       },
     });
+  });
+
+  it("settles each overlapping alert on its own run-history row in reverse settlement order", async () => {
+    // Two eligible failures fire before the first alert settles (cooldownMs=0).
+    // Alert B (newer run) settles first, alert A (older run) settles second.
+    // Each outcome must land only on its own run-history row; job state must
+    // reflect B's outcome since B is the most recently started alert.
+    const store = fixtures.makeStorePath();
+    const startedAtA = Date.parse("2026-08-01T16:10:00.000Z");
+    const startedAtB = startedAtA + 1;
+    const job = createAlertJob({ id: "failure-alert-reverse-settlement", dueAt: startedAtA });
+    job.failureAlert = { after: 1, cooldownMs: 0 };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    // Stable run-history row IDs so we can assert exact settlement.
+    const taskRunIdA = `${createCronExecutionId(job.id, startedAtA)}:${randomUUID()}`;
+    const taskRunIdB = `${createCronExecutionId(job.id, startedAtB)}:${randomUUID()}`;
+
+    // Each sendCronFailureAlert call gets its own deferred so we control order.
+    type Deferred = { resolve: () => void; reject: (e: unknown) => void };
+    const pendingAlerts: Deferred[] = [];
+    const sendCronFailureAlert = vi.fn(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          pendingAlerts.push({ resolve, reject });
+        }),
+    );
+
+    let now = startedAtA + 10;
+    const state = createAlertState({
+      storePath: store.storePath,
+      nowMs: () => now,
+      sendCronFailureAlert,
+    });
+
+    // Run A: fires alert A, transport paused.
+    await finalizeAlertOutcome({
+      state,
+      job,
+      status: "error",
+      error: "first failure",
+      startedAt: startedAtA,
+      endedAt: startedAtA + 10,
+      taskRunId: taskRunIdA,
+    });
+    expect(pendingAlerts).toHaveLength(1);
+
+    // Run B: fires alert B with cooldownMs=0, transport paused.
+    now = startedAtB + 10;
+    const jobAfterA = state.store?.jobs[0];
+    if (!jobAfterA) throw new Error("expected job after run A");
+    await finalizeAlertOutcome({
+      state,
+      job: jobAfterA,
+      status: "error",
+      error: "second failure",
+      startedAt: startedAtB,
+      endedAt: startedAtB + 10,
+      taskRunId: taskRunIdB,
+    });
+    expect(pendingAlerts).toHaveLength(2);
+
+    // Settle B first (out of order), then A.
+    pendingAlerts[1]!.resolve();
+    await vi.waitFor(() =>
+      expect(state.store?.jobs[0]?.state.lastFailureNotificationDeliveryStatus).toBe("delivered"),
+    );
+
+    const historyAfterB = readCronTaskRunHistoryPage({
+      storeKey: cronStoreKey(store.storePath),
+      jobId: job.id,
+      limit: 5,
+    });
+    // B's row is settled; A's row still "unknown". Rows are identified by runAtMs.
+    const rowA = historyAfterB.entries.find((e) => e.runAtMs === startedAtA);
+    const rowB = historyAfterB.entries.find((e) => e.runAtMs === startedAtB);
+    expect(rowB?.failureNotificationDelivery).toEqual({ delivered: true, status: "delivered" });
+    expect(rowA?.failureNotificationDelivery).toEqual({ status: "unknown" });
+
+    // Job state must reflect B's outcome.
+    expect(state.store?.jobs[0]?.state.lastFailureNotificationDeliveryStatus).toBe("delivered");
+    expect(state.store?.jobs[0]?.state.lastFailureAlertAtMs).toBe(startedAtB + 10);
+
+    // Now settle A.
+    pendingAlerts[0]!.resolve();
+    await vi.waitFor(() => {
+      // A's run-history row must now be settled.
+      const history = readCronTaskRunHistoryPage({
+        storeKey: cronStoreKey(store.storePath),
+        jobId: job.id,
+        limit: 5,
+      });
+      const entryA = history.entries.find((e) => e.runAtMs === startedAtA);
+      expect(entryA?.failureNotificationDelivery).toEqual({ delivered: true, status: "delivered" });
+    });
+
+    // Job state must still reflect B's outcome (A's callback must not clobber it).
+    expect(state.store?.jobs[0]?.state.lastFailureAlertAtMs).toBe(startedAtB + 10);
+    expect(state.store?.jobs[0]?.state.lastFailureNotificationDeliveryStatus).toBe("delivered");
   });
 });

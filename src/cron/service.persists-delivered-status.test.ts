@@ -1075,4 +1075,81 @@ describe("CronService persists delivered status", () => {
       await store.cleanup();
     },
   );
+
+  it("lands each overlapping alert's outcome on its own run-history row in reverse settlement order", async () => {
+    // Two back-to-back error runs with cooldownMs=0 each fire an alert.
+    // Alert B (from run 2) settles before alert A (run 1). Verify:
+    //   - A's run-history row gets A's settled outcome, B's gets B's.
+    //   - Job state reflects B's outcome; A's late callback does not clobber it.
+    const store = await makeStorePath();
+
+    // Deferred resolvers: we control settlement order explicitly.
+    type Deferred = { resolve: () => void };
+    const pendingAlerts: Deferred[] = [];
+    const sendCronFailureAlert = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          pendingAlerts.push({ resolve });
+        }),
+    );
+
+    // Two sequential runs, each of which errors.
+    let runCount = 0;
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        runCount++;
+        return { status: "error" as const, error: `failure ${runCount}` };
+      }),
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    try {
+      const job = await cron.add({
+        name: "overlapping-alerts",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "test" },
+        delivery: { mode: "none" },
+        failureAlert: { after: 1, cooldownMs: 0 },
+      });
+
+      // Run 1 → alert A dispatched but not yet settled.
+      await cron.run(job.id, "force");
+      expect(pendingAlerts).toHaveLength(1);
+
+      // Run 2 → alert B dispatched (cooldownMs=0 allows it).
+      await cron.run(job.id, "force");
+      expect(pendingAlerts).toHaveLength(2);
+
+      // Settle B (index 1) first, then A (index 0).
+      pendingAlerts[1]!.resolve();
+      await vi.waitFor(() =>
+        expect(cron.getJob(job.id)?.state.lastFailureNotificationDeliveryStatus).toBe("delivered"),
+      );
+
+      // Job state reflects B; check it is stable before A settles.
+      expect(cron.getJob(job.id)?.state.consecutiveErrors).toBe(2);
+      expect(cron.getJob(job.id)?.state.lastFailureNotificationDeliveryStatus).toBe("delivered");
+
+      pendingAlerts[0]!.resolve();
+      // Give A's callback time to land.
+      await vi.waitFor(() => expect(sendCronFailureAlert).toHaveBeenCalledTimes(2));
+      // Allow any pending microtasks to flush.
+      await Promise.resolve();
+
+      // Job state must still reflect B's outcome; A must not overwrite it.
+      expect(cron.getJob(job.id)?.state.lastFailureNotificationDeliveryStatus).toBe("delivered");
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
 });
