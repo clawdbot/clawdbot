@@ -35,7 +35,7 @@ describe("AppSidebar update card wiring", () => {
   });
 });
 
-describe("AppSidebar brand actions", () => {
+describe("AppSidebar new session navigation", () => {
   it("opens new-session links for the expanded agent without intercepting browser gestures", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const agentsList = {
@@ -94,6 +94,52 @@ describe("AppSidebar brand actions", () => {
       expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
       onOpenNewSession.mockClear();
     }
+  });
+
+  it("opens a catalog-targeted draft from its new-session action", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("research", ["agent:research:main"]),
+      "panel",
+      {
+        defaultId: "main",
+        mainKey: "agent:main:main",
+        scope: "global",
+        agents: [
+          { id: "main", name: "Main" },
+          { id: "research", name: "Research" },
+        ],
+      },
+    );
+    const onOpenNewSession = vi.fn();
+    sidebar.connected = true;
+    sidebar.onOpenNewSession = onOpenNewSession;
+    sidebar.sessionData.sessionCatalogs = [
+      {
+        id: "claude",
+        label: "Claude Code",
+        capabilities: {
+          continueSession: true,
+          archive: false,
+          createSession: { model: "anthropic/claude-opus-4-8" },
+        },
+        hosts: [],
+      },
+    ];
+    sidebar.sessionData.requestSessionDataUpdate();
+    await sidebar.updateComplete;
+
+    const link = sidebar.querySelector<HTMLAnchorElement>(".sidebar-session-catalog-new")!;
+    expect(link.getAttribute("aria-label")).toBe("New session — Claude Code");
+    expect(link.getAttribute("href")).toBe("/new?agent=research&catalog=claude");
+    const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    link.dispatchEvent(contextMenu);
+    expect(contextMenu.defaultPrevented).toBe(false);
+    expect(sidebar.querySelector(".sidebar-session-catalog-view-menu")).toBeNull();
+    link.click();
+
+    expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
   });
 });
 
