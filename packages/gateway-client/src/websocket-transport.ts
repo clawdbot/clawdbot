@@ -128,56 +128,63 @@ export function resolveGatewayWebSocketTransport(params: {
   }
   const options: ClientOptions = { ...params.options };
   if (usesTls && expectedFingerprint) {
-    options.rejectUnauthorized = false;
-    const headers = { ...options.headers };
-    const deferredHeaders = Object.entries(headers).filter(
-      ([key]) => key.toLowerCase() === "expect",
-    );
-    for (const [key] of deferredHeaders) {
-      delete headers[key];
-    }
-    options.headers = headers;
-    options.finishRequest = (request) => {
-      request.once("socket", (socket) => {
-        if (!(socket instanceof TLSSocket)) {
-          request.destroy(new GatewayWebSocketTlsPinError("gateway tls fingerprint unavailable"));
-          return;
-        }
-        const validatePin = () => {
-          if (request.destroyed) {
-            return;
-          }
-          const canonicalFingerprint = normalizeTlsFingerprint(
-            socket.getPeerCertificate()?.fingerprint256,
-          );
-          const fingerprint = canonicalFingerprint ? normalize(canonicalFingerprint) : "";
-          if (!fingerprint || fingerprint !== normalize(expectedFingerprint)) {
-            request.destroy(
-              new GatewayWebSocketTlsPinError(
-                fingerprint
-                  ? "gateway tls fingerprint mismatch"
-                  : "gateway tls fingerprint unavailable",
-              ),
-            );
-            return;
-          }
-          // Validate pin before upgrade, including deferred Expect headers.
-          for (const [key, value] of deferredHeaders) {
-            if (value !== undefined) {
-              request.setHeader(key, value);
-            }
-          }
-          request.end();
-        };
-        // SAFETY: Node TLS sockets track secureConnecting; proxy sockets may already be secure.
-        if ((socket as TLSSocket & { secureConnecting: boolean }).secureConnecting) {
-          socket.once("secureConnect", validatePin);
-          request.once("close", () => socket.off("secureConnect", validatePin));
-        } else {
-          validatePin();
-        }
-      });
-    };
+    applyGatewayWebSocketTlsPin(options, expectedFingerprint, normalize);
   }
   return { options };
+}
+
+// The enrolled auxiliary streams share pin enforcement without inheriting URL policy.
+export function applyGatewayWebSocketTlsPin(
+  options: ClientOptions,
+  expectedFingerprint: string,
+  normalize = normalizeTlsFingerprint,
+): void {
+  options.rejectUnauthorized = false;
+  const headers = { ...options.headers };
+  const deferredHeaders = Object.entries(headers).filter(([key]) => key.toLowerCase() === "expect");
+  for (const [key] of deferredHeaders) {
+    delete headers[key];
+  }
+  options.headers = headers;
+  options.finishRequest = (request) => {
+    request.once("socket", (socket) => {
+      if (!(socket instanceof TLSSocket)) {
+        request.destroy(new GatewayWebSocketTlsPinError("gateway tls fingerprint unavailable"));
+        return;
+      }
+      const validatePin = () => {
+        if (request.destroyed) {
+          return;
+        }
+        const canonicalFingerprint = normalizeTlsFingerprint(
+          socket.getPeerCertificate()?.fingerprint256,
+        );
+        const fingerprint = canonicalFingerprint ? normalize(canonicalFingerprint) : "";
+        if (!fingerprint || fingerprint !== normalize(expectedFingerprint)) {
+          request.destroy(
+            new GatewayWebSocketTlsPinError(
+              fingerprint
+                ? "gateway tls fingerprint mismatch"
+                : "gateway tls fingerprint unavailable",
+            ),
+          );
+          return;
+        }
+        // Validate pin before upgrade, including deferred Expect headers.
+        for (const [key, value] of deferredHeaders) {
+          if (value !== undefined) {
+            request.setHeader(key, value);
+          }
+        }
+        request.end();
+      };
+      // SAFETY: Node TLS sockets track secureConnecting; proxy sockets may already be secure.
+      if ((socket as TLSSocket & { secureConnecting: boolean }).secureConnecting) {
+        socket.once("secureConnect", validatePin);
+        request.once("close", () => socket.off("secureConnect", validatePin));
+      } else {
+        validatePin();
+      }
+    });
+  };
 }
