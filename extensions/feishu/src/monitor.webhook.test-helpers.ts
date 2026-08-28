@@ -6,8 +6,8 @@ import {
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { vi } from "vitest";
-import type { ClawdbotConfig } from "../runtime-api.js";
-import type { monitorFeishuProvider } from "./monitor.js";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import type { FeishuStatusSink, monitorFeishuProvider } from "./monitor.js";
 
 const WEBHOOK_READY_MAX_ATTEMPTS = 200;
 const WEBHOOK_READY_RETRY_DELAY_MS = 50;
@@ -89,6 +89,8 @@ export async function withRunningWebhookMonitor(
     path: string;
     verificationToken: string;
     encryptKey: string;
+    runtime?: RuntimeEnv;
+    statusSink?: FeishuStatusSink;
   },
   monitor: typeof monitorFeishuProvider,
   run: (url: string) => Promise<void>,
@@ -105,12 +107,13 @@ export async function withRunningWebhookMonitor(
     });
 
     const abortController = new AbortController();
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = params.runtime ?? { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const monitorPromise = monitor({
       config: cfg,
       runtime,
       abortSignal: abortController.signal,
       accountId: params.accountId,
+      statusSink: params.statusSink,
     });
 
     const url = `http://127.0.0.1:${port}${params.path}`;
