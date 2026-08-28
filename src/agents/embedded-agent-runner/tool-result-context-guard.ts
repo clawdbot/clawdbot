@@ -195,6 +195,7 @@ function truncateToolResultToChars(
         { minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE },
       );
       return replaceToolResultContent(msg, [
+        // SAFETY: Array input is preserved or mapped to another array by truncateToolResultMessage.
         ...(bounded as { content: unknown[] }).content,
         ...notice,
       ]);
