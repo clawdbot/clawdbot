@@ -823,7 +823,7 @@ openclaw-chat-pane {
   overflow-y: auto;
 }
 
-.chat-header-session-menu--compact:has(.chat-pane__sharing-title)::part(menu) {
+.chat-header-session-menu--compact-sharing::part(menu) {
   max-height: min(420px, 60vh);
 }
 

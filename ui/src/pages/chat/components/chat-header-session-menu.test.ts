@@ -603,6 +603,11 @@ describe("chat header session menu", () => {
     await compact.updateComplete;
     expect(onOpen).toHaveBeenCalledOnce();
     expect(
+      compact
+        .querySelector("wa-dropdown")
+        ?.classList.contains("chat-header-session-menu--compact-sharing"),
+    ).toBe(true);
+    expect(
       Array.from(
         compact.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
       ).map(itemLabel),
