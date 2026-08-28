@@ -776,14 +776,9 @@ describe("evaluateFilePolicy — bare directory allow entries", () => {
   });
 
   it("gives an unmarked bare-literal ancestor a one-shot conditional /** fix", () => {
-    // Regression (ClawSweeper P2 on PR #125103): a literal allow entry such
-    // as `/etc/hosts` is an exact-file grant, but a child-shaped request like
-    // `/etc/hosts/child` passes the string-prefix ancestor check. Without a
-    // directory fact (trailing slash), the policy cannot distinguish a bare
-    // directory from an exact file. The first denial must give a complete
-    // recovery in one shot: offer the `/**` fix conditional on directory
-    // intent, with an explicit guard against broadening an exact-file grant,
-    // so the operator never needs a second failed attempt to learn the fix.
+    // A bare literal without a directory fact (trailing slash) is ambiguous:
+    // it may be an exact-file grant. The first denial must offer the /**
+    // recovery conditionally, guarded against broadening an exact-file grant.
     withConfig({
       n1: { allowReadPaths: ["/etc/hosts"] },
     });

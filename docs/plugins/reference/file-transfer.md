@@ -39,8 +39,9 @@ semantics:
   unconditionally recommends the matching `/**` form; without a trailing
   slash the entry is ambiguous (it could be an exact-file grant like
   `/etc/hosts`), so the same `/**` fix is offered conditionally — apply it
-  only for directory intent, never to broaden a single-file grant. Append
-  `/**` (or a trailing slash plus `/**`) to allow files inside a directory.
+  only for directory intent, never to broaden a single-file grant. Replace
+  any trailing separator with `/**` (for example `/data/` becomes `/data/**`)
+  to allow files inside a directory.
 - A **bare file path** (for example `/data/config.json`) is an exact-file
   grant that covers only that file.
 - `~` expands to the operator home directory.
