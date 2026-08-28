@@ -3,7 +3,7 @@
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionFacts } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";

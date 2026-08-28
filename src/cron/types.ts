@@ -1,7 +1,7 @@
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 /** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/failover/signal.js";
-import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply.js";
+import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { HookExternalContentSource } from "../security/external-content.js";

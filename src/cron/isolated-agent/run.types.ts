@@ -1,4 +1,4 @@
-import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 /** Result types returned by isolated cron agent runs. */
 import type {
   CronDeliveryTrace,

@@ -1,4 +1,4 @@
-import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply.js";
+import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
 
 type CronCompletionRunStatus = "ok" | "error" | "skipped";
 

@@ -9,7 +9,7 @@ import {
 } from "../agents/agent-scope.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
-import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply.js";
+import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";

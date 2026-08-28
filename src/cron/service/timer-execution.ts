@@ -1,4 +1,4 @@
-import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import {
   HEARTBEAT_IDLE_RETRY_GRACE_MS,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,

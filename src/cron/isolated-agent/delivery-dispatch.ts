@@ -1,5 +1,5 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
-import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/inbound.runtime.js";

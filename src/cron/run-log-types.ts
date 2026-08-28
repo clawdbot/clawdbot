@@ -1,6 +1,6 @@
 /** Stable cron run-history wire shape and legacy JSONL migration input. */
 import type { FailoverReason } from "../agents/failover/signal.js";
-import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply.js";
+import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
 import type {
   CronCompletionStatus,
   CronDeliveryStatus,

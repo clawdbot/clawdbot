@@ -1,5 +1,5 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
