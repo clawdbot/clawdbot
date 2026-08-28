@@ -563,9 +563,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         ? " chat-group--latest-assistant"
         : ""}${isPeerGroup ? " chat-group--peer" : ""}${isForwarded
         ? " chat-group--forwarded"
-        : ""}${senderHue === null
-        ? ""
-        : " chat-group--sender-tint"}"
+        : ""}${senderHue === null ? "" : " chat-group--sender-tint"}"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
