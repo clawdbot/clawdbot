@@ -111,6 +111,17 @@ Reauthentication preserves an existing explicit primary model, including
 
 ## "Model is not allowed" (and why replies stop)
 
+When `modelPolicy.allow` is omitted or empty, you can select an explicit
+`provider/model` even when it is absent from the finite `/model` picker catalog.
+The catalog supplies browse choices and model metadata; it is not an implicit
+allowlist. Provider availability, runtime compatibility, and authentication are
+validated independently. An unrestricted policy does not make an unknown
+provider or an unsupported runtime usable. If the policy is omitted, unmigrated
+legacy model-map restrictions described above still apply.
+
+The same policy applies to explicit `provider/model` and configured-alias hints
+after `/new` or `/reset`. Unrecognized leading text stays in the prompt.
+
 If `agents.defaults.modelPolicy.allow` is non-empty, it becomes the allowlist for `/model`, session overrides, and `--model`. Selecting a model outside that allowlist returns before any normal reply is generated. A per-agent `agents.entries.*.modelPolicy.allow` replaces the default policy for that agent.
 
 ```text

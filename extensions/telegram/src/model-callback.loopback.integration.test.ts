@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
@@ -142,7 +143,7 @@ describe("Telegram model callback loopback", () => {
       const bot = new Bot(TOKEN, { botInfo: telegramBotInfoForTest, client: { apiRoot } });
       const telegramDeps = {
         ...defaultTelegramBotDeps,
-        buildModelsProviderData: async () => {
+        buildModelsProviderData: async (): Promise<ModelsProviderData> => {
           callbackSteps.push("catalog");
           return {
             byProvider: new Map([
@@ -152,6 +153,16 @@ describe("Telegram model callback loopback", () => {
             providers: ["anthropic", PROVIDER],
             resolvedDefault: { provider: "anthropic", model: "claude-opus-4-6" },
             modelNames: new Map<string, string>(),
+            modelCatalog: [
+              {
+                provider: PROVIDER,
+                id: MODEL,
+                name: MODEL,
+                api: "ollama",
+                contextWindow: 32_768,
+                reasoning: true,
+              },
+            ],
           };
         },
         getRuntimeConfig: () => config,
