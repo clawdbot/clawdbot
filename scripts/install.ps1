@@ -1364,10 +1364,16 @@ function Test-ShouldPreferOfflinePnpmInstall {
     if (-not $pnpmCommand) {
         return $false
     }
+    $pushedLocation = $false
     try {
-        $configured = (& $pnpmCommand --dir $ProjectDir config get prefer-offline 2>$null)
-    } catch { return $false }
-    if ($LASTEXITCODE -ne 0) {
+        Push-Location -LiteralPath $ProjectDir
+        $pushedLocation = $true
+        $configured = (& $pnpmCommand config get prefer-offline 2>$null)
+        $configExitCode = $LASTEXITCODE
+    } catch { return $false } finally {
+        if ($pushedLocation) { Pop-Location }
+    }
+    if ($configExitCode -ne 0) {
         return $false
     }
     $value = "$configured".Trim()
