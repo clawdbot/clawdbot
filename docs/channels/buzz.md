@@ -93,6 +93,12 @@ Fresh setup accepts normal messages from current members of the configured
 rooms without requiring a composer mention. Existing explicit mention and
 sender-allowlist settings are preserved when setup is rerun.
 
+Setup resolves the selected account's `privateKey` and `authTag` SecretRefs
+without replacing the references in your configuration. If a configured secret
+is unavailable, setup reports the error without saving account changes. Make
+the secret available and rerun setup; existing accounts are not disabled.
+Select at least one authorized room to complete setup, or go back to leave it.
+
 The automatic room-access wait is bounded. If access is not granted in time,
 setup remains open and offers authenticated Retry/Back controls. Every retry
 reuses the same relay and bot identity; the timeout does not disable Buzz or

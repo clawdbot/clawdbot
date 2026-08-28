@@ -47,7 +47,7 @@ function resolveComparableCurrentKey(cfg: OpenClawConfig, accountId: string): st
   return allowEnv ? process.env.BUZZ_PRIVATE_KEY?.trim() || undefined : undefined;
 }
 
-export function isSameBuzzIdentity(currentKey?: string, nextKey?: string): boolean {
+function isSameBuzzIdentity(currentKey?: string, nextKey?: string): boolean {
   if (!currentKey || !nextKey) {
     return false;
   }

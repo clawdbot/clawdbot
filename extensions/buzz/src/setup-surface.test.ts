@@ -1,7 +1,10 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { nip19 } from "nostr-tools";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
+import type { SecretInput, WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBuzzSetupWizard } from "./setup-surface.js";
 
@@ -9,6 +12,67 @@ const ROOM_A = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
 const ROOM_B = "940d0c32-4eb7-46d7-9d5b-d975aaef87f7";
 const GENERATED_KEY = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const AUTH_TAG = '["auth","bot","kind=9","signature"]';
+const secretFixtureRoots: string[] = [];
+
+function createCredentialConfig(
+  accountId: "default" | "ada",
+  privateKey: SecretInput,
+  authTag: SecretInput,
+) {
+  const healthyAccount = {
+    enabled: true,
+    name: "Healthy bot",
+    relayUrl: "wss://healthy.example.com",
+    privateKey: "11".repeat(32),
+    authTag: '["auth","healthy","kind=9","signature"]',
+    groups: { [ROOM_B]: { requireMention: true } },
+    defaultTo: ROOM_B,
+  };
+  const selectedAccount = {
+    enabled: true,
+    name: "Selected bot",
+    relayUrl: "wss://selected.example.com",
+    privateKey,
+    authTag,
+    groupPolicy: "allowlist",
+    groupAllowFrom: [],
+    groups: { [ROOM_A]: { requireMention: false, groupAllowFrom: [] } },
+  };
+  const cfg: OpenClawConfig = {
+    channels: {
+      buzz:
+        accountId === "default"
+          ? { ...selectedAccount, accounts: { ada: healthyAccount } }
+          : { ...healthyAccount, accounts: { ada: selectedAccount } },
+    },
+  };
+  return { cfg, healthyAccount };
+}
+
+async function createStoredCredentials(source: "env" | "file"): Promise<{
+  privateKey: SecretInput;
+  authTag: SecretInput;
+  secrets?: OpenClawConfig["secrets"];
+}> {
+  const privateKey = nip19.nsecEncode(GENERATED_KEY);
+  if (source === "env") {
+    vi.stubEnv("BUZZ_SETUP_PRIVATE_KEY", privateKey);
+    vi.stubEnv("BUZZ_SETUP_AUTH_TAG", AUTH_TAG);
+    return {
+      privateKey: { source, provider: "default", id: "BUZZ_SETUP_PRIVATE_KEY" },
+      authTag: { source, provider: "default", id: "BUZZ_SETUP_AUTH_TAG" },
+    };
+  }
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "buzz-setup-ref-")));
+  secretFixtureRoots.push(root);
+  const filePath = path.join(root, "credentials.json");
+  await fs.writeFile(filePath, JSON.stringify({ privateKey, authTag: AUTH_TAG }), { mode: 0o600 });
+  return {
+    privateKey: { source, provider: "buzzsetup", id: "/privateKey" },
+    authTag: { source, provider: "buzzsetup", id: "/authTag" },
+    secrets: { providers: { buzzsetup: { source, path: filePath, mode: "json" } } },
+  };
+}
 
 function createPrompter(): WizardPrompter {
   return {
@@ -48,8 +112,9 @@ function createRuntime(): RuntimeEnv {
 }
 
 describe("Buzz guided setup", () => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.unstubAllEnvs();
+    await Promise.all(secretFixtureRoots.splice(0).map((root) => fs.rm(root, { recursive: true })));
   });
 
   it("generates a dedicated plaintext bot key and configures discovered rooms", async () => {
@@ -114,6 +179,7 @@ describe("Buzz guided setup", () => {
 
   it("keeps generated identities stable per account across wizard replay", async () => {
     vi.stubEnv("BUZZ_PRIVATE_KEY", "33".repeat(32));
+    vi.stubEnv("BUZZ_AUTH_TAG", "ambient-auth-must-not-be-used");
     const otherKey = Uint8Array.from({ length: 32 }, () => 7);
     const generate = vi.fn().mockReturnValueOnce(GENERATED_KEY).mockReturnValueOnce(otherKey);
     const discoverRooms = vi.fn(async () => [{ id: ROOM_B, name: "Agents" }]);
@@ -125,6 +191,7 @@ describe("Buzz guided setup", () => {
           enabled: false,
           relayUrl: "wss://root.example.com",
           privateKey: "11".repeat(32),
+          authTag: AUTH_TAG,
           groups: { [ROOM_A]: {} },
         },
       },
@@ -200,7 +267,7 @@ describe("Buzz guided setup", () => {
     });
   });
 
-  it("uses the standard SecretRef route for an existing bot key", async () => {
+  it("uses the standard SecretRef route when entering a bot key", async () => {
     const secretRef = { source: "env" as const, provider: "default", id: "BUZZ_BOT_KEY" };
     const privateKey = nip19.nsecEncode(GENERATED_KEY);
     type BuzzSetupDependencies = NonNullable<Parameters<typeof createBuzzSetupWizard>[0]>;
@@ -288,7 +355,40 @@ describe("Buzz guided setup", () => {
     );
   });
 
-  it("reports a paused identity as configured but disabled", async () => {
+  it.each(["default", "ada"] as const)(
+    "keeps %s setup open after an empty room selection",
+    async (accountId) => {
+      const { cfg } = createCredentialConfig(accountId, "22".repeat(32), AUTH_TAG);
+      const before = structuredClone(cfg);
+      const discoverRooms = vi.fn(async () => [
+        { id: ROOM_A, name: "General" },
+        { id: ROOM_B, name: "Agents" },
+      ]);
+      const prompter = createPrompter();
+      vi.mocked(prompter.multiselect).mockResolvedValueOnce([]).mockResolvedValueOnce([ROOM_A]);
+      const result = await createBuzzSetupWizard({ discoverRooms }).configure({
+        cfg,
+        runtime: createRuntime(),
+        prompter,
+        accountOverrides: { buzz: accountId },
+        shouldPromptAccountIds: false,
+        forceAllowFrom: false,
+      });
+      expect(result.accountId).toBe(accountId);
+      expect(result.completion).toBeUndefined();
+      expect(prompter.multiselect).toHaveBeenCalledTimes(2);
+      expect(prompter.note).toHaveBeenCalledWith(
+        expect.stringContaining("at least one"),
+        "Buzz room selection required",
+      );
+      expect(discoverRooms).toHaveBeenCalledOnce();
+      expect(result.cfg.channels?.buzz?.enabled).toBe(true);
+      expect(result.cfg.channels?.buzz?.accounts?.ada?.enabled).toBe(true);
+      expect(cfg).toEqual(before);
+    },
+  );
+
+  it("reports a configured identity as disabled", async () => {
     const wizard = createBuzzSetupWizard();
 
     await expect(
@@ -389,37 +489,125 @@ describe("Buzz guided setup", () => {
     expect(result.cfg.channels?.defaults?.groupPolicy).toBe("disabled");
   });
 
-  it("does not use BUZZ_PRIVATE_KEY when reusing an unresolved SecretRef", async () => {
-    vi.stubEnv("BUZZ_PRIVATE_KEY", nip19.nsecEncode(GENERATED_KEY));
-    const secretRef = { source: "env" as const, provider: "default", id: "OTHER_BUZZ_KEY" };
-    const discoverRooms = vi.fn(async () => [{ id: ROOM_A, name: "General" }]);
-    const wizard = createBuzzSetupWizard({ discoverRooms });
-    const prompter = createPrompter();
-    vi.mocked(prompter.text).mockImplementation(async ({ message }) => {
-      if (message.includes("relay")) {
-        return "wss://buzz.example.com";
-      }
-      throw new Error(`Unexpected text prompt: ${message}`);
-    });
+  it.each([
+    { accountId: "default", source: "env", plaintextPrivateKey: false },
+    { accountId: "ada", source: "env", plaintextPrivateKey: false },
+    { accountId: "default", source: "file", plaintextPrivateKey: false },
+    { accountId: "ada", source: "file", plaintextPrivateKey: false },
+    { accountId: "ada", source: "env", plaintextPrivateKey: true },
+  ] as const)(
+    "reuses $accountId $source refs with plaintextPrivateKey=$plaintextPrivateKey without replacing authored credentials",
+    async ({ accountId, source, plaintextPrivateKey }) => {
+      vi.stubEnv("BUZZ_PRIVATE_KEY", "33".repeat(32));
+      vi.stubEnv("BUZZ_AUTH_TAG", "ambient-auth-must-not-be-used");
+      const stored = await createStoredCredentials(source);
+      const privateKey = nip19.nsecEncode(GENERATED_KEY);
+      const configuredKey = plaintextPrivateKey ? privateKey : stored.privateKey;
+      const { cfg, healthyAccount } = createCredentialConfig(
+        accountId,
+        configuredKey,
+        stored.authTag,
+      );
+      cfg.secrets = stored.secrets;
+      const before = structuredClone(cfg);
+      const discoverRooms = vi.fn(async () => [{ id: ROOM_A, name: "General" }]);
+      const generate = vi.fn(() => GENERATED_KEY);
+      const runSecretStep = vi.fn();
+      const wizard = createBuzzSetupWizard({
+        discoverRooms,
+        generateSecretKey: generate,
+        runSecretStep,
+      });
+      const prompter = createPrompter();
 
-    const result = await wizard.configure({
-      cfg: {
-        channels: {
-          buzz: { relayUrl: "wss://buzz.example.com", privateKey: secretRef },
-        },
-      } as OpenClawConfig,
-      runtime: createRuntime(),
-      prompter,
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
-    });
+      const result = await wizard.configure({
+        cfg,
+        runtime: createRuntime(),
+        prompter,
+        accountOverrides: { buzz: accountId },
+        shouldPromptAccountIds: false,
+        forceAllowFrom: false,
+      });
 
-    expect(discoverRooms).not.toHaveBeenCalled();
-    expect(result.cfg.channels?.buzz?.privateKey).toEqual(secretRef);
-    expect(result.cfg.channels?.buzz?.enabled).toBe(false);
-    expect(result.completion).toBe("paused");
-  });
+      expect(result.accountId).toBe(accountId);
+      expect(result.completion).toBeUndefined();
+      expect(discoverRooms).toHaveBeenCalledWith({
+        relayUrl: "wss://selected.example.com",
+        privateKey,
+        authTag: AUTH_TAG,
+      });
+      const { accounts, ...root } = result.cfg.channels!.buzz!;
+      const selected = accountId === "default" ? root : accounts.ada;
+      expect(accountId === "default" ? accounts.ada : root).toEqual(healthyAccount);
+      expect(selected).toMatchObject({
+        enabled: true,
+        privateKey: configuredKey,
+        authTag: stored.authTag,
+        groupPolicy: "allowlist",
+        groupAllowFrom: [],
+        groups: { [ROOM_A]: { enabled: true, requireMention: false, groupAllowFrom: [] } },
+        defaultTo: ROOM_A,
+      });
+      expect(cfg).toEqual(before);
+      expect(generate).not.toHaveBeenCalled();
+      expect(runSecretStep).not.toHaveBeenCalled();
+      expect(JSON.stringify(vi.mocked(prompter.note).mock.calls)).not.toContain(privateKey);
+      expect(JSON.stringify(vi.mocked(prompter.note).mock.calls)).not.toContain(AUTH_TAG);
+    },
+  );
+
+  it.each([
+    { accountId: "default", field: "privateKey" },
+    { accountId: "ada", field: "privateKey" },
+    { accountId: "default", field: "authTag" },
+    { accountId: "ada", field: "authTag" },
+  ] as const)(
+    "rejects unavailable $accountId $field refs without a configuration result or credential fallback",
+    async ({ accountId, field }) => {
+      vi.stubEnv("BUZZ_PRIVATE_KEY", "33".repeat(32));
+      vi.stubEnv("BUZZ_AUTH_TAG", "ambient-auth-must-not-be-used");
+      vi.stubEnv("BUZZ_SETUP_MISSING", undefined);
+      const secretRef = { source: "env", provider: "default", id: "BUZZ_SETUP_MISSING" } as const;
+      const privateKey = nip19.nsecEncode(GENERATED_KEY);
+      const { cfg } = createCredentialConfig(
+        accountId,
+        field === "privateKey" ? secretRef : privateKey,
+        field === "authTag" ? secretRef : AUTH_TAG,
+      );
+      const before = structuredClone(cfg);
+      const discoverRooms = vi.fn(async () => [{ id: ROOM_A, name: "General" }]);
+      const waitForRoomAccess = vi.fn(async () => []);
+      const generate = vi.fn(() => GENERATED_KEY);
+      const runSecretStep = vi.fn();
+      const onPostWriteHook = vi.fn();
+      const wizard = createBuzzSetupWizard({
+        discoverRooms,
+        waitForRoomAccess,
+        generateSecretKey: generate,
+        runSecretStep,
+      });
+
+      await expect(
+        wizard.configure({
+          cfg,
+          runtime: createRuntime(),
+          prompter: createPrompter(),
+          options: { onPostWriteHook },
+          accountOverrides: { buzz: accountId },
+          shouldPromptAccountIds: false,
+          forceAllowFrom: false,
+        }),
+      ).rejects.toThrow(/configured|SecretRef/i);
+      expect(cfg).toEqual(before);
+      expect(cfg.channels?.buzz?.enabled).toBe(true);
+      expect(cfg.channels?.buzz?.accounts?.ada?.enabled).toBe(true);
+      expect(discoverRooms).not.toHaveBeenCalled();
+      expect(waitForRoomAccess).not.toHaveBeenCalled();
+      expect(generate).not.toHaveBeenCalled();
+      expect(runSecretStep).not.toHaveBeenCalled();
+      expect(onPostWriteHook).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not replace an existing identity during SecretRef setup", async () => {
     const runSecretStep = vi.fn();
