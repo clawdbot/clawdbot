@@ -4849,6 +4849,44 @@ describe("requester-scoped MCP connection resolution", () => {
     await manager.disposeSession("session-adv");
     expect(manager.getAdvertisedScopedCatalog("session-adv")).toBeNull();
   });
+
+  it("clears advertised scoped catalog when its MCP config changes", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://mcp.example.test/authed" }),
+      },
+    ]);
+    const createRuntime: RuntimeFactory = (params) =>
+      makeManagedRuntime(params, [{ toolName: "inbox", description: "read inbox" }], "user-mail");
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfgA = {
+      mcp: {
+        servers: {
+          "user-mail": { transport: "streamable-http", toolFilter: { include: ["read*"] } },
+        },
+      },
+    };
+    const cfgB = {
+      mcp: {
+        servers: {
+          "user-mail": { transport: "streamable-http", toolFilter: { include: ["send*"] } },
+        },
+      },
+    };
+
+    const runtime = await manager.getOrCreateRequesterScoped(
+      makeRequesterParams("session-adv-config", cfgA as never, "authed"),
+    );
+    manager.rememberAdvertisedScopedCatalog("session-adv-config", await runtime!.getCatalog());
+    expect(manager.getAdvertisedScopedCatalog("session-adv-config")?.tools).toHaveLength(1);
+
+    await manager.getOrCreateRequesterScoped(
+      makeRequesterParams("session-adv-config", cfgB as never, "authed"),
+    );
+    expect(manager.getAdvertisedScopedCatalog("session-adv-config")).toBeNull();
+  });
 });
 
 describe("disposeSession timeout", () => {

@@ -121,6 +121,18 @@ export function createSessionMcpRuntimeManager(
         resolverRequesterServerNames,
       } = partitionMcpServersByConnectionScope(fullConfig.loaded.mcpServers);
       const hasRequesterScoped = requesterScopedServerNames.length > 0;
+      lifecycle.reconcileAdvertisedScopedCatalogConfig(
+        params.sessionId,
+        loadSessionMcpConfig({
+          workspaceDir: params.workspaceDir,
+          cfg: params.cfg,
+          logDiagnostics: false,
+          manifestRegistry: params.manifestRegistry,
+          redactConnectionServerNames: new Set(requesterScopedServerNames),
+          safeServerNamesByServer,
+          toolOverrides: params.toolOverrides,
+        }).fingerprint,
+      );
 
       if (!hasRequesterScoped) {
         return await install.getOrCreateRuntimeEntry({
@@ -243,6 +255,18 @@ export function createSessionMcpRuntimeManager(
       const safeServerNamesByServer = assignSafeServerNames(
         Object.keys(fullConfig.loaded.mcpServers),
       );
+      lifecycle.reconcileAdvertisedScopedCatalogConfig(
+        params.sessionId,
+        loadSessionMcpConfig({
+          workspaceDir: params.workspaceDir,
+          cfg: params.cfg,
+          logDiagnostics: false,
+          manifestRegistry: params.manifestRegistry,
+          redactConnectionServerNames: new Set(requesterScopedServerNames),
+          safeServerNamesByServer,
+          toolOverrides: params.toolOverrides,
+        }).fingerprint,
+      );
       const scopedNameSet = new Set(requesterScopedServerNames);
       const { runtimeKey, runtime } = await materializeRequesterScopedRuntime({
         ...params,
@@ -348,6 +372,7 @@ export function createSessionMcpRuntimeManager(
       store.requiredRetirementSessionIds.clear();
       store.connectionMetaByRuntimeKey.clear();
       store.advertisedScopedCatalogBySessionId.clear();
+      store.advertisedScopedCatalogConfigFingerprints.clear();
       const lateRuntimes = await Promise.all(
         inFlightRuntimes.map(async ({ promise }) => await promise.catch(() => undefined)),
       );
