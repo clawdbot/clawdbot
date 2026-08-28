@@ -105,6 +105,9 @@ function collectRequestHeaderSecretValues(headers: HeadersInit): string[] {
         ? headers
         : Object.entries(headers);
   return entries.flatMap(([headerName, headerValue]) => {
+    if (headerValue === undefined) {
+      return [];
+    }
     const normalizedHeaderName = headerName.toLowerCase();
     if (normalizedHeaderName === "content-type" && headerValue === "application/json") {
       return [];

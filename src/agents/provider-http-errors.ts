@@ -436,7 +436,7 @@ export async function readProviderJsonResponse<T>(
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T;
   } catch (cause) {
-    // Parser causes can quote a partial credential; the labeled failure is safe.
+    // oxlint-disable-next-line preserve-caught-error -- Parser causes can quote partial credentials; header-bearing failures must omit them.
     throw new Error(
       `${label}: malformed JSON response`,
       opts?.requestHeaders ? undefined : { cause },
