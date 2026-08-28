@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { CODEX_FIXTURE_CLEAR_ENV } from "./codex-fixture-env.mjs";
 import {
   parseRecorderReady,
   readScenarioFile,
@@ -320,7 +321,7 @@ async function readTester(driverEnv) {
 // api made those scenarios untestable without forking this runner.
 const PROVIDER_API = process.env.E2E_TELEGRAM_PROVIDER_API || "openai-responses";
 
-function writeConfig(params) {
+export function writeConfig(params) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-user-mock-sut-"));
   const stateDir = path.join(root, "state");
   const workspace = path.join(root, "workspace");
@@ -379,6 +380,7 @@ function writeConfig(params) {
                 mode: "yolo",
                 command: "node",
                 args: [CODEX_REQUEST_USER_INPUT_FIXTURE_PATH],
+                clearEnv: CODEX_FIXTURE_CLEAR_ENV,
                 requestTimeoutMs: 60_000,
                 turnCompletionIdleTimeoutMs: 60_000,
               },
@@ -903,7 +905,6 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
     }
 
     const gatewayEnv = {
-      ...driverEnv,
       OPENCLAW_CONFIG_PATH: temp.configPath,
       OPENCLAW_STATE_DIR: temp.stateDir,
       TELEGRAM_BOT_TOKEN: creds.sutToken,

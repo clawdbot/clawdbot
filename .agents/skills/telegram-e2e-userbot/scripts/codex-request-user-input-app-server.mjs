@@ -2,6 +2,12 @@
 
 import fs from "node:fs";
 import readline from "node:readline";
+import { CODEX_FIXTURE_CLEAR_ENV } from "./codex-fixture-env.mjs";
+
+const leakedLeaseKey = CODEX_FIXTURE_CLEAR_ENV.find((key) => process.env[key]);
+if (leakedLeaseKey) {
+  throw new Error(`Codex fixture received leased Telegram environment key ${leakedLeaseKey}.`);
+}
 
 const requestLog =
   process.env.OPENCLAW_CODEX_REQUEST_USER_INPUT_LOG ||

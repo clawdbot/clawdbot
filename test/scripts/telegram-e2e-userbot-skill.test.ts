@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { writeConfig } from "../../.agents/skills/telegram-e2e-userbot/scripts/run-mock-sut-user-e2e.mjs";
 import { CodexAppServerClient } from "../../extensions/codex/src/app-server/client.js";
 import { CODEX_APP_SERVER_VERSION } from "../../extensions/codex/src/app-server/version.js";
 
@@ -25,15 +25,31 @@ describe("repository Telegram E2E skill", () => {
   });
 
   it("initializes the Codex fixture through the OpenClaw app-server client", async () => {
-    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-codex-fixture-"));
-    const fixturePath = path.join(scriptsDir, "codex-request-user-input-app-server.mjs");
+    const generated = writeConfig({
+      backend: "codex-fixture",
+      gatewayPort: 19879,
+      groupId: "-1001",
+      mockPort: 19882,
+      sourceGateway: false,
+      telegramApiRoot: "http://127.0.0.1:19881",
+      testerId: "123",
+    });
+    const config = JSON.parse(fs.readFileSync(generated.configPath, "utf8"));
+    const appServer = config.plugins.entries.codex.config.appServer;
     const client = CodexAppServerClient.start({
       transport: "stdio",
-      command: process.execPath,
+      command: appServer.command,
       commandSource: "custom",
-      args: [fixturePath],
+      args: appServer.args,
+      clearEnv: appServer.clearEnv,
       headers: {},
-      env: { OPENCLAW_CODEX_REQUEST_USER_INPUT_LOG: path.join(temp, "messages.ndjson") },
+      env: {
+        OPENCLAW_CODEX_REQUEST_USER_INPUT_LOG: path.join(generated.root, "messages.ndjson"),
+        TELEGRAM_BOT_TOKEN: "secret-sentinel",
+        TELEGRAM_E2E_STATE_DIR: "/private/lease",
+        TELEGRAM_USER_DRIVER_STATE_DIR: "/private/lease/user-driver",
+        TELEGRAM_E2E_SUT_BOT_TOKEN: "secondary-secret-sentinel",
+      },
     });
     try {
       await client.initialize();
@@ -45,7 +61,7 @@ describe("repository Telegram E2E skill", () => {
       );
     } finally {
       await client.closeAndWait();
-      fs.rmSync(temp, { recursive: true, force: true });
+      fs.rmSync(generated.root, { recursive: true, force: true });
     }
   });
 
