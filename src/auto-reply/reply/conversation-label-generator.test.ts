@@ -61,9 +61,11 @@ describe("generateConversationLabel", () => {
           agentDir: "/tmp/agents/billing/agent",
           utilityModelRef: "openai/gpt-mini@work",
           regularModelRef: "openai/gpt-main@work",
+          preferredProfile: "work",
         }),
       ).resolves.toBe("Topic label");
 
+      expect(runIsolatedCompletion).toHaveBeenCalledOnce();
       expect(runIsolatedCompletion).toHaveBeenCalledWith({
         config: cfg,
         provider: "openai",
@@ -168,16 +170,6 @@ describe("generateConversationLabelWithFallback", () => {
     preferredProfile: "work",
   };
 
-  it("uses the utility candidate once", async () => {
-    await expect(generateConversationLabelWithFallback(params)).resolves.toBe("Topic label");
-    expect(runIsolatedCompletion).toHaveBeenCalledOnce();
-    expect(runIsolatedCompletion.mock.calls[0]?.[0]).toMatchObject({
-      provider: "openai",
-      model: "gpt-mini",
-      authProfileId: "work",
-    });
-  });
-
   it("locks an inherited profile onto a same-provider utility ref", async () => {
     await generateConversationLabelWithFallback({ ...params, utilityModelRef: "openai/gpt-mini" });
 
@@ -214,22 +206,30 @@ describe("generateConversationLabelWithFallback", () => {
     expect(runIsolatedCompletion).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the runtime owner when utility reasoning needs a primary fallback", async () => {
-    runIsolatedCompletion
-      .mockResolvedValueOnce({ text: "<think>private" })
-      .mockResolvedValueOnce({ text: "Primary title" });
+  it.each([false, true])(
+    "keeps the runtime owner during fallback (reasoning: %s)",
+    async (reasoning) => {
+      runIsolatedCompletion
+        .mockImplementationOnce(async () => {
+          if (!reasoning) {
+            throw new Error("utility unavailable");
+          }
+          return { text: "<think>private" };
+        })
+        .mockResolvedValueOnce({ text: "Primary title" });
 
-    await expect(
-      generateConversationLabelWithFallback({
-        ...params,
-        agentHarnessRuntimeOverride: "codex",
-      }),
-    ).resolves.toBe("Primary title");
+      await expect(
+        generateConversationLabelWithFallback({
+          ...params,
+          agentHarnessRuntimeOverride: "codex",
+        }),
+      ).resolves.toBe("Primary title");
 
-    expect(
-      runIsolatedCompletion.mock.calls.map(([request]) => request.agentHarnessRuntimeOverride),
-    ).toEqual(["codex", "codex"]);
-  });
+      expect(
+        runIsolatedCompletion.mock.calls.map(([request]) => request.agentHarnessRuntimeOverride),
+      ).toEqual(["codex", "codex"]);
+    },
+  );
 
   it("uses the regular candidate directly when no utility model exists", async () => {
     const { utilityModelRef: _utilityModelRef, ...regularOnlyParams } = params;
