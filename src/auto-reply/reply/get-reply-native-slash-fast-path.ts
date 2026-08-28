@@ -41,6 +41,8 @@ import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { stripStructuralPrefixes } from "./mentions.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
+import { resolveEffectiveElevatedState } from "./reply-elevated.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
 import { createSkillCommandLoaders } from "./skill-command-loaders.js";
 import type { createTypingController } from "./typing.js";
@@ -287,6 +289,21 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       return resolvedDefaultThinkingLevel;
     };
     const resolvedThinkLevel = normalizeThinkLevel(targetSessionEntry?.thinkingLevel);
+    const classificationSessionKey = resolveRuntimePolicySessionKey({
+      agentId: params.agentId,
+      cfg: params.cfg,
+      ctx: params.ctx,
+      sessionKey: sessionState.sessionKey,
+    });
+    const resolvedElevatedLevel = resolveEffectiveElevatedState({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      ctx: params.ctx,
+      provider: command.channel,
+      sessionEntry: targetSessionEntry,
+      sessionKey: sessionState.sessionKey,
+      classificationSessionKey,
+    }).level;
     // This fast path has no model-state owner; prepare side-effect-free catalog facts directly.
     const thinkingCatalog = await loadPreparedModelCatalog({
       config: params.cfg,
@@ -315,7 +332,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
           resolvedThinkLevel,
           resolvedVerboseLevel: "off",
           resolvedReasoningLevel: "off",
-          resolvedElevatedLevel: "off",
+          resolvedElevatedLevel,
           resolveDefaultThinkingLevel,
           isGroup: sessionState.isGroup,
           defaultGroupActivation: () => "always",

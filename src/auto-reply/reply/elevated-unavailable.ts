@@ -17,11 +17,19 @@ export function formatElevatedUnavailableMessage(params: {
       "Failing gates: enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled), allowFrom (tools.elevated.allowFrom.<provider>).",
     );
   }
-  lines.push("Fix-it keys:");
-  lines.push("- tools.elevated.enabled");
-  lines.push("- tools.elevated.allowFrom.<provider>");
-  lines.push("- agents.entries.*.tools.elevated.enabled");
-  lines.push("- agents.entries.*.tools.elevated.allowFrom.<provider>");
+  if (params.failures.some((failure) => failure.gate === "sandbox")) {
+    lines.push("This session requires a sandbox; elevated execution cannot be enabled.");
+  }
+  if (
+    params.failures.some((failure) => failure.gate !== "sandbox") ||
+    params.failures.length === 0
+  ) {
+    lines.push("Fix-it keys:");
+    lines.push("- tools.elevated.enabled");
+    lines.push("- tools.elevated.allowFrom.<provider>");
+    lines.push("- agents.entries.*.tools.elevated.enabled");
+    lines.push("- agents.entries.*.tools.elevated.allowFrom.<provider>");
+  }
   if (params.sessionKey) {
     lines.push(
       `See: ${formatCliCommand(`openclaw sandbox explain --session ${params.sessionKey}`)}`,

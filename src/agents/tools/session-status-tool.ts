@@ -579,6 +579,8 @@ export function createSessionStatusTool(opts?: {
   sandboxed?: boolean;
   activeModelProvider?: string;
   activeModelId?: string;
+  /** Effective elevated level prepared for the active live run. */
+  activeElevatedLevel?: ElevatedLevel;
   metadataSnapshot?: PluginMetadataSnapshot;
   callGateway?: AgentToolGatewayRequestCaller;
   /** Active live-run route, kept separate from the persisted/origin delivery route. */
@@ -1134,6 +1136,15 @@ export function createSessionStatusTool(opts?: {
               ? { workspaceDir: statusSessionEntry.spawnedWorkspaceDir }
               : {}),
           });
+          const liveSessionKeySet = new Set(
+            liveSessionKeys
+              .map((value) => value?.trim())
+              .filter((value): value is string => Boolean(value)),
+          );
+          const activeRouteRunSessionKey = opts?.runSessionKey?.trim();
+          const isLiveRouteSession = activeRouteRunSessionKey
+            ? agentId === requesterAgentId && scopedResolved.key.trim() === activeRouteRunSessionKey
+            : agentId === requesterAgentId && liveSessionKeySet.has(scopedResolved.key.trim());
           const { buildStatusText } = await loadCommandsStatusRuntime();
           const statusText = await buildStatusText({
             cfg,
@@ -1152,7 +1163,9 @@ export function createSessionStatusTool(opts?: {
             resolvedFastMode: statusSessionEntry.fastMode,
             resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
             resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
-            resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
+            resolvedElevatedLevel:
+              (isLiveRouteSession ? opts?.activeElevatedLevel : undefined) ??
+              (statusSessionEntry.elevatedLevel as ElevatedLevel | undefined),
             resolveDefaultThinkingLevel: () =>
               resolveThinkingDefaultWithRuntimeCatalogCore({
                 cfg,
@@ -1178,15 +1191,6 @@ export function createSessionStatusTool(opts?: {
             taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
           const resultOverrideProvider = statusSessionEntry.providerOverride?.trim();
           const resultOverrideModel = statusSessionEntry.modelOverride?.trim();
-          const liveSessionKeySet = new Set(
-            liveSessionKeys
-              .map((value) => value?.trim())
-              .filter((value): value is string => Boolean(value)),
-          );
-          const activeRouteRunSessionKey = opts?.runSessionKey?.trim();
-          const isLiveRouteSession = activeRouteRunSessionKey
-            ? agentId === requesterAgentId && scopedResolved.key.trim() === activeRouteRunSessionKey
-            : agentId === requesterAgentId && liveSessionKeySet.has(scopedResolved.key.trim());
           const routeDetails = buildSessionStatusRouteDetails({
             entry: statusSessionEntry,
             sessionKey: scopedResolved.key,

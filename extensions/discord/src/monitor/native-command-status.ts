@@ -48,6 +48,7 @@ export async function maybeDeliverDiscordDirectStatus(params: {
     sessionKey: params.commandTargetSessionKey?.trim() || params.sessionKey,
     channel: params.channel,
     senderId: params.senderId,
+    accountId: params.accountId,
     senderIsOwner: params.senderIsOwner,
     isAuthorizedSender: params.isAuthorizedSender,
     isGroup: params.isGroup,

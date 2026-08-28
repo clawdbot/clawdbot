@@ -445,4 +445,45 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       ),
     ).toBe(true);
   });
+
+  it('maps elevated_level "inherit" to sessions.patch with elevatedLevel: null', async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "elevated-inherit-session",
+              kind: "direct",
+              updatedAt: Date.now(),
+              thinkingLevel: "minimal",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+              elevatedLevel: "off",
+            },
+          ],
+        };
+      }
+      if (method === "sessions.patch") {
+        expect(requireAcpObject(params, "sessions.patch params")).toMatchObject({
+          key: "elevated-inherit-session",
+          elevatedLevel: null,
+        });
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), { sessionStore });
+
+    await agent.loadSession(createLoadSessionRequest("elevated-inherit-session"));
+    const result = await agent.setSessionConfigOption(
+      createSetSessionConfigOptionRequest("elevated-inherit-session", "elevated_level", "inherit"),
+    );
+
+    expectConfigOption(result.configOptions, "elevated_level", { currentValue: "inherit" });
+  });
 });

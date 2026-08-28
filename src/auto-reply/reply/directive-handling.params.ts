@@ -52,6 +52,7 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   currentVerboseLevel?: VerboseLevel;
   currentReasoningLevel?: ReasoningLevel;
   currentElevatedLevel?: ElevatedLevel;
+  effectiveElevatedLevel?: ElevatedLevel;
   workspaceDir?: string;
   surface?: string;
   gatewayClientScopes?: string[];

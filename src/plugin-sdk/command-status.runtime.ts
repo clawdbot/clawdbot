@@ -6,6 +6,8 @@ import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
 import { resolveCurrentDirectiveLevels } from "../auto-reply/reply/directive-handling.levels.js";
 import { createModelSelectionState } from "../auto-reply/reply/model-selection.js";
+import { resolveEffectiveElevatedState } from "../auto-reply/reply/reply-elevated.js";
+import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-policy-session-key.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadGatewaySessionEntryReadOnly } from "../gateway/session-utils.js";
@@ -20,6 +22,8 @@ export type ResolveDirectStatusReplyForSessionParams = {
   channel: string;
   /** Optional sender id for command-context rendering and audit output. */
   senderId?: string;
+  /** Channel account used to normalize sender identity for elevated policy. */
+  accountId?: string;
   /** Whether the requester is an owner and may see owner-only session state. */
   senderIsOwner: boolean;
   /** Whether the requester passed channel allowlist/authorization checks. */
@@ -84,18 +88,36 @@ export async function resolveDirectStatusReplyForSessionCore(
     model: selectedModel,
     hasModelDirective: false,
   });
-  const {
-    currentThinkLevel,
-    currentFastMode,
-    currentVerboseLevel,
-    currentReasoningLevel,
-    currentElevatedLevel,
-  } = await resolveCurrentDirectiveLevels({
-    sessionEntry: statusEntry,
-    agentEntry,
-    agentCfg,
-    resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
+  const { currentThinkLevel, currentFastMode, currentVerboseLevel, currentReasoningLevel } =
+    await resolveCurrentDirectiveLevels({
+      sessionEntry: statusEntry,
+      agentEntry,
+      agentCfg,
+      resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
+    });
+  const statusContext = {
+    Provider: params.channel,
+    Surface: params.channel,
+    SenderId: params.senderId,
+    From: params.senderId,
+    AccountId: params.accountId,
+    ChatType: params.isGroup ? "group" : "direct",
+  } as const;
+  const classificationSessionKey = resolveRuntimePolicySessionKey({
+    agentId: statusAgentId,
+    cfg: statusCfg,
+    ctx: statusContext,
+    sessionKey: statusSessionKey,
   });
+  const resolvedElevatedLevel = resolveEffectiveElevatedState({
+    cfg: statusCfg,
+    agentId: statusAgentId,
+    ctx: statusContext,
+    provider: params.channel,
+    sessionEntry: statusEntry,
+    sessionKey: statusSessionKey,
+    classificationSessionKey,
+  }).level;
   const thinkingCatalog = await modelState.resolveThinkingCatalog();
   let resolvedReasoningLevel = currentReasoningLevel;
   const hasAgentReasoningDefault =
@@ -142,7 +164,7 @@ export async function resolveDirectStatusReplyForSessionCore(
     resolvedFastMode: currentFastMode,
     resolvedVerboseLevel: currentVerboseLevel ?? "off",
     resolvedReasoningLevel,
-    resolvedElevatedLevel: currentElevatedLevel,
+    resolvedElevatedLevel,
     resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
     isGroup: params.isGroup,
     defaultGroupActivation: params.defaultGroupActivation,

@@ -155,6 +155,7 @@ function firstStatusCall(): {
   cfg: OpenClawConfig;
   sessionKey: string;
   channel: string;
+  accountId: string;
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
 } {
@@ -166,6 +167,7 @@ function firstStatusCall(): {
     cfg: OpenClawConfig;
     sessionKey: string;
     channel: string;
+    accountId: string;
     isGroup: boolean;
     defaultGroupActivation: () => "always" | "mention";
   };
@@ -205,6 +207,7 @@ describe("discord native /status", () => {
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
     expect(runtimeModuleMocks.resolveDirectStatusReplyForSession).toHaveBeenCalledTimes(1);
+    expect(firstStatusCall().accountId).toBe("default");
     expect(runtimeModuleMocks.dispatchReplyWithDispatcher).not.toHaveBeenCalled();
     expect(interaction.followUp).toHaveBeenCalledTimes(1);
     expect(firstMockArg(interaction.followUp, "interaction.followUp")).toStrictEqual({

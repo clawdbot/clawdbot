@@ -113,6 +113,18 @@ describe("directive behavior", () => {
     expect(elevatedText).toContain("Current elevated level: on");
     expect(elevatedText).toContain("Options: on, off, ask, full.");
 
+    const { text: effectiveExecText } = await runDirectiveStatus("/exec", {
+      elevatedAllowed: true,
+      elevatedEnabled: true,
+      currentElevatedLevel: "on",
+      effectiveElevatedLevel: "on",
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        tools: { exec: { host: "auto" } },
+      } as OpenClawConfig,
+    });
+    expect(effectiveExecText).toContain("host=auto, effective=gateway");
+
     const { text: execText } = await runDirectiveStatus("/exec", {
       cfg: {
         commands: { text: true },

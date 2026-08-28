@@ -1,16 +1,20 @@
 /**
  * Tests command status runtime lazy loading and direct status reply behavior.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const buildStatusReply = vi.fn(async (params: unknown) => params);
 const loadSessionEntry = vi.fn();
 const resolveSessionAgentId = vi.fn();
+const resolveAgentConfig = vi.fn();
 const listAgentEntries = vi.fn();
 const resolveDefaultModelForAgent = vi.fn();
 const resolveDefaultModel = vi.fn();
 const createModelSelectionState = vi.fn();
 const resolveCurrentDirectiveLevels = vi.fn();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../auto-reply/reply/commands-status.js", () => ({
   buildStatusReply,
@@ -22,6 +26,7 @@ vi.mock("../gateway/session-utils.js", () => ({
 
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentEntries,
+  resolveAgentConfig,
   resolveSessionAgentId,
 }));
 
@@ -60,6 +65,7 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
     buildStatusReply.mockReset();
     loadSessionEntry.mockReset();
     resolveSessionAgentId.mockReset();
+    resolveAgentConfig.mockReset();
     listAgentEntries.mockReset();
     resolveDefaultModelForAgent.mockReset();
     resolveDefaultModel.mockReset();
@@ -96,7 +102,6 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
       currentFastMode: false,
       currentVerboseLevel: "off",
       currentReasoningLevel: "off",
-      currentElevatedLevel: "off",
     });
   });
 
@@ -137,7 +142,6 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
       currentFastMode: false,
       currentVerboseLevel: "off",
       currentReasoningLevel: "stream",
-      currentElevatedLevel: "off",
     });
 
     const result = await resolveDirectStatusReplyForSessionCore({
@@ -174,7 +178,6 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
       currentFastMode: false,
       currentVerboseLevel: "off",
       currentReasoningLevel: "stream",
-      currentElevatedLevel: "off",
     });
 
     const result = await resolveDirectStatusReplyForSessionCore({
@@ -206,7 +209,6 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
       currentFastMode: false,
       currentVerboseLevel: "off",
       currentReasoningLevel: "stream",
-      currentElevatedLevel: "off",
     });
 
     const result = await resolveDirectStatusReplyForSessionCore({
@@ -238,7 +240,6 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
       currentFastMode: false,
       currentVerboseLevel: "off",
       currentReasoningLevel: "stream",
-      currentElevatedLevel: "off",
     });
 
     const result = await resolveDirectStatusReplyForSessionCore({
@@ -252,5 +253,67 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
     });
 
     expectResolvedReasoningLevel(result, "stream");
+  });
+
+  it("uses the sender-aware effective elevated level", async () => {
+    loadSessionEntry.mockReturnValue({
+      cfg: { tools: { elevated: { allowFrom: { discord: ["owner"] } } } },
+      canonicalKey: "main",
+      entry: { sessionId: "sess-main" },
+      store: {},
+      storePath: "/tmp/sessions.sqlite",
+    });
+
+    const result = await resolveDirectStatusReplyForSessionCore({
+      cfg: {},
+      sessionKey: "main",
+      channel: "discord",
+      accountId: "primary",
+      senderId: "owner",
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      isGroup: false,
+      defaultGroupActivation: () => "always",
+    });
+
+    expect(result).toMatchObject({ resolvedElevatedLevel: "on" });
+  });
+
+  it("uses the peer policy key when a direct main-session peer requires sandboxing", async () => {
+    const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
+    const storePath = path.join(tempDirs.make("openclaw-direct-status-policy-"), "sessions.sqlite");
+    const cfg = {
+      session: { store: storePath },
+      tools: { elevated: { allowFrom: { discord: ["owner"] } } },
+    };
+    await replaceSessionEntry(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:discord:primary:direct:owner",
+        storePath,
+      },
+      { sessionId: "peer-policy", sandbox: "required", updatedAt: Date.now() },
+    );
+    loadSessionEntry.mockReturnValue({
+      cfg,
+      canonicalKey: "main",
+      entry: { sessionId: "sess-main" },
+      store: {},
+      storePath,
+    });
+
+    const result = await resolveDirectStatusReplyForSessionCore({
+      cfg,
+      sessionKey: "main",
+      channel: "discord",
+      accountId: "primary",
+      senderId: "owner",
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      isGroup: false,
+      defaultGroupActivation: () => "always",
+    });
+
+    expect(result).toMatchObject({ resolvedElevatedLevel: "off" });
   });
 });

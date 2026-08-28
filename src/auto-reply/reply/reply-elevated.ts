@@ -2,10 +2,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { AgentElevatedAllowFromConfig, OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { shouldUseFromAsSenderFallback } from "../sender-identity.js";
 import type { MsgContext } from "../templating.js";
+import { normalizeElevatedLevel, type ElevatedLevel } from "../thinking.js";
 import {
   type AllowFromFormatter,
   type ExplicitElevatedAllowField,
@@ -176,7 +179,7 @@ function isApprovedElevatedSender(params: {
 }
 
 /** Resolves whether elevated tools are enabled and allowed for the inbound sender. */
-export function resolveElevatedPermissions(params: {
+function resolveElevatedPermissions(params: {
   cfg: OpenClawConfig;
   agentId: string;
   ctx: MsgContext;
@@ -252,4 +255,50 @@ export function resolveElevatedPermissions(params: {
     });
   }
   return { enabled, allowed: globalAllowed && agentAllowed, failures };
+}
+
+/** Resolves the elevated level that the current sender and session can actually use. */
+export function resolveEffectiveElevatedState(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  ctx: MsgContext;
+  provider: string;
+  sessionEntry?: Pick<SessionEntry, "elevatedLevel" | "sandbox">;
+  sessionKey?: string;
+  classificationSessionKey?: string;
+  requestedLevel?: ElevatedLevel;
+}): {
+  enabled: boolean;
+  allowed: boolean;
+  failures: Array<{ gate: string; key: string }>;
+  currentLevel: ElevatedLevel;
+  level: ElevatedLevel;
+  sandboxed: boolean;
+  sandboxRequired: boolean;
+} {
+  const permissions = resolveElevatedPermissions(params);
+  const runtime = resolveSandboxRuntimeStatus({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    classificationSessionKey: params.classificationSessionKey,
+  });
+  const sandboxRequired = params.sessionEntry?.sandbox === "required" || runtime.sandboxRequired;
+  const allowed = permissions.allowed && !sandboxRequired;
+  const failures = sandboxRequired
+    ? [...permissions.failures, { gate: "sandbox", key: "session.sandbox" }]
+    : permissions.failures;
+  const configuredLevel = params.cfg.agents?.defaults?.elevatedDefault;
+  const currentLevel = allowed
+    ? (normalizeElevatedLevel(params.sessionEntry?.elevatedLevel) ?? configuredLevel ?? "on")
+    : "off";
+  return {
+    enabled: permissions.enabled,
+    allowed,
+    failures,
+    currentLevel,
+    level: allowed ? (params.requestedLevel ?? currentLevel) : "off",
+    sandboxed: runtime.sandboxed,
+    sandboxRequired,
+  };
 }
