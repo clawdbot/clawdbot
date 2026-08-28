@@ -359,6 +359,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var derivedTitle: String?
     /// Non-sensitive facts derived by the Gateway from the canonical session route.
     public var classification: String?
+    public var boardFace: String?
     public var agentId: String?
     public var accountId: String?
     public var peerKind: String?
@@ -428,6 +429,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         kind: String?,
         displayName: String?,
         classification: String? = nil,
+        boardFace: String? = nil,
         agentId: String? = nil,
         accountId: String? = nil,
         peerKind: String? = nil,
@@ -494,6 +496,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.displayName = displayName
         self.derivedTitle = derivedTitle
         self.classification = classification
+        self.boardFace = boardFace
         self.agentId = agentId
         self.accountId = accountId
         self.peerKind = peerKind

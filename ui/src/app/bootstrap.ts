@@ -374,6 +374,7 @@ export function bootstrapApplication(
       ...(!hasPendingGateway && startup.pendingBootstrapProfile
         ? { bootstrapProfile: startup.pendingBootstrapProfile }
         : {}),
+      ...(startup.nativeClient ? { clientOptions: startup.nativeClient } : {}),
     },
   );
   const agents = createAgentCapability(gateway);

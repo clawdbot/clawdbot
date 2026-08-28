@@ -5,6 +5,11 @@ import WebKit
 
 /// URL, credential, and WebView plumbing shared by authenticated Control UI pages.
 enum AuthenticatedControlUI {
+    private struct StoredOperatorAuthorization {
+        let identity: DeviceIdentity
+        let entry: DeviceAuthEntry
+    }
+
     private static let queryComponentAllowed = CharacterSet(
         charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
     private static let pathSegmentAllowed = CharacterSet(
@@ -52,29 +57,64 @@ enum AuthenticatedControlUI {
         storedOperatorToken: String?) -> String?
     {
         guard let config, let pageURL else { return nil }
-        var payload: [String: String] = ["gatewayUrl": config.url.absoluteString]
+        var payload: [String: Any] = ["gatewayUrl": config.url.absoluteString]
         let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let storedToken = storedOperatorToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let password = config.password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !token.isEmpty {
+        let storedAuthorization = Self.storedOperatorAuthorization(
+            config: config,
+            expectedToken: storedToken)
+        if let storedAuthorization {
+            payload["client"] = [
+                "id": config.nodeOptions.clientId,
+                "mode": "ui",
+                "platform": InstanceIdentity.platformString,
+                "deviceFamily": InstanceIdentity.deviceFamily,
+                "instanceId": InstanceIdentity.instanceId,
+                "scopes": storedAuthorization.entry.scopes,
+            ]
+        }
+        if storedAuthorization == nil, !token.isEmpty {
             payload["token"] = token
-        } else if !storedToken.isEmpty {
+        } else if storedAuthorization == nil, !storedToken.isEmpty {
             payload["token"] = storedToken
         }
-        if !password.isEmpty {
+        if storedAuthorization == nil, !password.isEmpty {
             payload["password"] = password
         }
-        guard payload["token"] != nil || payload["password"] != nil else { return nil }
+        guard payload["token"] != nil || payload["password"] != nil || storedAuthorization != nil else {
+            return nil
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8)
         else {
             return nil
         }
+        let deviceAuthSeed = storedAuthorization.flatMap { Self.deviceAuthSeed(
+            gatewayURL: config.url,
+            authorization: $0)
+        } ?? "null"
         let allowedOrigin = Self.jsStringLiteral(Self.originString(for: pageURL))
         return """
         (() => {
           try {
             if (location.origin !== \(allowedOrigin)) return;
+            const deviceAuthSeed = \(deviceAuthSeed);
+            if (deviceAuthSeed) {
+              const gateway = new URL(deviceAuthSeed.gatewayUrl, location.href);
+              gateway.hash = "";
+              const path = gateway.pathname === "/"
+                ? ""
+                : gateway.pathname.replace(/\\/+$/, "") || gateway.pathname;
+              const scope = `${gateway.protocol}//${gateway.host}${path}${gateway.search}`;
+              localStorage.setItem(
+                "openclaw-device-identity-v1",
+                JSON.stringify(deviceAuthSeed.identity));
+              localStorage.setItem(
+                `openclaw.device.auth.v1:${scope}`,
+                JSON.stringify(deviceAuthSeed.authorization));
+              localStorage.removeItem("openclaw.device.auth.v1");
+            }
             Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {
               value: \(json),
               configurable: true,
@@ -85,17 +125,7 @@ enum AuthenticatedControlUI {
     }
 
     static func storedOperatorToken(config: GatewayConnectConfig?) -> String? {
-        guard let config else { return nil }
-        // Endpoint handoffs may explicitly suppress device-token reuse; every auth surface
-        // must honor that boundary or a stale token can override the supplied password.
-        guard config.nodeOptions.allowStoredDeviceAuth else { return nil }
-        let gatewayID = config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID
-        guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else { return nil }
-        return DeviceAuthStore.loadToken(
-            deviceId: identity.deviceId,
-            role: "operator",
-            gatewayID: gatewayID)?
-            .token
+        self.storedOperatorAuthorization(config: config)?.entry.token
     }
 
     static func webContentIdentity(config: GatewayConnectConfig?, storedOperatorToken: String?) -> Int {
@@ -128,6 +158,74 @@ enum AuthenticatedControlUI {
             return "\"\""
         }
         return String(raw.dropFirst().dropLast())
+    }
+
+    private static func storedOperatorAuthorization(
+        config: GatewayConnectConfig?,
+        expectedToken: String? = nil) -> StoredOperatorAuthorization?
+    {
+        guard let config else { return nil }
+        // Endpoint handoffs may explicitly suppress device-token reuse; every auth surface
+        // must honor that boundary or a stale token can override the supplied password.
+        guard config.nodeOptions.includeDeviceIdentity,
+              config.nodeOptions.allowStoredDeviceAuth
+        else { return nil }
+        let profile = config.nodeOptions.deviceIdentityProfile
+        let gatewayID = config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: profile),
+              let entry = DeviceAuthStore.loadToken(
+                  deviceId: identity.deviceId,
+                  role: "operator",
+                  gatewayID: gatewayID,
+                  profile: profile)
+        else { return nil }
+        if let expectedToken,
+           entry.token.trimmingCharacters(in: .whitespacesAndNewlines) != expectedToken
+        {
+            return nil
+        }
+        return StoredOperatorAuthorization(identity: identity, entry: entry)
+    }
+
+    private static func deviceAuthSeed(
+        gatewayURL: URL,
+        authorization: StoredOperatorAuthorization) -> String?
+    {
+        guard let publicKey = base64URL(authorization.identity.publicKey),
+              let privateKey = base64URL(authorization.identity.privateKey)
+        else { return nil }
+        let identity: [String: Any] = [
+            "version": 1,
+            "deviceId": authorization.identity.deviceId,
+            "publicKey": publicKey,
+            "privateKey": privateKey,
+            "createdAtMs": authorization.identity.createdAtMs,
+        ]
+        let entry: [String: Any] = [
+            "token": authorization.entry.token,
+            "role": "operator",
+            "scopes": authorization.entry.scopes,
+            "updatedAtMs": authorization.entry.updatedAtMs,
+        ]
+        let seed: [String: Any] = [
+            "gatewayUrl": gatewayURL.absoluteString,
+            "identity": identity,
+            "authorization": [
+                "version": 1,
+                "deviceId": authorization.identity.deviceId,
+                "tokens": ["operator": entry],
+            ],
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: seed) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func base64URL(_ value: String) -> String? {
+        guard let data = Data(base64Encoded: value) else { return nil }
+        return data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 
     private static func pagePath(basePath rawPath: String, path: String) -> String {

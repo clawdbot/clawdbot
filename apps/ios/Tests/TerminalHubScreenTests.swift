@@ -96,7 +96,7 @@ struct TerminalHubScreenTests {
         #expect(script?.contains("\"token\":\"stored-token\"") == true)
     }
 
-    @Test func `auth user script loads the active gateway scoped operator token`() throws {
+    @Test func `auth user script seeds the matching device identity and scoped operator token`() throws {
         let gatewayID = "manual|terminal-\(UUID().uuidString)|443"
         let identity = DeviceIdentityStore.loadOrCreate()
         defer {
@@ -109,14 +109,22 @@ struct TerminalHubScreenTests {
             deviceId: identity.deviceId,
             role: "operator",
             token: "scoped-terminal-token",
+            scopes: ["operator.read", "operator.write"],
             gatewayID: gatewayID).token == "scoped-terminal-token")
         let config = try Self.makeConfig(
             url: #require(URL(string: "wss://gateway.example.com:8443")),
+            token: "stale-configured-token",
             deviceAuthGatewayID: gatewayID)
 
         let script = TerminalHubScreen.terminalAuthUserScript(config: config)
 
+        #expect(script?.contains("openclaw-device-identity-v1") == true)
+        #expect(script?.contains("openclaw.device.auth.v1:${scope}") == true)
+        #expect(script?.contains(identity.deviceId) == true)
         #expect(script?.contains("\"token\":\"scoped-terminal-token\"") == true)
+        #expect(script?.contains("operator.read") == true)
+        #expect(script?.contains("operator.write") == true)
+        #expect(script?.contains("stale-configured-token") == false)
     }
 
     @Test func `auth user script honors stored device auth suppression`() throws {
@@ -142,6 +150,7 @@ struct TerminalHubScreenTests {
         let script = TerminalHubScreen.terminalAuthUserScript(config: config)
 
         #expect(script?.contains("stale-terminal-token") == false)
+        #expect(script?.contains("const deviceAuthSeed = null;") == true)
         #expect(script?.contains("\"password\":\"replacement-password\"") == true)
     }
 

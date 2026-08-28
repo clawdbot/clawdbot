@@ -17,6 +17,7 @@ struct RootSidebar: View {
     let isDrawerLayout: Bool
     let isDismissButtonEnabled: Bool
     let selectDestination: (RootTabs.SidebarDestination) -> Void
+    let selectSession: (OpenClawChatSessionEntry) -> Void
     let hideSidebar: () -> Void
 
     var body: some View {
@@ -606,8 +607,7 @@ struct RootSidebar: View {
         let session = node.session
         let isSelected = session.key == selectedSessionKey
         return Button {
-            self.appModel.openChat(sessionKey: session.key)
-            self.selectSidebarDestination(.chat)
+            self.selectSession(session)
         } label: {
             HStack(spacing: 9) {
                 ZStack {

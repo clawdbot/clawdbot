@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import OpenClawChatUI
 import SwiftUI
 
 extension RootTabs {
@@ -104,6 +105,15 @@ extension RootTabs {
     enum SidebarLayoutMode: Equatable {
         case drawer
         case split
+    }
+
+    enum SidebarSessionPresentation: Equatable {
+        case chat
+        case dashboard
+    }
+
+    static func sidebarPresentation(for session: OpenClawChatSessionEntry) -> SidebarSessionPresentation {
+        session.boardFace == "dashboard" ? .dashboard : .chat
     }
 
     static func sidebarLayoutContainerSize(contentSize: CGSize, windowSize: CGSize?) -> CGSize {

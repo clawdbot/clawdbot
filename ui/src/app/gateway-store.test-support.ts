@@ -63,6 +63,10 @@ export function createGatewayStoreTestStore(
     settings?: ReturnType<typeof loadSettings>;
     persistDefaultConnectionSettings?: boolean;
     resourceBasePath?: string;
+    clientOptions?: Pick<
+      GatewayBrowserClientOptions,
+      "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
+    >;
   } = {},
 ) {
   const clients: FakeGatewayClient[] = [];
@@ -78,6 +82,7 @@ export function createGatewayStoreTestStore(
     {
       persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
       resourceBasePath: params.resourceBasePath,
+      clientOptions: params.clientOptions,
     },
   );
   const current = () => {
