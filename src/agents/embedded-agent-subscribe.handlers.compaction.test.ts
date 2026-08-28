@@ -23,6 +23,7 @@ function createCompactionContext(params: {
   sessionKey: string;
   agentId?: string;
   initialCount: number;
+  onAgentEvent?: EmbeddedAgentSubscribeContext["params"]["onAgentEvent"];
   info?: (message: string, meta?: Record<string, unknown>) => void;
   warn?: (message: string, meta?: Record<string, unknown>) => void;
   messages?: AgentMessage[];
@@ -38,7 +39,7 @@ function createCompactionContext(params: {
       sessionKey: params.sessionKey,
       sessionId: "session-1",
       agentId: params.agentId ?? "test-agent",
-      onAgentEvent: undefined,
+      onAgentEvent: params.onAgentEvent,
     },
     state: {
       compactionInFlight: true,
@@ -373,6 +374,57 @@ describe("handleCompactionEnd", () => {
 
     expect(await readCompactionCount(storePath, sessionKey)).toBe(2);
     expect(ctx.noteCompactionTokensAfter).toHaveBeenCalledWith(50);
+    expect(ctx.log.debug).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "[compaction-attribution] end runId=run-test sessionKey=main trigger=budget outcome=compacted willRetry=false compactionCount.before=1 compactionCount.after=2 compactionCount.delta=1",
+      ),
+    );
+  });
+
+  it("emits terminal compaction attribution data for count deltas", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-attribution-"));
+    const storePath = path.join(tmp, "sessions.json");
+    await seedSessionStore({
+      storePath,
+      sessionKey: "main",
+      compactionCount: 4,
+    });
+    const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
+    const ctx = createCompactionContext({
+      storePath,
+      sessionKey: "main",
+      initialCount: 4,
+      onAgentEvent: (event) => {
+        events.push(event as { stream: string; data: Record<string, unknown> });
+      },
+    });
+
+    handleCompactionEnd(ctx, {
+      type: "compaction_end",
+      reason: "overflow",
+      outcome: { status: "completed", tokensBefore: 120, tokensAfter: 12, willRetry: true },
+    });
+
+    await waitForCompactionCount({
+      storePath,
+      sessionKey: "main",
+      expected: 5,
+    });
+
+    expect(events).toContainEqual({
+      stream: "compaction",
+      data: {
+        phase: "end",
+        completed: true,
+        willRetry: true,
+        outcome: "completed",
+        trigger: "overflow",
+        sessionKey: "main",
+        compactionCountBefore: 4,
+        compactionCountAfter: 5,
+        compactionCountDelta: 1,
+      },
+    });
   });
 
   it("clears stale assistant usage before compaction and preserves fresh usage after it", async () => {

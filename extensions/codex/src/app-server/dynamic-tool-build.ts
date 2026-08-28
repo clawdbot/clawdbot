@@ -140,6 +140,7 @@ type DynamicToolBuildParams = {
   forceHeartbeatTool?: boolean;
   ignoreDisableMessageTool?: boolean;
   ignoreRuntimePlan?: boolean;
+  allowProviderRuntimePluginLoad?: boolean;
   /** Host fact resolver; injectable only for focused plugin contract tests. */
   isHostScopedToolActive?: (toolName: string) => boolean;
   onYieldDetected: (acknowledgment?: string) => void;
@@ -404,6 +405,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       cronCreatorToolAllowlistRef: input.cronCreatorToolAllowlistRef,
       cronCreatorToolAllowlistCaptureRef: input.cronCreatorToolAllowlistCaptureRef,
       cronCreatorAuthorityUnavailableReason: input.cronCreatorAuthorityUnavailableReason,
+      drainsContinuationDelegateQueue: params.drainsContinuationDelegateQueue,
+      continueWorkOpts: params.continueWorkOpts,
+      requestCompactionOpts: params.requestCompactionOpts,
     };
     const bindingOptions = { cwd: input.effectiveCwd ?? input.effectiveWorkspace };
     if (injectedOpenClawCodingToolsFactory) {
@@ -523,7 +527,10 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     model: params.model,
     // Durable registration projects the prepared catalog; it must not activate
     // a different provider runtime while building the thread-stable schema.
-    allowProviderRuntimePluginLoad: input.ignoreRuntimePlan ? false : undefined,
+    // Outside durable registration the caller-supplied value still applies.
+    allowProviderRuntimePluginLoad: input.ignoreRuntimePlan
+      ? false
+      : input.allowProviderRuntimePluginLoad,
     onPreNormalizationSchemaDiagnostics: (diagnostics) =>
       preNormalizationDiagnostics.push(...diagnostics),
   });

@@ -1,3 +1,4 @@
+import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 /**
  * Transcript recorder for CLI-dispatched embedded runs.
  *
@@ -14,6 +15,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
+import { sanitizeTranscriptToolCallBlock } from "../tool-call-shared.js";
 
 const log = createSubsystemLogger("agents/embedded-cli-dispatch");
 
@@ -74,11 +76,17 @@ export function createCliDispatchTranscriptRecorder(params: {
   let turnTainted = false;
   let toolRecordSequence = 0;
 
+  // appendTranscriptMessage resolves its SQLite target from storePath, not
+  // sessionFile. Keep CLI transcript writes in the exact declared marker
+  // store; otherwise a custom/agent-scoped session can silently write into the
+  // default store and make canonical transcript reads miss the record.
+  const marker = parseSqliteSessionFileMarker(params.sessionFile);
   const scope = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     sessionFile: params.sessionFile,
+    ...(marker ? { storePath: marker.storePath } : {}),
     expectedLifecycleRevision: params.expectedLifecycleRevision,
     expectedWriterRunId: params.expectedWriterRunId,
   };
@@ -148,8 +156,10 @@ export function createCliDispatchTranscriptRecorder(params: {
               {
                 type: "toolCall",
                 id: toolCallId,
-                name: event.toolName,
-                arguments: event.args ?? {},
+                ...sanitizeTranscriptToolCallBlock({
+                  name: event.toolName,
+                  arguments: event.args ?? {},
+                }),
               },
             ],
             "toolUse",

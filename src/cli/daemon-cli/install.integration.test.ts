@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useHermeticOpenclawEnv } from "../../../test/vitest/hermetic-openclaw-env.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
@@ -44,6 +45,9 @@ async function readJson(filePath: string): Promise<Record<string, unknown>> {
 }
 
 describe("runDaemonInstall integration", () => {
+  useHermeticOpenclawEnv({
+    except: ["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"],
+  });
   let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome: string;
   let configPath: string;

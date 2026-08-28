@@ -310,8 +310,8 @@ function readGitCommit(cwd: string, ref: string): string {
 async function collectCodexRepoCandidates(repoRoot: string): Promise<string[]> {
   const candidates = [
     process.env.OPENCLAW_CODEX_REPO,
-    path.resolve(repoRoot, "../codex"),
     await resolvePrimaryWorktreeSiblingCodex(repoRoot),
+    path.resolve(repoRoot, "../codex"),
   ];
   return candidates.filter((candidate): candidate is string => Boolean(candidate));
 }

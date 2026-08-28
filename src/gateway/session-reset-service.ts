@@ -27,6 +27,7 @@ import { clearAllCliSessions } from "../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { SessionContinuationResetError } from "../auto-reply/continuation/session-reset.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -337,6 +338,7 @@ async function ensureSessionRuntimeCleanup(params: {
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
+  reason: "new" | "reset" | "delete";
   assertCurrent?: () => void;
 }) {
   // Session lifecycle mutation owns this heavy runtime edge; read-only gateway
@@ -375,10 +377,18 @@ async function ensureSessionRuntimeCleanup(params: {
   const processScopeKeys = new Set(queueKeys);
   processScopeKeys.add(params.key);
   clearFinishedSessionsForScopes(processScopeKeys);
-  clearSessionResetRuntimeState([...queueKeys], {
-    activeReplySessionId: params.sessionId,
-    agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
-  });
+  try {
+    clearSessionResetRuntimeState([...queueKeys], {
+      activeReplySessionId: params.sessionId,
+      agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
+      reason: params.reason,
+    });
+  } catch (error) {
+    if (error instanceof SessionContinuationResetError) {
+      return errorShape(ErrorCodes.UNAVAILABLE, error.message);
+    }
+    throw error;
+  }
   await stopSubagentsForRequester({
     cfg: params.cfg,
     requesterSessionKey: params.target.canonicalKey,
@@ -802,6 +812,7 @@ export async function cleanupSessionBeforeMutation(params: {
     key: params.key,
     target: params.target,
     sessionId: params.entry?.sessionId,
+    reason: params.reason === "session-reset" ? "reset" : "delete",
     assertCurrent: params.assertCurrent,
   });
   if (cleanupError) {
@@ -1340,14 +1351,14 @@ export async function performGatewaySessionReset(params: {
       await triggerInternalHook(hookEvent);
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
-      // Cleanup below is destructive. Once it starts, finish rotating the same
-      // session even if gateway ownership changes; otherwise runtime state can be
-      // reset while the persisted session still points at the old conversation.
+      // Cleanup can fail before rotation when continuation cancellation cannot persist.
+      // Once cleanup succeeds, finish rotating this session even if ownership changes.
       const runtimeCleanupError = await ensureSessionRuntimeCleanup({
         cfg,
         key: params.key,
         target,
         sessionId: entry?.sessionId,
+        reason: params.reason,
       });
       if (runtimeCleanupError) {
         return { ok: false, error: runtimeCleanupError };

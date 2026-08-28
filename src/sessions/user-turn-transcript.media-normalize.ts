@@ -5,8 +5,11 @@ import {
   asPositiveSafeInteger,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { MediaFactInput } from "../media/media-facts.js";
-import type { PersistedUserTurnMediaInput } from "./user-turn-transcript.types.js";
+import { readPersistedMediaFacts, type MediaFactInput } from "../media/media-facts.js";
+import type {
+  PersistedUserTurnMediaInput,
+  PersistedUserTurnMessage,
+} from "./user-turn-transcript.types.js";
 
 const URL_LIKE_MEDIA_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
 const STRUCTURED_MEDIA_KINDS = new Set<NonNullable<MediaFactInput["kind"]>>([
@@ -26,16 +29,62 @@ function normalizeStructuredMediaKind(value: string | null | undefined): MediaFa
     : undefined;
 }
 
-export function resolveTranscriptMediaPath(
-  pathValue: string,
-  workspaceDir: string | undefined,
-): string {
+function resolveTranscriptMediaPath(pathValue: string, workspaceDir: string | undefined): string {
   // Relative staged media paths are anchored to the media workspace; absolute
   // paths and URL-like refs are already stable transcript references.
   if (!workspaceDir || path.isAbsolute(pathValue) || URL_LIKE_MEDIA_PATH_PATTERN.test(pathValue)) {
     return pathValue;
   }
   return path.join(workspaceDir, pathValue);
+}
+
+export function buildPersistedUserTurnMediaInputsFromFields(
+  fields: PersistedUserTurnMessage | null | undefined,
+): PersistedUserTurnMediaInput[] {
+  if (!fields) {
+    return [];
+  }
+
+  const facts = readPersistedMediaFacts(fields) ?? [];
+  const normalizedMedia = facts.map((fact) => {
+    const rawPath = normalizeOptionalString(fact.path);
+    const mediaPath = rawPath
+      ? resolveTranscriptMediaPath(rawPath, normalizeOptionalString(fact.workspaceDir))
+      : undefined;
+    const url = normalizeOptionalString(fact.url);
+    if (!mediaPath && !url) {
+      return {};
+    }
+    const contentType =
+      normalizeOptionalString(fact.contentType) ?? mimeTypeFromFilePath(mediaPath ?? url);
+    const media: PersistedUserTurnMediaInput = { contentType };
+    if (mediaPath) {
+      media.path = mediaPath;
+    }
+    if (url) {
+      media.url = url;
+    }
+    if (fact.kind) {
+      media.kind = fact.kind;
+    }
+    if (fact.fileName) {
+      media.fileName = fact.fileName;
+    }
+    if (fact.sizeBytes !== undefined) {
+      media.sizeBytes = fact.sizeBytes;
+    }
+    if (fact.durationMs !== undefined) {
+      media.durationMs = fact.durationMs;
+    }
+    if (fact.width !== undefined) {
+      media.width = fact.width;
+    }
+    if (fact.height !== undefined) {
+      media.height = fact.height;
+    }
+    return media;
+  });
+  return normalizedMedia.some((entry) => entry.path || entry.url) ? normalizedMedia : [];
 }
 
 export function normalizeStructuredMediaEntryForTranscript(

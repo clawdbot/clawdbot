@@ -6,26 +6,25 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEventIfCurrent } from "../infra/agent-events.js";
 import { recordAgentRunOutputTokens } from "../infra/agent-run-usage.js";
 import type { AssistantMessage } from "../llm/types.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
-import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
+import { createCompactionRetryTracker } from "./embedded-agent-subscribe.compaction-retry.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import { readPendingToolMediaReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
   cleanupRunToolStartData,
-  handleToolExecutionEnd,
-  handleToolExecutionStart,
+  createEmbeddedToolLifecycle,
 } from "./embedded-agent-subscribe.handlers.tools.js";
 import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import { resolveEmbeddedAgentSessionLogger } from "./embedded-agent-subscribe.logger.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import { createStreamRendering } from "./embedded-agent-subscribe.stream-rendering.js";
@@ -34,25 +33,10 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
-import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js";
 import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
-import {
-  consumeTrustedToolNoStartError,
-  registerTrustedToolNoStartError,
-} from "./tool-result-error.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
-
-const embeddedLog = createSubsystemLogger("agent/embedded");
-
-function resolveEmbeddedAgentSessionLogger(messageChannel?: string) {
-  const normalizedChannel = normalizeMessageChannel(messageChannel);
-  if (normalizedChannel && isDeliverableMessageChannel(normalizedChannel)) {
-    return createSubsystemLogger(`gateway/channels/${normalizedChannel}`);
-  }
-  return embeddedLog;
-}
 
 export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
   const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
@@ -147,11 +131,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
   };
 
-  const noteCompactionRetry = () => {
-    state.pendingCompactionRetry += 1;
-    ensureCompactionPromise();
-  };
-
   const resolveCompactionPromiseIfIdle = () => {
     if (state.pendingCompactionRetry !== 0 || state.compactionInFlight) {
       return;
@@ -162,13 +141,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.compactionRetryPromise = null;
   };
 
-  const resolveCompactionRetry = () => {
-    if (state.pendingCompactionRetry <= 0) {
-      return;
-    }
-    state.pendingCompactionRetry -= 1;
-    resolveCompactionPromiseIfIdle();
-  };
+  const { noteCompactionReplacementActivity, noteCompactionRetry, resolveCompactionRetry } =
+    createCompactionRetryTracker({
+      state,
+      ensureCompactionPromise,
+      resolveCompactionPromiseIfIdle,
+    });
 
   const maybeResolveCompactionWait = () => {
     resolveCompactionPromiseIfIdle();
@@ -389,7 +367,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     log,
     blockChunker,
     emitBlockReply: replyDelivery.emitBlockReply,
-    pendingBlockReplyTasks: replyDelivery.pendingBlockReplyTasks,
+    settleBlockReplyDeliveries: replyDelivery.settleBlockReplyDeliveries,
+    currentPendingBlockReplyTasks: replyDelivery.currentPendingBlockReplyTasks,
     pushAssistantText: replyDelivery.pushAssistantText,
     shouldSkipAssistantText: replyDelivery.shouldSkipAssistantText,
   });
@@ -403,7 +382,21 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     stripBlockTags,
   } = streamRendering;
 
-  const resetForCompactionRetry = () => {
+  const invalidateBlockReplyDeliveries = () => {
+    replyDelivery.invalidateBlockReplyDeliveries();
+  };
+
+  const invalidateBlockReplyDeliveriesForCompactionRetry = () => {
+    invalidateBlockReplyDeliveries();
+    return replyDelivery.getBlockReplyDeliveryGeneration();
+  };
+
+  const resetForCompactionRetry = (invalidatedDeliveryGeneration?: number) => {
+    if (invalidatedDeliveryGeneration === undefined) {
+      invalidateBlockReplyDeliveries();
+    }
+    replyDelivery.resetBlockReplyFailures();
+
     state.hadDeterministicSideEffect =
       state.hadDeterministicSideEffect === true ||
       hasCommittedMessagingToolDeliveryEvidence({
@@ -446,9 +439,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     clearDeferredAssistantEvents();
     clearDeferredBlockReplies();
     state.pendingAssistantReplyDirectives = undefined;
+    state.deferredAssistantReplyDirectives = undefined;
+    state.lastDeliveredAssistantReplyDirectives = undefined;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
     state.lastDeliveredBlockReplyText = undefined;
+    state.deliveredBlockReplyTexts = [];
+    state.attemptedBlockReplyTexts = [];
+    state.deferredBlockReplyTexts = [];
     state.toolExecutionSinceLastBlockReply = false;
     // Keep prior usage until the retry records its own call or terminal error.
     currentAttemptAssistant = undefined;
@@ -528,6 +526,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     stripBlockTags,
     emitBlockChunk,
     flushBlockReplyBuffer,
+    settleBlockReplyDeliveries: replyDelivery.settleBlockReplyDeliveries,
     emitAssistantStreamData,
     emitBlockReply,
     flushDeferredAssistantEvents,
@@ -538,6 +537,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     consumeReplyDirectives,
     consumePartialReplyDirectives,
     resetAssistantMessageState,
+    getBlockReplyDeliveryGeneration: replyDelivery.getBlockReplyDeliveryGeneration,
+    invalidateBlockReplyDeliveriesForCompactionRetry,
     resetForCompactionRetry,
     finalizeAssistantTexts,
     trimMessagingToolSent,
@@ -545,6 +546,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       consumeEmbeddedToolReceipt(params.session.sessionManager, toolCallId),
     ensureCompactionPromise,
     noteCompactionRetry,
+    noteCompactionReplacementActivity,
     resolveCompactionRetry,
     maybeResolveCompactionWait,
     recordAssistantUsage,
@@ -557,6 +559,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
   };
 
+  const runToolLifecycle = createEmbeddedToolLifecycle(ctx);
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedAgentSessionEventHandler(ctx));
 
   const unsubscribe = () => {
@@ -606,56 +609,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       state.latestMcpAppChannelView ? { ...state.latestMcpAppChannelView } : undefined,
     getLatestMcpConnectAction: () =>
       state.latestMcpConnectAction ? { ...state.latestMcpConnectAction } : undefined,
-    runToolLifecycle: async <T>(toolParams: {
-      toolName: string;
-      toolCallId: string;
-      args: unknown;
-      replaySafe?: boolean;
-      hideFromChannelProgress?: boolean;
-      execute: (onImplementationStart: () => void) => Promise<T>;
-    }): Promise<T> => {
-      await handleToolExecutionStart(ctx, {
-        type: "tool_execution_start",
-        toolName: toolParams.toolName,
-        toolCallId: toolParams.toolCallId,
-        args: toolParams.args,
-        replaySafe: toolParams.replaySafe,
-        hideFromChannelProgress: toolParams.hideFromChannelProgress,
-        lifecycleProvenance: "nested",
-      } as never);
-      let executionStarted = false;
-      const onImplementationStart = () => {
-        executionStarted = true;
-      };
-      try {
-        const result = await toolParams.execute(onImplementationStart);
-        await handleToolExecutionEnd(ctx, {
-          type: "tool_execution_end",
-          toolName: toolParams.toolName,
-          toolCallId: toolParams.toolCallId,
-          isError: false,
-          executionStarted,
-          result,
-          hideFromChannelProgress: toolParams.hideFromChannelProgress,
-        } as never);
-        return result;
-      } catch (error) {
-        const trustedNoStart = consumeTrustedToolNoStartError(error);
-        const terminal = await handleToolExecutionEnd(ctx, {
-          type: "tool_execution_end",
-          toolName: toolParams.toolName,
-          toolCallId: toolParams.toolCallId,
-          isError: true,
-          executionStarted,
-          result: buildToolLifecycleErrorResult(error),
-          hideFromChannelProgress: toolParams.hideFromChannelProgress,
-        } as never);
-        if (trustedNoStart && !terminal.executionStarted) {
-          registerTrustedToolNoStartError(error);
-        }
-        throw error;
-      }
-    },
+    runToolLifecycle,
     unsubscribe,
     setTerminalLifecycleMeta: (meta: {
       replayInvalid?: boolean;

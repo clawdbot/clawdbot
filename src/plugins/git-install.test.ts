@@ -684,10 +684,11 @@ describe("installPluginFromGitSpec", () => {
         gitDir,
       });
 
-      expect(result.ok).toBe(true);
-      expect(mkdtempSpy).toHaveBeenCalledTimes(2);
+      expect(result.ok, result.ok ? "" : result.error).toBe(true);
+      expect(mkdtempSpy).toHaveBeenCalledTimes(3);
       const targetPrefix = mkdtempSpy.mock.calls[0]?.[0];
       const fallbackPrefix = mkdtempSpy.mock.calls[1]?.[0];
+      const commitPrefix = mkdtempSpy.mock.calls[2]?.[0];
       const persistentRepoDir = expectedGitRepoDir({
         gitDir,
         normalizedSpec: "git:https://github.com/acme/demo.git",
@@ -695,12 +696,16 @@ describe("installPluginFromGitSpec", () => {
       expect(path.dirname(expectDefined(targetPrefix, "targetPrefix test invariant"))).toBe(
         await fs.realpath(path.dirname(persistentRepoDir)),
       );
-      // withTempDir roots fallback staging at resolvePreferredOpenClawTmpDir(), which
+      // withTestDir roots fallback staging at resolvePreferredOpenClawTmpDir(), which
       // prefers /tmp/openclaw and only degrades to a uid-scoped os.tmpdir path when
       // that is unsafe. Recompute it here so the assertion holds on every host.
       expect(path.dirname(expectDefined(fallbackPrefix, "fallbackPrefix test invariant"))).toBe(
         await fs.realpath(resolvePreferredOpenClawTmpDir()),
       );
+      expect(path.dirname(expectDefined(commitPrefix, "commitPrefix test invariant"))).toBe(
+        await fs.realpath(path.dirname(persistentRepoDir)),
+      );
+      expect((await fs.stat(persistentRepoDir)).isDirectory()).toBe(true);
       expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
     } finally {
       mkdtempSpy.mockRestore();

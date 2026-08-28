@@ -1,18 +1,14 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-// Mock node:fs and node:os for controlled testing
-const { existsSyncMock, homedirMock } = vi.hoisted(() => ({
+// Partially mock node:fs for controlled binary discovery.
+const { existsSyncMock } = vi.hoisted(() => ({
   existsSyncMock: vi.fn(),
-  homedirMock: vi.fn(),
 }));
 
-vi.mock("node:fs", () => ({
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
   existsSync: existsSyncMock,
-}));
-
-vi.mock("node:os", () => ({
-  homedir: homedirMock,
 }));
 
 import { resolveMxcBinaryPath } from "../src/binary-resolver.js";
@@ -22,7 +18,6 @@ describe("resolveMxcBinaryPath", () => {
 
   beforeEach(() => {
     existsSyncMock.mockReset();
-    homedirMock.mockReturnValue("/home/openclaw");
     process.env.PATH = "";
   });
 

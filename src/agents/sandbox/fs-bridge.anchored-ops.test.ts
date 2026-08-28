@@ -16,7 +16,7 @@ import {
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
   mockedOpenRootFile,
-  withTempDir,
+  withTestDir,
 } from "./fs-bridge.test-helpers.js";
 
 type DockerRawCall = NonNullable<ReturnType<typeof findCallByDockerArg>>;
@@ -69,7 +69,7 @@ describe("sandbox fs bridge anchored ops", () => {
   ] as const;
 
   it.each(pinnedReadCases)("$name", async (testCase) => {
-    await withTempDir("openclaw-fs-bridge-contract-read-", async (stateDir) => {
+    await withTestDir("openclaw-fs-bridge-contract-read-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await testCase.setup(workspaceDir, stateDir);
       const bridge = createSandboxFsBridge({
@@ -92,7 +92,7 @@ describe("sandbox fs bridge anchored ops", () => {
       maxBytes: 64 * 1024 + 1,
     },
   ])("reads $name through one pinned descriptor", async (testCase) => {
-    await withTempDir("openclaw-fs-bridge-bounded-read-", async (stateDir) => {
+    await withTestDir("openclaw-fs-bridge-bounded-read-", async (stateDir) => {
       const { bridge } = await createSeededSandboxFsBridge(stateDir, {
         rootContents: testCase.contents,
       });
@@ -110,7 +110,7 @@ describe("sandbox fs bridge anchored ops", () => {
     { name: "negative limits", maxBytes: -1, error: /non-negative safe integer/ },
     { name: "unsafe limits", maxBytes: Number.NaN, error: /non-negative safe integer/ },
   ])("rejects $name without an unbounded read", async (testCase) => {
-    await withTempDir("openclaw-fs-bridge-bounded-reject-", async (stateDir) => {
+    await withTestDir("openclaw-fs-bridge-bounded-reject-", async (stateDir) => {
       const { bridge } = await createSeededSandboxFsBridge(stateDir, {
         rootContents: "hello",
       });
@@ -124,7 +124,7 @@ describe("sandbox fs bridge anchored ops", () => {
   });
 
   it("rejects files that grow after the sandbox descriptor is opened", async () => {
-    await withTempDir("openclaw-fs-bridge-bounded-growth-", async (stateDir) => {
+    await withTestDir("openclaw-fs-bridge-bounded-growth-", async (stateDir) => {
       const { bridge, workspaceDir } = await createSeededSandboxFsBridge(stateDir, {
         rootContents: "hello",
       });
@@ -194,7 +194,7 @@ describe("sandbox fs bridge anchored ops", () => {
   it.each(pinnedCases)("$name", async (testCase) => {
     // Mutations pass mount roots and basenames separately; full target paths
     // would allow symlink swaps between validation and execution.
-    await withTempDir("openclaw-fs-bridge-contract-write-", async (stateDir) => {
+    await withTestDir("openclaw-fs-bridge-contract-write-", async (stateDir) => {
       const { bridge } = await createSeededSandboxFsBridge(stateDir);
 
       await testCase.invoke(bridge);
@@ -216,7 +216,7 @@ describe("sandbox fs bridge anchored ops", () => {
   });
 
   it("allows dot-dot-prefixed sandbox entries without treating them as parent traversal", async () => {
-    await withTempDir("openclaw-fs-bridge-dot-prefix-", async (stateDir) => {
+    await withTestDir("openclaw-fs-bridge-dot-prefix-", async (stateDir) => {
       const { bridge } = await createSeededSandboxFsBridge(stateDir);
 
       expect(bridge.resolvePath({ filePath: "..cache" })).toMatchObject({
@@ -236,7 +236,7 @@ describe("sandbox fs bridge anchored ops", () => {
     async () => {
       // Parent symlinks are resolved once to a canonical path, then the write is
       // anchored there so later alias changes cannot redirect the target.
-      await withTempDir("openclaw-fs-bridge-contract-write-", async (stateDir) => {
+      await withTestDir("openclaw-fs-bridge-contract-write-", async (stateDir) => {
         const workspaceDir = path.join(stateDir, "workspace");
         const realDir = path.join(workspaceDir, "real");
         await fs.mkdir(realDir, { recursive: true });
@@ -279,7 +279,7 @@ describe("sandbox fs bridge anchored ops", () => {
   );
 
   it("stat anchors parent + basename", async () => {
-    await withTempDir("openclaw-fs-bridge-contract-stat-", async (stateDir) => {
+    await withTestDir("openclaw-fs-bridge-contract-stat-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "nested", "file.txt"), "bye", "utf8");
@@ -302,7 +302,7 @@ describe("sandbox fs bridge anchored ops", () => {
   });
 
   it("runs stat under the C locale so missing-file errors return null", async () => {
-    await withTempDir("openclaw-fs-bridge-stat-missing-", async (stateDir) => {
+    await withTestDir("openclaw-fs-bridge-stat-missing-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
 
@@ -342,7 +342,7 @@ describe("sandbox fs bridge anchored ops", () => {
   });
 
   it("keeps non-missing stat failures as errors", async () => {
-    await withTempDir("openclaw-fs-bridge-stat-error-", async (stateDir) => {
+    await withTestDir("openclaw-fs-bridge-stat-error-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
 
@@ -373,7 +373,7 @@ describe("sandbox fs bridge anchored ops", () => {
   });
 
   it("saturates unsafe stat size output", async () => {
-    await withTempDir("openclaw-fs-bridge-stat-parse-", async (stateDir) => {
+    await withTestDir("openclaw-fs-bridge-stat-parse-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
 

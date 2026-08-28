@@ -247,12 +247,13 @@ export class RequestClient {
       : controller.signal;
     this.requestControllers.add(controller);
     try {
-      const response = await (this.customFetch ?? fetch)(url, {
+      const init = {
         method,
         headers,
         body,
         signal,
-      });
+      };
+      const response = await (this.customFetch ?? fetch)(url, init);
       const text = await readResponseBodyText(response, this.options.timeout ?? 15_000);
       const parsed = coerceResponseBody(text);
       this.scheduler.recordResponse(routeKey, path, response, parsed);

@@ -90,9 +90,16 @@ export function testboxLeaseStaleReasons(saved: unknown, current: unknown) {
   if (!isRecord(saved) || saved.version !== STATE_VERSION || !isRecord(current)) {
     return ["state schema"];
   }
-  return ["baseSha", "dependencyDigest", "environmentDigest", "workflow", "job", "ref"].filter(
-    (key) => saved[key] !== current[key],
-  );
+  return [
+    "baseSha",
+    "headSha",
+    "workingTreeClean",
+    "dependencyDigest",
+    "environmentDigest",
+    "workflow",
+    "job",
+    "ref",
+  ].filter((key) => saved[key] !== current[key]);
 }
 
 export function prepareTestboxLeaseFreshness({

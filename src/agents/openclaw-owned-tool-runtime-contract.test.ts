@@ -36,6 +36,7 @@ type ToolExecutionEndEvent = Parameters<typeof handleToolExecutionEnd>[1];
 function createToolHandlerCtx(): ToolHandlerContext {
   // Minimal embedded-agent tool handler context used to drive start/end events.
   return {
+    getBlockReplyDeliveryGeneration: () => 0,
     params: {
       runId: "run-contract",
       agentId: "agent-1",

@@ -6,6 +6,45 @@ import type {
   SpawnSubagentSandboxMode,
 } from "./subagent-spawn.types.js";
 
+type SpawnSubagentAdmissionBoundary =
+  | "child-session"
+  | "gateway-dispatch"
+  | "registry-acceptance"
+  | "lifecycle-publication"
+  | "final-acceptance";
+
+export type SpawnSubagentAdmissionAuthority = {
+  signal: AbortSignal;
+  source: {
+    ownerSessionKey: string;
+    flowId?: string;
+    expectedRevision?: number;
+  };
+  assertCurrent(
+    boundary: SpawnSubagentAdmissionBoundary,
+    source?: { flowId?: string; expectedRevision?: number; task: string } | null,
+  ): void;
+};
+
+export class SpawnSubagentAdmissionCancelledError extends Error {
+  readonly code = "CONTINUATION_DELEGATE_ADMISSION_CANCELLED";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SpawnSubagentAdmissionCancelledError";
+  }
+}
+
+export function isSpawnSubagentAdmissionCancelledError(
+  error: unknown,
+): error is SpawnSubagentAdmissionCancelledError {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "CONTINUATION_DELEGATE_ADMISSION_CANCELLED"
+  );
+}
+
 export type SpawnSubagentParams = {
   task: string;
   label?: string;
@@ -53,10 +92,11 @@ export type SpawnSubagentContext = SpawnedToolContext & {
   currentMessageId?: string | number;
   requesterAgentIdOverride?: string;
   requesterRunId?: string;
+  continuationDelegateAdmission?: SpawnSubagentAdmissionAuthority;
 };
 
 export type SpawnSubagentResult = {
-  status: "accepted" | "forbidden" | "error";
+  status: "accepted" | "cancelled" | "forbidden" | "error";
   childSessionKey?: string;
   sessionKey?: string;
   runId?: string;
@@ -69,6 +109,8 @@ export type SpawnSubagentResult = {
   resolvedProvider?: string;
   modelApplied?: boolean;
   error?: string;
+  /** Removes and terminates this exact accepted run if its source handoff loses authority. */
+  rollbackAccepted?: () => Promise<void>;
   attachments?: {
     count: number;
     totalBytes: number;

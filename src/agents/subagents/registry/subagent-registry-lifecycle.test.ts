@@ -1897,6 +1897,7 @@ describe("subagent registry lifecycle hardening", () => {
 
     await completeRun(controller, entry, { triggerCleanup: true });
     await waitForLifecycleState(() => expect(entry.deleteCleanupDispatchedAt).toBeTypeOf("number"));
+    await vi.waitFor(() => expect(releaseDelete).toBeTypeOf("function"));
 
     expect(markSubagentRunPausedAfterYield({ entry, endedAt: 4_001 })).toBe(false);
     expect(entry.pauseReason).toBeUndefined();
@@ -1931,6 +1932,28 @@ describe("subagent registry lifecycle hardening", () => {
 
     releaseAnnounce?.();
     await waitForLifecycleState(() => expect(runs.has(entry.runId)).toBe(false));
+  });
+
+  it("defers announce delete while an accepted wake dispatch owns the session", async () => {
+    const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: true });
+    const runs = new Map([[entry.runId, entry]]);
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        entry.acceptedSteerDispatch = {
+          gatewayRunId: "accepted-wake-dispatch",
+          phase: "accepted",
+        };
+        expect(announceParams.onBeforeDeleteChildSession?.()).toBe(false);
+        return "retryable" as const;
+      },
+    );
+    const controller = createLifecycleController({ entry, runs, runSubagentAnnounceFlow });
+
+    await completeRun(controller, entry, { triggerCleanup: true });
+    await waitForLifecycleState(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
+
+    expect(entry.deleteCleanupDispatchedAt).toBeUndefined();
+    expect(runs.get(entry.runId)).toBe(entry);
   });
 
   it.each([

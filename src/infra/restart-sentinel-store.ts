@@ -38,10 +38,12 @@ export type RestartSentinelContinuation =
   | {
       kind: "systemEvent";
       text: string;
+      traceparent?: string;
     }
   | {
       kind: "agentTurn";
       message: string;
+      traceparent?: string;
     };
 
 export type RestartSentinelPayload = {

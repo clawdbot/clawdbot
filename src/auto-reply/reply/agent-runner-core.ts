@@ -6,6 +6,7 @@ import {
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
+  type SessionPostCompactionDelegate,
 } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
@@ -17,6 +18,7 @@ import {
   type DeliveryContext,
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
+import { stagePostCompactionDelegate } from "../continuation/delegate-store-post-compaction.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import {
   isReplyPayloadTerminalContent,
@@ -388,6 +390,7 @@ export async function handleReplyAgentRunError(
 export async function cleanupReplyAgentRun(context: {
   blockReplyPipeline: BlockReplyPipeline | null;
   clearRestartRecoveryDeliveryClaim: () => Promise<void>;
+  postCompactionDelegatesToPreserve: SessionPostCompactionDelegate[];
   providedReplyOperation: ReplyOperation | undefined;
   queueKey: string;
   replyOperation: ReplyOperation;
@@ -399,6 +402,7 @@ export async function cleanupReplyAgentRun(context: {
   const {
     blockReplyPipeline,
     clearRestartRecoveryDeliveryClaim,
+    postCompactionDelegatesToPreserve,
     providedReplyOperation,
     queueKey,
     replyOperation,
@@ -431,6 +435,27 @@ export async function cleanupReplyAgentRun(context: {
   }
   blockReplyPipeline?.stop();
   typing.markRunComplete();
+  // do NOT consume/claim queued delegates in cleanup. consume APIs are
+  // TaskFlow claims (queued -> running), not deletes; claiming here and
+  // discarding the returned rows would strand a delegate matured/queued during
+  // a failed turn in `running` until restart recovery. Durable queued delegates
+  // must survive a failed turn and be dispatched by the next turn's dispatcher
+  // or restart recovery — so leave them queued. Only re-stage the in-memory
+  // preserve list (delegates a durable handoff could not persist), which would
+  // otherwise be lost with the process. Guard the TaskFlow call: a throw here
+  // runs inside the finally, so it would both mask the original run error and
+  // skip markDispatchIdle() below, leaking the typing keepalive loop (I4).
+  if (sessionKey && postCompactionDelegatesToPreserve.length > 0) {
+    try {
+      for (const delegate of postCompactionDelegatesToPreserve) {
+        stagePostCompactionDelegate(sessionKey, delegate);
+      }
+    } catch (drainError) {
+      logVerbose(
+        `failed to re-stage preserved post-compaction delegates for ${sessionKey}: ${String(drainError)}`,
+      );
+    }
+  }
   // Safety net: the dispatcher's onIdle callback normally fires
   // markDispatchIdle(), but if the dispatcher exits early, errors,
   // or the reply path doesn't go through it cleanly, the second
@@ -475,5 +500,6 @@ export type RunReplyAgentParams = {
   typingMode: TypingMode;
   resetTriggered?: boolean;
   replyThreadingOverride?: TemplateContext["ReplyThreading"];
+  isContinuationWake?: boolean;
   replyOperation?: ReplyOperation;
 };

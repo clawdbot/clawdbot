@@ -5,7 +5,6 @@ import type { SessionEntry } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
 import { authorizeGatewaySessionCreation } from "../../../gateway/operator-role-policy.js";
-import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import {
   OutboundDeliveryError,
@@ -45,7 +44,6 @@ import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
 } from "./subagent-announce-delivery.test-support.js";
-import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
@@ -363,6 +361,8 @@ async function deliverDiscordDirectMessageCompletion(params: {
   sourceSessionKey?: string;
   sourceTool?: string;
   signal?: AbortSignal;
+  continuationTriggerOverride?: "work-wake" | "delegate-return" | "subagent-return";
+  traceparent?: string;
   onDeliveryResult?: Parameters<typeof deliverSubagentAnnouncement>[0]["onDeliveryResult"];
   isSourceSessionEffectsAllowed?: () => boolean;
 }) {
@@ -404,6 +404,8 @@ async function deliverDiscordDirectMessageCompletion(params: {
     sourceSessionKey: params.sourceSessionKey,
     sourceTool: params.sourceTool,
     signal: params.signal,
+    continuationTriggerOverride: params.continuationTriggerOverride,
+    traceparent: params.traceparent,
     onDeliveryResult: params.onDeliveryResult,
     isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
   });
@@ -1993,47 +1995,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
-  it("wakes settled descendant runs under restrictive gateway roles", async () => {
-    const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
-      runId: "descendant-wake-run",
-    });
-    const resolveGatewayContext: GatewayContextResolver = () => undefined;
-    const replaceSubagentRunAfterSteer = vi.fn(async () => true);
-    testing.setDepsForTest({
-      getRuntimeConfig: () => cfg,
-      loadSessionEntry: () => ({ sessionId: "nested-session", updatedAt: 1 }),
-    });
-
-    const woke = await runDescendantWake({
-      runId: "nested-parent-run",
-      childSessionKey: "agent:main:subagent:nested-parent",
-      taskLabel: "collect descendant findings",
-      findings: "The descendant completed successfully.",
-      announceId: "descendant-completion",
-      isChildSessionEffectsAllowed: () => true,
-      hasUsableSessionEntry: (entry): entry is Record<string, unknown> =>
-        typeof entry === "object" && entry !== null,
-      resolveGatewayContext,
-      deps: {
-        callGateway: createGatewayMock(),
-        dispatchGatewayMethodInProcess,
-        getRuntimeConfig: () => cfg,
-        replaceSubagentRunAfterSteer,
-      },
-    });
-
-    expect(woke).toBe(true);
-    expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
-      resolveGatewayContext,
-    });
-    expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        previousRunId: "nested-parent-run",
-        nextRunId: "descendant-wake-run",
-      }),
-    );
-  });
-
   it("does not dispatch child-derived completion after source lifecycle ownership changes", async () => {
     const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
       result: {
@@ -3204,6 +3165,55 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
     expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("preserves continuation trigger and trace on the direct completion path", async () => {
+    const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    const callGateway = createGatewayMock({
+      result: { payloads: [{ text: "The track is ready." }] },
+    });
+    const sendMessage = createSendMessageMock();
+
+    await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      continuationTriggerOverride: "delegate-return",
+      traceparent,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "task-continuation",
+        taskLabel: "continuation track",
+      }),
+    });
+
+    expectGatewayAgentParams(callGateway, {
+      continuationTrigger: "delegate-return",
+      traceparent,
+    });
+  });
+
+  it("persists continuation trigger and trusted trace for generated media", async () => {
+    const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    const callGateway = createGatewayMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sourceTool: "music_generate",
+      continuationTriggerOverride: "delegate-return",
+      traceparent,
+      internalEvents: musicCompletionEvents(),
+    });
+
+    expectDeliveryPath(result, "queued");
+    expect(sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "agentTurn",
+        continuationTrigger: "delegate-return",
+        traceparent,
+        traceparentProvenance: "internal",
+      }),
+      expect.any(Number),
+    );
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("queues generated media group completions that miss required message-tool delivery", async () => {

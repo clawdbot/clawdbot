@@ -3,7 +3,7 @@ import type { CreateChannelIngressDrainOptions } from "../../channels/message/in
 import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
 import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
-import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import type { HeartbeatRunResult } from "../../infra/heartbeat-wake-contracts.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
@@ -18,7 +18,7 @@ type TextToSpeechStream = TtsRuntimeApi["textToSpeechStream"];
 type TextToSpeechTelephony = TtsRuntimeApi["textToSpeechTelephony"];
 
 type RuntimeRequestHeartbeatOptions = Parameters<
-  typeof import("../../infra/heartbeat-wake.js").requestHeartbeat
+  typeof import("../../infra/heartbeat-wake.js").requestHeartbeatRaw
 >[0];
 
 type RuntimeRequestHeartbeatNowOptions = Omit<RuntimeRequestHeartbeatOptions, "source" | "intent"> &
@@ -402,8 +402,8 @@ export type PluginRuntimeCore = {
     }) => Promise<{ ok: true; runId: string } | { ok: false; reason: string }>;
   };
   system: {
-    enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEvent;
-    requestHeartbeat: typeof import("../../infra/heartbeat-wake.js").requestHeartbeat;
+    enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEventRaw;
+    requestHeartbeat: typeof import("../../infra/heartbeat-wake.js").requestHeartbeatRaw;
     /**
      * @deprecated Use `requestHeartbeat({ source, intent, reason })` so wake producers declare
      * scheduler intent explicitly.

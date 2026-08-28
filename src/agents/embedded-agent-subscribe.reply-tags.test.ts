@@ -62,7 +62,13 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     } as AssistantMessage;
     emit({ type: "message_end", message: assistantMessage });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls.map(([payload]) => payload)).toEqual([
+      expect.objectContaining({
+        text: "Hello",
+        replyToCurrent: true,
+        replyToTag: true,
+      }),
+    ]);
     const payload = replyPayloadAt(onBlockReply, 0);
     expect(payload.text).toBe("Hello");
     expect(payload.replyToCurrent).toBe(true);

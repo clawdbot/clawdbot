@@ -79,6 +79,43 @@ describe("normalizeSubagentRunState", () => {
     expect(entry.killReconciliation).toBeUndefined();
   });
 
+  it("normalizes accepted steer dispatches independently of presentation state", () => {
+    const accepted = normalizeSubagentRunState(
+      baseRun({
+        suppressAnnounceReason: "steer-restart",
+        acceptedSteerDispatch: {
+          gatewayRunId: "  run-steer-next  ",
+          expectedSessionId: "  session-next  ",
+          expectedLifecycleRevision: "  revision-next  ",
+        },
+      }),
+    );
+    const unowned = normalizeSubagentRunState(
+      baseRun({
+        acceptedSteerDispatch: {
+          gatewayRunId: "run-steer-unowned",
+        },
+      }),
+    );
+    const malformed = normalizeSubagentRunState(
+      baseRun({
+        acceptedSteerDispatch: {
+          gatewayRunId: "  ",
+        },
+      }),
+    );
+
+    expect(accepted.acceptedSteerDispatch).toEqual({
+      gatewayRunId: "run-steer-next",
+      expectedSessionId: "session-next",
+      expectedLifecycleRevision: "revision-next",
+    });
+    expect(unowned.acceptedSteerDispatch).toEqual({
+      gatewayRunId: "run-steer-unowned",
+    });
+    expect(malformed.acceptedSteerDispatch).toBeUndefined();
+  });
+
   it("keeps only complete interrupted-recovery terminal ownership", () => {
     const terminal = {
       endedReason: "subagent-error" as const,

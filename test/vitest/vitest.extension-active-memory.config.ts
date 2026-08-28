@@ -5,7 +5,9 @@ import { createExtensionVitestConfig } from "./vitest.extension-config.ts";
 function createExtensionActiveMemoryVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
-  return createExtensionVitestConfig("active-memory", activeMemoryExtensionTestRoots, env);
+  return createExtensionVitestConfig("active-memory", activeMemoryExtensionTestRoots, env, {
+    setupFiles: ["test/setup.extensions.ts", "test/setup.extension-active-memory.ts"],
+  });
 }
 
 export default createExtensionActiveMemoryVitestConfig();

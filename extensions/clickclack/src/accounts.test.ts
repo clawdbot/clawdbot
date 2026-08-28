@@ -154,6 +154,7 @@ describe("ClickClack account resolution", () => {
       defaultTo: "channel:general",
       enabled: true,
       agentActivity: false,
+      nativeProgress: false,
       commandMenu: true,
       discussions: {
         enabled: false,
@@ -164,7 +165,6 @@ describe("ClickClack account resolution", () => {
       mentionPatterns: [],
       model: undefined,
       name: undefined,
-      nativeProgress: false,
       reconnectMs: 1_500,
       replyMode: "agent",
       requireMention: false,
@@ -353,6 +353,7 @@ describe("ClickClack account resolution", () => {
       defaultTo: "channel:general",
       enabled: true,
       agentActivity: false,
+      nativeProgress: false,
       commandMenu: true,
       discussions: {
         enabled: false,
@@ -363,7 +364,6 @@ describe("ClickClack account resolution", () => {
       mentionPatterns: [],
       model: "openai/gpt-5.4-mini",
       name: undefined,
-      nativeProgress: false,
       reconnectMs: 1_500,
       replyMode: "model",
       requireMention: false,

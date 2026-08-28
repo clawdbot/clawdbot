@@ -1,4 +1,5 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
+import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import {
   isAuditLedgerEnabled,
   isExecutionIdentityCollectionEnabled,
@@ -155,14 +156,6 @@ export function startGatewayEventSubscriptions(params: {
             toolEventRecipients: params.toolEventRecipients,
             sessionEventSubscribers: params.sessionEventSubscribers,
             sessionMessageSubscribers: params.sessionMessageSubscribers,
-            updateRunToolErrorSummary: ({ runId, clientRunId, summary }) => {
-              for (const candidateRunId of new Set([runId, clientRunId])) {
-                const entry = params.chatAbortControllers.get(candidateRunId);
-                if (entry) {
-                  entry.toolErrorSummary = summary;
-                }
-              }
-            },
             clearTrackedActiveRun: ({ runId, clientRunId }) => {
               const candidateRunIds = runId === clientRunId ? [runId] : [runId, clientRunId];
               for (const candidateRunId of candidateRunIds) {
@@ -172,6 +165,7 @@ export function startGatewayEventSubscriptions(params: {
                 if (entry) {
                   entry.projectSessionActive = false;
                   entry.projectSessionTerminalPersisted = false;
+                  entry.chatSendActiveAtTerminalObservation = false;
                   markChatAbortTerminalPersistenceError(entry, undefined);
                   queueMicrotask(() => {
                     const current = params.chatAbortControllers.get(candidateRunId);
@@ -251,7 +245,27 @@ export function startGatewayEventSubscriptions(params: {
             },
             isChatSendRunActive: (runId) => {
               const entry = params.chatAbortControllers.get(runId);
-              return entry !== undefined && entry.kind !== "agent";
+              return (
+                entry !== undefined &&
+                entry.kind !== "agent" &&
+                entry.registrationCleanupRequested !== true &&
+                entry.chatTerminalBroadcasted !== true
+              );
+            },
+            wasChatSendActiveAtTerminalObservation: (runId) =>
+              params.chatAbortControllers.get(runId)?.chatSendActiveAtTerminalObservation === true,
+            wasChatSendTerminalBroadcasted: (runId) =>
+              params.chatAbortControllers.get(runId)?.chatTerminalBroadcasted === true,
+            resolveRunToolErrorSummary: ({ runId, clientRunId }) =>
+              params.chatAbortControllers.get(runId)?.toolErrorSummary ??
+              params.chatAbortControllers.get(clientRunId)?.toolErrorSummary,
+            markChatSendTerminalBroadcasted: ({ runId, clientRunId }) => {
+              const entry =
+                params.chatAbortControllers.get(runId) ??
+                params.chatAbortControllers.get(clientRunId);
+              if (entry && entry.kind !== "agent") {
+                entry.chatTerminalBroadcasted = true;
+              }
             },
             resolveActiveLifecycleGenerationForRun: (runId) =>
               params.chatAbortControllers.get(runId)?.lifecycleGeneration,
@@ -311,51 +325,64 @@ export function startGatewayEventSubscriptions(params: {
     if (auditEnabled) {
       auditRecorder.record(evt);
     }
+    const chatLink = evt.contextClaimId ? undefined : params.chatRunState.registry.peek(evt.runId);
+    const clientRunId = chatLink?.clientRunId ?? evt.runId;
+    const candidateRunIds = evt.runId === clientRunId ? [evt.runId] : [evt.runId, clientRunId];
+    const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
+    const forEachMatchingTrackedEntry = (
+      visit: (entry: ChatAbortControllerEntry) => void,
+    ): void => {
+      for (const candidateRunId of candidateRunIds) {
+        const entry = params.chatAbortControllers.get(candidateRunId);
+        if (
+          entry &&
+          (!eventLifecycleGeneration ||
+            !entry.lifecycleGeneration ||
+            entry.lifecycleGeneration === eventLifecycleGeneration)
+        ) {
+          visit(entry);
+        }
+      }
+    };
+    const toolPhase =
+      evt.stream === "tool" && typeof evt.data?.phase === "string" ? evt.data.phase : undefined;
+    if (evt.stream === "assistant" || toolPhase === "start") {
+      forEachMatchingTrackedEntry((entry) => {
+        entry.toolErrorSummary = undefined;
+      });
+    } else if (toolPhase === "result") {
+      const summary = readToolValidationErrorSummary(evt.data?.toolErrorSummary);
+      forEachMatchingTrackedEntry((entry) => {
+        entry.toolErrorSummary = summary;
+      });
+    }
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string"
         ? evt.data.phase
         : undefined;
     if (lifecyclePhase === "end" || lifecyclePhase === "error") {
-      const chatLink = evt.contextClaimId
-        ? undefined
-        : params.chatRunState.registry.peek(evt.runId);
-      const clientRunId = chatLink?.clientRunId ?? evt.runId;
-      const candidateRunIds = evt.runId === clientRunId ? [evt.runId] : [evt.runId, clientRunId];
-      for (const candidateRunId of candidateRunIds) {
-        const entry = params.chatAbortControllers.get(candidateRunId);
-        const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
-        if (
-          entry &&
-          (!eventLifecycleGeneration ||
-            !entry.lifecycleGeneration ||
-            entry.lifecycleGeneration === eventLifecycleGeneration)
-        ) {
-          entry.projectSessionTerminalPending = true;
-          entry.projectSessionTerminalObservedAt =
-            typeof evt.data.endedAt === "number" && Number.isFinite(evt.data.endedAt)
-              ? evt.data.endedAt
-              : evt.ts;
+      const hasToolErrorSummary = Object.hasOwn(evt.data ?? {}, "toolErrorSummary");
+      const terminalSummary = readToolValidationErrorSummary(evt.data?.toolErrorSummary);
+      forEachMatchingTrackedEntry((entry) => {
+        if (hasToolErrorSummary) {
+          entry.toolErrorSummary = terminalSummary;
         }
-      }
+        if (entry.kind !== "agent" && entry.registrationCleanupRequested !== true) {
+          entry.chatSendActiveAtTerminalObservation = true;
+        }
+        entry.projectSessionTerminalPending = true;
+        entry.projectSessionTerminalObservedAt =
+          typeof evt.data.endedAt === "number" && Number.isFinite(evt.data.endedAt)
+            ? evt.data.endedAt
+            : evt.ts;
+      });
     } else if (lifecyclePhase === "start") {
-      const chatLink = evt.contextClaimId
-        ? undefined
-        : params.chatRunState.registry.peek(evt.runId);
-      const clientRunId = chatLink?.clientRunId ?? evt.runId;
-      const candidateRunIds = evt.runId === clientRunId ? [evt.runId] : [evt.runId, clientRunId];
-      const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
-      for (const candidateRunId of candidateRunIds) {
-        const entry = params.chatAbortControllers.get(candidateRunId);
-        if (
-          entry &&
-          (!eventLifecycleGeneration ||
-            !entry.lifecycleGeneration ||
-            entry.lifecycleGeneration === eventLifecycleGeneration)
-        ) {
-          entry.projectSessionTerminalPending = false;
-          entry.projectSessionTerminalObservedAt = undefined;
-        }
-      }
+      forEachMatchingTrackedEntry((entry) => {
+        entry.toolErrorSummary = undefined;
+        entry.chatSendActiveAtTerminalObservation = false;
+        entry.projectSessionTerminalPending = false;
+        entry.projectSessionTerminalObservedAt = undefined;
+      });
     }
     dispatchEventHandler({
       loadHandler: getAgentEventHandler,

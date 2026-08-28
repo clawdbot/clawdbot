@@ -9,9 +9,9 @@ import { createThinkingTagStreamState } from "./embedded-agent-utils.js";
 export function updateMessage(
   context: EmbeddedAgentSubscribeContext,
   event: { message: unknown; assistantMessageEvent?: unknown },
-) {
+): void {
   // Stream fixtures intentionally include incomplete and malformed provider payloads.
-  return handleMessageUpdate(context, {
+  void handleMessageUpdate(context, {
     type: "message_update",
     ...event,
   } as Parameters<typeof handleMessageUpdate>[1]);
@@ -72,6 +72,9 @@ export function createMessageUpdateContext(
       },
       lastStreamedAssistant: undefined,
       lastStreamedAssistantCleaned: undefined,
+      lastStreamedCommentary: undefined,
+      commentaryStreamedWithDelta: false,
+      assistantDisplayPhasePending: false,
       emittedAssistantUpdate: false,
       shouldEmitPartialReplies: params.shouldEmitPartialReplies ?? true,
       blockReplyBreak: "text_end",
@@ -143,6 +146,8 @@ export function createMessageEndContext(
     state: {
       assistantTexts: [],
       assistantTextBaseline: 0,
+      deliveredBlockReplyTexts: [],
+      deferredBlockReplyTexts: [],
       emittedAssistantUpdate: false,
       deterministicApprovalPromptPending: false,
       deterministicApprovalPromptSent: false,

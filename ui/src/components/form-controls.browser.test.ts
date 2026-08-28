@@ -1,11 +1,15 @@
 // Control UI tests cover form controls behavior.
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  launchChromiumTestContext,
+  type ChromiumTestContext,
+} from "../test-helpers/playwright-chromium.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -15,7 +19,8 @@ type MobileFixture = {
   page: Page;
 };
 
-let browser: Browser;
+let desktopChromium: ChromiumTestContext;
+let mobileChromium: ChromiumTestContext;
 let desktopContext: BrowserContext;
 let mobileContext: BrowserContext;
 
@@ -129,28 +134,28 @@ beforeAll(async () => {
   if (!chromiumAvailable) {
     return;
   }
-  browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
   try {
-    [desktopContext, mobileContext] = await Promise.all([
-      browser.newContext(),
-      browser.newContext({
-        hasTouch: true,
-        isMobile: true,
-        viewport: { width: 390, height: 844 },
-      }),
-    ]);
+    desktopChromium = await launchChromiumTestContext({
+      executablePath: chromiumExecutablePath,
+      headless: true,
+    });
+    mobileChromium = await launchChromiumTestContext({
+      executablePath: chromiumExecutablePath,
+      headless: true,
+      hasTouch: true,
+      isMobile: true,
+      viewport: { width: 390, height: 844 },
+    });
+    desktopContext = desktopChromium.context;
+    mobileContext = mobileChromium.context;
   } catch (error) {
-    await browser.close().catch(() => {});
+    await Promise.all([desktopChromium?.close(), mobileChromium?.close()]);
     throw error;
   }
 });
 
 afterAll(async () => {
-  await Promise.all([
-    desktopContext?.close().catch(() => {}),
-    mobileContext?.close().catch(() => {}),
-  ]);
-  await browser?.close().catch(() => {});
+  await Promise.all([desktopChromium?.close(), mobileChromium?.close()]);
 });
 
 describeBrowserLayout("sensitive input visibility", () => {

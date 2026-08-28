@@ -11,6 +11,7 @@ import {
 } from "../agents/embedded-agent-runner/delivery-evidence.js";
 import { formatGeneratedMediaDeliveryRetryForPrompt } from "../agents/internal-events.js";
 import { resolveDurableCompletionDeliveryMode } from "../auto-reply/reply/completion-delivery-policy.js";
+import { isContinuationHeartbeatEquivalent } from "../auto-reply/reply/run-provenance.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   getRestartRecoveryTerminalDeliveryEvidence,
@@ -18,6 +19,7 @@ import {
 } from "../config/sessions/restart-recovery-state.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { normalizeDiagnosticTraceparent } from "../infra/diagnostic-trace-context.js";
 import {
   advanceSessionDeliveryAgentRun,
   deferSessionDelivery,
@@ -455,6 +457,13 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   // The queue owner fixes route/media and disables the model-facing message tool,
   // so only this one system completion can use the normal final-delivery transport.
   const sourceReplyDeliveryMode = "automatic" as const;
+  const continuationTrigger = isContinuationHeartbeatEquivalent(entry.continuationTrigger)
+    ? entry.continuationTrigger
+    : undefined;
+  const traceparent =
+    entry.traceparentProvenance === "internal"
+      ? normalizeDiagnosticTraceparent(entry.traceparent)
+      : undefined;
   const cronLifecycleRevision = params.sessionEntry?.cronRunContinuation?.lifecycleRevision?.trim();
   const cronSessionId = cronLifecycleRevision ? params.sessionEntry?.sessionId?.trim() : undefined;
   // Fence before gateway admission. Recovery clears it only for an explicit
@@ -478,6 +487,8 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
         ...(cronSessionId ? { sessionId: cronSessionId } : {}),
         inputProvenance: entry.inputProvenance,
         sourceReplyDeliveryMode,
+        ...(continuationTrigger ? { continuationTrigger } : {}),
+        ...(traceparent ? { traceparent } : {}),
         disableMessageTool: true,
         forceRestartSafeTools: true,
         idempotencyKey: queuedRunId,

@@ -12,6 +12,8 @@ import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types
 
 export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
+export type ContinuationTrigger = "work-wake" | "delegate-return" | "subagent-return";
+
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
@@ -115,6 +117,10 @@ type ProgressCallbackResult = boolean | void;
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
+  /** Parent run id when this run was spawned by a previous agent turn. */
+  parentRunId?: string;
+  /** Explicit command lane for the embedded run's turn execution. */
+  lane?: string;
   /** Stable provider prompt-cache affinity key; distinct from run id/idempotency. */
   promptCacheKey?: string;
   /** Abort signal for the underlying agent run. */
@@ -149,6 +155,16 @@ export type GetReplyOptions = {
   /** If false, send only the initial typing signal without periodic keepalive refreshes. */
   typingKeepalive?: boolean;
   isHeartbeat?: boolean;
+  /**
+   * Structured trigger identifying why this turn exists.
+   * Used for wake classification instead of inferring from system-event queue text.
+   * - "work-wake": CONTINUE_WORK timer fired (mid-chain self-continuation step)
+   * - "delegate-return": an in-chain continuation-chain delegate hop
+   *   (`[continuation:chain-hop:N]`) returned (mid-chain step; preserves the chain budget)
+   * - "subagent-return": an ordinary inter-session subagent completed (external
+   *   turn-entry, NOT part of an active continuation chain; resets the chain budget)
+   */
+  continuationTrigger?: ContinuationTrigger;
   /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
   typingPolicy?: TypingPolicy;
   /** Force-disable typing indicators for this run (system/internal/cross-channel routes). */

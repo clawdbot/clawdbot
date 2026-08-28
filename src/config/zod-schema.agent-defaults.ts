@@ -238,10 +238,10 @@ export const AgentDefaultsSchema = z
           .number()
           .int()
           .min(1)
-          .max(20)
+          .max(10000)
           .optional()
           .describe(
-            "Maximum number of active children a single agent session can spawn (default: 5).",
+            "Maximum number of active children a single agent session can spawn (default: 5). Raise via config for wide-fanout patterns (parallel delegate fan-out, batch processing). Token-budget (costCapTokens) + chain-length (maxChainLength) remain primary runaway-safety guards.",
           ),
         archiveAfterMinutes: z.number().int().min(0).optional(),
         model: AgentModelSchema.optional(),
@@ -253,6 +253,61 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    continuation: z
+      .object({
+        enabled: z.boolean().optional(),
+        // Bounds are tightened to match semantic expectations. Clamp helpers
+        // in continuation/config.ts still apply at read time as a belt-and-braces layer.
+        defaultDelayMs: z.number().int().nonnegative().optional(),
+        minDelayMs: z.number().int().nonnegative().optional(),
+        maxDelayMs: z.number().int().nonnegative().optional(),
+        maxChainLength: z.number().int().positive().optional(),
+        costCapTokens: z.number().int().nonnegative().optional(),
+        maxDelegatesPerTurn: z.number().int().positive().optional(),
+        maxPendingWork: z.number().int().positive().optional(),
+        busySkipBackoff: z
+          .object({
+            baseMs: z.number().int().positive().optional(),
+            ceilingMs: z.number().int().positive().optional(),
+            factor: z.number().gt(1).optional(),
+          })
+          .strict()
+          .optional(),
+        orphanReapStaleCutoffMs: z.number().int().positive().optional(),
+        crossSessionTargeting: z
+          .union([z.literal("disabled"), z.literal("enabled")])
+          .default("disabled"),
+        contextPressureThreshold: z
+          .number()
+          .gt(0, "contextPressureThreshold must be > 0 (0 would fire on empty sessions)")
+          .max(1)
+          .optional(),
+        earlyWarningBand: z.number().min(0).max(1).default(0.3125),
+      })
+      .strict()
+      .refine(
+        (cfg) => {
+          // min <= default <= max when all are set. Any omitted field skips
+          // its side of the comparison.
+          const min = cfg.minDelayMs;
+          const def = cfg.defaultDelayMs;
+          const max = cfg.maxDelayMs;
+          if (min !== undefined && def !== undefined && min > def) {
+            return false;
+          }
+          if (def !== undefined && max !== undefined && def > max) {
+            return false;
+          }
+          if (min !== undefined && max !== undefined && min > max) {
+            return false;
+          }
+          return true;
+        },
+        {
+          message: "continuation delay bounds violate minDelayMs ≤ defaultDelayMs ≤ maxDelayMs",
+        },
+      )
+      .optional(),
   })
   .strict()
   .optional();

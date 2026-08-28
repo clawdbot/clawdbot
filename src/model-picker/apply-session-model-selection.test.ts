@@ -16,7 +16,7 @@ const effects = vi.hoisted(() => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => effects.enqueueSystemEvent(...args),
+  enqueueSystemEventRaw: (...args: unknown[]) => effects.enqueueSystemEvent(...args),
 }));
 vi.mock("../auto-reply/reply/queue.js", () => ({
   refreshQueuedFollowupSession: (...args: unknown[]) =>

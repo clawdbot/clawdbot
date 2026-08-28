@@ -14,12 +14,9 @@ import {
 } from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
+import { resolveFreshSessionTotalTokens } from "../../config/sessions/session-entry-runtime.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import {
-  resolveFreshSessionTotalTokens,
-  type SessionEntry,
-  type SessionSystemPromptReport,
-} from "../../config/sessions/types.js";
+import type { SessionEntry, SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";

@@ -24,6 +24,7 @@ import {
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
 import { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
+import type { SubagentRegistrationIdentity } from "./subagent-registry-run-launch.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -33,6 +34,101 @@ export { markSubagentRunPausedAfterYield } from "./subagent-registry-run-wait.js
 const log = createSubsystemLogger("agents/subagent-registry");
 
 class SubagentRunManager extends SubagentLaunchManager {
+  readonly recordAcceptedSubagentSpawnRollback = (params: {
+    runId: string;
+    childSessionKey: string;
+    gatewayRunId: string;
+    reason: string;
+    expectedSessionId?: string;
+    expectedLifecycleRevision?: string;
+    expectedRegistration?: SubagentRegistrationIdentity;
+  }):
+    | { status: "persisted" }
+    | { status: "pending-persistence"; error: unknown }
+    | { status: "rejected" } => {
+    const runId = params.runId.trim();
+    const gatewayRunId = params.gatewayRunId.trim();
+    const reason = params.reason.trim() || "Accepted subagent rollback pending.";
+    const entry = this.options.runs.get(runId);
+    if (
+      !entry ||
+      entry.childSessionKey !== params.childSessionKey ||
+      !gatewayRunId ||
+      (params.expectedRegistration !== undefined &&
+        (entry.runId !== params.expectedRegistration.runId ||
+          entry.childSessionKey !== params.expectedRegistration.childSessionKey ||
+          entry.generation !== params.expectedRegistration.generation ||
+          entry.createdAt !== params.expectedRegistration.createdAt))
+    ) {
+      return { status: "rejected" };
+    }
+    const existing = entry.acceptedSpawnRollback;
+    if (existing && existing.gatewayRunId !== gatewayRunId) {
+      return { status: "rejected" };
+    }
+    entry.acceptedSpawnRollback = existing ?? {
+      gatewayRunId,
+      requestedAt: Date.now(),
+      reason,
+      expectedSessionId: params.expectedSessionId?.trim() || undefined,
+      expectedLifecycleRevision: params.expectedLifecycleRevision?.trim() || undefined,
+    };
+    entry.suppressCompletionDelivery = true;
+    entry.execution = { ...entry.execution, suppressSessionEffects: true };
+    try {
+      this.options.persistOrThrow(runId);
+      return { status: "persisted" };
+    } catch (error) {
+      // Accepted authority already exists. Keep the in-memory tombstone so no
+      // completion or replay can outrun a transient persistence failure.
+      this.options.startSweeper();
+      this.options.scheduleSweep({ delayMs: 1_000 });
+      return { status: "pending-persistence", error };
+    }
+  };
+
+  readonly rollbackSubagentRunRegistration = (params: {
+    runId: string;
+    childSessionKey: string;
+    expectedRegistration?: SubagentRegistrationIdentity;
+  }): boolean => {
+    const entry = this.options.runs.get(params.runId);
+    if (
+      !entry ||
+      entry.childSessionKey !== params.childSessionKey ||
+      (params.expectedRegistration !== undefined &&
+        (entry.runId !== params.expectedRegistration.runId ||
+          entry.childSessionKey !== params.expectedRegistration.childSessionKey ||
+          entry.generation !== params.expectedRegistration.generation ||
+          entry.createdAt !== params.expectedRegistration.createdAt))
+    ) {
+      return false;
+    }
+    this.options.runs.delete(params.runId);
+    try {
+      this.options.persistOrThrow(params.runId);
+    } catch (error) {
+      this.options.runs.set(params.runId, entry);
+      throw error;
+    }
+    this.options.clearPendingLifecycleError(params.runId);
+    clearGatewayContextResolver(entry);
+    finalizeTaskRunByRunId({
+      runId: entry.taskRunId ?? entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      status: "cancelled",
+      endedAt: Date.now(),
+      lastEventAt: Date.now(),
+      error: SUBAGENT_KILL_TASK_ERROR,
+      suppressDelivery: true,
+    });
+    if (this.options.runs.size === 0) {
+      this.options.stopSweeper();
+    }
+    return true;
+  };
+
   readonly releaseSubagentRun = (runId: string): void => {
     const entry = this.options.runs.get(runId);
     if (!entry) {

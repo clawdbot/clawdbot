@@ -71,8 +71,10 @@ export async function prepareSessionProjectWorkspace(params: {
 }): Promise<() => void> {
   const { admission, client, context, session } = params;
   const { entry, cfg, agentId, clientRunId, sessionKey, storePath } = session;
-  const gitUrl = normalizeSessionProjectGitUrl(entry?.pendingProjectGitUrl);
-  if (!entry || !gitUrl || gitUrl !== entry.pendingProjectGitUrl) {
+  const pendingProjectGitUrl =
+    entry && "pendingProjectGitUrl" in entry ? entry.pendingProjectGitUrl : undefined;
+  const gitUrl = normalizeSessionProjectGitUrl(pendingProjectGitUrl);
+  if (!entry || !gitUrl || gitUrl !== pendingProjectGitUrl) {
     throw new Error("Saved project repository is invalid; select the repository and retry.");
   }
   const { controller } = admission.activeRunAbort;
@@ -148,7 +150,9 @@ export async function prepareSessionProjectWorkspace(params: {
   }
   Object.assign(entry, bound);
   // JSON omits the cleared key, so assigning the bound entry alone would retain stale intent.
-  delete entry.pendingProjectGitUrl;
+  if ("pendingProjectGitUrl" in entry) {
+    delete entry.pendingProjectGitUrl;
+  }
   emitSessionsChanged(context, { sessionKey, agentId, reason: "project" });
   return assertRunOwnership;
 }

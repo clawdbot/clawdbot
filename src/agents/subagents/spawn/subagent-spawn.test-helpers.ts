@@ -21,6 +21,8 @@ type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks"> &
   >;
 type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
   resetSubagentRegistryForTests: MockFn;
+  consumeSubagentTraceparentHandoff: typeof import("../../subagent-traceparent-handoff.js").consumeSubagentTraceparentHandoff;
+  resetSubagentTraceparentHandoffsForTests: typeof import("../../subagent-traceparent-handoff.js").resetSubagentTraceparentHandoffsForTests;
 };
 
 /** Build a minimal runtime config for sessions_spawn tests. */
@@ -142,6 +144,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveContextEngineMock?: MockFn;
   resolveParentForkDecisionMock?: MockFn;
   registerSubagentRunMock?: MockFn;
+  recordAcceptedSubagentSpawnRollbackMock?: MockFn;
+  rollbackSubagentRunRegistrationMock?: MockFn;
+  getSubagentRunByRunIdMock?: MockFn;
   startQueuedSubagentRunMock?: MockFn;
   settleFailedQueuedSubagentLaunchMock?: MockFn;
   completeCollectorLaunchCleanupMock?: MockFn;
@@ -393,12 +398,32 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getSubagentDepthFromSessionStore: params.getSubagentDepthFromSessionStore ?? (() => 0),
   }));
 
+  const countActiveRunsForSessionImpl = params.countActiveRunsForSession ?? (() => 0);
+  const registerSubagentRunImpl = vi.fn((record: Record<string, unknown>) => {
+    const result = params.registerSubagentRunMock?.(record);
+    return (
+      result ?? {
+        status: "new-row-committed",
+        attempted: {
+          runId: String(record.runId),
+          childSessionKey: String(record.childSessionKey),
+          generation: 1,
+          createdAt: 1,
+        },
+      }
+    );
+  });
   vi.doMock("../registry/subagent-registry.js", () => ({
     completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
-    countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
+    countActiveRunsForSession: countActiveRunsForSessionImpl,
+    getSubagentRunByRunId:
+      params.getSubagentRunByRunIdMock ?? vi.fn(() => ({ execution: { status: "queued" } })),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
-    registerSubagentRun:
-      params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
+    registerSubagentRun: registerSubagentRunImpl,
+    recordAcceptedSubagentSpawnRollback:
+      params.recordAcceptedSubagentSpawnRollbackMock ?? vi.fn(() => ({ status: "persisted" })),
+    rollbackSubagentRunRegistration:
+      params.rollbackSubagentRunRegistrationMock ?? vi.fn(() => true),
     resetSubagentRegistryForTests,
     settleFailedQueuedSubagentLaunch:
       params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(() => true),
@@ -406,8 +431,14 @@ export async function loadSubagentSpawnModuleForTest(params: {
   }));
 
   const subagentSpawnModule = await import("./subagent-spawn.js");
+  // resetModules gives the SUT a fresh handoff map; return functions from that
+  // same module instance so tests consume the handoff the spawn path registered.
+  const traceparentHandoffModule = await import("../../subagent-traceparent-handoff.js");
   return {
     ...subagentSpawnModule,
     resetSubagentRegistryForTests,
+    consumeSubagentTraceparentHandoff: traceparentHandoffModule.consumeSubagentTraceparentHandoff,
+    resetSubagentTraceparentHandoffsForTests:
+      traceparentHandoffModule.resetSubagentTraceparentHandoffsForTests,
   };
 }

@@ -212,6 +212,27 @@ describe("protectNetworkToolExecutionError", () => {
 });
 
 describe("resolveToolResultFailureKind", () => {
+  it.each(["scheduled", "queued-for-compaction", "compaction_requested", "already_pending"])(
+    "does not infer failure from successful domain status %s",
+    (status) => {
+      const result = { details: { status } };
+
+      expect(isToolResultError(result)).toBe(false);
+      expect(resolveToolResultFailureKind(result)).toBeUndefined();
+    },
+  );
+
+  it("keeps structured guard rejection informational unless explicitly failed", () => {
+    const result = { details: { status: "rejected" } };
+
+    expect(isToolResultError(result)).toBe(false);
+    expect(resolveToolResultFailureKind(result)).toBeUndefined();
+    expect(isToolResultError({ details: { status: "rejected", ok: false } })).toBe(true);
+    expect(resolveToolResultFailureKind({ details: { status: "rejected", ok: false } })).toBe(
+      "failed",
+    );
+  });
+
   it("contains hostile structured result fields", () => {
     const hostileDetails = new Proxy(
       {},

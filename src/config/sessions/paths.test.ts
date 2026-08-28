@@ -54,7 +54,7 @@ describe("resolveSessionFilePath cross-root reroot", () => {
   });
 });
 
-describe("resolveStorePath", () => {
+describe("resolveSessionStorePathCore", () => {
   it("resolves a fixed literal path without an agent owner", () => {
     const fixed = path.join(path.parse(process.cwd()).root, "shared", "sessions.json");
     expect(resolveSessionStorePathCore(fixed)).toBe(path.resolve(fixed));

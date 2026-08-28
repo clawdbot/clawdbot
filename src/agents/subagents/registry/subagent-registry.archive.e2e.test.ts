@@ -21,6 +21,9 @@ const taskStatusMocks = vi.hoisted(() => ({
   findTaskByRunIdForStatus: vi.fn(),
   listTasksForSessionKeyForStatus: vi.fn(() => [] as never[]),
 }));
+const hasLiveOrRecentlyDispatchedContinuationWorkMock = vi.hoisted(() =>
+  vi.fn<(_sessionKey: string) => boolean>(() => false),
+);
 const sessionAccessorMocks = vi.hoisted(() => ({
   listSessionEntriesReadOnly: vi.fn(() => [] as Array<{ sessionKey: string; entry: unknown }>),
 }));
@@ -90,6 +93,9 @@ vi.mock("../../../config/config.js", async () => {
   };
 });
 
+vi.mock("../../../auto-reply/continuation/work-store.js", () => ({
+  hasLiveOrRecentlyDispatchedContinuationWork: hasLiveOrRecentlyDispatchedContinuationWorkMock,
+}));
 vi.mock("../announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
 }));
@@ -155,6 +161,7 @@ describe("subagent registry archive behavior", () => {
       return {};
     });
     loadConfigMock.mockClear();
+    hasLiveOrRecentlyDispatchedContinuationWorkMock.mockReset().mockReturnValue(false);
     vi.mocked(getAgentRunContext).mockReset().mockReturnValue(undefined);
     taskRuntimeMocks.finalizeTaskRunByRunId.mockClear();
     taskStatusMocks.findTaskByRunIdForStatus.mockReset();
@@ -921,14 +928,16 @@ describe("subagent registry archive behavior", () => {
     });
 
     const firstSweep = mod.testing.sweepOnceForTests();
-    await flushSweepMicrotasks();
-    expect(
-      vi
-        .mocked(callGateway)
-        .mock.calls.filter(
-          ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
-        ),
-    ).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(
+        vi
+          .mocked(callGateway)
+          .mock.calls.filter(
+            ([request]) =>
+              (request as { method?: string } | undefined)?.method === "sessions.delete",
+          ),
+      ).toHaveLength(1);
+    });
     expect(vi.mocked(callGateway)).toHaveBeenCalledWith({
       method: "sessions.delete",
       params: {

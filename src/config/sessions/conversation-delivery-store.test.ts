@@ -28,7 +28,7 @@ type LegacyDeliveryFixture = Partial<SessionEntry> & {
   origin?: SessionOrigin;
 };
 
-const upsertSessionEntry = (
+const upsertSessionEntryCore = (
   scope: Parameters<typeof upsertCanonicalSessionEntry>[0],
   entry: LegacyDeliveryFixture,
 ) => upsertCanonicalSessionEntry(scope, normalizeLegacySessionEntryDelivery(entry as SessionEntry));
@@ -43,7 +43,7 @@ async function withConversationStore(
     const storePath = path.join(dir, "sessions.json");
     const scope = { agentId: "main", storePath };
     try {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
         {
           sessionId: "reef-session",

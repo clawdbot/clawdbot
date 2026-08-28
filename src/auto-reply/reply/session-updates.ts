@@ -7,14 +7,17 @@ import {
   type ExecPolicyOverrides,
   resolveNodeExecEligibility,
 } from "../../agents/exec-defaults.js";
-import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  mergeSessionEntry,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   patchSessionEntryCore,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
@@ -365,9 +368,13 @@ export async function incrementCompactionCount(params: {
   }
   const incrementBy = Math.max(0, amount);
   const nextCount = (entry.compactionCount ?? 0) + incrementBy;
+  // Build update payload with compaction count and optionally updated token counts.
+  // Reset lastContextPressureBand: compaction reduces context, so band-tracking
+  // history is stale; next pressure-check should start fresh.
   const updates: Partial<SessionEntry> = {
     compactionCount: nextCount,
     updatedAt: now,
+    lastContextPressureBand: undefined,
     ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),
   };
   if (compactionKind === "context-engine") {
@@ -394,7 +401,7 @@ export async function incrementCompactionCount(params: {
     updates.totalTokensFresh = false;
     updates.totalTokensVersion = undefined;
   }
-  const nextEntry = projectCanonicalSessionEntryShape({ ...entry, ...updates });
+  const nextEntry = mergeSessionEntry(entry, updates, { now });
   const effectiveStorePath = storePath
     ? resolveSessionStorePathForScope({ agentId, sessionKey, storePath })
     : undefined;
@@ -413,7 +420,8 @@ export async function incrementCompactionCount(params: {
           return updates;
         },
         {
-          ...(expectedSession ? {} : { fallbackEntry: nextEntry }),
+          // Preserve the pre-rotation identity so a first-write merge can detect sessionId rollover.
+          ...(expectedSession ? {} : { fallbackEntry: entry }),
           ...(authorize
             ? {
                 assertCommitAllowed: () => {

@@ -33,9 +33,15 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     string,
     { spanContext: SpanContext; owner?: TrustedSpanAliasOwner }
   >();
+  // Keyed by OpenClaw's diagnostic trace id, which can differ from the OTEL
+  // trace id allocated for an otherwise unparented root span.
+  // Upstream's capacity-evicted `retainedTrustedSpanContexts` replaced the
+  // fork's timer-drained retention, so only this trace-id alias survives.
+  const trustedSpanContextsByTraceId = new Map<string, SpanContext>();
   const stopActiveTrustedSpans = () => {
     const stopAt = Date.now();
     retainedTrustedSpanContexts.clear();
+    trustedSpanContextsByTraceId.clear();
     for (const span of new Set([
       ...activeTrustedSpans.values(),
       ...Array.from(activeTrustedSpanAliases.values(), (entry) => entry.span),
@@ -142,6 +148,21 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     }
     return alias.span;
   };
+  const firstTrustedSpanContextForTraceId = (traceId: string): SpanContext | undefined =>
+    trustedSpanContextsByTraceId.get(traceId);
+  const rememberTrustedRootSpanContext = (
+    traceContext: DiagnosticTraceContext | undefined,
+    span: ReturnType<typeof tracer.startSpan>,
+  ): void => {
+    if (!traceContext || traceContext.parentSpanId) {
+      return;
+    }
+    const spanContext = span.spanContext();
+    if (!spanContext.traceId || trustedSpanContextsByTraceId.has(traceContext.traceId)) {
+      return;
+    }
+    trustedSpanContextsByTraceId.set(traceContext.traceId, spanContext);
+  };
   const internalOrTrustedParentContext = (
     evt: DiagnosticEventPayload,
     metadata: DiagnosticEventMetadata,
@@ -181,13 +202,19 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     const owner = trustedSpanAliasOwner(evt);
     const activeParentSpan =
       activeTrustedSpans.get(parentSpanId) ?? activeTrustedSpanAlias(parentSpanId, owner);
-    const spanContext =
+    const directSpanContext =
       activeParentSpan?.spanContext() ??
       retainedTrustedSpanContext(traceContext, parentSpanId, owner);
-    if (!spanContext) {
-      return undefined;
+    if (directSpanContext) {
+      return trace.setSpanContext(otelContextApi.active(), directSpanContext);
     }
-    return trace.setSpanContext(otelContextApi.active(), spanContext);
+    if (traceContext.parentSpanIdSource === "remote") {
+      return contextForTraceContext({ ...traceContext, spanId: parentSpanId });
+    }
+    const logicalSpanContext = firstTrustedSpanContextForTraceId(traceContext.traceId);
+    return logicalSpanContext
+      ? trace.setSpanContext(otelContextApi.active(), logicalSpanContext)
+      : undefined;
   };
   // Resolves only spans this process actually exported, so a miss leaves the caller
   // parentless rather than pointing at a span id no backend will ever receive.
@@ -243,10 +270,12 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     metadata: DiagnosticEventMetadata,
     span: ReturnType<typeof tracer.startSpan>,
   ) => {
-    const spanId = trustedTraceContext(evt, metadata)?.spanId;
+    const traceContext = trustedTraceContext(evt, metadata);
+    const spanId = traceContext?.spanId;
     if (spanId) {
       activeTrustedSpans.set(spanId, span);
     }
+    rememberTrustedRootSpanContext(traceContext, span);
     return span;
   };
   const trackInternalOrTrustedSpan = (
@@ -254,11 +283,39 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     metadata: DiagnosticEventMetadata,
     span: ReturnType<typeof tracer.startSpan>,
   ) => {
-    const spanId = internalOrTrustedTraceContext(evt, metadata)?.spanId;
+    const traceContext = internalOrTrustedTraceContext(evt, metadata);
+    const spanId = traceContext?.spanId;
     if (spanId) {
       activeTrustedSpans.set(spanId, span);
     }
+    rememberTrustedRootSpanContext(traceContext, span);
     return span;
+  };
+  const resolveTrustedSpanContext = (
+    traceContext: DiagnosticTraceContext,
+  ): SpanContext | undefined => {
+    const spanId = traceContext.spanId;
+    if (spanId) {
+      const activeSpan = activeTrustedSpans.get(spanId);
+      if (activeSpan) {
+        return activeSpan.spanContext();
+      }
+      for (const alias of activeTrustedSpanAliases.values()) {
+        const aliasSpanContext = alias.span.spanContext();
+        if (aliasSpanContext.spanId === spanId) {
+          return aliasSpanContext;
+        }
+      }
+      const retained = retainedTrustedSpanContext(traceContext, spanId);
+      if (retained) {
+        return retained;
+      }
+    }
+    return firstTrustedSpanContextForTraceId(traceContext.traceId);
+  };
+  const resolveTrustedParentContext = (traceContext: DiagnosticTraceContext) => {
+    const spanContext = resolveTrustedSpanContext(traceContext);
+    return spanContext ? trace.setSpanContext(otelContextApi.active(), spanContext) : undefined;
   };
   const takeTrackedTrustedSpan = (
     evt: DiagnosticEventPayload,
@@ -404,6 +461,8 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     exportedSpanContextForDiagnosticTraceContext,
     trackTrustedSpan,
     trackInternalOrTrustedSpan,
+    resolveTrustedSpanContext,
+    resolveTrustedParentContext,
     takeTrackedTrustedSpan,
     getTrackedInternalOrTrustedSpan,
     setSpanAttrs,

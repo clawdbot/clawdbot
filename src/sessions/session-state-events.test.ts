@@ -5,7 +5,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import {
-  enqueueSystemEvent,
+  enqueueSystemEventRaw as enqueueSystemEvent,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";

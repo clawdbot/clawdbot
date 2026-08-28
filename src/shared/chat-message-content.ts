@@ -126,17 +126,16 @@ export function resolveAssistantEventPhase(data: unknown): AssistantPhase | unde
   );
 }
 
-/** Extracts assistant text for a requested phase without mixing legacy and explicitly phased text. */
-export function extractAssistantTextForPhase(
+/** Extracts assistant text parts for a requested phase without mixing legacy and phased text. */
+export function extractAssistantTextPartsForPhase(
   message: unknown,
   options?: {
     phase?: AssistantPhase;
     sanitizeText?: (text: string) => string;
-    joinWith?: string;
   },
-): string | undefined {
+): string[] {
   if (!message || typeof message !== "object") {
-    return undefined;
+    return [];
   }
   const entry = message as { text?: unknown; content?: unknown; phase?: unknown };
   const messagePhase = normalizeAssistantPhase(entry.phase);
@@ -148,29 +147,26 @@ export function extractAssistantTextForPhase(
     return resolvedPhase === undefined;
   };
   const sanitizeText = options?.sanitizeText;
-  const joinWith = options?.joinWith ?? "\n";
   const sanitizeBlockText = (text: string) => (sanitizeText ? sanitizeText(text) : text);
-  const normalizeJoinedText = (text: string) => {
-    const normalized = text.trim();
-    return normalized || undefined;
-  };
 
   if (typeof entry.text === "string") {
     if (!shouldIncludeContent(messagePhase)) {
-      return undefined;
+      return [];
     }
-    return normalizeJoinedText(sanitizeBlockText(entry.text));
+    const sanitized = sanitizeBlockText(entry.text);
+    return sanitized.trim() ? [sanitized] : [];
   }
 
   if (typeof entry.content === "string") {
     if (!shouldIncludeContent(messagePhase)) {
-      return undefined;
+      return [];
     }
-    return normalizeJoinedText(sanitizeBlockText(entry.content));
+    const sanitized = sanitizeBlockText(entry.content);
+    return sanitized.trim() ? [sanitized] : [];
   }
 
   if (!Array.isArray(entry.content)) {
-    return undefined;
+    return [];
   }
 
   const hasExplicitPhasedTextBlocks = entry.content.some((block) => {
@@ -186,10 +182,10 @@ export function extractAssistantTextForPhase(
 
   // Once explicit phased blocks exist, unphased extraction should not revive legacy text.
   if (!phase && hasExplicitPhasedTextBlocks) {
-    return undefined;
+    return [];
   }
 
-  const parts = entry.content
+  return entry.content
     .map((block) => {
       if (!block || typeof block !== "object") {
         return null;
@@ -208,11 +204,22 @@ export function extractAssistantTextForPhase(
       return sanitized.trim() ? sanitized : null;
     })
     .filter((value): value is string => typeof value === "string");
+}
 
-  if (parts.length === 0) {
-    return undefined;
-  }
-  return normalizeJoinedText(parts.join(joinWith));
+/** Extracts joined assistant text for a requested phase. */
+export function extractAssistantTextForPhase(
+  message: unknown,
+  options?: {
+    phase?: AssistantPhase;
+    sanitizeText?: (text: string) => string;
+    joinWith?: string;
+  },
+): string | undefined {
+  const joined = extractAssistantTextPartsForPhase(message, options).join(
+    options?.joinWith ?? "\n",
+  );
+  const normalized = joined.trim();
+  return normalized || undefined;
 }
 
 /** Returns user-visible assistant text, preferring final answers over legacy unphased text. */

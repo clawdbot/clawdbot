@@ -111,8 +111,8 @@ describe("handleMessageUpdate commentary phase", () => {
     expect(commentaryEvent?.data?.phase).toBe("commentary");
     expect(commentaryEvent?.data).toMatchObject({
       text: "Working...",
-      delta: "",
-      replace: true,
+      delta: "Working...",
+      replace: undefined,
       phase: "commentary",
       itemId: "item_commentary",
     });
@@ -157,5 +157,39 @@ describe("handleMessageUpdate commentary phase", () => {
     await vi.waitFor(() => {
       expect(debug).toHaveBeenCalledWith("text_end block reply flush failed: Error: boom");
     });
+  });
+
+  it("suppresses repeated validation-loop assistant stream text once a safe summary exists", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createMessageUpdateContext({
+      onAgentEvent,
+      state: {
+        lastToolError: {
+          toolName: "edit",
+          validationErrorSummary: "edit tool validation failed: invalid arguments",
+        },
+      },
+    });
+
+    updateMessage(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "Stopped after 2 identical failed edit tool calls.",
+        delta: "Stopped after 2 identical failed edit tool calls.",
+      }),
+    );
+    updateMessage(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: 'Validation failed for tool "edit": Received arguments: {}',
+        delta: 'Validation failed for tool "edit": Received arguments: {}',
+      }),
+    );
+
+    expect(ctx.emitAssistantStreamData).not.toHaveBeenCalled();
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(JSON.stringify(ctx.state)).not.toContain("Received arguments");
   });
 });

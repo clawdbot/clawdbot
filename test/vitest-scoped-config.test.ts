@@ -651,7 +651,10 @@ describe("scoped vitest configs", () => {
     expect(coreTestConfig.include).toEqual(["*.test.ts", "usage-bar/*.test.ts"]);
     expect(coreTestConfig.exclude).toContain("reply*.test.ts");
     expect(requireTestConfig(defaultAutoReplyTopLevelConfig).include).toEqual(["reply*.test.ts"]);
-    expect(requireTestConfig(defaultAutoReplyReplyConfig).include).toEqual(["reply/**/*.test.ts"]);
+    expect(requireTestConfig(defaultAutoReplyReplyConfig).include).toEqual([
+      "reply/**/*.test.ts",
+      "continuation/**/*.test.ts",
+    ]);
   });
 
   it("keeps the broad agents lane on shared file parallelism", () => {

@@ -15,7 +15,10 @@ import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runn
 import { runCliFallbackCandidate } from "./agent-runner-cli-candidate.js";
 import { runEmbeddedFallbackCandidate } from "./agent-runner-embedded-candidate.js";
 import type { MessageToolDeliveryState } from "./agent-runner-event-handler.js";
-import type { EmbeddedAgentRunResult } from "./agent-runner-execution.types.js";
+import type {
+  ContinuationWrappedRunResult,
+  EmbeddedAgentRunResult,
+} from "./agent-runner-execution.types.js";
 import type {
   AgentFallbackCandidateCommonParams,
   AgentFallbackCycleParams,
@@ -31,6 +34,31 @@ import {
   readSourceReplyDeliveryRuntime,
   type SourceReplyDeliveryRuntimeOptions,
 } from "./source-reply-delivery-runtime.js";
+
+type FallbackContinuationMetadata = Omit<ContinuationWrappedRunResult, "result">;
+
+type FallbackContinuationRecord = FallbackContinuationMetadata & {
+  result: EmbeddedAgentRunResult;
+};
+
+export function selectFallbackContinuationMetadata(
+  selectedResult: EmbeddedAgentRunResult,
+  records: readonly FallbackContinuationRecord[],
+): FallbackContinuationMetadata {
+  const selectedRecord =
+    records.findLast((record) => record.result === selectedResult) ??
+    (selectedResult.payloads
+      ? records.findLast((record) => record.result.payloads === selectedResult.payloads)
+      : undefined) ??
+    (selectedResult.meta.error
+      ? records.findLast((record) => record.result.meta.error === selectedResult.meta.error)
+      : undefined);
+  return {
+    continueWorkRequests: selectedRecord?.continueWorkRequests,
+    compactionTraceparent: selectedRecord?.compactionTraceparent,
+    rawContinuationText: selectedRecord?.rawContinuationText,
+  };
+}
 
 /** Runs the provider/model fallback candidates while preserving cross-candidate delivery state. */
 export async function runAgentFallbackCandidates(params: AgentFallbackCycleParams) {
@@ -58,6 +86,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   const runLane = turn.isHeartbeat ? CommandLane.CronNested : CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
   let assistantErrorPersistedAcrossFallback = false;
+  const continuationRecords: FallbackContinuationRecord[] = [];
   const messageToolDeliveryState: MessageToolDeliveryState = {
     toolCallIds: new Set(),
     completed: false,
@@ -122,7 +151,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
       useCliExecution,
     };
   };
-  return params.timing.measure("model_fallback", () =>
+  const entryResult = await params.timing.measure("model_fallback", () =>
     runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
       selection: {
         cfg: selection.cfg,
@@ -307,10 +336,26 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         });
         params.state.bootstrapPromptWarningSignaturesSeen =
           candidate.bootstrapPromptWarningSignaturesSeen;
+        continuationRecords.push({
+          result: candidate.result,
+          continueWorkRequests: candidate.continueWorkRequests,
+          compactionTraceparent: candidate.compactionTraceparent,
+          rawContinuationText: candidate.rawContinuationText,
+        });
         return candidate.result;
       },
     }),
   );
+  const continuation = selectFallbackContinuationMetadata(entryResult.result, continuationRecords);
+  return {
+    ...entryResult,
+    result: {
+      result: entryResult.result,
+      continueWorkRequests: continuation.continueWorkRequests,
+      compactionTraceparent: continuation.compactionTraceparent,
+      rawContinuationText: continuation.rawContinuationText,
+    } satisfies ContinuationWrappedRunResult,
+  };
 }
 
 export type AgentFallbackCandidatesResult = Awaited<ReturnType<typeof runAgentFallbackCandidates>>;

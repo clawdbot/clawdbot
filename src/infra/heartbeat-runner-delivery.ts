@@ -20,17 +20,17 @@ import { handleHeartbeatFailureNotice } from "./heartbeat-failure-notice.js";
 import { persistHeartbeatOutcome } from "./heartbeat-outcome-store.js";
 import { heartbeatLog, resolveHeartbeatChannelPlugin } from "./heartbeat-runner-config.js";
 import type {
-  CompletedHeartbeatAgentRun,
   HeartbeatRunOptions,
   PreparedHeartbeatRun,
   ReadyHeartbeatWake,
 } from "./heartbeat-runner-execution.js";
+import type { CompletedHeartbeatAgentRun } from "./heartbeat-runner-invoke.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
 import { restoreHeartbeatUpdatedAt } from "./heartbeat-runner-session.js";
+import type { HeartbeatRunResult } from "./heartbeat-wake-contracts.js";
 import {
   HEARTBEAT_IDLE_RETRY_GRACE_MS,
   HEARTBEAT_SKIP_CHANNEL_NOT_READY,
-  type HeartbeatRunResult,
 } from "./heartbeat-wake.js";
 import type { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import type { buildOutboundSessionContext } from "./outbound/session-context.js";

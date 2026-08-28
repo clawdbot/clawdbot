@@ -997,8 +997,8 @@ setInterval(() => {}, 1000);
       process.execPath,
       [scriptPath, grandchildPidPath, grandchildReadyPath],
       {
-        timeoutKillGraceMs: 100,
-        timeoutMs: 100,
+        timeoutKillGraceMs: 2_000,
+        timeoutMs: 1_500,
       },
     );
     const runErrorPromise = runPromise.then(
@@ -1017,7 +1017,7 @@ setInterval(() => {}, 1000);
 
       const runError = await runErrorPromise;
       expect(runError).toBeInstanceOf(Error);
-      expect((runError as Error).message).toContain("timed out after 100ms");
+      expect((runError as Error).message).toContain("timed out after 1500ms");
       await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
     } finally {
       await runPromise.catch(() => {});

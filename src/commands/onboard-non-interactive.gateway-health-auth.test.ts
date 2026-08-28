@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayHealthProbeToken } from "./onboard-non-interactive/local.test-support.js";
 
-async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
+async function withTestDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-health-auth-"));
   try {
     return await run(dir);
@@ -38,7 +38,7 @@ describe("resolveGatewayHealthProbeToken", () => {
   });
 
   it("resolves file SecretRefs for the local onboarding health probe without persisting plaintext", async () => {
-    await withTempDir(async (dir) => {
+    await withTestDir(async (dir) => {
       const tokenPath = path.join(dir, "gateway-token.txt");
       await writeSecureFile(tokenPath, "file-secret-token\n");
       process.env.OPENCLAW_GATEWAY_TOKEN = "stale-env-token";
@@ -70,7 +70,7 @@ describe("resolveGatewayHealthProbeToken", () => {
   });
 
   it("does not fall back to stale OPENCLAW_GATEWAY_TOKEN when a SecretRef is unresolved", async () => {
-    await withTempDir(async (dir) => {
+    await withTestDir(async (dir) => {
       process.env.OPENCLAW_GATEWAY_TOKEN = "stale-env-token";
 
       const resolved = await resolveGatewayHealthProbeToken({

@@ -1,8 +1,10 @@
 // Subagent spawn attachment tests cover strict base64 decoding, attachment name
 // validation, materialization paths, and cleanup after spawn failures.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
@@ -135,6 +137,35 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(result.error).toMatch(/attachments_invalid_name/);
   });
 
+  it.each([
+    ["case-insensitive manifest alias", ".MANIFEST.JSON"],
+    ["manifest trailing-dot alias", ".manifest.json."],
+    ["manifest trailing-NBSP alias", ".manifest.json\u00A0"],
+    ["leading-space alias", " foo.txt"],
+    ["trailing-space alias", "handoff.txt "],
+    ["overlong UTF-8 basename", "é".repeat(128)],
+    ["Windows reserved device basename", "CON.txt"],
+    ["Windows device stem with pre-extension space", "CON .txt"],
+    ["Windows console input device", "CONIN$.txt"],
+    ["Windows console output device", "CONOUT$.txt"],
+    ["Windows clock device", "CLOCK$"],
+    ["Windows clock device extension", "CLOCK$.txt"],
+    ["Windows clock device spacing", "CLOCK$ .txt"],
+    ["Windows clock device case", "clock$.TXT"],
+    ["Windows portable forbidden character", "handoff?.txt"],
+    ["lone surrogate", "\uD800"],
+    ["replacement character", "\uFFFD"],
+  ])("%s returns attachments_invalid_name", async (_label, name) => {
+    const result = await spawnWithName(name);
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/attachments_invalid_name/);
+  });
+
+  it.each(["100%.txt", "wow!.txt"])("permits portable filename %s", async (name) => {
+    const result = await spawnWithName(name);
+    expect(result.status).toBe("accepted");
+  });
+
   it("name with newline returns attachments_invalid_name", async () => {
     const result = await spawnWithName("foo\nbar");
     expect(result.status).toBe("error");
@@ -157,9 +188,14 @@ describe("spawnSubagentDirect filename validation", () => {
   });
 
   it("rejects a raw-valid path list whose wrapped prompt exceeds the budget", async () => {
-    // Raw path stays under 4096; wrapper label/tags push the rendered block over.
-    const nearCapName = `${"n".repeat(4000)}.bin`;
-    const result = await spawnWithName(nearCapName);
+    const names = Array.from({ length: 18 }, (_, index) => `${index}-${"n".repeat(238)}.bin`);
+    const result = await subagentSpawnModule.spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: names.map((name) => ({ name, content: validContent, encoding: "base64" })),
+      },
+      ctx,
+    );
     expect(result.status).toBe("error");
     expect(result.error).toMatch(/attachments_prompt_paths_exceeded/);
     expect(result.error).toContain("maxChars=4096");
@@ -176,12 +212,62 @@ describe("spawnSubagentDirect filename validation", () => {
 
   it("duplicate name returns attachments_duplicate_name", async () => {
     const { spawnSubagentDirect } = subagentSpawnModule;
+    const duplicateName = "sessions-spawn-duplicate.txt";
     const result = await spawnSubagentDirect(
       {
         task: "test",
         attachments: [
-          { name: "file.txt", content: validContent, encoding: "base64" },
-          { name: "file.txt", content: validContent, encoding: "base64" },
+          { name: duplicateName, content: validContent, encoding: "base64" },
+          { name: duplicateName, content: validContent, encoding: "base64" },
+        ],
+      },
+      ctx,
+    );
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/attachments_duplicate_name/);
+    expect(result.error).toContain(duplicateName);
+  });
+
+  it("case-folded and normalization-equivalent names return attachments_duplicate_name", async () => {
+    const { spawnSubagentDirect } = subagentSpawnModule;
+    const result = await spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [
+          { name: "Café.txt", content: validContent, encoding: "base64" },
+          { name: "cafe\u0301.TXT", content: validContent, encoding: "base64" },
+        ],
+      },
+      ctx,
+    );
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/attachments_duplicate_name/);
+  });
+
+  it("Unicode sigma case-fold aliases return attachments_duplicate_name", async () => {
+    const { spawnSubagentDirect } = subagentSpawnModule;
+    const result = await spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [
+          { name: "Σ.txt", content: validContent, encoding: "base64" },
+          { name: "ς.txt", content: validContent, encoding: "base64" },
+        ],
+      },
+      ctx,
+    );
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/attachments_duplicate_name/);
+  });
+
+  it("uppercase-then-NFC aliases return attachments_duplicate_name", async () => {
+    const { spawnSubagentDirect } = subagentSpawnModule;
+    const result = await spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [
+          { name: "ΐ.txt", content: validContent, encoding: "base64" },
+          { name: "Ϊ́.txt", content: validContent, encoding: "base64" },
         ],
       },
       ctx,
@@ -194,6 +280,109 @@ describe("spawnSubagentDirect filename validation", () => {
     const result = await spawnWithName("");
     expect(result.status).toBe("error");
     expect(result.error).toMatch(/attachments_invalid_name/);
+  });
+
+  it.each([
+    ["non-object member", [null]],
+    ["non-string content", [{ name: "file.txt", content: 42 }]],
+    ["unknown encoding", [{ name: "file.txt", content: "MATERIALIZER_SECRET", encoding: "hex" }]],
+    ["non-string mimeType", [{ name: "file.txt", content: "data", mimeType: 42 }]],
+  ])("rejects malformed runtime attachment shape: %s", async (_label, attachments) => {
+    const result = await subagentSpawnModule.spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: attachments as never,
+      },
+      ctx,
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/attachments_invalid_member/);
+    expect(JSON.stringify(result)).not.toContain("MATERIALIZER_SECRET");
+  });
+
+  async function spawnWithForcedMaterializationFailure(params: {
+    continuation: boolean;
+    attachmentNames?: string[];
+  }) {
+    const attachmentId = "00000000-0000-4000-8000-000000000001";
+    const attachmentNames = params.attachmentNames ?? [
+      "MATERIALIZATION_FILENAME_MUST_NOT_ECHO.txt",
+    ];
+    const collisionName = expectDefined(attachmentNames.at(-1), "collision attachment name");
+    const randomUuid = vi.spyOn(crypto, "randomUUID").mockReturnValue(attachmentId);
+    try {
+      fs.mkdirSync(
+        path.join(workspaceDirOverride, ".openclaw", "attachments", attachmentId, collisionName),
+        { recursive: true },
+      );
+
+      const result = await subagentSpawnModule.spawnSubagentDirect(
+        {
+          task: "test materialization failure redaction",
+          attachments: attachmentNames.map((name) => ({ name, content: "snapshot" })),
+          ...(params.continuation
+            ? {
+                drainsContinuationDelegateQueue: true,
+                continuationChainState: {
+                  count: 1,
+                  startedAt: Date.now(),
+                  tokens: 0,
+                  chainId: "materialization-failure",
+                },
+              }
+            : {}),
+        },
+        ctx,
+      );
+      return { result, attachmentId, attachmentNames };
+    } finally {
+      randomUuid.mockRestore();
+    }
+  }
+
+  it("keeps ordinary materialization failures actionable without exposing paths", async () => {
+    const { result, attachmentId, attachmentNames } = await spawnWithForcedMaterializationFailure({
+      continuation: false,
+    });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "attachments_materialization_failed (stage=attachment_write reason=target_conflict)",
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(attachmentNames[0]);
+    expect(serialized).not.toContain(attachmentId);
+    expect(serialized).not.toContain(workspaceDirOverride);
+  });
+
+  it("does not leak overlapping attachment name fragments from ordinary failures", async () => {
+    const overlappingFragment = "OVERLAP_FRAGMENT_MUST_NOT_ECHO";
+    const secretPrefix = "SECRET_PREFIX_MUST_NOT_ECHO";
+    const { result } = await spawnWithForcedMaterializationFailure({
+      continuation: false,
+      attachmentNames: [overlappingFragment, `${secretPrefix}-${overlappingFragment}`],
+    });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "attachments_materialization_failed (stage=attachment_write reason=target_conflict)",
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(overlappingFragment);
+    expect(serialized).not.toContain(secretPrefix);
+  });
+
+  it("fully redacts continuation materialization failures", async () => {
+    const { result, attachmentId, attachmentNames } = await spawnWithForcedMaterializationFailure({
+      continuation: true,
+    });
+
+    expect(result).toEqual({ status: "error", error: "attachments_materialization_failed" });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(attachmentNames[0]);
+    expect(serialized).not.toContain(attachmentId);
+    expect(serialized).not.toContain(workspaceDirOverride);
   });
 
   it("lists staged attachment file paths in the child launch prompt", async () => {
@@ -300,6 +489,119 @@ describe("spawnSubagentDirect filename validation", () => {
     } finally {
       fs.rmSync(explicitWorkspaceDir, { recursive: true, force: true });
     }
+  });
+
+  it("materializes continuation delegate input in the new child workspace", async () => {
+    const attachmentContent = "continuation child input";
+    const result = await subagentSpawnModule.spawnSubagentDirect(
+      {
+        task: "read delegated input",
+        drainsContinuationDelegateQueue: true,
+        continuationChainState: {
+          count: 1,
+          startedAt: Date.now(),
+          tokens: 0,
+          chainId: "attachment-chain",
+        },
+        attachments: [{ name: "handoff.txt", content: attachmentContent }],
+        attachMountPath: "handoff",
+      },
+      ctx,
+    );
+
+    expect(result.status).toBe("accepted");
+    const attachmentRoot = path.join(workspaceDirOverride, ".openclaw", "attachments");
+    const receiptDirs = fs.readdirSync(attachmentRoot);
+    expect(receiptDirs).toHaveLength(1);
+    expect(
+      fs.readFileSync(
+        path.join(
+          attachmentRoot,
+          expectDefined(receiptDirs.at(0), "receipt directory"),
+          "handoff.txt",
+        ),
+        "utf8",
+      ),
+    ).toBe(attachmentContent);
+  });
+
+  it("re-evaluates attachment policy when queued continuation input reaches spawn", async () => {
+    const queuedAttachments = [{ name: "handoff.txt", content: "queued child input" }];
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
+      tools: {
+        sessions_spawn: {
+          attachments: {
+            enabled: false,
+            maxFiles: 50,
+            maxFileBytes: 1 * 1024 * 1024,
+            maxTotalBytes: 5 * 1024 * 1024,
+          },
+        },
+      },
+    });
+
+    const result = await subagentSpawnModule.spawnSubagentDirect(
+      {
+        task: "read delegated input after policy reload",
+        drainsContinuationDelegateQueue: true,
+        continuationChainState: {
+          count: 1,
+          startedAt: Date.now(),
+          tokens: 0,
+          chainId: "attachment-policy-change",
+        },
+        attachments: queuedAttachments,
+      },
+      ctx,
+    );
+
+    expect(result).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("attachments are disabled for sessions_spawn"),
+    });
+    expect(fs.existsSync(path.join(workspaceDirOverride, ".openclaw", "attachments"))).toBe(false);
+    expect(callGatewayMock).not.toHaveBeenCalledWith(expect.objectContaining({ method: "agent" }));
+  });
+
+  it("fails closed at child spawn if policy changes after a snapshot was accepted", async () => {
+    const attachmentContent = "POLICY_CHANGED_SNAPSHOT_MUST_NOT_ECHO";
+    const snapshot = [{ name: "handoff.txt", content: attachmentContent }];
+
+    const accepted = await subagentSpawnModule.spawnSubagentDirect(
+      {
+        task: "accept the snapshot under the original policy",
+        attachments: snapshot,
+      },
+      ctx,
+    );
+    expect(accepted.status).toBe("accepted");
+
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
+      tools: { sessions_spawn: { attachments: { enabled: false } } },
+    });
+    callGatewayMock.mockClear();
+
+    const result = await subagentSpawnModule.spawnSubagentDirect(
+      {
+        task: "materialize the previously accepted snapshot",
+        attachments: snapshot,
+      },
+      ctx,
+    );
+
+    expect(result).toMatchObject({
+      status: "forbidden",
+      error:
+        "attachments are disabled for sessions_spawn (enable tools.sessions_spawn.attachments.enabled)",
+    });
+    expect(JSON.stringify(result)).not.toContain(attachmentContent);
+    // The provisional child is deliberately cleaned up after the current
+    // policy rejects materialization; no child agent run begins.
+    expect(
+      callGatewayMock.mock.calls.filter(
+        ([request]) => (request as { method?: string }).method === "agent",
+      ),
+    ).toHaveLength(0);
   });
 
   it("normalizes explicit cwd before materializing native subagent attachments", async () => {

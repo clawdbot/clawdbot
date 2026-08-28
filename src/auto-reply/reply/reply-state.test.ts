@@ -536,7 +536,12 @@ describe("resolveMemoryFlushContextWindowTokens", () => {
 
 describe("incrementCompactionCount", () => {
   it("increments compaction count", async () => {
-    const entry = { sessionId: "s1", updatedAt: Date.now(), compactionCount: 2 } as SessionEntry;
+    const entry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      compactionCount: 2,
+      lastContextPressureBand: 90,
+    } as SessionEntry;
     const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
     const count = await incrementCompactionCount({
@@ -548,7 +553,9 @@ describe("incrementCompactionCount", () => {
     expect(count).toBe(3);
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(3);
+    const storedEntry = requireStoredSession(stored, sessionKey);
+    expect(storedEntry.compactionCount).toBe(3);
+    expect(storedEntry.lastContextPressureBand).toBeUndefined();
   });
 
   it.each([

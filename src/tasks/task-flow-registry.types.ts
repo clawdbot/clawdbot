@@ -48,6 +48,14 @@ export type TaskFlowRecord = {
   flowId: string;
   syncMode: TaskFlowSyncMode;
   ownerKey: string;
+  /**
+   * Originating continuation chain id.
+   *
+   * Set-once at create-time; subsequent hops within the same chain do NOT
+   * update this column (UPDATE-on-hop deferred-by-design). Audit walks key
+   * off this field as the chain-of-origin correlation id.
+   */
+  chainId?: string;
   requesterOrigin?: DeliveryContext;
   controllerId?: string;
   revision: number;

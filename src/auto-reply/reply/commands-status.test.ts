@@ -13,6 +13,10 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import {
+  _resetVolitionalCounts,
+  incrementVolitionalCompactionCount,
+} from "../../agents/tools/request-compaction-tool.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   persistSessionTranscriptTurn,
@@ -28,6 +32,11 @@ import {
 } from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import {
+  consumeStagedPostCompactionDelegates,
+  stagePostCompactionDelegate,
+} from "../continuation/delegate-store-post-compaction.js";
+import { consumePendingDelegates, enqueuePendingDelegate } from "../continuation/delegate-store.js";
 import { buildStatusPluginsReply, buildStatusReply, buildStatusText } from "./commands-status.js";
 import {
   baseCommandTestConfig,
@@ -2313,6 +2322,125 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     expect(normalizeTestText(text)).toContain("Runtime: OpenAI Codex");
+  });
+});
+describe("buildStatusText continuation line", () => {
+  const continuationSessionKey = "agent:main:cont-test";
+
+  afterEach(() => {
+    consumePendingDelegates(continuationSessionKey);
+    consumeStagedPostCompactionDelegates(continuationSessionKey);
+    _resetVolitionalCounts(continuationSessionKey);
+  });
+
+  const cfgWithContinuation = {
+    ...baseCfg,
+    agents: {
+      defaults: {
+        continuation: {
+          enabled: true,
+          maxChainLength: 100,
+        },
+      },
+    },
+  } as OpenClawConfig;
+
+  it("shows continuation line when continuation is enabled", async () => {
+    incrementVolitionalCompactionCount(continuationSessionKey);
+
+    const text = await buildStatusText({
+      cfg: cfgWithContinuation,
+      sessionEntry: {
+        sessionId: "cont-test",
+        updatedAt: 0,
+        totalTokens: 0,
+        continuationChainCount: 3,
+        compactionCount: 1,
+      },
+      sessionKey: continuationSessionKey,
+      parentSessionKey: continuationSessionKey,
+      sessionScope: "per-sender",
+      statusChannel: "whatsapp",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      contextTokens: 0,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+    });
+
+    expect(text).toContain("🔄 Continuation: chain 3/100");
+    expect(text).toContain("volitional: 1");
+  });
+
+  it("does not show continuation line when continuation is disabled", async () => {
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "cont-test",
+        updatedAt: 0,
+        totalTokens: 0,
+      },
+      sessionKey: continuationSessionKey,
+      parentSessionKey: continuationSessionKey,
+      sessionScope: "per-sender",
+      statusChannel: "whatsapp",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      contextTokens: 0,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+    });
+
+    expect(text).not.toContain("Continuation:");
+  });
+
+  it("renders delegate and post-compaction counts correctly", async () => {
+    incrementVolitionalCompactionCount(continuationSessionKey);
+    incrementVolitionalCompactionCount(continuationSessionKey);
+    enqueuePendingDelegate(continuationSessionKey, { task: "task-a" });
+    enqueuePendingDelegate(continuationSessionKey, { task: "task-b" });
+    stagePostCompactionDelegate(continuationSessionKey, {
+      task: "compaction-task",
+      createdAt: Date.now(),
+      silent: false,
+    });
+
+    const text = await buildStatusText({
+      cfg: cfgWithContinuation,
+      sessionEntry: {
+        sessionId: "cont-test",
+        updatedAt: 0,
+        totalTokens: 0,
+        continuationChainCount: 5,
+        compactionCount: 2,
+      },
+      sessionKey: continuationSessionKey,
+      parentSessionKey: continuationSessionKey,
+      sessionScope: "per-sender",
+      statusChannel: "whatsapp",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      contextTokens: 0,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+    });
+
+    expect(text).toContain("chain 5/100");
+    expect(text).toContain("2 delegates pending");
+    expect(text).toContain("1 post-compaction staged");
+    expect(text).toContain("volitional: 2");
   });
 });
 

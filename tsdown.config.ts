@@ -365,6 +365,11 @@ function buildCoreDistEntries(): Record<string, string> {
     // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
     // dist/ trees do not strand already-running gateways on stale hashed chunks.
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
+    // agent-runner.runtime is dynamically imported by get-reply-run.ts. Keep it in
+    // the unified graph so singleton continuation state is shared; otherwise a
+    // split chunk can silently drop continue_work tool calls.
+    "auto-reply/reply/agent-runner.runtime": "src/auto-reply/reply/agent-runner.runtime.ts",
+    "auto-reply/continuation/lazy.runtime": "src/auto-reply/continuation/lazy.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
@@ -391,6 +396,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/synthetic-auth.runtime": "src/plugins/synthetic-auth.runtime.ts",
     "subagent-registry.runtime": "src/agents/subagents/registry/subagent-registry.runtime.ts",
     "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
+    "subagent-announce.continuation.runtime":
+      "src/agents/subagent-announce.continuation.runtime.ts",
     "link-understanding/apply.runtime": "src/link-understanding/apply.runtime.ts",
     "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
     "commands/doctor/shared/plugin-registry-migration":

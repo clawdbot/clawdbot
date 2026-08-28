@@ -46,6 +46,8 @@
     "sessions_search": {"emoji":"🔎","title":"Session Search","detailKeys":["query","sessionKey","limit"]},
     "transcripts": {"emoji":"🎙️","title":"Transcripts","actions":{"start":{"label":"start","detailKeys":["sessionId","title","providerId","accountId","guildId","channelId","meetingUrl"]},"stop":{"label":"stop","detailKeys":["sessionId"]},"status":{"label":"status"},"import":{"label":"import","detailKeys":["sessionId","title","providerId","meetingUrl","speakerLabel"]},"summarize":{"label":"summarize","detailKeys":["sessionId"]}}},
     "sessions_spawn": {"emoji":"🧑‍🔧","title":"Sub-agent","detailKeys":["label","task","agentId","model","thinking","runTimeoutSeconds","cleanup"]},
+    "delegate_artifacts_publish": {"emoji":"📦","title":"Publish Delegate Artifacts","detailKeys":[]},
+    "delegate_artifacts": {"emoji":"📦","title":"Delegate Artifacts","actions":{"list":{"label":"list"},"inspect":{"label":"inspect","detailKeys":["claimId"]},"materialize":{"label":"materialize","detailKeys":["claimId","destination"]},"discard":{"label":"discard","detailKeys":["claimId"]}}},
     "agents_wait": {"emoji":"⏳","title":"Wait for Agents","detailKeys":["ids","timeoutSeconds"]},
     "structured_output": {"emoji":"🧾","title":"Structured Output","detailKeys":["result"]},
     "subagents": {"emoji":"🤖","title":"Subagents","actions":{"list":{"label":"list","detailKeys":["recentMinutes"]},"kill":{"label":"kill","detailKeys":["target"]},"steer":{"label":"steer","detailKeys":["target"]}}},
@@ -63,6 +65,9 @@
     "music_generate": {"emoji":"🎵","title":"Music Generation","actions":{"generate":{"label":"generate","detailKeys":["prompt","model","durationSeconds","format","instrumental"]},"list":{"label":"list","detailKeys":["provider","model"]}}},
     "video_generate": {"emoji":"🎬","title":"Video Generation","actions":{"generate":{"label":"generate","detailKeys":["prompt","model","durationSeconds","resolution","aspectRatio","audio","watermark"]},"list":{"label":"list","detailKeys":["provider","model"]}}},
     "pdf": {"emoji":"📑","title":"PDF","detailKeys":["path","paths","url","urls","prompt","pageRange","model"]},
+    "continue_delegate": {"emoji":"🔄","title":"Continue Delegate","detailKeys":["task","mode","delaySeconds"]},
+    "continue_work": {"emoji":"⏩","title":"Continue Work","detailKeys":["reason","delaySeconds"]},
+    "request_compaction": {"emoji":"📦","title":"Request Compaction","detailKeys":["reason"]},
     "sessions_yield": {"emoji":"⏸️","title":"Yield"},
     "tts": {"emoji":"🔊","title":"TTS","detailKeys":["text","channel"]}
   }

@@ -130,13 +130,19 @@ function makeMockMessage(role: "user" | "assistant" = "user", text = "hello"): A
 }
 
 let restoreContextEngineRegistry = () => {};
+let testStateRoot = "";
+let testAgentDbPath = "";
 
 beforeAll(() => {
+  testStateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-engine-"));
+  testAgentDbPath = path.join(testStateRoot, "openclaw-agent.sqlite");
   restoreContextEngineRegistry = captureContextEngineRegistryStateForTests();
 });
 
 afterAll(() => {
   restoreContextEngineRegistry();
+  closeOpenClawAgentDatabasesForTest();
+  fs.rmSync(testStateRoot, { recursive: true, force: true });
 });
 
 let uniqueEngineIdCounter = 0;
@@ -284,7 +290,7 @@ describe("Engine contract tests", () => {
       agentId: "main",
       sessionId: "s2",
       sessionKey: "agent:main:s2",
-      storePath: "/tmp/openclaw-agent.sqlite",
+      storePath: testAgentDbPath,
     };
     const result = await delegateCompactionToRuntime({
       sessionId: "s2",
@@ -423,7 +429,7 @@ describe("Engine contract tests", () => {
           agentId: "worker",
           sessionId: "s-agent-conflict",
           sessionKey: "agent:main:s-agent-conflict",
-          storePath: "/tmp/openclaw-agent.sqlite",
+          storePath: testAgentDbPath,
         },
         tokenBudget: 4096,
       }),
@@ -462,7 +468,7 @@ describe("Engine contract tests", () => {
       result: {
         tokensBefore: 100,
         sessionId: "top-level-successor",
-        sessionFile: "sqlite:main:marker-successor:/tmp/openclaw-agent.sqlite",
+        sessionFile: `sqlite:main:marker-successor:${testAgentDbPath}`,
       },
     });
 

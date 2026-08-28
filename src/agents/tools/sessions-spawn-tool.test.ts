@@ -2386,7 +2386,9 @@ describe("sessions_spawn tool", () => {
     });
 
     expectDetailFields(result.details, { status: "error" });
-    expect(JSON.stringify(result.details)).toContain("attachments_unsupported_for_acp");
+    const serialized = JSON.stringify(result.details);
+    expect(serialized).toContain("attachments_unsupported_for_acp");
+    expect(serialized).toContain("name=note.txt");
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 

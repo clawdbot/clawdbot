@@ -7,6 +7,7 @@ import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
 import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
+  buildAgentRunTerminalOutcome,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
   isDefinitiveRunLifecycle,
@@ -1309,6 +1310,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
       run.toolErrorSummary = undefined;
     } else if (evt.stream === "tool" && evt.data?.phase === "result") {
       run.toolErrorSummary = readToolValidationErrorSummary(evt.data.toolErrorSummary);
+    } else if (evt.stream === "lifecycle" && lifecyclePhase === "start") {
+      run.toolErrorSummary = undefined;
     }
 
     const assistantLiveChatInput =
@@ -1332,6 +1335,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
 
     const phase = lifecyclePhase;
+    if (Object.hasOwn(evt.data ?? {}, "toolErrorSummary")) {
+      run.toolErrorSummary = readToolValidationErrorSummary(evt.data?.toolErrorSummary);
+    }
     if (phase === "finishing") {
       run.finishing = true;
       run.markQueuedRunReady();
@@ -1345,6 +1351,24 @@ export class EmbeddedTuiBackend implements TuiBackend {
     run.finishing = false;
     if (phase === "error") {
       run.buffer = "";
+    }
+    // A tool-validation error summary terminalizes the run as aborted even when the
+    // provider reported no abort, so the safe summary reaches the transcript instead
+    // of a generic blocked/liveness diagnostic. The outcome is forced rather than
+    // classified because a validation loop also trips the blocked-liveness heuristic.
+    if (run.toolErrorSummary) {
+      this.projectTerminalOutcome(
+        evt.runId,
+        run,
+        { ...evt.data, aborted: true, toolErrorSummary: run.toolErrorSummary },
+        {
+          terminalOutcome: buildAgentRunTerminalOutcome({
+            status: "error",
+            stopReason: "aborted",
+          }),
+        },
+      );
+      return;
     }
     if (this.projectTerminalOutcome(evt.runId, run, evt.data)) {
       return;

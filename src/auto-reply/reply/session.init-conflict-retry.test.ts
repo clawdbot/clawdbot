@@ -116,6 +116,38 @@ describe("runWithSessionInitConflictRetry", () => {
     expect(attempt).toHaveBeenCalledTimes(2);
   });
 
+  it("retries conflicts wrapped by channel dispatch boundaries", async () => {
+    const wrappedConflict = new Error("channel dispatch failed", {
+      cause: {
+        error: new ReplySessionInitConflictError(SESSION_KEY),
+      },
+    });
+    const attempt = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(wrappedConflict)
+      .mockResolvedValue("ok");
+
+    await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).resolves.toBe(
+      "ok",
+    );
+    expect(attempt).toHaveBeenCalledTimes(2);
+  });
+
+  it("handles cyclic wrappers while locating a nested conflict", async () => {
+    const wrappedConflict: { error?: unknown; cause?: unknown } = {};
+    wrappedConflict.cause = wrappedConflict;
+    wrappedConflict.error = new ReplySessionInitConflictError(SESSION_KEY);
+    const attempt = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(wrappedConflict)
+      .mockResolvedValue("ok");
+
+    await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).resolves.toBe(
+      "ok",
+    );
+    expect(attempt).toHaveBeenCalledTimes(2);
+  });
+
   it("rethrows the conflict after exhausting all attempts", async () => {
     const { attempt, state } = conflictingAttempt(Number.POSITIVE_INFINITY);
     await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).rejects.toThrow(
@@ -206,6 +238,24 @@ describe("runWithSessionInitConflictRetry", () => {
     await expect(retrying).rejects.toThrow("aborted");
     expect(state.calls).toBe(1);
     expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechecks cancellation after backoff before starting the next attempt", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancel at retry boundary");
+    const { attempt, state } = conflictingAttempt(Number.POSITIVE_INFINITY);
+
+    await expect(
+      runWithSessionInitConflictRetry(attempt, {
+        signal: controller.signal,
+        sleep: async (_ms, signal) => {
+          expect(signal).toBe(controller.signal);
+          controller.abort(reason);
+        },
+      }),
+    ).rejects.toBe(reason);
+
+    expect(state.calls).toBe(1);
   });
 
   it("applies capped exponential backoff between attempts", async () => {

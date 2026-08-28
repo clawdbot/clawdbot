@@ -322,6 +322,20 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(20);
   });
 
+  it.each([
+    { paths: ["private/report.pdf"] },
+    { path: "private/report.pdf" },
+    { paths: "private/report.pdf" },
+    { paths: { length: "private/report.pdf" } },
+  ])("redacts delegate artifact publication arguments for every input shape", (args) => {
+    const chatLog = new ChatLog(20);
+    chatLog.startTool("tool-1", "delegate_artifacts_publish", args);
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("artifact paths redacted");
+    expect(rendered).not.toContain("private/report.pdf");
+  });
+
   it("clears visible tool entries and stale tool references", () => {
     const chatLog = new ChatLog(20);
     chatLog.startTool("tool-1", "read_file", { path: "a.txt" });

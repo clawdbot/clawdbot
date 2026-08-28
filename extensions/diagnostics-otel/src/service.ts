@@ -13,8 +13,15 @@ import {
   TraceIdRatioBasedSampler,
 } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import {
+  setContinuationTracer,
+  type Tracer,
+  waitForDiagnosticEventsDrained,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import type { DiagnosticTraceContext, OpenClawPluginService } from "../api.js";
+import { createContinuationOtelTracerAdapter } from "./continuation-tracer-adapter.js";
+import { resetContinuationTracerIfOwned } from "./continuation-tracer-ownership.js";
 import {
   DEFAULT_SERVICE_NAME,
   OTEL_EXPORTER_OTLP_ENDPOINT_ENV,
@@ -192,6 +199,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
   let stopActiveTrustedSpans: (() => void) | null = null;
   let unregisterOwnedSdkRuntime: (() => void) | null = null;
   let unregisterUnhandledRejectionHandler: (() => void) | null = null;
+  let installedContinuationTracer: Tracer | null = null;
   let retireExporterRoutes: ((preserveFailures?: boolean) => void) | null = null;
   let preserveExporterRoutesOnNextStop = false;
 
@@ -201,6 +209,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     const currentLogProvider = logProvider;
     const currentTraceProvider = traceProvider;
     const currentMeterProvider = meterProvider;
+    const currentContinuationTracer = installedContinuationTracer;
     const currentStopActiveTrustedSpans = stopActiveTrustedSpans;
     const currentUnregisterOwnedSdkRuntime = unregisterOwnedSdkRuntime;
     const currentUnregisterUnhandledRejectionHandler = unregisterUnhandledRejectionHandler;
@@ -211,6 +220,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     logProvider = null;
     traceProvider = null;
     meterProvider = null;
+    installedContinuationTracer = null;
     stopActiveTrustedSpans = null;
     unregisterOwnedSdkRuntime = null;
     unregisterUnhandledRejectionHandler = null;
@@ -220,12 +230,22 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       (
         await Promise.allSettled(stops.map((stop) => Promise.resolve().then(() => stop?.())))
       ).flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-    // Preserve cleanup -> provider flush -> handler removal while attempting every step per phase.
-    const failures = await settle(
-      currentUnregisterTracePropagationBridge,
-      currentUnsubscribe,
-      currentStopActiveTrustedSpans,
-      currentUnregisterOwnedSdkRuntime,
+    // Stop new propagation, drain queued events, then retire listeners/spans before providers.
+    const failures = await settle(currentUnregisterTracePropagationBridge);
+    if (currentUnsubscribe) {
+      failures.push(...(await settle(() => waitForDiagnosticEventsDrained())));
+    }
+    failures.push(
+      ...(await settle(currentUnsubscribe)),
+      ...(await settle(currentStopActiveTrustedSpans)),
+      ...(await settle(currentUnregisterOwnedSdkRuntime)),
+      ...(await settle(
+        currentContinuationTracer
+          ? () => {
+              resetContinuationTracerIfOwned(currentContinuationTracer);
+            }
+          : null,
+      )),
     );
     const providerFailures = await settle(
       currentLogProvider ? () => currentLogProvider.shutdown() : null,
@@ -593,6 +613,16 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ...createModelRecorders(recorderRuntime),
         ...createToolAndSystemRecorders(recorderRuntime),
       };
+
+      if (tracesActive) {
+        const continuationTracer = createContinuationOtelTracerAdapter({
+          ...(traceProvider ? { tracerProvider: traceProvider } : {}),
+          resolveSpanContext: diagnosticsTrace.resolveTrustedSpanContext,
+          resolveParentContext: diagnosticsTrace.resolveTrustedParentContext,
+        });
+        setContinuationTracer(continuationTracer);
+        installedContinuationTracer = continuationTracer;
+      }
 
       unsubscribe = subscribe(
         createDiagnosticsEventHandler({

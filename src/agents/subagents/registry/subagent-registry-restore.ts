@@ -79,7 +79,18 @@ export function createSubagentRegistryRestorer(config: {
     timeoutMs: number;
     expectedSessionId?: string;
     expectedLifecycleRevision?: string;
-  }) => Promise<void>;
+  }) => Promise<boolean>;
+  recordAcceptedSubagentSpawnRollback: (params: {
+    runId: string;
+    childSessionKey: string;
+    gatewayRunId: string;
+    reason: string;
+    expectedSessionId?: string;
+    expectedLifecycleRevision?: string;
+  }) =>
+    | { status: "persisted" }
+    | { status: "pending-persistence"; error: unknown }
+    | { status: "rejected" };
   cleanupCollectorLaunchResources: (
     entry: SubagentRunRecord,
     options?: { isCurrent?: () => boolean },
@@ -102,6 +113,7 @@ export function createSubagentRegistryRestorer(config: {
     listSwarmRunsForGroup,
     startQueuedSubagentRun,
     terminateAcceptedRestoredCollectorRun,
+    recordAcceptedSubagentSpawnRollback,
     cleanupCollectorLaunchResources,
     settleFailedQueuedSubagentLaunch,
     completeCollectorLaunchCleanup,
@@ -114,6 +126,12 @@ export function createSubagentRegistryRestorer(config: {
   // pending because mergeOnly correctly reports them as existing on retry.
   let restoredRowsPending = false;
   let restoreRetryTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // Single ownership predicate for the restored queued launch: both the failure
+  // settlement path and the scheduler seam must agree on whether this exact row
+  // still owns the queued work before either holds or releases its FIFO slot.
+  const ownsRestoredQueuedLaunch = (runId: string, entry: SubagentRunRecord) =>
+    runs.get(runId) === entry && entry.execution.status === "queued";
 
   function clearRestoreRetryTimer() {
     if (restoreRetryTimer) {
@@ -200,7 +218,13 @@ export function createSubagentRegistryRestorer(config: {
     for (const [runId, entry] of runs) {
       // Restart recovery exclusively owns receipt-bearing source rows until it
       // remaps or terminalizes them. Generic resume would wait on an obsolete run.
-      if (entry.execution.restartRecovery || entry.killIntent || entry.killReconciliation) {
+      if (
+        entry.acceptedSteerDispatch ||
+        entry.acceptedSpawnRollback ||
+        entry.execution.restartRecovery ||
+        entry.killIntent ||
+        entry.killReconciliation
+      ) {
         continue;
       }
       if (entry.collect && entry.execution.status === "queued") {
@@ -228,7 +252,10 @@ export function createSubagentRegistryRestorer(config: {
           entry.requesterAgentId,
         );
         const currentSwarmConfig = resolveSwarmConfig(cfg, entry.requesterAgentId);
+        let launchAcceptanceObserved = false;
         let launchTerminationConfirmed = false;
+        let acceptedGatewayRunId: string | undefined;
+        let acceptedLaunchError: unknown;
         let launchLifecycleGeneration: string | undefined;
         enqueueSwarmRun({
           groupId: launch.schedulerGroupKey,
@@ -239,6 +266,22 @@ export function createSubagentRegistryRestorer(config: {
             .map((candidate) => candidate.schedulerSlotId ?? candidate.runId),
           start: async () => {
             await runWithGatewayIndependentRootWorkAdmission(async () => {
+              if (acceptedGatewayRunId) {
+                launchTerminationConfirmed = await terminateAcceptedRestoredCollectorRun({
+                  entry,
+                  gatewayRunId: acceptedGatewayRunId,
+                  timeoutMs: launch.timeoutMs,
+                  expectedSessionId: cleanupSessionEntry?.sessionId,
+                  expectedLifecycleRevision: cleanupSessionEntry?.lifecycleRevision,
+                });
+                if (!launchTerminationConfirmed) {
+                  throw new Error(
+                    `Accepted child termination was not confirmed: ${acceptedGatewayRunId}`,
+                    { cause: acceptedLaunchError },
+                  );
+                }
+                throw acceptedLaunchError;
+              }
               launchLifecycleGeneration = getAgentEventLifecycleGeneration();
               const request = {
                 params: applySubagentLaunchAuthorization(launch.request, launch.authorization),
@@ -255,7 +298,9 @@ export function createSubagentRegistryRestorer(config: {
                   ? { allowModelOverride: true, scopes: [ADMIN_SCOPE] }
                   : undefined,
               );
+              launchAcceptanceObserved = true;
               const gatewayRunId = readGatewayRunId(response) ?? runId;
+              acceptedGatewayRunId = gatewayRunId;
               try {
                 if (!startQueuedSubagentRun(runId, gatewayRunId, launchLifecycleGeneration)) {
                   throw new Error(
@@ -263,14 +308,49 @@ export function createSubagentRegistryRestorer(config: {
                   );
                 }
               } catch (error) {
-                await terminateAcceptedRestoredCollectorRun({
-                  entry,
+                acceptedLaunchError = error;
+                const reason = error instanceof Error ? error.message : String(error);
+                const rollbackOwner = recordAcceptedSubagentSpawnRollback({
+                  runId,
+                  childSessionKey: entry.childSessionKey,
                   gatewayRunId,
-                  timeoutMs: launch.timeoutMs,
+                  reason,
                   expectedSessionId: cleanupSessionEntry?.sessionId,
                   expectedLifecycleRevision: cleanupSessionEntry?.lifecycleRevision,
                 });
-                launchTerminationConfirmed = true;
+                const rollbackFailures: unknown[] = [];
+                if (rollbackOwner.status === "rejected") {
+                  rollbackFailures.push(
+                    new Error(`Accepted collector rollback owner was rejected: ${runId}`),
+                  );
+                } else if (rollbackOwner.status === "pending-persistence") {
+                  rollbackFailures.push(rollbackOwner.error);
+                }
+                try {
+                  launchTerminationConfirmed = await terminateAcceptedRestoredCollectorRun({
+                    entry,
+                    gatewayRunId,
+                    timeoutMs: launch.timeoutMs,
+                    expectedSessionId: cleanupSessionEntry?.sessionId,
+                    expectedLifecycleRevision: cleanupSessionEntry?.lifecycleRevision,
+                  });
+                  if (!launchTerminationConfirmed) {
+                    throw new Error(
+                      `Accepted child termination was not confirmed: ${gatewayRunId}`,
+                      { cause: error },
+                    );
+                  }
+                } catch (terminationError) {
+                  rollbackFailures.push(terminationError);
+                }
+                if (rollbackFailures.length > 0) {
+                  const aggregate = new AggregateError(
+                    [error, ...rollbackFailures],
+                    `Accepted restored collector rollback incomplete: ${runId}`,
+                  );
+                  aggregate.cause = error;
+                  throw aggregate;
+                }
                 throw error;
               }
             });
@@ -278,6 +358,9 @@ export function createSubagentRegistryRestorer(config: {
           onStartFailure: (error) => {
             if (error instanceof GatewayDrainingError) {
               return false;
+            }
+            if (launchAcceptanceObserved && !launchTerminationConfirmed) {
+              return !ownsRestoredQueuedLaunch(runId, entry);
             }
             return failAndCleanupRestoredQueuedRun(
               runId,
@@ -359,7 +442,7 @@ export function createSubagentRegistryRestorer(config: {
     expectedSessionId?: string,
     expectedLifecycleRevision?: string,
   ): Promise<boolean> {
-    if (runs.get(runId) !== entry || entry.execution.status !== "queued") {
+    if (!ownsRestoredQueuedLaunch(runId, entry)) {
       return true;
     }
     const claim: RestoredQueuedFailureSettlementClaim = {

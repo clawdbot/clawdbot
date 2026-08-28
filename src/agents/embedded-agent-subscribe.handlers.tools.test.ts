@@ -12,14 +12,11 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import {
   buildBlockedToolResult,
+  peekAdjustedParamsForToolCall,
   recordAdjustedParamsForToolCall,
   recordStructuredReplayTrustForToolCall,
 } from "./agent-tools.before-tool-call.js";
-import {
-  adjustedParamsByToolCallId,
-  buildAdjustedParamsKey,
-  recordToolExecutionTracked,
-} from "./agent-tools.before-tool-call.state.js";
+import { recordToolExecutionTracked } from "./agent-tools.before-tool-call.state.js";
 import { addSession, deleteSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createProcessTool } from "./bash-tools.process.js";
@@ -138,8 +135,6 @@ afterEach(async () => {
   resetPendingAskUserQuestionsForTest();
 });
 
-const beforeToolCallTesting = { adjustedParamsByToolCallId, buildAdjustedParamsKey };
-
 function createTestContext(): {
   ctx: ToolHandlerContext;
   warn: ReturnType<typeof vi.fn>;
@@ -160,6 +155,7 @@ function createTestContext(): {
   const trace = vi.fn();
   const isEnabled = vi.fn(() => false);
   const ctx: ToolHandlerContext = {
+    getBlockReplyDeliveryGeneration: () => 0,
     params: {
       runId: "run-test",
       sessionKey: "agent:unit-session",
@@ -1663,14 +1659,14 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   it("uses hook-adjusted args for replay safety", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-cron-hook-rewrite";
-    const adjustedParamsKey = beforeToolCallTesting.buildAdjustedParamsKey({
-      runId: "run-test",
+    recordAdjustedParamsForToolCall(
       toolCallId,
-    });
-    beforeToolCallTesting.adjustedParamsByToolCallId.set(adjustedParamsKey, {
-      action: "add",
-      job: { name: "rewritten mutation" },
-    });
+      {
+        action: "add",
+        job: { name: "rewritten mutation" },
+      },
+      "run-test",
+    );
 
     await executeTool(ctx, {
       toolName: "cron",
@@ -1685,7 +1681,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       hadPotentialSideEffects: true,
     });
     expect(ctx.state.successfulCronAdds).toBe(1);
-    expect(beforeToolCallTesting.adjustedParamsByToolCallId.has(adjustedParamsKey)).toBe(false);
+    expect(peekAdjustedParamsForToolCall(toolCallId, "run-test")).toBeUndefined();
   });
 
   it("snapshots hook-adjusted args before result middleware can mutate them", async () => {
@@ -1724,17 +1720,17 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   it("uses hook-adjusted message arguments for delivery telemetry", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-message-hook-rewrite";
-    const adjustedParamsKey = beforeToolCallTesting.buildAdjustedParamsKey({
-      runId: "run-test",
+    recordAdjustedParamsForToolCall(
       toolCallId,
-    });
-    beforeToolCallTesting.adjustedParamsByToolCallId.set(adjustedParamsKey, {
-      action: "send",
-      provider: "telegram",
-      to: "chat-rewritten",
-      text: "rewritten delivery",
-      mediaUrl: "/tmp/rewritten.png",
-    });
+      {
+        action: "send",
+        provider: "telegram",
+        to: "chat-rewritten",
+        text: "rewritten delivery",
+        mediaUrl: "/tmp/rewritten.png",
+      },
+      "run-test",
+    );
 
     await executeTool(ctx, {
       toolName: "message",
@@ -2688,6 +2684,58 @@ describe("handleToolExecutionEnd timeout metadata", () => {
 });
 
 describe("handleToolExecutionEnd exec approval prompts", () => {
+  it("does not restore approval suppression state after generation invalidation", async () => {
+    const { ctx } = createTestContext();
+    let deliveryGeneration = 0;
+    let resolveToolResult: (() => void) | undefined;
+    ctx.params.onToolResult = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveToolResult = resolve;
+        }),
+    );
+    (
+      ctx as typeof ctx & {
+        getBlockReplyDeliveryGeneration: () => number;
+      }
+    ).getBlockReplyDeliveryGeneration = () => deliveryGeneration;
+
+    const task = handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-stale-approval",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-pending",
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            expiresAtMs: 1_800_000_000_000,
+            host: "gateway",
+            command: "npm view diver name version description",
+            cwd: "/tmp/work",
+            warningText: "Approval required.",
+          },
+        },
+      } as never,
+      { deliveryGeneration },
+    );
+
+    await vi.waitFor(() => {
+      expect(ctx.params.onToolResult).toHaveBeenCalledTimes(1);
+    });
+    deliveryGeneration += 1;
+    ctx.state.deterministicApprovalPromptPending = false;
+    ctx.state.deterministicApprovalPromptSent = false;
+    resolveToolResult?.();
+    await task;
+
+    expect(ctx.state.deterministicApprovalPromptPending).toBe(false);
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
+  });
+
   it("emits a deterministic approval payload and marks assistant output suppressed", async () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();

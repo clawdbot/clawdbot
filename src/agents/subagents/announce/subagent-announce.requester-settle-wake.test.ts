@@ -26,6 +26,7 @@ const { registryRuntimeMock } = vi.hoisted(() => ({
     countPendingDescendantRuns: vi.fn((_rootSessionKey: string) => 0),
     isSubagentSessionRunActive: vi.fn((_childSessionKey: string) => true),
     shouldIgnorePostCompletionAnnounceForSession: vi.fn((_childSessionKey: string) => false),
+    countActiveDescendantRuns: vi.fn(() => 0),
     hasDescendantRunAwaitingSettle: vi.fn(
       (_rootSessionKey: string, _excludeRunId?: string) => false,
     ),
@@ -46,6 +47,7 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
   readSubagentSessionEntry: vi.fn(() => undefined),
   resolveAgentIdFromSessionKey: vi.fn(() => "main"),
+  resolveContinuationRuntimeConfig: vi.fn(() => ({ maxChainLength: 16 })),
   resolveMainSessionKey: vi.fn(() => "agent:main:main"),
   resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
   waitForEmbeddedAgentRunEnd: vi.fn(async () => true),

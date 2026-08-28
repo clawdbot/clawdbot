@@ -447,6 +447,52 @@ describe("executeAgentTurn: result and tool delivery", () => {
     expect(onToolResult).toHaveBeenCalledWith({ text: "The user is saying hello" });
   });
 
+  it("preserves continuation-shaped trailing text in streamed tool results", async () => {
+    const onToolResult = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onToolResult?.({ text: "Literal tool output CONTINUE_WORK" });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
+    const pendingToolTasks = new Set<Promise<void>>();
+    const typingSignals = createMockTypingSignaler();
+    const followupRun = createFollowupRun();
+    followupRun.run.config = {
+      agents: { defaults: { continuation: { enabled: true } } },
+    };
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {
+        onToolResult,
+      } satisfies GetReplyOptions,
+      typingSignals,
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    await Promise.all(pendingToolTasks);
+
+    expect(result.kind).toBe("success");
+    expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("Literal tool output CONTINUE_WORK");
+    expect(onToolResult).toHaveBeenCalledWith({ text: "Literal tool output CONTINUE_WORK" });
+  });
+
   it("continues delivering later streamed tool results after an earlier delivery failure", async () => {
     const delivered: string[] = [];
     const onToolResult = vi.fn(async (payload: { text?: string }) => {

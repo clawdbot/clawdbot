@@ -8,6 +8,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { ensureDelegateArtifactsSchema } from "../agents/delegate-artifact-store.js";
 import { saveCronStore } from "../cron/store.js";
 import { loadedCronStoreFromRows, loadCronRows } from "../cron/store/row-codec.js";
 import type { CronStoredJob } from "../cron/types.js";
@@ -35,6 +36,7 @@ import {
   readConfigMachineState,
   readConfigMachineStateWithMetadata,
 } from "./config-machine-state.js";
+import { DELEGATE_ARTIFACTS_SCHEMA_SQL } from "./delegate-artifacts-schema.js";
 import { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry.js";
 import { FIRST_USE_STATE_TABLES } from "./openclaw-state-db-contract.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
@@ -466,6 +468,48 @@ function seedEarlyCommitmentSchema(database: DatabaseSync): void {
     CREATE INDEX idx_commitments_status_due
       ON commitments(status, due_earliest_ms, due_latest_ms);
   `);
+}
+
+function readDelegateArtifactSchemaNames(): { indexes: string[]; tables: string[] } {
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec(DELEGATE_ARTIFACTS_SCHEMA_SQL);
+    const rows = database
+      .prepare(
+        `SELECT type, name
+           FROM sqlite_schema
+          WHERE type IN ('table', 'index')
+            AND name NOT LIKE 'sqlite_%'
+          ORDER BY name`,
+      )
+      .all() as Array<{ name: string; type: "index" | "table" }>;
+    return {
+      indexes: rows.filter((row) => row.type === "index").map((row) => row.name),
+      tables: rows.filter((row) => row.type === "table").map((row) => row.name),
+    };
+  } finally {
+    database.close();
+  }
+}
+
+function findSchemaObjectNames(
+  database: DatabaseSync,
+  type: "index" | "table",
+  names: string[],
+): string[] {
+  const placeholders = names.map(() => "?").join(", ");
+  return (
+    database
+      .prepare(
+        `SELECT name
+           FROM sqlite_schema
+          WHERE type = ?
+            AND name IN (${placeholders})
+          ORDER BY name`,
+      )
+      .all(type, ...names) as Array<{ name: string }>
+  ).map((row) => row.name);
 }
 
 function seedLegacySessionWatchCursorSchema(stateDir: string): {
@@ -4840,6 +4884,48 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
   });
 
+  for (const { label, version } of [
+    { label: "a current v6 database", version: 6 },
+    { label: "a v5 database migrating to v6", version: 5 },
+  ] as const) {
+    it(`keeps delegate artifact schema lazy after opening ${label}`, () => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = openOpenClawStateDatabase(options).path;
+      closeOpenClawStateDatabaseForTest();
+
+      const schemaNames = readDelegateArtifactSchemaNames();
+      const { DatabaseSync } = requireNodeSqlite();
+      const preFeature = new DatabaseSync(databasePath);
+      preFeature.exec("PRAGMA foreign_keys = OFF;");
+      for (const tableName of schemaNames.tables) {
+        preFeature.exec(`DROP TABLE IF EXISTS "${tableName}";`);
+      }
+      if (version === 5) {
+        markStateDatabaseVersion(preFeature, 5);
+      }
+      preFeature.close();
+
+      const reopened = openOpenClawStateDatabase(options);
+      expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+      expect(findSchemaObjectNames(reopened.db, "table", schemaNames.tables)).toEqual([]);
+      expect(findSchemaObjectNames(reopened.db, "index", schemaNames.indexes)).toEqual([]);
+
+      ensureDelegateArtifactsSchema(options);
+      closeOpenClawStateDatabaseForTest();
+      const postEnsure = openOpenClawStateDatabase(options);
+
+      expect(findSchemaObjectNames(postEnsure.db, "table", schemaNames.tables)).toEqual(
+        schemaNames.tables,
+      );
+      expect(findSchemaObjectNames(postEnsure.db, "index", schemaNames.indexes)).toEqual(
+        schemaNames.indexes,
+      );
+    });
+  }
+
   it("rejects an inline unique constraint hidden behind a SQLite autoindex", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -6152,6 +6238,54 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approvals'")
       .get() as { sql: string };
     expect(migratedSql.sql).toContain("'system-agent'");
+  });
+
+  it("repairs additive columns after migrating legacy operator approvals", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    const currentApprovalSql = (
+      legacyDb
+        .prepare(
+          "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approvals'",
+        )
+        .get() as { sql: string }
+    ).sql;
+    legacyDb.exec("ALTER TABLE operator_approvals RENAME TO operator_approvals_current");
+    legacyDb.exec(
+      currentApprovalSql.replace("'exec', 'plugin', 'system-agent'", "'exec', 'plugin'"),
+    );
+    legacyDb.exec(`
+      DROP TABLE operator_approvals_current;
+      DROP INDEX idx_managed_outgoing_images_agent_session;
+      DROP INDEX idx_managed_outgoing_images_agent_message;
+      ALTER TABLE managed_outgoing_image_records DROP COLUMN agent_id;
+    `);
+    legacyDb.close();
+
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [
+        "Migrated shared state operator approvals → OpenClaw system changes",
+        expect.stringMatching(/^Rebuilt canonical shared-state SQLite indexes \(\d+\)$/u),
+      ],
+      warnings: [],
+    });
+
+    const reopened = openOpenClawStateDatabase(options);
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM pragma_table_info('managed_outgoing_image_records')")
+        .all(),
+    ).toContainEqual({ name: "agent_id" });
+    const indexes = reopened.db
+      .prepare("SELECT name FROM pragma_index_list('managed_outgoing_image_records')")
+      .all();
+    expect(indexes).toContainEqual({ name: "idx_managed_outgoing_images_agent_session" });
+    expect(indexes).toContainEqual({ name: "idx_managed_outgoing_images_agent_message" });
   });
 
   it("does not recursively recommend doctor when operator approval repair refuses a shape", () => {

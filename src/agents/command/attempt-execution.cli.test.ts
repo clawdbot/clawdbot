@@ -17,6 +17,16 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  emitTrustedDiagnosticEvent,
+  onInternalDiagnosticEvent,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
+import {
+  getActiveDiagnosticTraceContext,
+  parseDiagnosticTraceparent,
+  resetDiagnosticTraceContextForTest,
+} from "../../infra/diagnostic-trace-context.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import {
@@ -368,6 +378,7 @@ const providerAuthAliasMocks = vi.hoisted(() => ({
     },
   ),
 }));
+const INHERITED_TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
 }));
@@ -1886,7 +1897,7 @@ describe("CLI attempt execution", () => {
       agentDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
-    expect(() =>
+    await expect(
       runStoredAttempt({
         providerOverride: "google",
         modelOverride: "gemini-3.1-pro-preview",
@@ -1906,7 +1917,7 @@ describe("CLI attempt execution", () => {
         runId: "run-gemini-cli-incompatible-auth",
         sessionStore,
       }),
-    ).toThrow(/cannot use auth profile "vercel-ai-gateway:default"/);
+    ).rejects.toThrow(/cannot use auth profile "vercel-ai-gateway:default"/);
 
     expect(runCliAgentMock).not.toHaveBeenCalled();
   });
@@ -3605,6 +3616,83 @@ describe("CLI attempt execution", () => {
       disableTools: true,
     });
     expect(firstEmbeddedAgentArg().prompt).not.toContain("[Inter-session message]");
+  });
+
+  it("sets inherited traceparent active for embedded child runs", async () => {
+    const sessionKey = "agent:main:direct:traceparent";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-traceparent",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const parsedInheritedTrace = parseDiagnosticTraceparent(INHERITED_TRACEPARENT);
+    const inheritedTrace = parsedInheritedTrace
+      ? { ...parsedInheritedTrace, spanIdSource: "remote" as const }
+      : undefined;
+    let activeTraceBeforeAwait: unknown;
+    let activeTraceAfterAwait: unknown;
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const stopDiagnosticEvents = onInternalDiagnosticEvent((evt) => {
+      if (evt.type === "log.record" && evt.message === "child diagnostic inherited trace") {
+        diagnosticEvents.push(evt);
+      }
+    });
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      activeTraceBeforeAwait = getActiveDiagnosticTraceContext();
+      emitTrustedDiagnosticEvent({
+        type: "log.record",
+        level: "INFO",
+        message: "child diagnostic inherited trace",
+      });
+      await Promise.resolve();
+      activeTraceAfterAwait = getActiveDiagnosticTraceContext();
+      return { meta: { durationMs: 1 } } satisfies EmbeddedAgentRunResult;
+    });
+
+    try {
+      await runAgentAttempt({
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-7",
+        originalProvider: "anthropic",
+        cfg: {} as OpenClawConfig,
+        sessionEntry,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionAgentId: "main",
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        workspaceDir: tmpDir,
+        body: "trace inherited context",
+        isFallbackRetry: false,
+        resolvedThinkLevel: "medium",
+        timeoutMs: 1_000,
+        runId: "run-traceparent",
+        opts: {
+          senderIsOwner: false,
+          traceparent: INHERITED_TRACEPARENT,
+        } as Parameters<typeof runAgentAttempt>[0]["opts"],
+        runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+        spawnedBy: undefined,
+        messageChannel: "discord",
+        skillsSnapshot: undefined,
+        resolvedVerboseLevel: undefined,
+        agentDir: tmpDir,
+        onAgentEvent: vi.fn(),
+        authProfileProvider: "anthropic",
+        sessionStore,
+        storePath,
+        sessionHasHistory: true,
+      });
+
+      expect(activeTraceBeforeAwait).toEqual(inheritedTrace);
+      expect(activeTraceAfterAwait).toEqual(inheritedTrace);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(diagnosticEvents[0]?.trace).toEqual(inheritedTrace);
+    } finally {
+      stopDiagnosticEvents();
+      resetDiagnosticTraceContextForTest();
+    }
   });
 
   it("forwards trusted elevated defaults to embedded agent runs", async () => {

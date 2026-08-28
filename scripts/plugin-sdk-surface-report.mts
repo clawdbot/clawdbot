@@ -316,6 +316,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: typed owner-declared approval-scope contract for plugin-authored approvals.
       // -5: approval display sanitizers moved to a non-public leaf module
       //     (exec-approval-text-sanitize) to break the exec-approvals cycle.
+      // +17: continuation tool, dispatch, tracing, and lifecycle exports.
       // +3: typed ask_user option-index contract and two bounded owner-order resolvers.
       // +2: exact-session deletion parameters and synchronous companion mutation contract.
       // +2: canonical session-model selection and auxiliary runtime-auth preparation.
@@ -323,7 +324,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared channel-account logout config cleanup.
       // +1: descriptor-based allowFrom authentication classifier for channel security audits.
       // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
-      4349,
+      4366,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -418,12 +419,13 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: embedded foreground prompt context builder.
       // -4: approval display sanitizers moved to a non-public leaf module
       //     (exec-approval-text-sanitize) to break the exec-approvals cycle.
+      // +5: continuation runtime callables.
       // +2: bounded ask_user owner-order map builder and option resolver.
       // +2: canonical session-model selection and auxiliary runtime-auth preparation.
       // +1: shared channel-account logout config cleanup.
       // +1: descriptor-based allowFrom authentication classifier for channel security audits.
       // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
-      2585,
+      2590,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -442,7 +444,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -18: retire the expired August compatibility exports and messaging-targets subpath.
-      1134,
+      // +2: net continuation compatibility exports retained after upstream barrel cleanup.
+      1136,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

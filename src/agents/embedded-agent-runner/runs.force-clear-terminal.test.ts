@@ -252,6 +252,40 @@ describe("force-clear terminal state persistence", () => {
     expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
   });
 
+  it("persists killed status for a canonical global-scope session", async () => {
+    const sessionKey = "global";
+    const sessionId = "session-global-1";
+    const startedAt = Date.now() - 60_000;
+
+    await upsertSessionEntryCore(
+      { sessionKey, storePath },
+      {
+        sessionId,
+        updatedAt: startedAt,
+        startedAt,
+        runtimeMs: 4_321,
+        status: "running",
+      },
+    );
+
+    setActiveEmbeddedRun(sessionId, createRunHandle(), sessionKey);
+
+    const result = await abortAndDrainEmbeddedAgentRun({
+      sessionId,
+      sessionKey,
+      forceClear: true,
+      reason: "stuck_recovery",
+      settleMs: 0,
+    });
+
+    expect(result.forceCleared).toBe(true);
+
+    const entry = loadSessionEntry({ sessionKey, storePath });
+    expect(entry?.status).toBe("killed");
+    expect(entry?.abortedLastRun).toBe(true);
+    expect(entry?.runtimeMs).toBe(4_321);
+  });
+
   it("persists killed status after a force-cleared run", async () => {
     const sessionKey = "agent:main:main";
     const sessionId = "session-1";

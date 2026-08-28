@@ -7,6 +7,7 @@ export {
   failFlow,
   finishFlow,
   getTaskFlowById,
+  listTaskFlowsForOwnerKey,
   listTaskFlowRecords,
   requestFlowCancel,
   reloadTaskFlowRegistryFromStore,

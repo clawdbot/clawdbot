@@ -10,7 +10,6 @@ import {
   type AgentPatchSummaryEventData,
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
-import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
   consumeAdjustedParamsForToolCall,
@@ -43,17 +42,16 @@ import {
 } from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
+import { scheduleEmbeddedAfterToolCallHook } from "./embedded-agent-subscribe.handlers.tools.after-call.js";
 import {
   applyCurrentMessageProvider,
   applyToolSendReceiptForExtraction,
   buildPatchSummaryText,
-  buildProcessTerminalDiagnostic,
   didShellCronAddSucceed,
   emitToolResultOutput,
   extractExecOutput,
   extractLiveExecOutput,
   hasMessagingRichContent,
-  hasTerminalControlCharacter,
   isAsyncStartedToolResult,
   isCronAddAction,
   isMiddlewareToolResultError,
@@ -96,7 +94,9 @@ import { readMcpConnectAction } from "./mcp-connect-action.js";
 import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
+  buildProcessTerminalDiagnostic,
   createToolValidationErrorSummary,
+  hasTerminalControlCharacter,
   summarizeToolValidationError,
 } from "./tool-error-summary.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
@@ -105,22 +105,25 @@ import { isToolResultError, readToolResultDetails } from "./tool-result-error.js
 import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
-/** Handles a tool-execution result and commits replay, media, hook, and error state. */
 export async function handleToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: Extract<AgentEvent, { type: "tool_execution_end" }>,
+  options?: { deliveryGeneration?: number },
 ) {
-  const rawToolName = evt.toolName;
+  const isCurrentDeliveryGeneration = () =>
+    options?.deliveryGeneration === undefined ||
+    options.deliveryGeneration === ctx.getBlockReplyDeliveryGeneration();
+  if (!isCurrentDeliveryGeneration()) {
+    return { status: "stale" };
+  }
+  const { toolName: rawToolName, toolCallId, isError, result } = evt;
   const toolName = normalizeToolPolicyName(rawToolName);
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
-  const toolCallId = evt.toolCallId;
   ctx.state.liveEditDiffStateById.delete(toolCallId);
   if (toolName === "ask_user") {
     cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey, ctx.params.runId);
   }
   const runId = ctx.params.runId;
-  const isError = evt.isError;
-  const result = evt.result;
   const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
   const observerIsError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
@@ -684,36 +687,32 @@ export async function handleToolExecutionEnd(
     isToolError,
     result,
     sanitizedResult,
+    deliveryGeneration: options?.deliveryGeneration,
   });
+  if (!isCurrentDeliveryGeneration()) {
+    return { status: "stale" };
+  }
   await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
     ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
   });
-
-  // Run after_tool_call plugin hook (fire-and-forget)
-  const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
-  if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
-    const hookEvent: PluginHookAfterToolCallEvent = {
-      toolName,
-      params: startArgs,
-      runId,
-      toolCallId,
-      result: sanitizedResult,
-      error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
-      durationMs,
-    };
-    void hookRunnerAfter
-      .runAfterToolCall(hookEvent, {
-        toolName,
-        agentId: ctx.params.agentId,
-        sessionKey: ctx.params.sessionKey,
-        sessionId: ctx.params.sessionId,
-        runId,
-        toolCallId,
-      })
-      .catch((err: unknown) => {
-        ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
-      });
+  if (!isCurrentDeliveryGeneration()) {
+    return { status: "stale" };
   }
-  return { executionStarted: terminal.executionStarted };
+
+  const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
+  if (!isCurrentDeliveryGeneration()) {
+    return { status: "stale" };
+  }
+  scheduleEmbeddedAfterToolCallHook({
+    ctx,
+    hookRunner: hookRunnerAfter,
+    params: startArgs,
+    result: sanitizedResult,
+    error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+    startedAt: startData?.startTime,
+    toolName,
+    toolCallId,
+    runId,
+  });
+  return { status: "completed", executionStarted: terminal.executionStarted };
 }

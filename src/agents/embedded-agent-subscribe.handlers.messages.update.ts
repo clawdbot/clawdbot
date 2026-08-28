@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 /**
  * Handles assistant message deltas, reasoning, directives, and block replies.
  */
@@ -9,7 +10,15 @@ import { coerceChatContentText } from "../shared/chat-content.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
 import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
-import { capturePendingAssistantUsage } from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
+import {
+  emitCommentaryDisplayTransition,
+  emitResolvedCommentaryDisplay,
+  resolveCommentaryDisplayText,
+} from "./embedded-agent-subscribe.handlers.messages.continuation.js";
+import {
+  capturePendingAssistantUsage,
+  shouldSuppressValidationLoopAssistantOutput,
+} from "./embedded-agent-subscribe.handlers.messages.lifecycle-state.js";
 import {
   hasAssistantVisibleReply,
   mergeReplyDirectiveResults,
@@ -48,17 +57,26 @@ import {
   extractAssistantCommentaryText,
   extractAssistantThinking,
   extractAssistantVisibleText,
+  extractEmbeddedAssistantText,
   extractThinkingFromTaggedStream,
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
+import { summarizeToolValidationError } from "./tool-error-summary.js";
 
 const REASONING_TAG_RE = /<\s*\/?\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b/i;
 
 export function handleMessageUpdate(
   ctx: EmbeddedAgentSubscribeContext,
   evt: AgentEvent & { message: AgentMessage; assistantMessageEvent?: unknown },
-) {
+  options?: { streamItemBoundaryReplayed?: boolean; deliveryGeneration?: number },
+): void | Promise<void> {
+  if (
+    options?.deliveryGeneration !== undefined &&
+    options.deliveryGeneration !== ctx.getBlockReplyDeliveryGeneration()
+  ) {
+    return;
+  }
   const msg = evt.message;
   if (msg?.role !== "assistant" || isSubscribeTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
@@ -88,35 +106,47 @@ export function handleMessageUpdate(
   const isResponsesTextEvent =
     isResponsesApiAssistantMessage(eventAssistantMessage) &&
     (evtType === "text_start" || evtType === "text_delta" || evtType === "text_end");
+  const isAnthropicTextEvent =
+    isAnthropicAssistantMessage(eventAssistantMessage) &&
+    (evtType === "text_start" || evtType === "text_delta" || evtType === "text_end");
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
-  if (suppressVisibleAssistantOutput && !isResponsesTextEvent) {
-    const commentaryText = coerceChatContentText(extractAssistantCommentaryText(msg));
-    if (commentaryText) {
-      appendRawStream({
-        ts: Date.now(),
-        event: "assistant_text_stream",
-        runId: ctx.params.runId,
-        sessionId: (ctx.params.session as { id?: string }).id,
-        evtType: "commentary_update",
-        delta: "",
-        content: commentaryText,
-      });
-      ctx.emitAssistantStreamData(
-        buildAssistantStreamData({ text: commentaryText, replace: true, phase: "commentary" }),
-      );
-    }
+  if (suppressVisibleAssistantOutput && !isResponsesTextEvent && !isAnthropicTextEvent) {
+    const rawCommentaryText = coerceChatContentText(extractAssistantCommentaryText(msg));
+    appendRawStream({
+      ts: Date.now(),
+      event: "assistant_text_stream",
+      runId: ctx.params.runId,
+      sessionId: (ctx.params.session as { id?: string }).id,
+      evtType: "commentary_update",
+      delta: "",
+      content: rawCommentaryText,
+    });
+    emitResolvedCommentaryDisplay(ctx, rawCommentaryText, { preferReplace: true });
     return;
   }
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
 
   const assistantPhase = resolveAssistantMessagePhase(msg);
+  const validationErrorSummary = ctx.state.lastToolError
+    ? summarizeToolValidationError(ctx.state.lastToolError)
+    : undefined;
 
   if (evtType === "text_end" || evtType === "done" || evtType === "error") {
     capturePendingAssistantUsage(ctx, evt);
     if (evtType === "done" || evtType === "error") {
       ctx.commitAssistantUsage();
     }
+  }
+
+  if (
+    shouldSuppressValidationLoopAssistantOutput({
+      message: msg,
+      assistantRecord,
+      validationErrorSummary,
+    })
+  ) {
+    return;
   }
 
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
@@ -175,7 +205,7 @@ export function handleMessageUpdate(
     content,
   });
 
-  const chunk = resolveAssistantTextChunk({
+  let chunk = resolveAssistantTextChunk({
     evtType,
     delta,
     content,
@@ -209,14 +239,29 @@ export function handleMessageUpdate(
     isCompletionsAssistant && partialAssistant.openclawDelivery?.textPhaseRequiresTerminal === true;
   const hasResponsesContentIndex =
     streamContentIndex !== undefined && isResponsesApiAssistantMessage(partialAssistant);
-  let streamItemChanged = false;
+  const hasAnthropicContentIndex =
+    streamContentIndex !== undefined && isAnthropicAssistantMessage(partialAssistant);
+  let streamItemChanged = options?.streamItemBoundaryReplayed === true;
   let deliveryItemId = streamItemId;
   if (
-    (deliveryPhase || isPhasePendingResponsesTextItem || hasResponsesContentIndex) &&
+    (deliveryPhase ||
+      isPhasePendingResponsesTextItem ||
+      hasResponsesContentIndex ||
+      hasAnthropicContentIndex) &&
     (streamContentIndex !== undefined || streamItemId)
   ) {
     const previousStreamContentIndex = ctx.state.lastAssistantStreamContentIndex;
     const previousStreamItemId = ctx.state.lastAssistantStreamItemId;
+    const isDelayedUnphasedAnthropicTextEnd =
+      evtType === "text_end" &&
+      isAnthropicAssistantMessage(partialAssistant) &&
+      deliveryPhase !== "commentary" &&
+      previousStreamContentIndex !== undefined &&
+      streamContentIndex !== undefined &&
+      streamContentIndex < previousStreamContentIndex;
+    if (isDelayedUnphasedAnthropicTextEnd) {
+      return;
+    }
     const contentIndexChanged =
       previousStreamContentIndex !== undefined &&
       streamContentIndex !== undefined &&
@@ -226,9 +271,42 @@ export function handleMessageUpdate(
       Boolean(previousStreamItemId && streamItemId && previousStreamItemId !== streamItemId);
     if (contentIndexChanged || itemIdChangedWithoutIndexes) {
       streamItemChanged = true;
-      void ctx.flushBlockReplyBuffer({ assistantMessageIndex: ctx.state.assistantMessageIndex });
-      ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
-      emitAssistantMessageStart(ctx);
+      if (ctx.state.lastStreamedCommentary !== undefined) {
+        emitCommentaryDisplayTransition(ctx, ctx.state.deltaBuffer, {
+          final: true,
+          itemId: previousStreamItemId,
+        });
+      }
+      const finishStreamItemBoundary = () => {
+        ctx.resetAssistantMessageState(ctx.state.assistantTexts.length, {
+          preserveReplyDirectiveState: true,
+        });
+        ctx.state.lastAssistantStreamContentIndex = streamContentIndex;
+        ctx.state.lastAssistantStreamItemId = deliveryItemId;
+        emitAssistantMessageStart(ctx);
+      };
+      const flushBoundaryResult = ctx.flushBlockReplyBuffer({
+        assistantMessageIndex: ctx.state.assistantMessageIndex,
+      });
+      if (isPromiseLike<void>(flushBoundaryResult)) {
+        return Promise.resolve(flushBoundaryResult).then(() => {
+          if (
+            options?.deliveryGeneration !== undefined &&
+            options.deliveryGeneration !== ctx.getBlockReplyDeliveryGeneration()
+          ) {
+            return;
+          }
+          finishStreamItemBoundary();
+          return handleMessageUpdate(ctx, evt, {
+            ...options,
+            streamItemBoundaryReplayed: true,
+          });
+        });
+      }
+      finishStreamItemBoundary();
+      if (evtType === "text_end" && isAnthropicAssistantMessage(partialAssistant)) {
+        chunk = coerceChatContentText(extractEmbeddedAssistantText(streamAssistant));
+      }
     } else if (
       previousStreamContentIndex !== undefined &&
       streamContentIndex === previousStreamContentIndex &&
@@ -241,38 +319,42 @@ export function handleMessageUpdate(
     ctx.state.lastAssistantStreamContentIndex = streamContentIndex;
     ctx.state.lastAssistantStreamItemId = deliveryItemId;
   }
-  // Responses text_start snapshots may already contain text replayed by the first delta.
+  // Responses and Anthropic text_start snapshots may contain text replayed by the first delta.
   // Keep starts lifecycle-only so commentary and final-answer lanes consume each byte once.
-  if (evtType === "text_start" && isResponsesApiAssistantMessage(partialAssistant)) {
+  if (
+    evtType === "text_start" &&
+    (isResponsesApiAssistantMessage(partialAssistant) ||
+      isAnthropicAssistantMessage(partialAssistant))
+  ) {
     return;
   }
   if (deliveryPhase === "commentary") {
     const isResponsesCommentary = isResponsesApiAssistantMessage(partialAssistant);
     const hadResponsesCommentaryText = isResponsesCommentary && Boolean(ctx.state.deltaBuffer);
-    if (isResponsesCommentary && chunk) {
-      // Keep cumulative end events monotonic without feeding commentary into reply buffers.
+    // Every commentary transport accumulates its raw chunks so continuation markers can
+    // span deltas and message_end can dedupe against the buffer. Only Responses displays
+    // from that buffer; other transports re-extract an already-cumulative snapshot.
+    if (chunk) {
       ctx.state.deltaBuffer += chunk;
       ctx.state.deltaBufferIsCommentary = true;
     }
     const commentaryText = isResponsesCommentary
       ? ctx.state.deltaBuffer
       : coerceChatContentText(extractAssistantCommentaryText(streamAssistant));
-    const commentaryData =
-      commentaryText && (chunk || !hadResponsesCommentaryText)
-        ? buildAssistantStreamData({
-            text: commentaryText,
-            replace: true,
-            phase: "commentary",
-            itemId: deliveryItemId,
-          })
-        : undefined;
-    if (commentaryData) {
-      ctx.emitAssistantStreamData(commentaryData);
+    if (commentaryText && (chunk || !hadResponsesCommentaryText)) {
+      emitResolvedCommentaryDisplay(ctx, commentaryText, {
+        itemId: deliveryItemId,
+      });
     }
     return;
   }
   if (isPhasePendingResponsesTextItem) {
     return;
+  }
+  const isAssistantDisplayPhasePending =
+    isPhasePendingAnthropicText || isPhasePendingCompletionsText;
+  if (isAssistantDisplayPhasePending) {
+    ctx.state.assistantDisplayPhasePending = true;
   }
   // Subagents have no live consumer; their final result is delivered from
   // message_end. Keep accumulating deltaBuffer, but skip per-chunk visible-text
@@ -410,19 +492,26 @@ export function handleMessageUpdate(
       parsedStreamDirectives,
       shouldUsePhaseAwareBlockReply,
     });
+    const displayPhaseResolved = Boolean(deliveryPhase) && !isAssistantDisplayPhasePending;
+    const displayText =
+      isAssistantDisplayPhasePending || ctx.state.assistantDisplayPhasePending
+        ? resolveCommentaryDisplayText(cleanedText, {
+            final: displayPhaseResolved || evtType === "text_end",
+          })
+        : cleanedText;
     const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
     const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
 
     let shouldEmit;
     let deltaText = "";
     let replace = false;
-    if (!hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice: hasAudio })) {
+    if (!hasAssistantVisibleReply({ text: displayText, mediaUrls, audioAsVoice: hasAudio })) {
       shouldEmit = false;
     } else {
-      replace = Boolean(previousCleaned && !cleanedText.startsWith(previousCleaned));
-      deltaText = replace ? "" : cleanedText.slice(previousCleaned.length);
+      replace = Boolean(previousCleaned && !displayText.startsWith(previousCleaned));
+      deltaText = replace ? "" : displayText.slice(previousCleaned.length);
       shouldEmit = replace
-        ? cleanedText !== previousCleaned || hasMedia || hasAudio
+        ? displayText !== previousCleaned || hasMedia || hasAudio
         : Boolean(deltaText || hasMedia || hasAudio);
     }
 
@@ -446,7 +535,10 @@ export function handleMessageUpdate(
     }
 
     ctx.state.lastStreamedAssistant = nextRawStreamText;
-    ctx.state.lastStreamedAssistantCleaned = cleanedText;
+    ctx.state.lastStreamedAssistantCleaned = displayText;
+    if (displayPhaseResolved) {
+      ctx.state.assistantDisplayPhasePending = false;
+    }
 
     if (
       ctx.params.silentExpected ||
@@ -461,11 +553,11 @@ export function handleMessageUpdate(
         ctx.params.sourceReplyDeliveryMode !== "message_tool_only"
           ? resolveCurrentSourceMessagingToolPartial(ctx.state, {
               evtType,
-              text: cleanedText,
+              text: displayText,
               visibleDelta,
             })
-          : { hold: false, text: cleanedText };
-      const releaseHeldSnapshot = currentSourcePartial.text !== cleanedText;
+          : { hold: false, text: displayText };
+      const releaseHeldSnapshot = currentSourcePartial.text !== displayText;
       const data = buildAssistantStreamData({
         text: currentSourcePartial.text,
         delta: releaseHeldSnapshot ? currentSourcePartial.text : deltaText,
@@ -499,11 +591,16 @@ export function handleMessageUpdate(
     ctx.state.blockReplyBreak === "text_end"
   ) {
     const assistantMessageIndex = ctx.state.assistantMessageIndex;
-    void Promise.resolve()
-      .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex, final: true }))
-      .catch((err: unknown) => {
-        ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
-      });
+    try {
+      const flushResult = ctx.flushBlockReplyBuffer({ assistantMessageIndex, final: true });
+      if (isPromiseLike<void>(flushResult)) {
+        return Promise.resolve(flushResult).catch((err: unknown) => {
+          ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
+        });
+      }
+    } catch (err) {
+      ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
+    }
   }
 }
 

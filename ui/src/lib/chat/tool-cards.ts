@@ -9,6 +9,7 @@ import {
   extractCanvasFromDetails,
   extractCanvasFromText,
 } from "../../../../src/chat/canvas-render.js";
+import { resolveRedactedToolArgumentSummary } from "../../../../src/chat/tool-argument-redaction.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -354,16 +355,21 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
       (typeof item.name === "string" &&
         (item.arguments != null || item.args != null || item.input != null));
     if (isToolCall) {
-      const args = coerceArgs(item.arguments ?? item.args ?? item.input);
+      const rawArgs = coerceArgs(item.arguments ?? item.args ?? item.input);
+      const name = resolveToolName(item, m);
       const callId = resolveToolCallId(item, m);
+      // Redact at construction: the sidebar, the expanded card, and the
+      // key-value list all read `args`/`inputText`, so a redacted tool's
+      // arguments must never enter the card in the first place.
+      const redactedSummary = resolveRedactedToolArgumentSummary(name);
       const details = item.details ?? m.details;
       cards.push({
         id: resolveToolCardId(item, m, index, prefix),
         ...(callId ? { callId } : {}),
-        name: resolveToolName(item, m),
-        args,
-        inputText: serializeToolInput(args),
-        ...(details !== undefined ? { details } : {}),
+        name,
+        args: redactedSummary === undefined ? rawArgs : undefined,
+        inputText: redactedSummary ?? serializeToolInput(rawArgs),
+        ...(redactedSummary === undefined && details !== undefined ? { details } : {}),
         ...(isLiveToolStream
           ? { live: true, completed: m["__openclawToolStreamResultReceived"] === true }
           : {}),

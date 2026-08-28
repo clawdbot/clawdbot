@@ -2,6 +2,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripInternalProtocolFields } from "../packages/gateway-protocol/src/schema/internal-fields.js";
 import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema/protocol-schemas.js";
 import { listCoreGatewayMethodMetadata } from "../src/gateway/methods/core-descriptors.js";
 
@@ -34,7 +35,10 @@ function resolveOutputPath(args: string[]): string {
 async function writeJsonSchema(jsonSchemaPath: string) {
   const definitions: Record<string, unknown> = {};
   for (const [name, schema] of Object.entries(ProtocolSchemas)) {
-    definitions[name] = schema;
+    const publicSchema = stripInternalProtocolFields(schema);
+    if (publicSchema !== undefined) {
+      definitions[name] = publicSchema;
+    }
   }
   const methods = Object.fromEntries(
     listCoreGatewayMethodMetadata().map(({ name, scope, since }) => [name, { since, scope }]),

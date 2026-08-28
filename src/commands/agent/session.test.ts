@@ -5,7 +5,7 @@ import { resolveSessionKeyForRequest } from "./session.runtime.js";
 
 const mocks = vi.hoisted(() => ({
   listSessionEntriesCore: vi.fn(),
-  resolveStorePath: vi.fn(),
+  resolveSessionStorePathCore: vi.fn(),
   listAgentIds: vi.fn(),
   resolveExplicitAgentSessionKey: vi.fn(),
 }));
@@ -25,7 +25,7 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveSessionStorePathCore: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveSessionStorePathCore,
 }));
 
 vi.mock("../../agents/agent-scope.js", async () => {
@@ -50,7 +50,7 @@ describe("resolveSessionKeyForRequest", () => {
 
   const setupMainAndMybotStorePaths = () => {
     mocks.listAgentIds.mockReturnValue(["main", "mybot"]);
-    mocks.resolveStorePath.mockImplementation(
+    mocks.resolveSessionStorePathCore.mockImplementation(
       (_store: string | undefined, opts?: { agentId?: string }) => {
         if (opts?.agentId === "mybot") {
           return MYBOT_STORE_PATH;
@@ -78,7 +78,7 @@ describe("resolveSessionKeyForRequest", () => {
   const baseCfg: OpenClawConfig = {};
 
   it("returns sessionKey when --to resolves a session key via context", () => {
-    mocks.resolveStorePath.mockReturnValue(MAIN_STORE_PATH);
+    mocks.resolveSessionStorePathCore.mockReturnValue(MAIN_STORE_PATH);
     mockStoresByPath({
       [MAIN_STORE_PATH]: {
         "agent:main:main": { sessionId: "sess-1", updatedAt: 0 },
@@ -94,7 +94,7 @@ describe("resolveSessionKeyForRequest", () => {
 
   it("uses an agent-scoped --to value as the requested session key", () => {
     const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
-    mocks.resolveStorePath.mockReturnValue(MAIN_STORE_PATH);
+    mocks.resolveSessionStorePathCore.mockReturnValue(MAIN_STORE_PATH);
     mockStoresByPath({
       [MAIN_STORE_PATH]: {
         [sessionKey]: { sessionId: "wechat-session", updatedAt: 0 },
@@ -175,7 +175,7 @@ describe("resolveSessionKeyForRequest", () => {
       "agent:main:main": { sessionId: "legacy-session-id", updatedAt: 1 },
     };
     mocks.listAgentIds.mockReturnValue(["main", "mybot"]);
-    mocks.resolveStorePath.mockReturnValue(SHARED_STORE_PATH);
+    mocks.resolveSessionStorePathCore.mockReturnValue(SHARED_STORE_PATH);
     mockStoresByPath({ [SHARED_STORE_PATH]: sharedStore });
 
     const result = resolveSessionKeyForRequest({
@@ -222,7 +222,7 @@ describe("resolveSessionKeyForRequest", () => {
   });
 
   it("finds session by sessionId via reverse lookup in primary store", () => {
-    mocks.resolveStorePath.mockReturnValue(MAIN_STORE_PATH);
+    mocks.resolveSessionStorePathCore.mockReturnValue(MAIN_STORE_PATH);
     mockStoresByPath({
       [MAIN_STORE_PATH]: {
         "agent:main:main": { sessionId: "target-session-id", updatedAt: 0 },
@@ -350,7 +350,7 @@ describe("resolveSessionKeyForRequest", () => {
 
   it("does not search other stores when explicitSessionKey is set", () => {
     mocks.listAgentIds.mockReturnValue(["main", "mybot"]);
-    mocks.resolveStorePath.mockReturnValue(MAIN_STORE_PATH);
+    mocks.resolveSessionStorePathCore.mockReturnValue(MAIN_STORE_PATH);
     mockStoresByPath({
       [MAIN_STORE_PATH]: {
         "agent:main:main": { sessionId: "other-id", updatedAt: 0 },

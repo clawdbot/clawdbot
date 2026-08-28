@@ -1,5 +1,6 @@
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
+import type { ContinueWorkRequest } from "../../agents/tools/continue-work-tool.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -21,6 +22,24 @@ export type RuntimeFallbackAttempt = {
   code?: string;
 };
 
+export type ContinuationWrappedRunResult = {
+  result: EmbeddedAgentRunResult;
+  continueWorkRequests?: ContinueWorkRequest[];
+  compactionTraceparent?: string;
+  rawContinuationText?: string;
+};
+
+export function isContinuationWrappedRunResult(
+  result: unknown,
+): result is ContinuationWrappedRunResult {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    "result" in result &&
+    "continueWorkRequests" in result
+  );
+}
+
 /** Internal fallback-cycle result before caller-facing settlement projection. */
 export type AgentTurnInternalResult =
   | {
@@ -32,6 +51,9 @@ export type AgentTurnInternalResult =
       fallbackAttempts: RuntimeFallbackAttempt[];
       didLogHeartbeatStrip: boolean;
       autoCompactionCount: number;
+      compactionTraceparent?: string;
+      continueWorkRequests?: ContinueWorkRequest[];
+      rawContinuationText?: string;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
       directlySentBlockKeys?: Set<string>;
       /** Payloads successfully sent directly during tool flush. */
@@ -50,6 +72,9 @@ export type SettledAgentTurn = {
   status: "ok" | "failed";
   abortReason?: "user" | "restart";
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
+  continueWorkRequests?: ContinueWorkRequest[];
+  compactionTraceparent?: string;
+  rawContinuationText?: string;
   resolved: { provider: string; model: string };
   fallback: { exhausted: boolean; attempts: RuntimeFallbackAttempt[] };
   autoCompactionCount: number;
@@ -97,6 +122,7 @@ export type AgentTurnParams = {
   pendingToolTasks: Set<Promise<void>>;
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
+  hookTrigger?: "heartbeat" | "user";
   sessionKey?: string;
   runtimePolicySessionKey?: string;
   getActiveSessionEntry: () => SessionEntry | undefined;

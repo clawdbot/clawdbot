@@ -40,7 +40,7 @@ export const deliveryQueueRowColumns = [
   "recovery_state",
 ] as const;
 
-export type DeliveryQueueSqliteRow = {
+type DeliveryQueueSqliteRow = {
   id: string;
   entry_json: string;
   enqueued_at: number | bigint;
@@ -163,9 +163,7 @@ type BoundDeliveryQueueEntry = {
   completeExisting: boolean;
 };
 
-export function inflateDeliveryQueueRow(
-  row: DeliveryQueueSqliteRow,
-): DeliveryQueueEntryState | null {
+function inflateDeliveryQueueRow(row: DeliveryQueueSqliteRow): DeliveryQueueEntryState | null {
   let parsed: DeliveryQueueEntryState;
   try {
     parsed = JSON.parse(row.entry_json) as DeliveryQueueEntryState;

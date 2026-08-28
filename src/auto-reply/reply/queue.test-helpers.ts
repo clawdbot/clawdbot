@@ -16,6 +16,7 @@ export function createQueueTestRun(params: {
   originatingReplyToMode?: FollowupRun["originatingReplyToMode"];
   originatingChatType?: string;
   currentInboundEventKind?: FollowupRun["currentInboundEventKind"];
+  currentInboundEventTimestampMs?: FollowupRun["currentInboundEventTimestampMs"];
 }): FollowupRun {
   return {
     prompt: params.prompt,
@@ -29,6 +30,7 @@ export function createQueueTestRun(params: {
     originatingReplyToMode: params.originatingReplyToMode,
     originatingChatType: params.originatingChatType,
     currentInboundEventKind: params.currentInboundEventKind,
+    currentInboundEventTimestampMs: params.currentInboundEventTimestampMs,
     run: {
       agentId: "agent",
       agentDir: "/tmp",

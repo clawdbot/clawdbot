@@ -1,3 +1,4 @@
+// "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 /** Tests auto-reply status message formatting. */
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +36,48 @@ const { listPluginCommands } = vi.hoisted(() => ({
 vi.mock("../plugins/commands.js", () => ({
   listPluginCommands,
 }));
+
+// Continuation counters — mocked so the /status renderer sees session-keyed
+// non-zero values in the "full row" regression test below. Defaults to 0
+// for every session so every other test's behavior is unchanged.
+const continuationMocks = vi.hoisted(() => ({
+  pending: new Map<string, number>(),
+  staged: new Map<string, number>(),
+  volitional: new Map<string, number>(),
+}));
+
+vi.mock("./continuation/delegate-store.js", async () => {
+  const actual = await vi.importActual<typeof import("./continuation/delegate-store.js")>(
+    "./continuation/delegate-store.js",
+  );
+  return {
+    ...actual,
+    pendingDelegateCount: (sessionKey: string): number =>
+      continuationMocks.pending.get(sessionKey) ?? 0,
+  };
+});
+
+vi.mock("./continuation/delegate-store-post-compaction.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("./continuation/delegate-store-post-compaction.js")
+  >("./continuation/delegate-store-post-compaction.js");
+  return {
+    ...actual,
+    stagedPostCompactionDelegateCount: (sessionKey: string): number =>
+      continuationMocks.staged.get(sessionKey) ?? 0,
+  };
+});
+
+vi.mock("../agents/tools/request-compaction-tool.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/tools/request-compaction-tool.js")>(
+    "../agents/tools/request-compaction-tool.js",
+  );
+  return {
+    ...actual,
+    getVolitionalCompactionCount: (sessionKey: string): number =>
+      continuationMocks.volitional.get(sessionKey) ?? 0,
+  };
+});
 
 beforeEach(() => {
   cliBackendsTesting.setDepsForTest({
@@ -246,7 +289,181 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("verbose");
     expect(normalized).toContain("elevated");
     expect(normalized).toContain("Queue: collect");
+    // RFC §6.3 — with continuation disabled (default), the row is absent.
+    expect(normalized).not.toContain("Continuation:");
     expect(normalized).toContain("- active run");
+  });
+
+  it("renders the RFC §6.3 continuation row when enabled and chain depth > 0", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            continuation: {
+              enabled: true,
+              maxChainLength: 10,
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: { model: "anthropic/pi:opus" },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        contextTokens: 32_000,
+        continuationChainCount: 3,
+      },
+      sessionKey: "agent:main:test-187",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+    // Shape comes from docs/design/continue-work-signal-v2.md §6.3.
+    expect(normalized).toMatch(/Continuation: chain 3\/10/);
+  });
+
+  it("renders the full RFC §6.3 continuation row with all four fields", () => {
+    const key = "agent:main:test-187-full-row";
+    continuationMocks.pending.set(key, 2);
+    continuationMocks.staged.set(key, 1);
+    continuationMocks.volitional.set(key, 3);
+    try {
+      const text = buildStatusMessage({
+        config: {
+          agents: {
+            defaults: {
+              continuation: { enabled: true, maxChainLength: 10 },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        agent: { model: "anthropic/pi:opus" },
+        sessionEntry: {
+          sessionId: "abc",
+          updatedAt: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          contextTokens: 32_000,
+          continuationChainCount: 4,
+        },
+        sessionKey: key,
+        sessionScope: "per-sender",
+        queue: { mode: "collect", depth: 0 },
+      });
+      const normalized = normalizeTestText(text);
+      // All four RFC §6.3 fields must render, pipe-joined, in order.
+      expect(normalized).toMatch(
+        /Continuation: chain 4\/10 \| 2 delegates pending \| 1 post-compaction staged \| volitional: 3/,
+      );
+    } finally {
+      continuationMocks.pending.delete(key);
+      continuationMocks.staged.delete(key);
+      continuationMocks.volitional.delete(key);
+    }
+  });
+
+  it("renders a partial continuation row showing only the non-zero fields", () => {
+    const key = "agent:main:test-187-partial";
+    // chain + staged only; pending=0 and volitional=0 must be omitted from the line.
+    continuationMocks.staged.set(key, 1);
+    try {
+      const text = buildStatusMessage({
+        config: {
+          agents: {
+            defaults: {
+              continuation: { enabled: true, maxChainLength: 10 },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        agent: { model: "anthropic/pi:opus" },
+        sessionEntry: {
+          sessionId: "abc",
+          updatedAt: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          contextTokens: 32_000,
+          continuationChainCount: 2,
+        },
+        sessionKey: key,
+        sessionScope: "per-sender",
+        queue: { mode: "collect", depth: 0 },
+      });
+      const normalized = normalizeTestText(text);
+      // Chain + staged visible; pending / volitional fields omitted entirely.
+      expect(normalized).toMatch(/Continuation: chain 2\/10 \| 1 post-compaction staged$/m);
+      expect(normalized).not.toContain("delegate");
+      expect(normalized).not.toContain("volitional");
+    } finally {
+      continuationMocks.staged.delete(key);
+    }
+  });
+
+  it("renders singular 'delegate' when pending count is 1 (plural boundary)", () => {
+    const key = "agent:main:test-187-singular";
+    continuationMocks.pending.set(key, 1);
+    try {
+      const text = buildStatusMessage({
+        config: {
+          agents: {
+            defaults: {
+              continuation: { enabled: true, maxChainLength: 10 },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        agent: { model: "anthropic/pi:opus" },
+        sessionEntry: {
+          sessionId: "abc",
+          updatedAt: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          contextTokens: 32_000,
+          continuationChainCount: 1,
+        },
+        sessionKey: key,
+        sessionScope: "per-sender",
+        queue: { mode: "collect", depth: 0 },
+      });
+      const normalized = normalizeTestText(text);
+      expect(normalized).toMatch(/Continuation: chain 1\/10 \| 1 delegate pending$/m);
+      expect(normalized).not.toMatch(/1 delegates pending/);
+    } finally {
+      continuationMocks.pending.delete(key);
+    }
+  });
+
+  it("omits the continuation row when enabled but every field is zero", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            continuation: {
+              enabled: true,
+              maxChainLength: 10,
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: { model: "anthropic/pi:opus" },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        contextTokens: 32_000,
+        continuationChainCount: 0,
+      },
+      sessionKey: "agent:main:test-187-empty",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+    expect(normalized).not.toContain("Continuation:");
   });
 
   it("shows configured model costs for aws-sdk providers", () => {

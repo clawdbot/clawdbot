@@ -4,22 +4,21 @@ import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
 import type { ReplyMessageInjectionAttempt } from "../../auto-reply/reply/reply-run-registry.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
-import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
-import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
+import { broadcastChatFinal } from "./chat-broadcast.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
+import { finalizeChatSendAgentOutcome } from "./chat-send-agent-outcome.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import {
   resolveWebchatPromptCacheKey,
@@ -70,6 +69,13 @@ type StartChatDispatchParams = {
     preAckReplyContextPromise: Promise<ChatSendReplyContextFields> | undefined;
     replyContextFieldsPromise: Promise<ChatSendReplyContextFields> | undefined;
   };
+  /**
+   * Fork addition (continuation): the handler owns the single terminal-broadcast
+   * latch so that a queued follow-up cannot emit a second terminal for the same
+   * run. The dispatch block that consumes it was moved here by upstream
+   * 22b3c2530f1, so the latch has to be threaded in rather than closed over.
+   */
+  markTerminalBroadcasted: () => void;
   request: NormalizedChatSendRequest;
   session: PreparedChatSendSession;
   terminalizeRestartSafeAdmission: (
@@ -95,6 +101,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     cronCreatorAuthority,
     externalAuthorityAdmission,
     injection,
+    markTerminalBroadcasted,
     request,
     session,
     terminalizeRestartSafeAdmission,
@@ -176,6 +183,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     admission,
     context,
     isQueuedFollowupEnqueued: queuedFollowup.isEnqueued,
+    markTerminalBroadcasted,
     persistUserTurnTranscript: persistGatewayUserTurnTranscript,
     session,
     terminalizeRestartSafeAdmission,
@@ -454,6 +462,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               deliveredReplies: replyDispatch.deliveredReplies,
               emitFirstAssistantServerTiming,
               foldCommandBlocks: isInternalTextSlashCommandTurn,
+              markTerminalBroadcasted,
               persistUserTurnTranscript: persistGatewayUserTurnTranscriptBestEffort,
               session,
               suppressReplies: replyDispatch.hasAppendedWebchatAgentMedia(),
@@ -465,43 +474,23 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               deliveredReplies: replyDispatch.deliveredReplies,
               emitFirstAssistantServerTiming,
               hasReturnedAgentErrorPayloads: hasReturnedAgentError,
+              markTerminalBroadcasted,
               session,
             });
           }
-          const shouldBroadcastAgentError = hasReturnedAgentError && !broadcastedSourceReplyFinal;
-          if (shouldBroadcastAgentError) {
-            broadcastChatError({
-              context,
-              runId: clientRunId,
-              sessionKey,
-              agentId,
-              errorMessage: returnedAgentErrorMessage,
-            });
-          }
-          if (!context.chatRunState.hasAbortMarker(clientRunId)) {
-            const returnedAgentError = shouldBroadcastAgentError
-              ? errorShape(
-                  ErrorCodes.UNAVAILABLE,
-                  returnedAgentErrorMessage ?? "agent returned an error payload",
-                )
-              : undefined;
-            setGatewayDedupeEntry({
-              dedupe: context.dedupe,
-              key: `chat:${clientRunId}`,
-              entry: {
-                ts: Date.now(),
-                ok: !shouldBroadcastAgentError,
-                payload: shouldBroadcastAgentError
-                  ? {
-                      runId: clientRunId,
-                      status: "error" as const,
-                      summary: returnedAgentErrorMessage ?? "agent returned an error payload",
-                    }
-                  : { runId: clientRunId, status: "ok" as const },
-                ...(returnedAgentError ? { error: returnedAgentError } : {}),
-              },
-            });
-          }
+          finalizeChatSendAgentOutcome({
+            context,
+            runId: clientRunId,
+            sessionKey,
+            agentId,
+            hasReturnedAgentErrorPayloads: hasReturnedAgentError,
+            broadcastedSourceReplyFinal,
+            successfulFinalOwnedElsewhere: queuedFollowup.isEnqueued(),
+            markTerminalBroadcasted,
+            terminalAlreadyBroadcasted: activeRunAbort.entry?.chatTerminalBroadcasted === true,
+            returnedAgentErrorMessage,
+            toolErrorSummary: activeRunAbort.entry?.toolErrorSummary,
+          });
         },
         {
           phase: "agent-turn",
@@ -519,6 +508,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       if (queuedFollowup.isEnqueued() && !context.chatRunState.hasAbortMarker(clientRunId)) {
         // Successful queue admission ends this client run. The later
         // aggregate/followup owns its own run id.
+        markTerminalBroadcasted();
         broadcastChatFinal({
           context,
           runId: clientRunId,

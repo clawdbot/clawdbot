@@ -17,10 +17,14 @@ import {
 } from "./heartbeat-runner.test-utils.js";
 import {
   HEARTBEAT_SKIP_NO_PENDING_EVENT,
-  requestHeartbeat,
+  requestHeartbeatRaw as requestHeartbeat,
   setHeartbeatWakeHandler as setRuntimeHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
-import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
+import {
+  enqueueSystemEventRaw as enqueueSystemEvent,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 describe("stale exec heartbeat wakes", () => {
   type WakeRequest = Parameters<typeof requestHeartbeat>[0];

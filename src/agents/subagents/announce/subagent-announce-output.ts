@@ -7,7 +7,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
-import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.js";
+import { resolveFreshSessionTotalTokens } from "../../../config/sessions/session-entry-runtime.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
@@ -29,6 +29,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveSessionStorePathCore,
 } from "./subagent-announce.runtime.js";
+import type { SubagentRunOutcome } from "./subagent-run-outcome.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
@@ -85,14 +86,6 @@ type AgentWaitResult = {
   pendingError?: boolean;
   timeoutPhase?: string;
   providerStarted?: boolean;
-};
-
-export type SubagentRunOutcome = {
-  status: "ok" | "error" | "timeout" | "unknown";
-  error?: string;
-  startedAt?: number;
-  endedAt?: number;
-  elapsedMs?: number;
 };
 
 export function withSubagentOutcomeTiming(

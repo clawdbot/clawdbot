@@ -21,7 +21,10 @@ export {
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "../../../gateway/method-scopes.js";
 export { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-export { resolveGatewaySessionStoreTarget } from "../../../gateway/session-utils.js";
+// Leaf import: do not route through gateway/session-utils barrel — that pulls
+// list/core modules which import the subagent registry and close a madge cycle
+// back into spawn/announce runtime.
+export { resolveGatewaySessionStoreTarget } from "../../../gateway/session-utils-store-lookup.js";
 export { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 export { resolveProviderRefOwnership } from "../../../plugins/providers.js";
 export { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";

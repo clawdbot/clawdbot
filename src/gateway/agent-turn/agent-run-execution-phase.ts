@@ -15,6 +15,7 @@ import {
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
+import { consumeSubagentTraceparentHandoff } from "../../agents/subagent-traceparent-handoff.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import {
   setChannelSourceTurnId,
@@ -71,6 +72,7 @@ export function startAgentRunExecution(params: {
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
   sessionEntry?: SessionEntry;
+  sessionContinuationTraceparent?: string;
   resolvedSessionKey?: string;
   requestedSessionKey?: string;
   resolvedSessionId?: string;
@@ -222,6 +224,17 @@ export function startAgentRunExecution(params: {
       const ingressAgentId = params.resolvedSessionKey
         ? params.activeSessionAgentId
         : params.agentId;
+      const subagentTraceparentHandoff = consumeSubagentTraceparentHandoff({
+        idempotencyKey: params.runId,
+        sessionKey: params.resolvedSessionKey,
+      })?.traceparent;
+      const trustedContinuationRuntimeHandoff =
+        params.canUseInternalRuntimeHandoff || Boolean(subagentTraceparentHandoff);
+      // Persistence clears the durable one-shot field before this asynchronous dispatch.
+      const inheritedTraceparent =
+        (params.canUseInternalRuntimeHandoff ? params.request.traceparent : undefined) ??
+        subagentTraceparentHandoff ??
+        params.sessionContinuationTraceparent;
       // Plugin-owned additive grants stay internal to the authenticated in-process run.
       // Public agent params cannot supply them, and normal tool policy still filters them.
       const runtimePluginToolGrant =
@@ -393,6 +406,15 @@ export function startAgentRunExecution(params: {
               suppressPromptPersistence: prepared.userTurn.suppressPromptPersistence,
               userTurnTranscriptRecorder,
               cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,
+              // Raw RPC callers cannot opt into continuation queue ownership or
+              // classify an ordinary run as a continuation-triggered handoff.
+              drainsContinuationDelegateQueue: trustedContinuationRuntimeHandoff
+                ? params.request.drainsContinuationDelegateQueue
+                : undefined,
+              continuationTrigger: trustedContinuationRuntimeHandoff
+                ? params.request.continuationTrigger
+                : undefined,
+              traceparent: inheritedTraceparent,
               abortSignal: prepared.activeRunAbort.controller.signal,
               lifecycleGeneration: params.lifecycleGeneration,
               onExecutionStarted: () => {

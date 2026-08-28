@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { callGateway } from "../../../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
@@ -7,15 +8,30 @@ import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 type GatewayCall = (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
 function isMatchingAbortResponse(response: unknown, gatewayRunId: string): boolean {
-  if (!response || typeof response !== "object") {
+  if (!isRecord(response)) {
     return false;
   }
-  const result = response as { aborted?: unknown; runIds?: unknown };
   return (
-    result.aborted === true &&
-    Array.isArray(result.runIds) &&
-    result.runIds.some((runId) => runId === gatewayRunId)
+    response.aborted === true &&
+    Array.isArray(response.runIds) &&
+    response.runIds.some((runId) => runId === gatewayRunId)
   );
+}
+
+function isSettledAbortResponse(response: unknown, gatewayRunId: string): boolean {
+  if (isMatchingAbortResponse(response, gatewayRunId)) {
+    return true;
+  }
+  if (!isRecord(response)) {
+    return false;
+  }
+  return (
+    response.aborted === false && Array.isArray(response.runIds) && response.runIds.length === 0
+  );
+}
+
+function hasFrozenSessionIdentity(options?: SessionCleanupOptions): boolean {
+  return Boolean(options?.expectedSessionId && options.expectedLifecycleRevision);
 }
 
 export async function retrySubagentCleanup(
@@ -73,6 +89,9 @@ async function waitForProvisionalSessionDeletion(
   childSessionKey: string,
   options?: SessionCleanupOptions,
 ): Promise<boolean> {
+  if (!hasFrozenSessionIdentity(options)) {
+    return false;
+  }
   let deleted = false;
   await retrySubagentCleanup(async () => {
     const outcome = await requestProvisionalSessionCleanup(childSessionKey, options);
@@ -116,30 +135,39 @@ export async function terminateAcceptedCollectorRun(params: {
   expectedLifecycleRevision?: string;
   callGateway?: GatewayCall;
   timeoutMs?: number;
-}): Promise<void> {
+  retry?: boolean;
+}): Promise<boolean> {
   const call = params.callGateway ?? callSubagentGateway;
   const timeoutMs = params.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS;
-  await retrySubagentCleanup(async () => {
-    try {
-      const response = await call({
-        method: "chat.abort",
-        params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
+  return await retrySubagentCleanup(
+    async () => {
+      try {
+        const response = await call({
+          method: "chat.abort",
+          params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
+          timeoutMs,
+        });
+        if (isSettledAbortResponse(response, params.gatewayRunId)) {
+          return true;
+        }
+      } catch {
+        // Fall through to exact-session deletion.
+      }
+      if (!hasFrozenSessionIdentity(params)) {
+        return false;
+      }
+      const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
+        deleteTranscript: true,
+        expectedSessionId: params.expectedSessionId,
+        expectedLifecycleRevision: params.expectedLifecycleRevision,
+        callGateway: call,
         timeoutMs,
       });
-      if (isMatchingAbortResponse(response, params.gatewayRunId)) {
-        return true;
-      }
-    } catch {
-      // Fall through to exact-session deletion.
-    }
-    const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
-      deleteTranscript: true,
-      expectedSessionId: params.expectedSessionId,
-      expectedLifecycleRevision: params.expectedLifecycleRevision,
-      callGateway: call,
-      timeoutMs,
-    });
-    // A changed lifecycle proves the accepted run no longer owns this session.
-    return cleanup !== "failed";
-  });
+      // A changed lifecycle proves the accepted run no longer owns this session.
+      return cleanup !== "failed";
+    },
+    {
+      shouldRetry: () => params.retry !== false && hasFrozenSessionIdentity(params),
+    },
+  );
 }

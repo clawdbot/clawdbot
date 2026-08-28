@@ -1,17 +1,17 @@
 // Session-state notice context key decoding: strict UTF-8 after hex validation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { requestHeartbeatRaw as requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
   decodeSessionStateNoticeContextKey,
   enqueueSessionStateNotice,
 } from "./session-state-notices.js";
 
 vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeat: vi.fn(),
+  requestHeartbeatRaw: vi.fn(),
 }));
 
 vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: vi.fn(),
+  enqueueSystemEventRaw: vi.fn(),
 }));
 
 beforeEach(() => {

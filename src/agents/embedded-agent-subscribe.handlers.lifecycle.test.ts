@@ -944,10 +944,13 @@ describe("handleAgentEnd", () => {
 
     await handleAgentEnd(ctx);
 
-    expect(ctx.emitBlockReply).toHaveBeenCalledWith({
-      mediaUrls: ["/tmp/reply.opus"],
-      audioAsVoice: true,
-    });
+    expect(ctx.emitBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrls: ["/tmp/reply.opus"],
+        audioAsVoice: true,
+      }),
+      expect.objectContaining({ onDelivered: expect.any(Function) }),
+    );
     expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
   });
@@ -978,10 +981,13 @@ describe("handleAgentEnd", () => {
     const lifecycleOrder = onAgentEvent.mock.invocationCallOrder[0] as number | undefined;
 
     expect(ctx.emitBlockReply).toHaveBeenCalledTimes(1);
-    expect(ctx.emitBlockReply).toHaveBeenCalledWith({
-      mediaUrls: ["/tmp/reply.opus"],
-      audioAsVoice: true,
-    });
+    expect(ctx.emitBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrls: ["/tmp/reply.opus"],
+        audioAsVoice: true,
+      }),
+      expect.objectContaining({ onDelivered: expect.any(Function) }),
+    );
     expect(blockReplyOrder).toBeTypeOf("number");
     if (typeof blockReplyOrder !== "number") {
       throw new Error("Expected orphaned media block reply call order.");
@@ -1079,7 +1085,10 @@ describe("handleAgentEnd", () => {
       expect(ctx.clearDeferredBlockReplies).not.toHaveBeenCalled();
       expect(ctx.flushDeferredAssistantEvents).toHaveBeenCalledTimes(1);
       expect(ctx.flushDeferredBlockReplies).toHaveBeenCalledTimes(1);
-      expect(ctx.flushBlockReplyBuffer).toHaveBeenCalledWith({ final: true });
+      expect(ctx.flushBlockReplyBuffer).toHaveBeenCalledWith({
+        final: true,
+        retryFailures: true,
+      });
       expect(ctx.resolveCompactionRetry).toHaveBeenCalledTimes(1);
       expect(ctx.maybeResolveCompactionWait).not.toHaveBeenCalled();
     } finally {
@@ -1261,14 +1270,17 @@ describe("handleAgentEnd", () => {
     ctx.state.blockState.pendingFenceFragment = "```";
     ctx.flushBlockReplyBuffer = vi.fn((options?: { final?: boolean }) => {
       if (vi.mocked(ctx.flushBlockReplyBuffer).mock.calls.length === 1) {
-        expect(options).toEqual({ final: true });
+        expect(options).toEqual({ final: true, retryFailures: true });
         expect(ctx.state.blockState.pendingFenceFragment).toBe("```");
       }
     });
 
     await handleAgentEnd(ctx);
 
-    expect(ctx.flushBlockReplyBuffer).toHaveBeenNthCalledWith(1, { final: true });
+    expect(ctx.flushBlockReplyBuffer).toHaveBeenNthCalledWith(1, {
+      final: true,
+      retryFailures: true,
+    });
     expect(ctx.state.blockState.pendingFenceFragment).toBeUndefined();
   });
 

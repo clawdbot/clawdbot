@@ -66,3 +66,17 @@ export {
   isValidDiagnosticTraceId,
   parseDiagnosticTraceparent,
 } from "../infra/diagnostic-trace-context.js";
+export {
+  getContinuationTracer,
+  noopTracer,
+  resetContinuationTracer,
+  setContinuationTracer,
+} from "../infra/continuation-tracer.js";
+export type {
+  Span,
+  SpanAttributes,
+  SpanAttributeValue,
+  SpanStatus,
+  StartSpanOptions,
+  Tracer,
+} from "../infra/continuation-tracer.js";

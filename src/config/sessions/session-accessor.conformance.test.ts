@@ -81,7 +81,7 @@ type AccessorAdapter = {
     scope: Partial<Omit<SessionAccessScope, "sessionKey">>,
   ): SessionEntrySummary[];
   readSessionUpdatedAtCore(scope: SessionAccessScope): number | undefined;
-  upsertSessionEntry(
+  upsertSessionEntryCore(
     scope: SessionAccessScope,
     patch: Partial<SessionEntry>,
   ): Promise<SessionEntry | null>;
@@ -149,7 +149,7 @@ const publicAccessorAdapter: AccessorAdapter = {
   loadExactSessionEntry,
   listSessionEntriesCore,
   readSessionUpdatedAtCore,
-  upsertSessionEntry: upsertSessionEntryCore,
+  upsertSessionEntryCore,
   replaceSessionEntry,
   patchSessionEntryCore,
   updateSessionEntry,
@@ -185,7 +185,7 @@ const sqliteAdapter: AccessorAdapter = {
   loadExactSessionEntry,
   listSessionEntriesCore: listSessionEntryRows,
   readSessionUpdatedAtCore,
-  upsertSessionEntry: upsertSessionEntryCore,
+  upsertSessionEntryCore,
   replaceSessionEntry,
   patchSessionEntryCore,
   updateSessionEntry: patchSessionEntryCore,
@@ -234,7 +234,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
     it("conforms for entry load/list/timestamp/upsert/update/replace/patch", async () => {
       const scope = adapter.entryScope(paths);
 
-      await adapter.upsertSessionEntry(scope, {
+      await adapter.upsertSessionEntryCore(scope, {
         model: "gpt-5.5",
         sessionId: "session-1",
         updatedAt: 10,
@@ -316,7 +316,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       const scope = adapter.entryScope(paths);
       const mixedCaseScope = { ...scope, sessionKey: "AGENT:MAIN:MAIN" };
 
-      await adapter.upsertSessionEntry(scope, {
+      await adapter.upsertSessionEntryCore(scope, {
         model: "gpt-5.5",
         sessionId: "exact-session",
         updatedAt: 10,

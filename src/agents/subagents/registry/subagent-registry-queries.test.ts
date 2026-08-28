@@ -504,6 +504,20 @@ describe("subagent registry query regressions", () => {
         requesterSessionKey,
         createdAt: 270,
       }),
+      makeRun({
+        runId: "run-child-bound-current-late",
+        requesterTurnRunId: "run-parent-current",
+        childSessionKey: `${requesterSessionKey}:subagent:bound-current-late`,
+        requesterSessionKey,
+        createdAt: 270,
+      }),
+      makeRun({
+        runId: "run-child-bound-other-in-window",
+        requesterTurnRunId: "run-parent-old",
+        childSessionKey: `${requesterSessionKey}:subagent:bound-other-in-window`,
+        requesterSessionKey,
+        createdAt: 230,
+      }),
     ]);
 
     const scoped = listRunsForRequesterFromRuns(runs, requesterSessionKey, {
@@ -511,7 +525,11 @@ describe("subagent registry query regressions", () => {
     });
     const scopedRunIds = scoped.map((entry) => entry.runId).toSorted();
 
-    expect(scopedRunIds).toEqual(["run-child-current-a", "run-child-current-b"]);
+    expect(scopedRunIds).toEqual([
+      "run-child-bound-current-late",
+      "run-child-current-a",
+      "run-child-current-b",
+    ]);
   });
 
   it("regression post-completion gating, run-mode sessions ignore late announces after cleanup completes", () => {

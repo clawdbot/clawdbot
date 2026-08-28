@@ -42,7 +42,11 @@ import {
   summarizeInStages,
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
-import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
+import {
+  buildCopilotDynamicHeaders,
+  buildCopilotIdeHeaders,
+  hasCopilotVisionInput,
+} from "../copilot-dynamic-headers.js";
 import { isTimeoutError } from "../failover-error.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import {
@@ -330,7 +334,11 @@ async function resolveModelAuth(
   // `ok: false` when auth cannot resolve. Do not re-derive failure from absent
   // key/headers. SDK-managed modes (aws-sdk, oauth) sign the request later and
   // legitimately carry neither, so gating on them wedges compaction forever.
-  return { ok: true, apiKey: requestAuth.apiKey, headers: requestAuth.headers };
+  const headers =
+    model.provider === "github-copilot"
+      ? { ...buildCopilotIdeHeaders(), ...requestAuth.headers }
+      : requestAuth.headers;
+  return { ok: true, apiKey: requestAuth.apiKey, headers };
 }
 
 function buildCompactionSummaryHeaders(params: {

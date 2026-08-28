@@ -1127,6 +1127,7 @@ function createMaintenanceHandles() {
     startMediaCleanup: vi.fn(async () => undefined),
     stopMediaCleanup: vi.fn(async () => "drained" as const),
     worktreeCleanup: setInterval(() => undefined, 60_000),
+    delegateArtifactCleanup: setInterval(() => undefined, 60_000),
     skillUsageCleanup: vi.fn(),
   };
 }

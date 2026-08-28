@@ -3,8 +3,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
-  emitAssistantTextDeltaAndEnd,
   createSubscribedSessionHarness,
+  emitAssistantTextDelta,
+  emitAssistantTextDeltaAndEnd,
+  emitAssistantTextEnd,
   emitMessageStartAndEndForAssistantText,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 
@@ -256,6 +258,72 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     expect(onBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Accepted answer." }),
       { assistantMessageIndex: 1 },
+    );
+  });
+
+  it("delivers deferred audio metadata only once when the callback succeeds", async () => {
+    const onBlockReply = vi.fn();
+    const onBeforeTerminalDelivery = vi.fn(async () => undefined);
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-before-terminal-audio",
+      onBlockReply,
+      onBeforeTerminalDelivery,
+      blockReplyBreak: "text_end",
+    });
+    const answer = "Accepted answer. [[audio_as_voice]]";
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: answer }],
+      stopReason: "stop",
+    };
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: answer });
+    emitAssistantTextEnd({ emit });
+    emit({ type: "message_end", message: assistantMessage });
+    emit({ type: "agent_end", messages: [assistantMessage], willRetry: false });
+
+    await subscription.waitForPendingEvents();
+    const audioReplies = onBlockReply.mock.calls.filter(
+      ([payload]) => (payload as { audioAsVoice?: boolean } | undefined)?.audioAsVoice === true,
+    );
+    expect(audioReplies).toHaveLength(1);
+  });
+
+  it("can retry a deferred reply after a synchronous callback failure", async () => {
+    const onBlockReply = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("boom");
+      })
+      .mockImplementation(() => undefined);
+    const onBeforeTerminalDelivery = vi.fn(async () => undefined);
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-before-terminal-audio-retry",
+      onBlockReply,
+      onBeforeTerminalDelivery,
+      blockReplyBreak: "text_end",
+    });
+    const answer = "Accepted answer. [[audio_as_voice]]";
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: answer }],
+      stopReason: "stop",
+    };
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: answer });
+    emitAssistantTextEnd({ emit });
+    emit({ type: "message_end", message: assistantMessage });
+    emit({ type: "agent_end", messages: [assistantMessage], willRetry: false });
+    await subscription.waitForPendingEvents();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
+    expect(onBlockReply.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        text: "Accepted answer.",
+        audioAsVoice: true,
+      }),
     );
   });
 

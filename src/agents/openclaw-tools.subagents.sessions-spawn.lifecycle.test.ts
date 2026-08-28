@@ -1,7 +1,13 @@
 // Verifies sessions_spawn lifecycle hooks, cleanup, and completion announcements.
+import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { testing as bundleMcpRuntimeTesting } from "./agent-bundle-mcp-runtime.js";
 import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import {
@@ -33,6 +39,8 @@ const hookRunnerMocks = vi.hoisted(() => ({
 
 const callGatewayMock = getCallGatewayMock();
 const RUN_TIMEOUT_SECONDS = 1;
+let testState: OpenClawTestState | undefined;
+let restoreSessionStorePath: (() => void) | undefined;
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
@@ -48,7 +56,9 @@ function expectAcceptedRunDetails(details: unknown): string {
   // Accepted details must include the run id used by later lifecycle events.
   const rec = details as { status?: string; runId?: unknown } | undefined;
   const runId = rec?.runId;
-  expect(rec?.status).toBe("accepted");
+  expect(rec?.status, JSON.stringify(details, null, 2) ?? "missing sessions_spawn details").toBe(
+    "accepted",
+  );
   expect(typeof runId).toBe("string");
   if (typeof runId !== "string") {
     throw new Error("missing accepted runId");
@@ -161,6 +171,15 @@ async function waitForRunCleanup(childSessionKey: string) {
 describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
   beforeEach(async () => {
     await bundleMcpRuntimeTesting.resetSessionMcpRuntimeManager();
+    testState = await createOpenClawTestState({ label: "sessions-spawn-lifecycle" });
+    const state = testState;
+    const sessions = await import("../config/sessions.js");
+    const resolveSessionStorePathCore = vi
+      .spyOn(sessions, "resolveSessionStorePathCore")
+      .mockImplementation((_store, opts) =>
+        path.join(state.sessionsDir(opts?.agentId), "sessions.json"),
+      );
+    restoreSessionStorePath = () => resolveSessionStorePathCore.mockRestore();
     resetSessionsSpawnAnnounceFlowOverride();
     resetSessionsSpawnHookRunnerOverride();
     resetSessionsSpawnConfigOverride();
@@ -202,6 +221,11 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     resetSessionsSpawnConfigOverride();
     resetSubagentRegistryForTests({ persist: false });
     await bundleMcpRuntimeTesting.resetSessionMcpRuntimeManager();
+    restoreSessionStorePath?.();
+    restoreSessionStorePath = undefined;
+    closeOpenClawAgentDatabasesForTest();
+    await testState?.cleanup();
+    testState = undefined;
   });
 
   afterAll(() => {

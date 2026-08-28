@@ -7,6 +7,19 @@ import {
   waitForGoogleMeetAuthCode,
 } from "./oauth.js";
 
+async function getFreePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+  return port;
+}
+
 async function occupyPort(port: number): Promise<Server | null> {
   const server = createServer();
   try {
@@ -232,12 +245,17 @@ describe("Google Meet OAuth", () => {
 
   it("propagates non-listener callback failures without manual fallback", async () => {
     const promptInput = vi.fn(async () => "unused");
+    // Bind an explicitly free port rather than the 8085 default: this exercises
+    // the callbackPort seam (our fork's addition) and keeps the timeout path
+    // deterministic on hosts where something already holds 8085.
+    const callbackPort = await getFreePort();
     await expect(
       waitForGoogleMeetAuthCode({
         state: "state-token",
         manual: false,
         timeoutMs: 1,
         authUrl: "https://accounts.google.com/o/oauth2/v2/auth?x=1",
+        callbackPort,
         promptInput,
         writeLine: () => {},
       }),

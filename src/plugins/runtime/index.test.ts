@@ -7,7 +7,10 @@ import {
   type OpenClawConfig,
 } from "../../config/config.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
-import { requestHeartbeat, setHeartbeatWakeHandler } from "../../infra/heartbeat-wake.js";
+import {
+  requestHeartbeatRaw as requestHeartbeat,
+  setHeartbeatWakeHandler,
+} from "../../infra/heartbeat-wake.js";
 import * as execModule from "../../process/exec.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { VERSION } from "../../version.js";
@@ -152,8 +155,8 @@ describe("plugin runtime command execution", () => {
     {
       name: "exposes runtime.system.requestHeartbeat",
       readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
-        runtime.system.requestHeartbeat,
-      expected: requestHeartbeat,
+        typeof runtime.system.requestHeartbeat,
+      expected: "function",
     },
     {
       name: "exposes deprecated runtime.system.requestHeartbeatNow",
@@ -194,6 +197,35 @@ describe("plugin runtime command execution", () => {
       expect(request?.source).toBe("other");
       expect(request?.intent).toBe("immediate");
       expect(request?.reason).toBe("legacy-plugin");
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("maps runtime.system.requestHeartbeat to an explicit wake request", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn(async (_request: Parameters<typeof requestHeartbeat>[0]) => ({
+      status: "skipped" as const,
+      reason: "disabled",
+    }));
+    const dispose = setHeartbeatWakeHandler(handler);
+    try {
+      createPluginRuntime().system.requestHeartbeat({
+        source: "other",
+        intent: "event",
+        reason: "runtime-system-heartbeat",
+        sessionKey: "agent:main:subagent:plugin-forged",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      const request = handler.mock.calls[0]?.[0] as
+        | { source?: string; intent?: string; reason?: string; sessionKey?: string }
+        | undefined;
+      expect(request?.source).toBe("other");
+      expect(request?.intent).toBe("event");
+      expect(request?.reason).toBe("runtime-system-heartbeat");
+      expect(request?.sessionKey).toBe("agent:main:subagent:plugin-forged");
     } finally {
       dispose();
       vi.useRealTimers();

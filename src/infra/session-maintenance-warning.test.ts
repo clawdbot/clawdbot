@@ -43,7 +43,7 @@ vi.mock("./outbound/deliver-runtime.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
 }));
 vi.mock("./system-events.js", () => ({
-  enqueueSystemEvent: mocks.enqueueSystemEvent,
+  enqueueSystemEventRaw: mocks.enqueueSystemEvent,
 }));
 
 type SessionMaintenanceWarningModule = typeof import("./session-maintenance-warning.js");

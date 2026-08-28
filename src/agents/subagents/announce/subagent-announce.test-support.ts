@@ -10,6 +10,7 @@ import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runn
 
 type DeliveryRuntimeMockOptions = {
   callGateway: (request: unknown) => Promise<unknown>;
+  dispatchGatewayMethodInProcess?: (...args: unknown[]) => unknown;
   getRuntimeConfig: () => OpenClawConfig;
   loadSessionStore: (storePath: string) => unknown;
   resolveAgentIdFromSessionKey: (sessionKey: string) => string;

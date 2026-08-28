@@ -4,12 +4,13 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { SessionEntry } from "../../config/sessions.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
-  enqueueSystemEvent,
+  enqueueSystemEventRaw as enqueueSystemEvent,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
@@ -205,8 +206,44 @@ vi.mock("../../config/sessions/group.js", () => ({
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionFilePathCore: vi.fn().mockReturnValue("/tmp/session.jsonl"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
+  // Continuation resolves the agent-scoped store before session-id filtering.
+  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/sessions.json"),
 }));
 
+const sessionSystemEventsMocks = vi.hoisted(() => {
+  const drainFormattedSystemEventsMock = vi.fn(
+    async (_params: unknown): Promise<string | undefined> => undefined,
+  );
+  const state: {
+    prepared?: {
+      blocks: Array<{ key?: string; text: string }>;
+      managedDeliveries: Array<{ id: string; acknowledge: () => Promise<void> }>;
+    };
+    preparedQueue: Array<{
+      blocks: Array<{ key?: string; text: string }>;
+      managedDeliveries: Array<{ id: string; acknowledge: () => Promise<void> }>;
+    }>;
+  } = { preparedQueue: [] };
+  return {
+    state,
+    drainFormattedSystemEvents: drainFormattedSystemEventsMock,
+    prepareFormattedSystemEvents: vi.fn(async (params: unknown) => {
+      const queued = state.preparedQueue.shift();
+      if (queued) {
+        return queued;
+      }
+      if (state.prepared) {
+        return state.prepared;
+      }
+      const text = await drainFormattedSystemEventsMock(params);
+      return {
+        blocks: text ? [{ text }] : [],
+        managedDeliveries: [],
+      };
+    }),
+    settleManagedSystemEventsAfterTurnAdoption: vi.fn().mockResolvedValue(undefined),
+  };
+});
 const loadSessionEntryMock = vi.hoisted(() => vi.fn());
 const updateAmbientTranscriptWatermarkMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 
@@ -249,10 +286,15 @@ vi.mock("../command-detection.js", () => ({
 
 vi.mock("./agent-runner.runtime.js", () => ({
   runReplyAgent: vi.fn().mockResolvedValue({ text: "ok" }),
+  cancelContinuationTimer: vi.fn(),
 }));
 
 vi.mock("./body.js", () => ({
   applySessionHints: vi.fn().mockImplementation(async ({ baseBody }) => baseBody),
+}));
+
+vi.mock("../continuation/context-pressure.js", () => ({
+  checkContextPressure: vi.fn().mockReturnValue({ fired: false, band: 0 }),
 }));
 
 const resolveCurrentTurnImagesMock = vi.hoisted(() => vi.fn().mockResolvedValue({}));
@@ -294,7 +336,10 @@ vi.mock("./session-updates.runtime.js", () => ({
 }));
 
 vi.mock("./session-system-events.js", () => ({
-  drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
+  drainFormattedSystemEvents: sessionSystemEventsMocks.drainFormattedSystemEvents,
+  prepareFormattedSystemEvents: sessionSystemEventsMocks.prepareFormattedSystemEvents,
+  settleManagedSystemEventsAfterTurnAdoption:
+    sessionSystemEventsMocks.settleManagedSystemEventsAfterTurnAdoption,
 }));
 
 vi.mock("../../sessions/stored-model-overrides.js", () => ({
@@ -551,6 +596,8 @@ describe("runPreparedReply media-only handling", () => {
     preparedReplyMockState.unexpectedCalls.length = 0;
     loadSessionEntryMock.mockReset();
     updateAmbientTranscriptWatermarkMock.mockClear();
+    sessionSystemEventsMocks.state.prepared = undefined;
+    sessionSystemEventsMocks.state.preparedQueue.length = 0;
     vi.clearAllMocks();
     vi.mocked(buildDirectChatContext).mockReturnValue("");
     vi.mocked(buildGroupIntro).mockReturnValue("");
@@ -566,6 +613,47 @@ describe("runPreparedReply media-only handling", () => {
     vi.useRealTimers();
     resetSystemEventsForTest();
     expect(preparedReplyMockState.unexpectedCalls).toEqual([]);
+  });
+
+  it("defers managed events when a supplied recorder is already durable", async () => {
+    sessionSystemEventsMocks.state.prepared = {
+      blocks: [
+        {
+          key: "session-delivery:delivery-1",
+          text: "System: managed delegate artifact",
+        },
+      ],
+      managedDeliveries: [{ id: "delivery-1", acknowledge: vi.fn().mockResolvedValue(undefined) }],
+    };
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "retry" },
+      target: {
+        sessionId: "session-id",
+        sessionKey: "session-key",
+        sessionEntry: undefined,
+        agentId: "default",
+      },
+    });
+    recorder.markRuntimePersisted({ role: "user", content: "retry", timestamp: Date.now() });
+
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "retry",
+          RawBody: "retry",
+          CommandBody: "retry",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+        },
+        opts: { userTurnTranscriptRecorder: recorder },
+      }),
+    );
+
+    expect(requireRunReplyAgentCall().followupRun.prompt).not.toContain(
+      "managed delegate artifact",
+    );
+    expect(requireRunReplyAgentCall().opts?.turnAdoptionLifecycle).toBeUndefined();
   });
 
   it("passes approved elevated defaults to the runner", async () => {
@@ -3032,6 +3120,45 @@ describe("runPreparedReply media-only handling", () => {
     expect(peekSystemEventEntries("session-key")).toStrictEqual([]);
   });
 
+  it("replaces stale supplied-recorder delivery receipts after an admission wait", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    sessionSystemEventsMocks.state.preparedQueue.push({ blocks: [], managedDeliveries: [] });
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "retry", sessionDeliveryAckIds: ["delivery-evicted"] },
+      target: {
+        sessionId: "session-id",
+        sessionKey: "session-key",
+        sessionEntry: undefined,
+        agentId: "default",
+      },
+    });
+    const previousRun = createReplyOperation({
+      sessionId: "session-managed-after-wait",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    previousRun.setPhase("running");
+
+    const runPromise = runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: "session-managed-after-wait",
+        opts: { userTurnTranscriptRecorder: recorder },
+      }),
+    );
+
+    await Promise.resolve();
+    expect(sessionSystemEventsMocks.prepareFormattedSystemEvents).not.toHaveBeenCalled();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+
+    previousRun.complete();
+    await expect(runPromise).resolves.toEqual({ text: "ok" });
+
+    expect(sessionSystemEventsMocks.prepareFormattedSystemEvents).toHaveBeenCalledOnce();
+    expect(await recorder.resolveMessage()).not.toHaveProperty("__openclaw.sessionDeliveryAckIds");
+  });
+
   it("threads inbound context as current-turn context without changing transcript text", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       ["Current message:", '[Replying to: "quoted status body"]', "#34974 obviyus:"].join("\n"),
@@ -4309,6 +4436,56 @@ describe("runPreparedReply media-only handling", () => {
       suppressTyping?: boolean;
     };
     expect(call?.suppressTyping).toBe(true);
+  });
+
+  it("marks delegate-return turns as continuation wakes and clears delegate-pending state", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          continuationTrigger: "delegate-return",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.isContinuationWake).toBe(true);
+  });
+
+  it("marks work-wake turns as continuation wakes without clearing delegate-pending state", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          continuationTrigger: "work-wake",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.isContinuationWake).toBe(true);
+  });
+
+  it("leaves ordinary turns unmarked as continuation wakes", async () => {
+    await runPreparedReply(baseParams());
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.isContinuationWake).toBe(false);
+  });
+
+  it("leaves ordinary subagent-return turns unmarked as continuation wakes (chain-budget reset)", async () => {
+    // An ordinary inter-session subagent completion is NOT a mid-chain wake. It
+    // must NOT set isContinuationWake, otherwise the agent-runner chain-budget
+    // reset gate is skipped and a stale chain count rejects every fresh
+    // continuation elected from the subagent return (the doom-lock hole).
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          continuationTrigger: "subagent-return",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.isContinuationWake).toBe(false);
   });
 
   it("routes queued system events into user prompt text, not system prompt context", async () => {

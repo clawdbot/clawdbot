@@ -85,8 +85,11 @@ function createSubscribedCodeModeHarness(params: {
     onBlockReply: params.onBlockReply,
     onBlockReplyFlush: params.onBlockReplyFlush,
     sandboxSessionKey: sessionKey,
-    builtinToolNames: new Set(),
-    replaySafeToolNames: new Set(),
+    subscriptionToolTrust: {
+      builtinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+      trustedLocalMediaToolNames: new Set(),
+    },
   });
   const context = {
     config,

@@ -90,6 +90,7 @@ export async function clearGatewayMaintenanceHandles(
   clearInterval(maintenance.dedupeCleanup);
   await maintenance.stopMediaCleanup();
   clearInterval(maintenance.worktreeCleanup);
+  clearInterval(maintenance.delegateArtifactCleanup);
   maintenance.skillUsageCleanup();
 }
 
@@ -336,6 +337,82 @@ function startPendingSessionDeliveryRuntime(params: {
   };
 }
 
+function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger }): void {
+  // Delegate recovery must run before same-session continue_work recovery to
+  // preserve normal post-turn ordering when a restart happens after both were
+  // queued in the same turn.
+  //
+  // Captured BEFORE the deferred timer as a boot-time cutoff: post-compaction
+  // recovery only resets rows that were already `running` at process start, so a
+  // live release claiming a row during the startup window is not requeued.
+  const recoveryArmedAt = Date.now();
+  const timer = setTimeout(() => {
+    void (async () => {
+      const [delegateRecoveryModule, workModule] = await Promise.all([
+        import("../auto-reply/continuation/delegate-dispatch-recovery.js"),
+        import("../auto-reply/continuation/work-dispatch.js"),
+      ]);
+      const delegateLog = params.log.child("continuation-delegate-recovery");
+      const delegateSummary = await delegateRecoveryModule.recoverPendingContinuationDelegates({
+        queuedCreatedAtOrBefore: recoveryArmedAt,
+        includeRunningUpdatedAtOrBefore: recoveryArmedAt,
+      });
+      if (
+        delegateSummary.sessions > 0 ||
+        delegateSummary.dispatched > 0 ||
+        delegateSummary.rejected > 0
+      ) {
+        delegateLog.info(
+          `replayed sessions=${delegateSummary.sessions} dispatched=${delegateSummary.dispatched} rejected=${delegateSummary.rejected}`,
+        );
+      }
+      // Post-compaction delegates left `running` by a crash between
+      // release-claim and durable handoff must be re-dispatched now, not just
+      // requeued — for a session that already compacted there is no subsequent
+      // compaction seam to consume them, so a requeued row would sit forever.
+      // The boot-time cutoff excludes rows a live release claimed after startup,
+      // so recovery cannot double-drive an actively-releasing delegate.
+      const awaitingNextCompactionRequeue =
+        await delegateRecoveryModule.requeueAwaitingNextCompactionDelegates({
+          runningUpdatedAtOrBefore: recoveryArmedAt,
+        });
+      if (awaitingNextCompactionRequeue.requeued > 0) {
+        delegateLog.info(
+          `requeued awaiting-next-compaction delegates requeued=${awaitingNextCompactionRequeue.requeued}`,
+        );
+      }
+      const postCompactionRecovery =
+        await delegateRecoveryModule.recoverAndReleaseStagedPostCompactionDelegates({
+          runningUpdatedAtOrBefore: recoveryArmedAt,
+        });
+      if (
+        postCompactionRecovery.sessions > 0 ||
+        postCompactionRecovery.dispatched > 0 ||
+        postCompactionRecovery.failed > 0
+      ) {
+        delegateLog.info(
+          `recovered post-compaction delegates sessions=${postCompactionRecovery.sessions} dispatched=${postCompactionRecovery.dispatched} failed=${postCompactionRecovery.failed}`,
+        );
+      }
+
+      const workLog = params.log.child("continuation-work-recovery");
+      const workSummary = await workModule.recoverPendingContinuationWork();
+      if (
+        workSummary.sessions > 0 ||
+        workSummary.dispatched > 0 ||
+        workSummary.failed > 0 ||
+        workSummary.reaped > 0 ||
+        workSummary.terminalNotices > 0
+      ) {
+        workLog.info(
+          `replayed sessions=${workSummary.sessions} dispatched=${workSummary.dispatched} failed=${workSummary.failed} reaped=${workSummary.reaped} terminalNotices=${workSummary.terminalNotices}`,
+        );
+      }
+    })().catch((err: unknown) => params.log.error(`Continuation recovery failed: ${String(err)}`));
+  }, 1_400);
+  timer.unref?.();
+}
+
 /** Activates background gateway services after core runtime startup is ready. */
 export function activateGatewayScheduledServices(params: {
   minimalTestGateway: boolean;
@@ -417,6 +494,9 @@ export function activateGatewayScheduledServices(params: {
   }
   const stopOutboundDeliveryRecovery = startPendingOutboundDeliveryRecovery({
     cfg: params.cfgAtStart,
+    log: params.log,
+  });
+  recoverPendingContinuations({
     log: params.log,
   });
   const heartbeatRunnerWithUpstreamMonitor: HeartbeatRunner = {

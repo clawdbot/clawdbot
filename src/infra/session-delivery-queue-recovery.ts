@@ -15,6 +15,7 @@ import {
   loadPendingSessionDeliveries,
   markSessionDeliverySettlement,
   moveSessionDeliveryToFailed,
+  pruneFailedOlderThan,
   SessionDeliveryAcknowledgementFinalizeError,
   SessionDeliveryAttemptStartError,
   SessionDeliveryDeadLetteredError,
@@ -24,6 +25,38 @@ import {
   type QueuedSessionDelivery,
   type SessionDeliverySettledOutcome,
 } from "./session-delivery-queue-storage.js";
+
+// Session delivery recovery replays persisted messages after crashes while
+// bounding retry count, backoff, and concurrent drain work.
+const FAILED_GC_AMORTIZATION_MS = 60_000;
+let lastGcAt = 0;
+
+async function maybePruneFailedRecords(opts: {
+  failedMaxAgeMs?: number;
+  stateDir?: string;
+  log: SessionDeliveryRecoveryLogger;
+  now: number;
+}): Promise<void> {
+  const { failedMaxAgeMs, stateDir, log, now } = opts;
+  if (failedMaxAgeMs == null || !(failedMaxAgeMs > 0)) {
+    return;
+  }
+  if (now - lastGcAt < FAILED_GC_AMORTIZATION_MS) {
+    return;
+  }
+  try {
+    const summary = await pruneFailedOlderThan(failedMaxAgeMs, now, stateDir);
+    if (summary.removed > 0) {
+      log.info(
+        `Session delivery failed/ prune: removed ${summary.removed} of ${summary.scanned} entries older than ${failedMaxAgeMs}ms`,
+      );
+    }
+  } catch (err) {
+    log.warn(`Session delivery failed/ prune error: ${formatErrorMessage(err)}`);
+  } finally {
+    lastGcAt = now;
+  }
+}
 
 export type DeliverSessionDeliveryFn = (
   entry: QueuedSessionDelivery,
@@ -91,6 +124,23 @@ function resolvePendingSettlementOutcome(
   entry: QueuedSessionDelivery,
 ): SessionDeliverySettledOutcome | undefined {
   return entry.settlementOutcome ?? (entry.acknowledgedAt !== undefined ? "recovered" : undefined);
+}
+
+function formatRetryBudgetExhaustedLog(entry: QueuedSessionDelivery): string | null {
+  if (entry.kind !== "postCompactionDelegate") {
+    return null;
+  }
+  return `[session-delivery-queue:retry-budget-exhausted] entry ${entry.id} hit retry cap before post-compaction delegate spawn for session ${entry.sessionKey}: ${entry.task}`;
+}
+
+function logRetryBudgetExhausted(
+  log: SessionDeliveryRecoveryLogger,
+  entry: QueuedSessionDelivery,
+): void {
+  const message = formatRetryBudgetExhaustedLog(entry);
+  if (message) {
+    log.warn(message);
+  }
 }
 
 function resolveSessionDeliveryMaxRetries(entry: QueuedSessionDelivery): number {
@@ -242,6 +292,7 @@ async function processDrainedSessionDelivery(
     },
   });
   if (result.status === "max-retries" && result.finalized) {
+    logRetryBudgetExhausted(context.log, entry);
     context.log.warn(
       `${context.logLabel}: entry ${entry.id} exceeded max retries and was moved to failed`,
     );
@@ -251,6 +302,49 @@ async function processDrainedSessionDelivery(
     );
   }
   return result;
+}
+
+type DeliveryRecoveryDrainDecision = {
+  match: boolean;
+  bypassBackoff?: boolean;
+};
+
+/** Drain one filtered delivery family without widening ownership to sibling rows. */
+export async function drainPendingSessionDeliveries(
+  opts: SessionDeliveryDrainContext & {
+    drainKey: string;
+    selectEntry: (entry: QueuedSessionDelivery, now: number) => DeliveryRecoveryDrainDecision;
+    failedMaxAgeMs?: number;
+  },
+): Promise<void> {
+  const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
+    await maybePruneFailedRecords({
+      failedMaxAgeMs: opts.failedMaxAgeMs,
+      stateDir: opts.stateDir,
+      log: opts.log,
+      now: Date.now(),
+    });
+    const entries = (await loadPendingSessionDeliveries(opts.stateDir)).filter(
+      (entry) => opts.selectEntry(entry, Date.now()).match,
+    );
+    await recoveryCoordinator.scan({
+      entries,
+      loadEntry: (id) => loadPendingSessionDelivery(id, opts.stateDir),
+      onClaimConflict: (entry) => {
+        opts.log.info(`${opts.logLabel}: entry ${entry.id} is already being recovered`);
+      },
+      onEntry: async (entry) => {
+        const decision = opts.selectEntry(entry, Date.now());
+        if (!decision.match) {
+          return;
+        }
+        await processDrainedSessionDelivery(entry, opts, decision.bypassBackoff);
+      },
+    });
+  });
+  if (!drained) {
+    opts.log.info(`${opts.logLabel}: already in progress for ${opts.drainKey}, skipping`);
+  }
 }
 
 /** Drain one exact queued session delivery and return its final pending state. */
@@ -283,7 +377,14 @@ export async function recoverPendingSessionDeliveries(opts: {
   stateDir?: string;
   maxRecoveryMs?: number;
   maxEnqueuedAt?: number;
+  failedMaxAgeMs?: number;
 }): Promise<DeliveryRecoverySummary> {
+  await maybePruneFailedRecords({
+    failedMaxAgeMs: opts.failedMaxAgeMs,
+    stateDir: opts.stateDir,
+    log: opts.log,
+    now: Date.now(),
+  });
   const pending = (await loadPendingSessionDeliveries(opts.stateDir)).filter(
     (entry) => opts.maxEnqueuedAt == null || entry.enqueuedAt <= opts.maxEnqueuedAt,
   );
@@ -326,6 +427,7 @@ export async function recoverPendingSessionDeliveries(opts: {
       });
       if (result.status === "max-retries") {
         summary.skippedMaxRetries += 1;
+        logRetryBudgetExhausted(opts.log, currentEntry);
         return "continue";
       }
       if (result.status === "backoff") {

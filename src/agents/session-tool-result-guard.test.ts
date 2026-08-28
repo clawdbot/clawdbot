@@ -87,6 +87,116 @@ function getToolResultText(messages: AgentMessage[]): string {
 }
 
 describe("installSessionToolResultGuard", () => {
+  it("redacts continue_delegate attachment names and content before persistence", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+    const secret = "PERSISTED_CONTINUE_DELEGATE_SECRET";
+    const attachmentName = "PERSISTED_ATTACHMENT_NAME_MUST_NOT_ECHO.md";
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_continue_delegate",
+            name: "continue_delegate",
+            arguments: {
+              task: "use durable input",
+              attachments: [
+                {
+                  name: attachmentName,
+                  content: secret,
+                  encoding: "utf8",
+                  mimeType: "text/markdown",
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    const serialized = JSON.stringify(getPersistedMessages(sm));
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain(attachmentName);
+    expect(serialized).toContain('"content":"__OPENCLAW_REDACTED__"');
+    expect(serialized).toContain("use durable input");
+  });
+
+  it("removes legacy attachment names from already-redacted continuation persistence", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+    const attachmentName = "LEGACY_REDACTED_NAME_MUST_NOT_PERSIST.md";
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_continue_delegate_legacy",
+            name: "continue_delegate",
+            arguments: {
+              task: "use legacy redacted input",
+              attachments: [
+                {
+                  name: attachmentName,
+                  content: "__OPENCLAW_REDACTED__",
+                  encoding: "utf8",
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    const serialized = JSON.stringify(getPersistedMessages(sm));
+    expect(serialized).not.toContain(attachmentName);
+    expect(serialized).toContain('"content":"__OPENCLAW_REDACTED__"');
+    expect(serialized).toContain('"encoding":"utf8"');
+  });
+
+  it("does not persist malformed continue_delegate attachment secrets", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+    const primitiveSecret = "PERSISTED_PRIMITIVE_SECRET";
+    const unknownFieldSecret = "PERSISTED_UNKNOWN_FIELD_SECRET";
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_continue_delegate_malformed",
+            name: "continue_delegate",
+            arguments: {
+              task: "use malformed durable input",
+              attachments: [
+                primitiveSecret,
+                {
+                  name: "brief.md",
+                  content: "PERSISTED_CONTENT_SECRET",
+                  extra: unknownFieldSecret,
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    const serialized = JSON.stringify(getPersistedMessages(sm));
+    expect(serialized).not.toContain(primitiveSecret);
+    expect(serialized).not.toContain(unknownFieldSecret);
+    expect(serialized).not.toContain("PERSISTED_CONTENT_SECRET");
+    expect(serialized).not.toContain('"extra"');
+    expect(serialized).toContain('"content":"__OPENCLAW_REDACTED__"');
+    expect(serialized).not.toContain('"name":"brief.md"');
+  });
+
   it("inserts synthetic toolResult before non-tool message when pending", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);

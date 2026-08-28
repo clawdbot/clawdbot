@@ -7,15 +7,28 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
+import {
+  emitContinuationCompactionReleasedSpan,
+  formatCurrentSpanContinuationTraceparent,
+  resolveContinuationTraceparent,
+} from "../../infra/continuation-tracer.js";
+import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
+import { resolveLiveContinuationRuntimeConfig } from "../continuation/config.js";
+import { failQueuedDelegatesCreatedAtOrAfter } from "../continuation/delegate-store.js";
+import { extractContinuationSignal } from "../continuation/signal.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
+import { scheduleReplyContinuation } from "./agent-runner-continuation-schedule.js";
+import { createReplyContinuationController } from "./agent-runner-continuation.js";
 import { resolveFallbackOriginModel } from "./agent-runner-core.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
+import { recordNoOpRearmOutcome, summarizeEmbeddedRunOutcome } from "./no-op-rearm-guard.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
+import { dispatchPostCompactionDelegates } from "./post-compaction-delegate-dispatch.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
 import { persistRunSessionUsage, incrementRunCompactionCount } from "./session-run-accounting.js";
@@ -26,11 +39,16 @@ type AgentTurnAccountingContext = Pick<
   | "activeSessionStore"
   | "blockReplyPipeline"
   | "cfg"
+  | "continuation"
   | "defaultModel"
   | "followupRun"
+  | "getActiveSessionEntry"
   | "isHeartbeat"
+  | "noOpRearmWakeClass"
+  | "opts"
   | "pendingToolTasks"
   | "preflightCompactionApplied"
+  | "replySessionKey"
   | "resolvedVerboseLevel"
   | "execution"
   | "runId"
@@ -46,11 +64,16 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     activeSessionStore,
     blockReplyPipeline,
     cfg,
+    continuation,
     defaultModel,
     followupRun,
+    getActiveSessionEntry,
     isHeartbeat,
+    noOpRearmWakeClass,
+    opts,
     pendingToolTasks,
     preflightCompactionApplied,
+    replySessionKey,
     resolvedVerboseLevel,
     execution,
     runId,
@@ -110,6 +133,97 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       onTimeout: logVerbose,
     });
   }
+
+  // Post-turn no-op replay outcome recording. Record before the
+  // continuation/followup scheduling below so a no-op self-rearm turn increments
+  // the streak before it can schedule the next same-family wake. This is also the
+  // recording site for continuation turns driven through getReplyFromConfig.
+  if (noOpRearmWakeClass && replySessionKey) {
+    const facts = summarizeEmbeddedRunOutcome(runResult);
+    const messageToolOnlyWithoutDelivery =
+      opts?.sourceReplyDeliveryMode === "message_tool_only" &&
+      runResult.didSendViaMessagingTool !== true &&
+      runResult.didDeliverSourceReplyViaMessageTool !== true;
+    recordNoOpRearmOutcome({
+      sessionKey: replySessionKey,
+      wakeClass: noOpRearmWakeClass,
+      runId,
+      ...(messageToolOnlyWithoutDelivery
+        ? { facts: { ...facts, hasVisibleReply: false } }
+        : { facts }),
+    });
+  }
+
+  // --- Continuation signal extraction (docs/design/continue-work-signal-v2.md §3.1) ---
+  // Tool-based `continue_work` flows via the closure `requestContinuation`
+  // callback in agent-runner-execution.ts and is surfaced on the run outcome
+  // as `runOutcome.continueWorkRequests` (one entry per tool call this turn).
+  // Bracket signals (CONTINUE_WORK, CONTINUE_DELEGATE) live in the payload
+  // text and are parsed here. The merged signal only needs the first request
+  // to decide kind/delay; the full array fans out at the work-schedule site.
+  const continueWorkRequests = execution.continueWorkRequests ?? [];
+  const suppressToolContinuationAfterIncompleteTurn =
+    runResult.meta?.error?.kind === "incomplete_turn" && runResult.meta?.replayInvalid === true;
+  if (suppressToolContinuationAfterIncompleteTurn) {
+    if (continueWorkRequests.length > 0) {
+      defaultRuntime.log(
+        `[continuation] Ignoring ${continueWorkRequests.length} continue_work election(s) because the enclosing turn was incomplete and replay-unsafe for session ${sessionKey ?? "unknown"}`,
+      );
+    }
+    if (sessionKey) {
+      const failedDelegateRows = failQueuedDelegatesCreatedAtOrAfter(
+        sessionKey,
+        runStartedAt,
+        "Continuation delegate election ignored because the enclosing turn was incomplete and replay-unsafe.",
+      );
+      if (failedDelegateRows > 0) {
+        defaultRuntime.log(
+          `[continuation] Failed ${failedDelegateRows} queued continue_delegate election(s) because the enclosing turn was incomplete and replay-unsafe for session ${sessionKey}`,
+        );
+      }
+    }
+  }
+  const effectiveContinueWorkRequests = suppressToolContinuationAfterIncompleteTurn
+    ? []
+    : continueWorkRequests;
+  const firstWorkRequest = effectiveContinueWorkRequests[0];
+  // Recheck after inference so a disabled -> enabled hot reload cannot revive
+  // stale depth, cost, or chain identity at the next enforcement point.
+  await continuation.resetContinuationChainForFreshTurn();
+  activeSessionEntry = getActiveSessionEntry() ?? activeSessionEntry;
+  let continuationExtraction = extractContinuationSignal({
+    payloads: payloadArray,
+    continueWorkRequest: firstWorkRequest
+      ? {
+          reason: firstWorkRequest.reason,
+          delaySeconds: firstWorkRequest.delaySeconds,
+        }
+      : undefined,
+    enabled: resolveLiveContinuationRuntimeConfig(cfg).enabled,
+    sessionKey,
+  });
+  // Display payloads intentionally strip continuation tokens. Recover a raw
+  // terminal bracket signal before accepting the typed continue_work fallback.
+  if (
+    !suppressToolContinuationAfterIncompleteTurn &&
+    !continuationExtraction.fromBracket &&
+    execution.rawContinuationText
+  ) {
+    const rawExtraction = extractContinuationSignal({
+      payloads: [{ text: execution.rawContinuationText }],
+      enabled: resolveLiveContinuationRuntimeConfig(cfg).enabled,
+      sessionKey,
+    });
+    if (rawExtraction.fromBracket) {
+      continuationExtraction = rawExtraction;
+    }
+  }
+  const effectiveContinuationSignal = continuationExtraction.signal;
+  const continuationWorkReason = continuationExtraction.workReason;
+  const internalBracketTraceparent = continuationExtraction.fromBracket
+    ? (formatCurrentSpanContinuationTraceparent() ??
+      resolveContinuationTraceparent(followupRun.run.traceparent))
+    : undefined;
 
   const usage = runResult.meta?.agentMeta?.usage;
   const hasBillableUsageBuckets =
@@ -294,13 +408,18 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     autoCompactionCount,
     configuredFallbackModel,
     contextTokensUsed,
+    continuationExtractionFromBracket: continuationExtraction.fromBracket,
+    continuationWorkReason,
     didLogHeartbeatStrip,
     directlySentBlockKeys,
     directlySentBlockPayloads,
+    effectiveContinuationSignal,
+    effectiveContinueWorkRequests,
     fallbackAttempts,
     fallbackExhausted,
     fallbackTransition,
     hasBillableUsageBuckets,
+    internalBracketTraceparent,
     modelUsed,
     payloadArray,
     preserveUserFacingSessionState,
@@ -331,16 +450,32 @@ export async function accountFollowupTurn(params: {
   }
   const { turn, defaults, execution } = params;
   const sessionKey = turn.session.kind === "session" ? turn.session.key : undefined;
+  const storePath = turn.session.kind === "session" ? turn.session.storePath : undefined;
+  const getActiveSessionEntry = () => turn.session.current();
+  const continuation = createReplyContinuationController({
+    cfg: turn.config,
+    sessionKey,
+    storePath,
+    isContinuationWake: false,
+    activeSessionStore: turn.sessionStore,
+    getActiveSessionEntry,
+    setActiveSessionEntry: (entry) => turn.session.publish(entry),
+  });
   const accounting = await accountAgentTurn({
     activeSessionEntry: turn.session.current(),
     activeSessionStore: turn.sessionStore,
     blockReplyPipeline: null,
     cfg: turn.config,
+    continuation,
     defaultModel: defaults.defaultModel,
     followupRun: turn.queued,
+    getActiveSessionEntry,
     isHeartbeat: defaults.opts?.isHeartbeat === true,
+    noOpRearmWakeClass: turn.noOpRearmWakeClass,
+    opts: defaults.opts,
     pendingToolTasks: execution.pendingToolTasks,
     preflightCompactionApplied: turn.preflightCompactionApplied,
+    replySessionKey: turn.queued.run.sessionKey ?? defaults.sessionKey ?? sessionKey,
     resolvedVerboseLevel:
       normalizeVerboseLevel(turn.session.current()?.verboseLevel ?? turn.queued.run.verboseLevel) ??
       "off",
@@ -350,7 +485,7 @@ export async function accountFollowupTurn(params: {
     sessionCtx: execution.sessionCtx,
     sessionKey,
     shouldInjectGroupIntro: false,
-    storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
+    storePath,
   });
   turn.session.publish(accounting.activeSessionEntry);
   const queueKey = turn.queued.run.sessionKey ?? defaults.sessionKey ?? sessionKey;
@@ -399,10 +534,46 @@ export async function accountFollowupTurn(params: {
         nextSessionFile: queueKey ?? sessionKey,
       });
     }
+    if (sessionKey) {
+      const releasedCount = refreshed?.pendingPostCompactionDelegates?.length ?? 0;
+      await dispatchPostCompactionDelegates({
+        cfg: turn.config,
+        compactionCount: count,
+        continuationSignalKind: accounting.effectiveContinuationSignal?.kind,
+        followupRun: turn.queued,
+        postCompactionDelegatesToPreserve: continuation.postCompactionDelegatesToPreserve,
+        releaseTraceparent: settled.compactionTraceparent,
+        sessionEntry: refreshed,
+        sessionKey,
+        sessionStore: turn.sessionStore,
+        storePath,
+      });
+      emitContinuationCompactionReleasedSpan({
+        releasedCount,
+        compactionId: count,
+        traceparent: settled.compactionTraceparent,
+        log: (message) => defaultRuntime.log(message),
+      });
+    }
     if (accounting.verboseEnabled) {
       const suffix = typeof count === "number" ? ` (count ${count})` : "";
       compactionNotice = { text: `🧹 Auto-compaction complete${suffix}.` };
     }
   }
+  await scheduleReplyContinuation({
+    cfg: turn.config,
+    sessionKey,
+    followupRun: turn.queued,
+    runId: execution.execution.runId,
+    usage: accounting.usage,
+    effectiveContinuationSignal: accounting.effectiveContinuationSignal,
+    continuationExtractionFromBracket: accounting.continuationExtractionFromBracket,
+    effectiveContinueWorkRequests: accounting.effectiveContinueWorkRequests,
+    continuationWorkReason: accounting.continuationWorkReason,
+    internalBracketTraceparent: accounting.internalBracketTraceparent,
+    continuation,
+    getActiveSessionEntry,
+  });
+  turn.session.publish(getActiveSessionEntry());
   return { ...accounting, compactionNotice };
 }

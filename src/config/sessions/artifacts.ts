@@ -14,6 +14,13 @@ const MIGRATION_ARCHIVE_RE = /\.migrated(?:\.\d+)?$/u;
 const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
   /^(.+)\.checkpoint\.([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
 
+// Anchored at end of file name: literal `.checkpoint.` + UUID-v4 shape + `.jsonl`.
+// Session IDs that happen to contain the substring "checkpoint" (with any suffix
+// shape) do NOT match because the UUID regex requires the exact `[0-9a-f]{8}-…`
+// shape immediately after `.checkpoint.` and `.jsonl` immediately after that.
+const CHECKPOINT_MARKER_RE =
+  /\.checkpoint\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
+
 function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
   // Compressed archives carry a trailing .zst; strip it so every classifier
   // sees one canonical `<id>.jsonl.<reason>.<timestamp>[.<generation>]` shape.
@@ -129,7 +136,7 @@ export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
   if (isTrajectoryRuntimeArtifactName(fileName)) {
     return false;
   }
-  if (isCompactionCheckpointTranscriptFileName(fileName)) {
+  if (isCheckpointSessionTranscriptFileName(fileName)) {
     return false;
   }
   return !isSessionArchiveArtifactName(fileName);
@@ -138,6 +145,30 @@ export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
 /** Returns true for transcript files counted in usage, including reset/deleted archives. */
 export function isUsageCountedSessionTranscriptFileName(fileName: string): boolean {
   return parseUsageCountedSessionIdFromFileName(fileName) !== null;
+}
+
+/**
+ * Classify pre-compaction checkpoint-twin transcript files, e.g.
+ * `<parentId>.checkpoint.<uuid>.jsonl`. Uses an anchored UUID-shape match so
+ * session IDs that happen to contain the substring "checkpoint" do not
+ * false-positive.
+ */
+function isCheckpointSessionTranscriptFileName(fileName: string): boolean {
+  return CHECKPOINT_MARKER_RE.test(fileName);
+}
+
+/**
+ * Extract the parent session id from a checkpoint transcript file name. The
+ * parent session id is the part BEFORE `.checkpoint.<uuid>.jsonl`; it matches
+ * what `isPrimarySessionTranscriptFileName` expects when the parent primary
+ * exists as `<parentId>.jsonl`. Returns `null` if the file is not a checkpoint.
+ */
+export function parseParentSessionIdFromCheckpointFileName(fileName: string): string | null {
+  const match = fileName.match(CHECKPOINT_MARKER_RE);
+  if (!match || match.index === undefined) {
+    return null;
+  }
+  return fileName.slice(0, match.index);
 }
 
 /** Extracts the session id from a usage-counted transcript filename. */

@@ -1,6 +1,6 @@
 /** Stale-state notice text, coalescing keys, and watcher eligibility. */
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import { requestHeartbeatRaw as requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../infra/system-events.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 
 const SESSION_STATE_CONTEXT_PREFIX = "session-state:";

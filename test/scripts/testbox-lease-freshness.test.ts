@@ -29,6 +29,16 @@ describe("Testbox lease freshness", () => {
     ).toEqual(["baseSha", "dependencyDigest", "workflow"]);
   });
 
+  it("rotates a lease when the checkout head or dirty state changes", () => {
+    expect(
+      testboxLeaseStaleReasons(fingerprint, {
+        ...fingerprint,
+        headSha: "e".repeat(40),
+        workingTreeClean: false,
+      }),
+    ).toEqual(["headSha", "workingTreeClean"]);
+  });
+
   it("rejects unknown provenance schemas", () => {
     expect(testboxLeaseStaleReasons({ ...fingerprint, version: 2 }, fingerprint)).toEqual([
       "state schema",

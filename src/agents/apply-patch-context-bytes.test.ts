@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { applyPatch } from "./apply-patch.test-support.js";
 
-async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
+async function withTestDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-context-"));
   try {
     return await run(dir);
@@ -105,7 +105,7 @@ describe("applyPatch context byte preservation", () => {
       missing: [],
     },
   ])("keeps context bytes through $name", async ({ files, patch, expected, missing }) => {
-    await withTempDir(async (dir) => {
+    await withTestDir(async (dir) => {
       await Promise.all(
         Object.entries(files).map(([filePath, contents]) =>
           fs.writeFile(path.join(dir, filePath), contents, "utf8"),

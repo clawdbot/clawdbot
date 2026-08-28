@@ -23,9 +23,15 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-admission.test-helpers.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 
 const callGatewayMock = vi.fn();
+let sessionsListTestState: OpenClawTestState | undefined;
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
@@ -285,6 +291,12 @@ describe("sessions tools", () => {
   });
   afterEach(resetGatewayWorkAdmission);
 
+  afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
+    await sessionsListTestState?.cleanup();
+    sessionsListTestState = undefined;
+  });
+
   it("uses integer schemas for session count and window parameters", () => {
     const tools = createOpenClawTools();
     const byName = (name: string) => {
@@ -434,11 +446,13 @@ describe("sessions tools", () => {
   });
 
   it("sessions_list forwards mailbox filters and includes messages", async () => {
+    sessionsListTestState = await createOpenClawTestState({ label: "sessions-list-mailbox" });
+    const storePath = path.join(sessionsListTestState.sessionsDir(), "sessions.json");
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
         return {
-          path: "/tmp/sessions.json",
+          path: storePath,
           sessions: [
             {
               key: "agent:main:main",

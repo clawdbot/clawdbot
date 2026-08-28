@@ -53,6 +53,10 @@ function runGit(cwd: string, args: string[]): string {
   }).trim();
 }
 
+function runBareGit(cwd: string, args: string[]): string {
+  return runGit(cwd, ["--git-dir=.", ...args]);
+}
+
 function createDispatchFixture(
   options: {
     parentRunStates?: Array<{ conclusion: string | null; status: string }>;
@@ -844,9 +848,9 @@ describe("full-release-validation-at-sha", () => {
         `:refs/heads/${workflowBranch}`,
         `:refs/heads/${targetBranch}`,
       ]);
-      expect(runGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
-        "refs/heads/main\nrefs/heads/release/2026.8.1",
-      );
+      expect(
+        runBareGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"]),
+      ).toBe("refs/heads/main\nrefs/heads/release/2026.8.1");
     } finally {
       fixture.cleanup();
     }
@@ -876,9 +880,9 @@ describe("full-release-validation-at-sha", () => {
       expect(artifactDownloads[1]?.index).toBeGreaterThan(parentPolls[1]?.index ?? Infinity);
       expect(artifactDownloads[1]?.index).toBeLessThan(parentPolls[2]?.index ?? -Infinity);
       expect(result.stdout).toContain("Parent run status: queued/pending");
-      expect(runGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
-        "refs/heads/main\nrefs/heads/release/2026.8.1",
-      );
+      expect(
+        runBareGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"]),
+      ).toBe("refs/heads/main\nrefs/heads/release/2026.8.1");
     } finally {
       fixture.cleanup();
     }
@@ -1033,7 +1037,7 @@ describe("full-release-validation-at-sha", () => {
           (args) => args[0] === "push" && args.slice(2).some((value) => value.startsWith(":")),
         ),
       ).toBe(false);
-      const remoteRefs = runGit(fixture.origin, [
+      const remoteRefs = runBareGit(fixture.origin, [
         "for-each-ref",
         "--format=%(refname)",
         "refs/heads/release-ci",

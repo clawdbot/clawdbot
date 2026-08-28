@@ -15,7 +15,7 @@ import {
   MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import {
-  enqueueSystemEvent,
+  enqueuePluginSystemEvent,
   resetSystemEventsForTest,
 } from "openclaw/plugin-sdk/system-event-runtime";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -664,7 +664,7 @@ describe("gateway startup reconciliation", () => {
       });
 
       const sessionKey = "agent:main:main";
-      enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+      enqueuePluginSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
         sessionKey,
         contextKey: "cron:memory-dreaming",
       });
@@ -1189,7 +1189,7 @@ describe("gateway startup reconciliation", () => {
       });
 
       const sessionKey = "agent:main:main";
-      enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+      enqueuePluginSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
         sessionKey,
         contextKey: "cron:memory-dreaming",
       });
@@ -1231,7 +1231,7 @@ describe("gateway startup reconciliation", () => {
         getCron: () => harness.cron,
       });
 
-      enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+      enqueuePluginSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
         sessionKey: "agent:main:main",
         contextKey: "cron:memory-dreaming",
       });
@@ -1572,7 +1572,7 @@ describe("gateway startup reconciliation", () => {
       });
 
       const sessionKey = "agent:main:main";
-      enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+      enqueuePluginSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
         sessionKey,
         contextKey: "cron:memory-dreaming",
       });
@@ -1628,7 +1628,7 @@ describe("gateway startup reconciliation", () => {
       });
 
       const sessionKey = "agent:main:main";
-      enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+      enqueuePluginSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
         sessionKey,
         contextKey: "cron:memory-dreaming",
       });

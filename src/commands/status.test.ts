@@ -224,7 +224,7 @@ function createSessionStatusRows() {
     id: string;
   }>;
   const byAgent = agents.map((agent: { id: string }) => {
-    const path = mocks.resolveStorePath("sessions", { agentId: agent.id });
+    const path = mocks.resolveSessionStorePathCore("sessions", { agentId: agent.id });
     const store = mocks.loadSessionStore(path) as Record<
       string,
       ReturnType<typeof createDefaultSessionStoreEntry>
@@ -442,7 +442,7 @@ const mocks = vi.hoisted(() => ({
     "+1000": createDefaultSessionStoreEntry(),
   }),
   resolveMainSessionKey: vi.fn().mockReturnValue("agent:main:main"),
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/sessions.json"),
+  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/sessions.json"),
   loadNodeHostConfig: vi.fn().mockResolvedValue(null),
   webAuthExists: vi.fn().mockResolvedValue(true),
   getWebAuthAgeMs: vi.fn().mockReturnValue(5000),
@@ -576,7 +576,7 @@ vi.mock("../config/sessions/main-session.js", () => ({
   resolveMainSessionKey: mocks.resolveMainSessionKey,
 }));
 vi.mock("../config/sessions/paths.js", () => ({
-  resolveSessionStorePathCore: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveSessionStorePathCore,
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
   listSessionEntriesCore: (opts?: { storePath?: string }) =>
@@ -585,16 +585,28 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
       entry,
     })),
 }));
-vi.mock("../config/sessions/types.js", () => ({
-  resolveFreshSessionTotalTokens: vi.fn(
-    (entry?: { totalTokens?: number; totalTokensFresh?: boolean; totalTokensVersion?: number }) =>
-      typeof entry?.totalTokens === "number" &&
-      entry?.totalTokensFresh === true &&
-      entry.totalTokensVersion === 1
-        ? entry.totalTokens
-        : undefined,
-  ),
-}));
+vi.mock("../config/sessions/session-entry-runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../config/sessions/session-entry-runtime.js")>();
+  return {
+    ...actual,
+    resolveSessionTotalTokens: vi.fn((entry?: { totalTokens?: number }) =>
+      typeof entry?.totalTokens === "number" ? entry.totalTokens : undefined,
+    ),
+    resolveFreshSessionTotalTokens: vi.fn(
+      (entry?: {
+        totalTokens?: number;
+        totalTokensFresh?: boolean;
+        totalTokensVersion?: number;
+      }) =>
+        typeof entry?.totalTokens === "number" &&
+        entry?.totalTokensFresh === true &&
+        entry.totalTokensVersion === 1
+          ? entry.totalTokens
+          : undefined,
+    ),
+  };
+});
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () => {
     const plugins = [
@@ -933,8 +945,8 @@ describe("statusCommand", () => {
     });
     mocks.resolveMainSessionKey.mockReset();
     mocks.resolveMainSessionKey.mockReturnValue("agent:main:main");
-    mocks.resolveStorePath.mockReset();
-    mocks.resolveStorePath.mockReturnValue("/tmp/sessions.json");
+    mocks.resolveSessionStorePathCore.mockReset();
+    mocks.resolveSessionStorePathCore.mockReturnValue("/tmp/sessions.json");
     mocks.loadNodeHostConfig.mockReset();
     mocks.loadNodeHostConfig.mockResolvedValue(null);
     mocks.probeGateway.mockReset();
@@ -1203,6 +1215,24 @@ describe("statusCommand", () => {
       expect(payload.sessions.recent[0].percentUsed).toBeNull();
       expect(payload.sessions.recent[0].remainingTokens).toBeNull();
     });
+  });
+
+  it("mocks the extracted session runtime token resolvers", async () => {
+    const sessionRuntime = await import("../config/sessions/session-entry-runtime.js");
+    const totalTokensMock = vi.mocked(sessionRuntime.resolveSessionTotalTokens);
+    const freshTotalTokensMock = vi.mocked(sessionRuntime.resolveFreshSessionTotalTokens);
+
+    expect(vi.isMockFunction(totalTokensMock)).toBe(true);
+    expect(vi.isMockFunction(freshTotalTokensMock)).toBe(true);
+    // The real resolvers reject negative totals, so these controls prove the mock is live.
+    expect(totalTokensMock({ totalTokens: -1 })).toBe(-1);
+    expect(
+      freshTotalTokensMock({
+        totalTokens: -1,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      }),
+    ).toBe(-1);
   });
 
   it("surfaces stale usage when totalTokens is preserved but not fresh", async () => {
@@ -1589,7 +1619,7 @@ describe("statusCommand", () => {
 
   it("includes sessions across agents in JSON output", async () => {
     const originalAgents = mocks.listGatewayAgentsBasic.getMockImplementation();
-    const originalResolveStorePath = mocks.resolveStorePath.getMockImplementation();
+    const originalResolveStorePath = mocks.resolveSessionStorePathCore.getMockImplementation();
     const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
 
     mocks.listGatewayAgentsBasic.mockReturnValue({
@@ -1601,7 +1631,7 @@ describe("statusCommand", () => {
         { id: "ops", name: "Ops" },
       ],
     });
-    mocks.resolveStorePath.mockImplementation((_store, opts) =>
+    mocks.resolveSessionStorePathCore.mockImplementation((_store, opts) =>
       opts?.agentId === "ops" ? "/tmp/ops.json" : "/tmp/main.json",
     );
     mocks.loadSessionStore.mockImplementation((storePath) => {
@@ -1634,7 +1664,7 @@ describe("statusCommand", () => {
       mocks.listGatewayAgentsBasic.mockImplementation(originalAgents);
     }
     if (originalResolveStorePath) {
-      mocks.resolveStorePath.mockImplementation(originalResolveStorePath);
+      mocks.resolveSessionStorePathCore.mockImplementation(originalResolveStorePath);
     }
     if (originalLoadSessionStore) {
       mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);

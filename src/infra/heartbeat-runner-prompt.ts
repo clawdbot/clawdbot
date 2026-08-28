@@ -25,15 +25,12 @@ import {
   resolveHeartbeatSession,
   resolveIsolatedHeartbeatSessionKey,
 } from "./heartbeat-runner-session.js";
+import type { HeartbeatScheduledTask, HeartbeatWakeSource } from "./heartbeat-wake-contracts.js";
 import {
   resolveHeartbeatWakePayloadFlags,
   type HeartbeatWakePayloadFlags,
 } from "./heartbeat-wake-policy.js";
-import {
-  HEARTBEAT_SKIP_NO_PENDING_EVENT,
-  type HeartbeatScheduledTask,
-  type HeartbeatWakeSource,
-} from "./heartbeat-wake.js";
+import { HEARTBEAT_SKIP_NO_PENDING_EVENT } from "./heartbeat-wake.js";
 import { selectAgentSystemEvents } from "./system-event-ownership.js";
 import {
   peekSystemEventEntries,

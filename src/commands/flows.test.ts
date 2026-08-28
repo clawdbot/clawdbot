@@ -4,7 +4,11 @@ import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createRunningTaskRunCore as createRunningTaskRunOrNull } from "../tasks/task-executor.js";
-import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "../tasks/task-flow-registry.js";
+import { CONTINUATION_DELEGATE_CONTROLLER_ID } from "../tasks/task-flow-continuation-state.js";
+import {
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
+  getTaskFlowById,
+} from "../tasks/task-flow-registry.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import * as taskFlowRuntime from "../tasks/task-flow-runtime-internal.js";
 import { markTaskLostById, markTaskTerminalById } from "../tasks/task-registry.js";
@@ -801,6 +805,10 @@ describe("flows commands", () => {
         controllerId: "tests/flows-command",
         goal: "Stop detached work",
         status: "running",
+        stateJson: {
+          attachments: [{ name: "controller-owned.json", content: "preserve me" }],
+          attachAs: { mountPath: "controller-state" },
+        },
         createdAt: 100,
         updatedAt: 100,
       });
@@ -813,6 +821,7 @@ describe("flows commands", () => {
       expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toEqual([
         `Cancelled ${flow.flowId} (managed) with status cancelled.`,
       ]);
+      expect(getTaskFlowById(flow.flowId)?.stateJson).toEqual(flow.stateJson);
 
       const listRuntime = createRuntime();
       await flowsListCommand({}, listRuntime);
@@ -831,6 +840,36 @@ describe("flows commands", () => {
           }),
         ],
       });
+    });
+  });
+
+  it("persistently scrubs continuation attachments through flows cancel", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const secret = "FLOWS_CANCEL_CONTINUATION_ATTACHMENT_SECRET";
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: CONTINUATION_DELEGATE_CONTROLLER_ID,
+        goal: "Cancel stored continuation input",
+        status: "queued",
+        stateJson: {
+          phase: "queued",
+          attachments: [{ name: "brief.md", content: secret }],
+          attachAs: { mountPath: "handoff" },
+        },
+        createdAt: 100,
+        updatedAt: 100,
+      });
+
+      const runtime = createRuntime();
+      await flowsCancelCommand({ lookup: flow.flowId }, runtime);
+
+      expect(vi.mocked(runtime.error)).not.toHaveBeenCalled();
+      expect(vi.mocked(runtime.exit)).not.toHaveBeenCalled();
+      resetTaskFlowRegistryForTests({ persist: false });
+      const stored = getTaskFlowById(flow.flowId);
+      expect(stored?.status).toBe("cancelled");
+      expect(stored?.stateJson).toEqual({ phase: "queued" });
+      expect(JSON.stringify(stored?.stateJson)).not.toContain(secret);
     });
   });
 });

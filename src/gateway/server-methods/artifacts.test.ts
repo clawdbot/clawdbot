@@ -406,6 +406,7 @@ describe("artifacts RPC handlers", () => {
       encoding: "base64",
       data: "aGVsbG8=",
     });
+
     expectFields(downloadPayload.artifact, { id: artifactId });
   });
 

@@ -165,7 +165,7 @@ describe("resolveSessionEntryResetFreshness", () => {
 
   it("resolves fresh daily freshness for active lifecycle timestamps", async () => {
     const sessionKey = "agent:main:main";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
+    const now = new Date("2026-01-02T18:00:00Z").getTime();
     await upsertSessionEntryCore(
       { sessionKey, storePath },
       {

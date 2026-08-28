@@ -26,6 +26,7 @@ import {
 } from "./compaction-notice.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
+import { evaluateNoOpRearmAdmission, type NoOpRearmWakeClass } from "./no-op-rearm-guard.js";
 import {
   admitFollowupRunLifecycle,
   isFollowupRunAborted,
@@ -80,6 +81,7 @@ export type AdmittedFollowupTurn = {
   currentInboundContext?: CurrentInboundPromptContext;
   sendPolicy: "allow" | "deny";
   preflightCompactionApplied: boolean;
+  noOpRearmWakeClass?: NoOpRearmWakeClass;
   preflightFailurePayload?: ReplyPayload;
   preflightError?: unknown;
 };
@@ -89,7 +91,7 @@ type FollowupAdmissionResult =
   | { kind: "deferred"; reason: "active-run" }
   | {
       kind: "skipped";
-      reason: "aborted" | "lifecycle-invalidated";
+      reason: "aborted" | "lifecycle-invalidated" | "no-op-rearm-suppressed";
       operation?: ReplyOperation;
     };
 
@@ -178,6 +180,27 @@ export async function admitFollowupTurn(params: {
         autoFallbackPrimaryProbe: undefined,
         modelSelectionLocked: false,
       };
+    }
+    let noOpRearmWakeClass: NoOpRearmWakeClass | undefined;
+    const noOpRearmSessionKey = replySessionKey ?? run.sessionKey ?? "";
+    if (noOpRearmSessionKey) {
+      const noOpRearmAdmission = evaluateNoOpRearmAdmission({
+        sessionKey: noOpRearmSessionKey,
+        provenance: run.inputProvenance,
+        inboundEventKind: params.queued.currentInboundEventKind,
+        messageId: resolveFollowupCurrentMessageId(params.queued) ?? params.queued.messageId,
+        eventTimestampMs: params.queued.currentInboundEventTimestampMs,
+        isHeartbeat: params.defaults.opts?.isHeartbeat === true,
+      });
+      noOpRearmWakeClass = noOpRearmAdmission.wake;
+      if (!noOpRearmAdmission.admit) {
+        if (noOpRearmAdmission.diagnostic) {
+          defaultRuntime.log?.(noOpRearmAdmission.diagnostic.message);
+        }
+        await settleQueuedFollowupPresentation(params.defaults);
+        queuedFollowupAdmitted = false;
+        return { kind: "skipped", reason: "no-op-rearm-suppressed", operation };
+      }
     }
     const admittedEntry = replySessionKey
       ? params.defaults.storePath
@@ -295,6 +318,7 @@ export async function admitFollowupTurn(params: {
       currentInboundContext,
       sendPolicy: resolveTurnSendPolicy(activeEntry),
       preflightCompactionApplied: false,
+      noOpRearmWakeClass,
     };
     const refreshTurnSessionState = (entry: SessionEntry | undefined) => {
       const refreshedInboundContext =

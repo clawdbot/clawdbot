@@ -20,7 +20,24 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 // list/call traffic from the same MCP client.
 const TOOL_CACHE_TTL_MS = 30_000;
 const TOOL_CACHE_MAX_ENTRIES = 256;
-const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
+// Tools excluded from the MCP loopback catalog (the CLI-coding-agent tool list).
+// - read/write/edit/apply_patch/exec/process: CLI-mode providers have their own
+//   native equivalents, so OpenClaw's versions would conflict.
+// - continue_work/request_compaction: continuation is an INTERNAL primitive the
+//   inferring session elects for itself; it is not something an external/CLI
+//   caller should drive. They stay registered in the
+//   gateway catalog (for /status, doctor, policy, child-inheritance) but are kept
+//   out of the loopback surface here.
+const NATIVE_TOOL_EXCLUDE = new Set([
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+  "continue_work",
+  "request_compaction",
+]);
 
 type CachedScopedTools = {
   agentId: string | undefined;

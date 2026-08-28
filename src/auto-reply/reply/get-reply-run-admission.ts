@@ -53,7 +53,10 @@ import {
   isSlackDirectRoutedThreadTurn,
   resolveRoutedDeliveryThreadId,
 } from "./routed-delivery-thread.js";
-import { drainFormattedSystemEvents } from "./session-system-events.js";
+import {
+  prepareFormattedSystemEvents,
+  type PreparedManagedSystemEventDelivery,
+} from "./session-system-events.js";
 import { getReplySystemEventSessionKey } from "./system-event-session-key.js";
 
 export async function prepareReplyRunAdmission(context: PreparedReplyRunContext) {
@@ -135,6 +138,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
+  const managedSystemEventDeliveries = new Map<string, PreparedManagedSystemEventDelivery>();
   const drainSystemEventBlocks = async () => {
     if (useFastReplyRuntime) {
       return;
@@ -144,18 +148,40 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
         ? [routeSystemEventSessionKey, sessionKey]
         : [sessionKey];
+    const preparedBySession: Awaited<ReturnType<typeof prepareFormattedSystemEvents>>[] = [];
     for (const systemEventSessionKey of systemEventSessionKeys) {
       const isCurrentSession = systemEventSessionKey === sessionKey;
-      const eventsBlock = await drainFormattedSystemEvents({
-        cfg,
-        agentId,
-        sessionKey: systemEventSessionKey,
-        isMainSession: isCurrentSession && isMainSession,
-        isNewSession: isCurrentSession && isNewSession,
-        suppressHeartbeatOwnedEvents: context.isHeartbeat,
-      });
-      if (eventsBlock) {
-        drainedSystemEventBlocks.push(eventsBlock);
+      preparedBySession.push(
+        await prepareFormattedSystemEvents({
+          cfg,
+          agentId,
+          sessionKey: systemEventSessionKey,
+          isMainSession: isCurrentSession && isMainSession,
+          isNewSession: isCurrentSession && isNewSession,
+          suppressHeartbeatOwnedEvents: context.isHeartbeat,
+        }),
+      );
+    }
+    const managedDeliveryIds = preparedBySession.flatMap((prepared) =>
+      prepared.managedDeliveries.map((delivery) => delivery.id),
+    );
+    const suppliedRecorderAccepted =
+      !opts?.userTurnTranscriptRecorder ||
+      opts.userTurnTranscriptRecorder.replaceSessionDeliveryAckIds?.(managedDeliveryIds) === true;
+    const deferredManagedBlockKeys = suppliedRecorderAccepted
+      ? undefined
+      : new Set(managedDeliveryIds.map((id) => `session-delivery:${id}`));
+    for (const prepared of preparedBySession) {
+      if (suppliedRecorderAccepted) {
+        for (const delivery of prepared.managedDeliveries) {
+          managedSystemEventDeliveries.set(delivery.id, delivery);
+        }
+      }
+      for (const block of prepared.blocks) {
+        if (block.key && deferredManagedBlockKeys?.has(block.key)) {
+          continue;
+        }
+        drainedSystemEventBlocks.push(block.text);
       }
     }
   };
@@ -632,6 +658,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     transcriptCommandBody,
     promptMedia,
     currentInboundContext,
+    managedSystemEventDeliveries,
     isRoomEvent,
     providedReplyOperation,
     sessionIdFinal,

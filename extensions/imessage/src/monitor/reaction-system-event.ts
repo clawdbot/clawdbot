@@ -1,6 +1,6 @@
 // Imessage plugin module implements reaction system event behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueuePluginSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 
 type IMessageReactionSystemEventDecision = {
   text: string;
@@ -21,7 +21,7 @@ export function enqueueIMessageReactionSystemEvent(params: {
   logVerbose?: (message: string) => void;
 }): boolean {
   const { decision, runtime } = params;
-  const queued = enqueueSystemEvent(decision.text, {
+  const queued = enqueuePluginSystemEvent(decision.text, {
     sessionKey: decision.route.sessionKey,
     contextKey: decision.contextKey,
   });

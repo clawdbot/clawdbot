@@ -32,6 +32,10 @@ export function normalizeTraceContext(value: unknown): DiagnosticTraceContext | 
     ...(candidate.spanId ? { spanId: candidate.spanId } : {}),
     ...(candidate.parentSpanId ? { parentSpanId: candidate.parentSpanId } : {}),
     ...(candidate.traceFlags ? { traceFlags: candidate.traceFlags } : {}),
+    // Preserve remote-source markers so trace stitching can distinguish a
+    // carried W3C parent from a logical local parent on the same trace id.
+    ...(candidate.parentSpanIdSource === "remote" ? { parentSpanIdSource: "remote" as const } : {}),
+    ...(candidate.spanIdSource === "remote" ? { spanIdSource: "remote" as const } : {}),
   };
 }
 

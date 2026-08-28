@@ -1303,6 +1303,46 @@ describe("Codex app-server dynamic tool build", () => {
     expect(webSearchAllowed).toBe(false);
   });
 
+  it("forwards executable continuation ownership into normal Codex dynamic catalogs", async () => {
+    const factoryOptions: unknown[] = [];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [
+        createRuntimeDynamicTool("continue_work"),
+        createRuntimeDynamicTool("continue_delegate"),
+        createRuntimeDynamicTool("request_compaction"),
+      ];
+    });
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const continueWorkOpts = { requestContinuation: vi.fn() };
+    const requestCompactionOpts = {
+      getContextUsage: () => 1,
+      triggerCompaction: vi.fn(),
+      sessionId: "session-1",
+    };
+    params.continueWorkOpts = continueWorkOpts;
+    params.requestCompactionOpts = requestCompactionOpts;
+    params.drainsContinuationDelegateQueue = true;
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(factoryOptions).toHaveLength(1);
+    expect(factoryOptions[0]).toMatchObject({
+      continueWorkOpts,
+      requestCompactionOpts,
+      drainsContinuationDelegateQueue: true,
+    });
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "continue_work",
+      "continue_delegate",
+      "request_compaction",
+    ]);
+  });
+
   it("keeps persistent search disabled during a memory flush when config disables it", async () => {
     setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("read"),
@@ -2728,14 +2768,16 @@ describe("Codex app-server dynamic tool build", () => {
     ).toBe(false);
   });
 
-  it("preserves the core final delivery control only on message-tool-only schemas", async () => {
+  it("forwards message-tool-only finality to the canonical message schema", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
-    setOpenClawCodingToolsFactoryForTests((options) =>
-      createOpenClawCodingTools(options).filter((tool) => tool.name === "message"),
-    );
+    const factoryOptions: unknown[] = [];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return createOpenClawCodingTools(options).filter((tool) => tool.name === "message");
+    });
 
     params.sourceReplyDeliveryMode = "message_tool_only";
     const sourceReplyTools = await buildDynamicToolsForTest(params, workspaceDir);
@@ -2743,6 +2785,9 @@ describe("Codex app-server dynamic tool build", () => {
       properties?: Record<string, unknown>;
     };
 
+    expect(factoryOptions[0]).toMatchObject({
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
     expect(sourceReplySchema.properties).toMatchObject({
       final: {
         type: "boolean",
@@ -2757,6 +2802,9 @@ describe("Codex app-server dynamic tool build", () => {
       properties?: Record<string, unknown>;
     };
 
+    expect(factoryOptions[1]).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+    });
     expect(automaticSchema.properties).not.toHaveProperty("final");
   });
 });

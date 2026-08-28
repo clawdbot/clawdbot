@@ -920,9 +920,8 @@ describe("createCodexDynamicToolBridge", () => {
     // An accepted sessions_spawn launch carries details.status "accepted" with a
     // runId + childSessionKey. The launch succeeded (the child session was
     // accepted), so Codex must see a successful tool call, not an error.
-    // Regression for #96833: the former Codex-only success allowlist omitted
-    // "accepted", so the launch was persisted with isError: true and reported
-    // to Codex as success: false.
+    // Regression for #96833: Codex previously classified unfamiliar
+    // successful statuses as errors instead of using the shared failure contract.
     const onAgentToolResult = vi.fn();
     const bridge = createBridgeWithToolResult(
       "sessions_spawn",
@@ -1042,8 +1041,7 @@ describe("createCodexDynamicToolBridge", () => {
   });
 
   it("still reports a forbidden sessions_spawn result as a failed dynamic tool call", async () => {
-    // Deny symmetry: a genuinely rejected spawn (status "forbidden") must stay an
-    // error so the accepted-status allowlist entry does not over-correct.
+    // Deny symmetry: a genuinely forbidden spawn must remain an error.
     const bridge = createBridgeWithToolResult(
       "sessions_spawn",
       textToolResult("Forbidden: spawn limit reached.", { status: "forbidden" }),
@@ -1142,6 +1140,82 @@ describe("createCodexDynamicToolBridge", () => {
     );
   });
 
+  it.each([
+    { toolName: "continue_work", status: "scheduled" },
+    { toolName: "continue_delegate", status: "scheduled" },
+    { toolName: "continue_delegate", status: "queued-for-compaction" },
+    { toolName: "request_compaction", status: "compaction_requested" },
+    { toolName: "request_compaction", status: "already_pending" },
+  ])(
+    "treats $toolName status $status as a successful dynamic tool call",
+    async ({ toolName, status }) => {
+      const onAgentToolResult = vi.fn();
+      const bridge = createBridgeWithToolResult(
+        toolName,
+        textToolResult(`${toolName}: ${status}`, { status }),
+      );
+
+      const result = await bridge.handleToolCall(
+        {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: `call-${toolName}-${status}`,
+          namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+          tool: toolName,
+          arguments: {},
+        },
+        { onAgentToolResult },
+      );
+
+      expect(result.success).toBe(true);
+      expect(onAgentToolResult).toHaveBeenCalledWith(
+        expect.objectContaining({ toolName, isError: false }),
+      );
+    },
+  );
+
+  it("keeps structured continuation guard rejections informational", async () => {
+    const bridge = createBridgeWithToolResult(
+      "continue_delegate",
+      textToolResult("delegate limit reached", {
+        status: "rejected",
+        guard: "maxDelegatesPerTurn",
+      }),
+    );
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-continue-delegate-rejected",
+      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      tool: "continue_delegate",
+      arguments: {},
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("keeps explicitly failed continuation rejections classified as failures", async () => {
+    const bridge = createBridgeWithToolResult(
+      "continue_delegate",
+      textToolResult("delegate request failed", {
+        status: "rejected",
+        ok: false,
+      }),
+    );
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-continue-delegate-rejected-failed",
+      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      tool: "continue_delegate",
+      arguments: {},
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it.each(["pending", "applied", "rejected", "quarantined", "stale"] as const)(
     "treats Skill Workshop lifecycle status %s as a successful dynamic tool call",
     async (status) => {
@@ -1184,7 +1258,6 @@ describe("createCodexDynamicToolBridge", () => {
       tool: "plugin_tool",
       arguments: {},
     });
-
     expect(result.success).toBe(true);
   });
 

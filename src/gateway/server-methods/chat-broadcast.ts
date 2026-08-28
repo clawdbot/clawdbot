@@ -178,6 +178,40 @@ export function broadcastChatError(params: ChatBroadcastParams & { errorMessage?
   broadcastChatTerminal({ ...params, state: "error" });
 }
 
+export function broadcastChatAborted(params: {
+  context: ChatBroadcastContext;
+  runId: string;
+  sessionKey: string;
+  agentId?: string;
+  errorMessage?: string;
+}): void {
+  const seq = nextChatSeq(params.context, params.runId);
+  const payloadAgentId = parseAgentSessionKey(params.sessionKey) ? undefined : params.agentId;
+  const payload = {
+    runId: params.runId,
+    sessionKey: params.sessionKey,
+    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
+    seq,
+    state: "aborted" as const,
+    errorMessage: params.errorMessage,
+  };
+  params.context.broadcast("chat", payload, {
+    sessionKeys: resolveChatSessionKeys({
+      context: params.context,
+      sessionKey: params.sessionKey,
+      agentId: payloadAgentId,
+    }),
+  });
+  sendGlobalAwareNodeChatPayload({
+    context: params.context,
+    sessionKey: params.sessionKey,
+    agentId: payloadAgentId,
+    event: "chat",
+    payload,
+  });
+  params.context.agentRunSeq.delete(params.runId);
+}
+
 export function isSourceReplyTranscriptMirrorPayload(payload: ReplyPayload | undefined): boolean {
   return Boolean(payload && getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror);
 }

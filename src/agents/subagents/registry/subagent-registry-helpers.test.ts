@@ -227,6 +227,19 @@ describe("reconcileOrphanedRestoredRuns", () => {
     },
   );
 
+  it("preserves orphaned accepted steer dispatch owners", () => {
+    const entry = createRunEntry({
+      suppressAnnounceReason: "steer-restart",
+      acceptedSteerDispatch: {
+        gatewayRunId: "gateway-steer-run",
+      },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+
+    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns: new Set() })).toBe(false);
+    expect(runs.get(entry.runId)).toBe(entry);
+  });
+
   it.each(["pending", "suspended", "in_progress"] as const)(
     "preserves orphaned required completion delivery in the %s state",
     (status) => {

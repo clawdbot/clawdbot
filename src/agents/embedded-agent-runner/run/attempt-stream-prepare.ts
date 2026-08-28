@@ -95,10 +95,13 @@ export function prepareEmbeddedAttemptStream(input: {
   onBlockReply: EmbeddedRunAttemptParams["onBlockReply"];
   onBlockReplyFlush: EmbeddedRunAttemptParams["onBlockReplyFlush"];
   sandboxSessionKey: string;
-  builtinToolNames: ReadonlySet<string>;
-  coreBuiltinToolNames?: ReadonlySet<string>;
-  replaySafeToolNames: ReadonlySet<string>;
-  codeModeExecToolNames?: ReadonlySet<string>;
+  subscriptionToolTrust: {
+    builtinToolNames: ReadonlySet<string>;
+    coreBuiltinToolNames?: ReadonlySet<string>;
+    replaySafeToolNames: ReadonlySet<string>;
+    trustedLocalMediaToolNames: ReadonlySet<string>;
+    codeModeExecToolNames?: ReadonlySet<string>;
+  };
   sideEffectToolOwners?: ReadonlyMap<string, string>;
   diagnosticOwner: DiagnosticEmbeddedRunOwner;
 }) {
@@ -328,10 +331,7 @@ export function prepareEmbeddedAttemptStream(input: {
     hasRepliedRef: attempt.hasRepliedRef,
     sessionId: attempt.sessionId,
     agentId: input.hookAgentId,
-    builtinToolNames: input.builtinToolNames,
-    coreBuiltinToolNames: input.coreBuiltinToolNames,
-    replaySafeToolNames: input.replaySafeToolNames,
-    ...(input.codeModeExecToolNames ? { codeModeExecToolNames: input.codeModeExecToolNames } : {}),
+    ...input.subscriptionToolTrust,
     ...(input.sideEffectToolOwners ? { sideEffectToolOwners: input.sideEffectToolOwners } : {}),
     internalEvents: attempt.internalEvents,
   });

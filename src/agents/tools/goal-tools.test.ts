@@ -31,7 +31,7 @@ function getSessionEntry(params: {
   return loadSessionEntry(params);
 }
 
-async function upsertSessionEntry(params: {
+async function upsertSessionEntryCore(params: {
   storePath: string;
   sessionKey: string;
   entry: SessionEntry;
@@ -48,7 +48,7 @@ describe("goal tools", () => {
     // stored active goal record.
     const { config, template } = await createStoreConfig();
     const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
-    await upsertSessionEntry({
+    await upsertSessionEntryCore({
       storePath,
       sessionKey: "global",
       entry: {
@@ -95,7 +95,7 @@ describe("goal tools", () => {
     });
 
     const researchStorePath = resolveSessionStorePathCore(template, { agentId: "research" });
-    await upsertSessionEntry({
+    await upsertSessionEntryCore({
       storePath: researchStorePath,
       sessionKey: "global",
       entry: { sessionId: "sess-global", updatedAt: 1 },
@@ -123,7 +123,7 @@ describe("goal tools", () => {
       });
 
       const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
-      await upsertSessionEntry({
+      await upsertSessionEntryCore({
         storePath,
         sessionKey: "global",
         entry: { sessionId: "sess-global", updatedAt: 1 },
@@ -149,7 +149,7 @@ describe("goal tools", () => {
     });
 
     const opsStorePath = resolveSessionStorePathCore(template, { agentId: "ops" });
-    await upsertSessionEntry({
+    await upsertSessionEntryCore({
       storePath: opsStorePath,
       sessionKey: "agent:ops:main",
       entry: { sessionId: "sess-ops", updatedAt: 1 },
@@ -174,7 +174,7 @@ describe("goal tools", () => {
       sessionAgentId: "research",
       config,
     };
-    await upsertSessionEntry({
+    await upsertSessionEntryCore({
       storePath,
       sessionKey: "global",
       entry: { sessionId: "sess-global", updatedAt: 1 },

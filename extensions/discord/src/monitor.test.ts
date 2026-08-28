@@ -1115,7 +1115,7 @@ describe("discord DM reaction handling", () => {
   ])("preserves distinct normal and super reactions when $action", async (testCase) => {
     channelRuntimeModule.resetSystemEventsForTest();
     enqueueSystemEventSpy.mockImplementation((text: string, options: { sessionKey: string }) =>
-      channelRuntimeModule.enqueueSystemEvent(text, options),
+      channelRuntimeModule.enqueuePluginSystemEvent(text, options),
     );
 
     try {

@@ -2808,6 +2808,254 @@ describe("steerControlledSubagentRun", () => {
     });
   });
 
+  const unconfirmedSteerSeams = [
+    {
+      name: "Gateway lifecycle rotation",
+      rotateOnLaunch: true,
+      replaceResult: undefined,
+      childSessionKey: "agent:main:subagent:steer-unconfirmed-generation",
+      runId: "run-steer-unconfirmed-generation",
+      gatewayRunId: "run-steer-unconfirmed-generation-new",
+      error: "Gateway lifecycle changed before the steered run could be registered.",
+    },
+    {
+      name: "run remap refusal",
+      rotateOnLaunch: false,
+      replaceResult: false,
+      childSessionKey: "agent:main:subagent:steer-unconfirmed-remap",
+      runId: "run-steer-unconfirmed-remap",
+      gatewayRunId: "run-steer-unconfirmed-remap-new",
+      error: "failed to replace steered subagent run",
+    },
+  ] as const;
+
+  for (const seam of unconfirmedSteerSeams) {
+    it(`keeps steer-restart ownership when ${seam.name} leaves termination unconfirmed`, async () => {
+      const entry = createSubagentRunRecord({
+        runId: seam.runId,
+        childSessionKey: seam.childSessionKey,
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "initial task",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+      });
+      addSubagentRunForTests(entry);
+      const replaceSpy =
+        seam.replaceResult === undefined
+          ? undefined
+          : vi
+              .spyOn(await import("./subagent-registry.js"), "replaceSubagentRunAfterSteerCore")
+              .mockReturnValue(seam.replaceResult);
+
+      const callGateway = vi.fn(
+        async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+          if (request.method === "agent.wait") {
+            return {} as T;
+          }
+          if (request.method === "agent") {
+            if (seam.rotateOnLaunch) {
+              rotateAgentEventLifecycleGeneration();
+            }
+            return { runId: seam.gatewayRunId } as T;
+          }
+          if (request.method === "chat.abort") {
+            // Inconclusive abort plus no frozen child-session identity: the accepted
+            // run was never proven stopped.
+            return { aborted: true, runIds: ["a-different-run"] } as T;
+          }
+          throw new Error(`unexpected method: ${request.method}`);
+        },
+      ) as GatewayCaller;
+      setSubagentControlDepsForTest({ callGateway });
+
+      try {
+        await expect(
+          steerControlledSubagentRun({
+            cfg: cfgWithSessionStore(),
+            controller: {
+              controllerSessionKey: "agent:main:main",
+              callerSessionKey: "agent:main:main",
+              callerIsSubagent: false,
+              controlScope: "children",
+            },
+            entry,
+            message: "new direction",
+          }),
+        ).resolves.toMatchObject({
+          status: "error",
+          runId: seam.gatewayRunId,
+          error: seam.error,
+        });
+
+        expect(callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "chat.abort",
+            params: { sessionKey: seam.childSessionKey, runId: seam.gatewayRunId },
+          }),
+        );
+        expect(getSubagentRunByChildSessionKey(seam.childSessionKey)).toMatchObject({
+          runId: seam.runId,
+          suppressAnnounceReason: "steer-restart",
+          acceptedSteerDispatch: {
+            gatewayRunId: seam.gatewayRunId,
+          },
+        });
+      } finally {
+        replaceSpy?.mockRestore();
+      }
+    });
+  }
+
+  it("defers termination until the accepted steer receipt is durable", async () => {
+    const childSessionKey = "agent:main:subagent:steer-pending-owner-write";
+    const entry = createSubagentRunRecord({
+      runId: "run-steer-pending-owner-write",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "initial task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+    addSubagentRunForTests(entry);
+    const registry = await import("./subagent-registry.js");
+    let recordAttempts = 0;
+    const recordSpy = vi
+      .spyOn(registry, "recordAcceptedSubagentSteerDispatch")
+      .mockImplementation((params) => {
+        recordAttempts += 1;
+        const dispatch = {
+          gatewayRunId: params.gatewayRunId,
+        };
+        params.expected.acceptedSteerDispatch = dispatch;
+        return {
+          status: recordAttempts === 1 ? "persisted" : "pending-persistence",
+          ownerRunId: params.expected.runId,
+          owner: params.expected,
+          dispatch,
+        };
+      });
+    const replaceSpy = vi
+      .spyOn(registry, "replaceSubagentRunAfterSteerCore")
+      .mockReturnValue(false);
+    const callGateway = vi.fn(async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+      if (request.method === "agent.wait") {
+        return {} as T;
+      }
+      if (request.method === "agent") {
+        return { runId: "run-steer-pending-owner-write-next" } as T;
+      }
+      throw new Error(`unexpected method: ${request.method}`);
+    }) as GatewayCaller;
+    setSubagentControlDepsForTest({ callGateway });
+
+    try {
+      await expect(
+        steerControlledSubagentRun({
+          cfg: cfgWithSessionStore(),
+          controller: {
+            controllerSessionKey: "agent:main:main",
+            callerSessionKey: "agent:main:main",
+            callerIsSubagent: false,
+            controlScope: "children",
+          },
+          entry,
+          message: "new direction",
+        }),
+      ).resolves.toMatchObject({
+        status: "error",
+        runId: "run-steer-pending-owner-write-next",
+        error: "failed to replace steered subagent run",
+      });
+
+      expect(callGateway).not.toHaveBeenCalledWith(
+        expect.objectContaining({ method: "chat.abort" }),
+      );
+      expect(recordSpy).toHaveBeenCalledTimes(2);
+      expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+        suppressAnnounceReason: "steer-restart",
+        acceptedSteerDispatch: {
+          gatewayRunId: "run-steer-pending-owner-write-next",
+        },
+      });
+    } finally {
+      recordSpy.mockRestore();
+      replaceSpy.mockRestore();
+    }
+  });
+
+  it("retains the idempotency-key owner when the steer response is lost", async () => {
+    const childSessionKey = "agent:main:subagent:steer-response-lost";
+    const entry = createSubagentRunRecord({
+      runId: "run-steer-response-lost",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "initial task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+    addSubagentRunForTests(entry);
+    let dispatchedIdempotencyKey = "";
+    const callGateway = vi.fn(async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+      if (request.method === "agent.wait") {
+        return {} as T;
+      }
+      if (request.method === "agent") {
+        dispatchedIdempotencyKey = String(
+          (request.params as { idempotencyKey?: string }).idempotencyKey,
+        );
+        throw new Error("steer response lost");
+      }
+      if (request.method === "chat.abort") {
+        return { aborted: true, runIds: ["another-run"] } as T;
+      }
+      throw new Error(`unexpected method: ${request.method}`);
+    }) as GatewayCaller;
+    setSubagentControlDepsForTest({ callGateway });
+
+    await expect(
+      steerControlledSubagentRun({
+        cfg: cfgWithSessionStore(),
+        controller: {
+          controllerSessionKey: "agent:main:main",
+          callerSessionKey: "agent:main:main",
+          callerIsSubagent: false,
+          controlScope: "children",
+        },
+        entry,
+        message: "new direction",
+      }),
+    ).resolves.toMatchObject({
+      status: "error",
+      error: "steer response lost",
+    });
+
+    expect(dispatchedIdempotencyKey).not.toBe("");
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "chat.abort",
+        params: {
+          sessionKey: childSessionKey,
+          runId: dispatchedIdempotencyKey,
+        },
+      }),
+    );
+    expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+      suppressAnnounceReason: "steer-restart",
+      acceptedSteerDispatch: {
+        gatewayRunId: dispatchedIdempotencyKey,
+      },
+    });
+  });
+
   it("does not replace a finalizing run when its abort is rejected", async () => {
     const childSessionKey = "agent:main:subagent:steer-finalizing";
     const storePath = await writeSessionStoreFixture("steer-finalizing", {

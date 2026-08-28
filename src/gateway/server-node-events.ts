@@ -27,7 +27,7 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
-import { requestHeartbeat as defaultRequestHeartbeat } from "../infra/heartbeat-wake.js";
+import { requestHeartbeatRaw as defaultRequestHeartbeat } from "../infra/heartbeat-wake.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
@@ -36,7 +36,7 @@ import {
   registerApnsRegistration as defaultRegisterApnsRegistration,
 } from "../infra/push-apns.js";
 import { withSystemEventOwner as defaultWithSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEvent as defaultEnqueueSystemEvent } from "../infra/system-events.js";
+import { enqueueSystemEventRaw as defaultEnqueueSystemEvent } from "../infra/system-events.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { deleteMediaBuffer } from "../media/store.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";

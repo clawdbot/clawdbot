@@ -1,6 +1,5 @@
 // User turn transcript helpers extract user-turn text from session transcripts.
 import { randomUUID } from "node:crypto";
-import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
@@ -17,9 +16,10 @@ import { readPersistedMediaFacts, type MediaFact } from "../media/media-facts.js
 import { applyInputProvenanceToUserMessage } from "./input-provenance.js";
 import { resolveUserTurnTranscriptAdmission } from "./user-turn-transcript-admission.js";
 import {
-  normalizeStructuredMediaEntryForTranscript,
-  resolveTranscriptMediaPath,
-} from "./user-turn-transcript.media-normalize.js";
+  buildLateResolvedMediaMessage,
+  readUserTurnMessageMeta,
+} from "./user-turn-transcript-late-media.js";
+import { normalizeStructuredMediaEntryForTranscript } from "./user-turn-transcript.media-normalize.js";
 import {
   buildPersistedUserTurnMetadata,
   normalizePersistedSteerTargetRunId,
@@ -30,7 +30,6 @@ import {
 import type {
   CreateUserTurnTranscriptRecorderParams,
   PersistUserTurnTranscriptParams,
-  PersistedUserTurnMediaInput,
   PersistedUserTurnMessage,
   UserTurnMessagePersistenceParams,
   UserTurnInput,
@@ -47,6 +46,7 @@ export type {
   UserTurnInput,
   UserTurnTranscriptRecorder,
 } from "./user-turn-transcript.types.js";
+export { buildPersistedUserTurnMediaInputsFromFields } from "./user-turn-transcript.media-normalize.js";
 
 export {
   preparePersistedUserTurnMessageForTranscriptWrite,
@@ -62,67 +62,11 @@ export function resolvePersistedUserTurnText(value: string | null | undefined): 
   return normalizeOptionalString(value);
 }
 
-function resolveTranscriptMediaType(params: {
-  explicitType: string | undefined;
-  mediaPath: string | undefined;
-  mediaUrl: string | undefined;
-}): string | undefined {
-  return params.explicitType ?? mimeTypeFromFilePath(params.mediaPath ?? params.mediaUrl);
-}
-
-export function buildPersistedUserTurnMediaInputsFromFields(
-  fields: PersistedUserTurnMessage | null | undefined,
-): PersistedUserTurnMediaInput[] {
-  const facts = fields ? (readPersistedMediaFacts(fields) ?? []) : [];
-  const normalizedMedia = facts.map((fact) => {
-    const rawPath = normalizeOptionalString(fact.path);
-    const mediaPath = rawPath
-      ? resolveTranscriptMediaPath(rawPath, normalizeOptionalString(fact.workspaceDir))
-      : undefined;
-    const url = normalizeOptionalString(fact.url);
-    if (!mediaPath && !url) {
-      return {};
-    }
-    const contentType = resolveTranscriptMediaType({
-      explicitType: normalizeOptionalString(fact.contentType),
-      mediaPath,
-      mediaUrl: url,
-    });
-    const media: PersistedUserTurnMediaInput = { contentType };
-    if (mediaPath) {
-      media.path = mediaPath;
-    }
-    if (url) {
-      media.url = url;
-    }
-    if (fact.kind) {
-      media.kind = fact.kind;
-    }
-    if (fact.fileName) {
-      media.fileName = fact.fileName;
-    }
-    if (fact.sizeBytes !== undefined) {
-      media.sizeBytes = fact.sizeBytes;
-    }
-    if (fact.durationMs !== undefined) {
-      media.durationMs = fact.durationMs;
-    }
-    if (fact.width !== undefined) {
-      media.width = fact.width;
-    }
-    if (fact.height !== undefined) {
-      media.height = fact.height;
-    }
-    return media;
-  });
-  return normalizedMedia.some((entry) => entry.path || entry.url) ? normalizedMedia : [];
-}
-
 export function buildLateMediaAttachedProjection(message: AgentMessage): {
   text?: string;
   media: MediaFact[];
 } {
-  const isLateMedia = readOpenClawMessageMeta(message)?.lateMedia === true;
+  const isLateMedia = readUserTurnMessageMeta(message)?.lateMedia === true;
   const media = isLateMedia ? (readPersistedMediaFacts(message) ?? []) : [];
   const text = media
     .flatMap((fact) => {
@@ -133,9 +77,6 @@ export function buildLateMediaAttachedProjection(message: AgentMessage): {
   return { ...(text ? { text } : {}), media };
 }
 
-function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown> | undefined {
-  return asOptionalRecord(Reflect.get(message, "__openclaw"));
-}
 export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const normalizedMedia = (params.media ?? []).map(normalizeStructuredMediaEntryForTranscript);
   const text = params.text ?? "";
@@ -145,7 +86,14 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
   // every historical turn serialize identically on the wire. Persisting a stamp
   // here would NOT match the bare-current arrival (the gateway no longer stamps
   // the live turn) — see https://github.com/openclaw/openclaw/issues/3658.
-  const openClawMeta = buildPersistedUserTurnMetadata(params, normalizedMedia);
+  // Upstream owns the shared metadata shape; managed session-delivery acks are a
+  // fork-local field the recorder later replaces, so they stay layered here.
+  const openClawMeta = {
+    ...buildPersistedUserTurnMetadata(params, normalizedMedia),
+    ...(params.sessionDeliveryAckIds && params.sessionDeliveryAckIds.length > 0
+      ? { sessionDeliveryAckIds: [...new Set(params.sessionDeliveryAckIds)] }
+      : {}),
+  };
   const message = {
     role: "user",
     content: text,
@@ -164,44 +112,6 @@ function resolvePersistedUserTurnMessage(
 
 function isUserMessage(message: unknown): message is PersistedUserTurnMessage {
   return asOptionalRecord(message)?.role === "user";
-}
-
-function buildLateResolvedMediaMessage(params: {
-  admittedMessage?: PersistedUserTurnMessage;
-  resolvedMessage: PersistedUserTurnMessage;
-}): PersistedUserTurnMessage | undefined {
-  const admittedMedia = buildPersistedUserTurnMediaInputsFromFields(params.admittedMessage);
-  const resolvedMedia = buildPersistedUserTurnMediaInputsFromFields(params.resolvedMessage);
-  if (
-    resolvedMedia.length === 0 ||
-    JSON.stringify(resolvedMedia) === JSON.stringify(admittedMedia)
-  ) {
-    return undefined;
-  }
-  const resolvedIdempotencyKey = Reflect.get(params.resolvedMessage, "idempotencyKey");
-  const resolvedTimestamp = Reflect.get(params.resolvedMessage, "timestamp");
-  const admittedContent = params.admittedMessage?.content;
-  const resolvedContent = params.resolvedMessage.content;
-  let content = resolvedContent;
-  if (resolvedContent === admittedContent) {
-    content = "";
-  } else if (Array.isArray(resolvedContent) && typeof admittedContent === "string") {
-    content = resolvedContent.filter((block) => {
-      const textBlock = block as { type?: unknown; text?: unknown } | null;
-      return textBlock?.type !== "text" || textBlock.text !== admittedContent;
-    });
-  }
-  const idempotencyKey =
-    typeof resolvedIdempotencyKey === "string" && resolvedIdempotencyKey.length > 0
-      ? `${resolvedIdempotencyKey}:late-media`
-      : `late-media:${typeof resolvedTimestamp === "number" ? resolvedTimestamp : Date.now()}`;
-  // Like #111204, mark late-media scaffolding as wire-only so UIs never render it.
-  return {
-    ...params.resolvedMessage,
-    content,
-    idempotencyKey,
-    __openclaw: { ...readOpenClawMessageMeta(params.resolvedMessage), lateMedia: true },
-  } as PersistedUserTurnMessage;
 }
 
 function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
@@ -236,8 +146,8 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
   ) {
     return params.runtimeMessage;
   }
-  const runtimeMeta = readOpenClawMessageMeta(params.runtimeMessage);
-  const preparedMeta = readOpenClawMessageMeta(params.preparedMessage);
+  const runtimeMeta = readUserTurnMessageMeta(params.runtimeMessage);
+  const preparedMeta = readUserTurnMessageMeta(params.preparedMessage);
   return {
     ...params.runtimeMessage,
     ...params.preparedMessage,
@@ -379,6 +289,43 @@ export function createUserTurnTranscriptRecorder(
   let sentToProvider = false;
   let admissionHandler: ((admission: UserTurnTranscriptAdmissionReceipt) => void) | undefined;
   let resolvedBeforeProvider = false;
+  const replacementSessionDeliveryAckIds = new Set<string>();
+  let hasReplacementSessionDeliveryAckIds = false;
+
+  const replaceSessionDeliveryAckIds = (deliveryIds: readonly string[]): boolean => {
+    if (selfPersistencePromise || runtimePersistencePromise || runtimePersisted || persisted) {
+      return false;
+    }
+    hasReplacementSessionDeliveryAckIds = true;
+    replacementSessionDeliveryAckIds.clear();
+    for (const deliveryId of deliveryIds) {
+      const normalized = deliveryId.trim();
+      if (normalized) {
+        replacementSessionDeliveryAckIds.add(normalized);
+      }
+    }
+    return true;
+  };
+
+  const withReplacementSessionDeliveryAckIds = (
+    candidate: PersistedUserTurnMessage | undefined,
+  ): PersistedUserTurnMessage | undefined => {
+    if (!candidate || !hasReplacementSessionDeliveryAckIds) {
+      return candidate;
+    }
+    const metadata = { ...readUserTurnMessageMeta(candidate) };
+    Reflect.deleteProperty(metadata, "sessionDeliveryAckIds");
+    return {
+      ...candidate,
+      __openclaw: {
+        ...metadata,
+        ...(replacementSessionDeliveryAckIds.size > 0
+          ? { sessionDeliveryAckIds: [...replacementSessionDeliveryAckIds] }
+          : {}),
+      },
+    } as PersistedUserTurnMessage;
+  };
+
   let replacementText: string | undefined;
   let confirmedSteerTargetRunId: string | undefined;
 
@@ -410,7 +357,7 @@ export function createUserTurnTranscriptRecorder(
 
   const resolveMessageForPersistence = async (): Promise<PersistedUserTurnMessage | undefined> => {
     if (params.message || !params.resolveInput) {
-      return applyMessageOverrides(message);
+      return withReplacementSessionDeliveryAckIds(applyMessageOverrides(message));
     }
     if (!resolvedMessagePromise) {
       resolvedMessagePromise = (async () => {
@@ -429,7 +376,7 @@ export function createUserTurnTranscriptRecorder(
         }
       })();
     }
-    return await resolvedMessagePromise;
+    return withReplacementSessionDeliveryAckIds(await resolvedMessagePromise);
   };
 
   const notifyMessagePersisted = (persistedMessage?: PersistedUserTurnMessage) => {
@@ -644,6 +591,7 @@ export function createUserTurnTranscriptRecorder(
     getPersistedMessage: () =>
       admittedMessage ?? runtimePersistedMessage ?? persistedResult?.message,
     getAdmissionReceipt: () => admissionReceipt,
+    replaceSessionDeliveryAckIds,
     setAdmissionHandler: (handler) => (admissionHandler = handler),
     markSentToProvider: () => {
       sentToProvider = true;

@@ -2,6 +2,7 @@
 import { createServer } from "node:http";
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useHermeticOpenclawEnv } from "../../../test/vitest/hermetic-openclaw-env.js";
 import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
@@ -381,6 +382,7 @@ vi.mock("./run-loop.js", () => ({
 }));
 
 describe("gateway run option collisions", () => {
+  useHermeticOpenclawEnv();
   let addGatewayRunCommand: typeof import("./run-command.js").addGatewayRunCommand;
   let sharedProgram: Command;
 
@@ -397,10 +399,20 @@ describe("gateway run option collisions", () => {
   });
 
   beforeEach(() => {
-    delete process.env.OPENCLAW_SERVICE_MARKER;
-    delete process.env.OPENCLAW_SERVICE_KIND;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    // Hermetic env: host shells running under the openclaw-gateway systemd unit
+    // inherit OPENCLAW_SERVICE_MARKER and related markers, which trip the
+    // service-mode future-version-block branch before the --force branch the
+    // first sub-test exercises. Clear via vi.stubEnv so afterEach's implicit
+    // unstub restores the host env. The test that needs the marker re-sets it
+    // explicitly via process.env (and restores in finally) lower in this file.
+    vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
+    vi.stubEnv("OPENCLAW_SERVICE_KIND", "");
+    // OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 bypasses the future-version
+    // guard before the marker/service-kind gates fire. Some deployments export
+    // this through their openclaw-gateway systemd unit, so stub it empty for hermeticity too.
+    vi.stubEnv("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
     deleteTestEnvValue(GATEWAY_SERVICE_RUNTIME_PID_ENV);
     resetRuntimeCapture();
     configState.cfg = {};

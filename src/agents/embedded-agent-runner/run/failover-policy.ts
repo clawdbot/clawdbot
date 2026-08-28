@@ -1,7 +1,10 @@
 /**
  * Resolves retry, fallback, and terminal failover decisions for a run.
  */
-import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import {
+  projectAgentRunAttemptTerminal,
+  type AgentRunAttemptTerminal,
+} from "../../agent-run-terminal-outcome.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 
 /** Failover action selected for one embedded run failure decision point. */
@@ -151,6 +154,11 @@ export function mergeRetryFailoverReason(params: {
   failoverReason: FailoverReason | null;
   timedOut?: boolean;
 }): FailoverReason | null {
+  // This value is a carried label for reporting; it is not a control signal.
+  // Nothing branches on it — the timeout control path is decided separately
+  // (see prompt-failure.ts, which computes `promptFailoverReason === "timeout"`
+  // independently). So a concrete classified reason is more useful than a
+  // coarse timeout, and a timeout still surfaces when nothing else is known.
   return params.failoverReason ?? params.previous ?? (params.timedOut ? "timeout" : null);
 }
 
@@ -238,6 +246,27 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
     ((params.terminal.kind === "aborted" || params.terminal.kind === "timeout") &&
       params.terminal.source === "external")
   ) {
+    return {
+      action: "surface_error",
+      reason: params.failoverReason,
+    };
+  }
+  const terminal = projectAgentRunAttemptTerminal(params.terminal);
+  if (
+    terminal.timedOut &&
+    !terminal.idleTimedOut &&
+    !terminal.aborted &&
+    !terminal.timedOutDuringToolExecution &&
+    !terminal.timedOutDuringCompaction &&
+    !params.harnessOwnsTransport
+  ) {
+    // Plain LLM-phase timeout outside an in-flight abort: surface so local
+    // timeout recovery can run. Aborted + LLM-phase timeouts fall through to
+    // shouldRotateAssistant rotation; tool-execution + compaction timeouts
+    // fall through to continue_normal so in-flight work is not interrupted. When the
+    // harness owns the transport (harnessOwnsTransport=true), the timeout is
+    // not a local LLM-phase silence — defer to shouldRotateAssistant so a
+    // concrete failoverReason can drive rotation/fallback.
     return {
       action: "surface_error",
       reason: params.failoverReason,

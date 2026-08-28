@@ -1,5 +1,6 @@
 // Control UI tests cover the semantic cursor policy.
 import fs from "node:fs";
+import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
@@ -138,7 +139,8 @@ function expectedCursors(): Record<string, string> {
 }
 
 let fixtureDirectory: string;
-let fixtureFile: string;
+let fixtureServer: Server | undefined;
+let fixtureUrl: string;
 let tabBrowser: Browser;
 let appContext: BrowserContext;
 
@@ -147,15 +149,27 @@ beforeAll(async () => {
     return;
   }
   fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-policy-"));
-  fixtureFile = path.join(fixtureDirectory, "fixture.html");
-  fs.writeFileSync(fixtureFile, fixtureDocument(), "utf8");
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(fixtureDocument());
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  fixtureServer = server;
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("cursor fixture server did not bind a TCP port");
+  }
+  fixtureUrl = `http://127.0.0.1:${address.port}/`;
   tabBrowser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
   try {
     // `--app=` opens a real Chromium app window, which is the only way to get a
     // genuine `display-mode: standalone` match; CDP media emulation does not
     // drive this feature.
     appContext = await chromium.launchPersistentContext(path.join(fixtureDirectory, "profile"), {
-      args: [`--app=file://${fixtureFile}`],
+      args: [`--app=${fixtureUrl}`],
       executablePath: chromiumExecutablePath,
       headless: true,
     });
@@ -168,6 +182,12 @@ beforeAll(async () => {
 afterAll(async () => {
   await appContext?.close().catch(() => {});
   await tabBrowser?.close().catch(() => {});
+  const server = fixtureServer;
+  if (server) {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  }
   if (fixtureDirectory) {
     fs.rmSync(fixtureDirectory, { force: true, recursive: true });
   }
@@ -177,7 +197,7 @@ describeCursorPolicy("Control UI cursor policy", () => {
   it("uses semantic cursors in a browser tab", async () => {
     const page = await tabBrowser.newPage();
     try {
-      await page.goto(`file://${fixtureFile}`);
+      await page.goto(fixtureUrl);
       const probe = await probeWindow(page);
 
       expect(probe.displayMode).toBe("browser");
@@ -190,7 +210,7 @@ describeCursorPolicy("Control UI cursor policy", () => {
   it("uses the same semantic cursors in a native app host", async () => {
     const page = await tabBrowser.newPage();
     try {
-      await page.goto(`file://${fixtureFile}`);
+      await page.goto(fixtureUrl);
       // The macOS dashboard is a plain web view, so it reports display-mode
       // browser and marks itself with these classes at document end instead.
       await page.evaluate((markers: readonly string[]) => {

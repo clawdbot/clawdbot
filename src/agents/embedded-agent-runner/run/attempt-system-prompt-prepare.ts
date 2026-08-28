@@ -322,6 +322,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       projectMemoryBootstrap,
       activeProjectKeys,
       promptContribution,
+      continuationEnabled: attempt.config?.agents?.defaults?.continuation?.enabled === true,
     },
     providerTransform: {
       provider: attempt.provider,

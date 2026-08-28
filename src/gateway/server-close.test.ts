@@ -171,9 +171,11 @@ function createGatewayCloseTestDeps(
       startMediaCleanup: vi.fn(),
       stopMediaCleanup: vi.fn(async () => "drained" as const),
       worktreeCleanup: setInterval(() => undefined, 60_000),
+      delegateArtifactCleanup: setInterval(() => undefined, 60_000),
       skillUsageCleanup: vi.fn(),
     },
     stopMediaCleanup: vi.fn(async () => "drained" as const),
+    delegateArtifactCleanup: null,
     agentUnsub: null,
     taskUnsub: null,
     heartbeatUnsub: null,
@@ -265,17 +267,25 @@ describe("createGatewayCloseHandler", () => {
   });
 
   it("completes a clean shutdown with a ShutdownResult", async () => {
-    const deps = createGatewayCloseTestDeps();
+    const delegateArtifactCleanup = setInterval(() => undefined, 60_000);
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+    const deps = createGatewayCloseTestDeps({ delegateArtifactCleanup });
     const close = createGatewayCloseHandler(deps);
 
-    const result = await close({ reason: "test" });
+    try {
+      const result = await close({ reason: "test" });
 
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.durationMs).toBeGreaterThanOrEqual(0);
-    expect(deps.cron.stop).toHaveBeenCalledTimes(1);
-    expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
-    expect(deps.stopMediaCleanup).toHaveBeenCalledTimes(1);
-    expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
+      expect(result.warnings).toStrictEqual([]);
+      expect(result.durationMs).toBeGreaterThanOrEqual(0);
+      expect(deps.cron.stop).toHaveBeenCalledTimes(1);
+      expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
+      expect(deps.stopMediaCleanup).toHaveBeenCalledTimes(1);
+      expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
+      expect(clearIntervalSpy).toHaveBeenCalledWith(delegateArtifactCleanup);
+    } finally {
+      clearIntervalSpy.mockRestore();
+      clearInterval(delegateArtifactCleanup);
+    }
   });
 
   it("waits for in-flight media cleanup before shutdown completes", async () => {

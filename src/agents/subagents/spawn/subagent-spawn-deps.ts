@@ -25,7 +25,7 @@ type SubagentSpawnDeps = {
   resolveContextEngine: typeof resolveContextEngine;
 };
 
-const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
+const subagentSpawnDeps: SubagentSpawnDeps = {
   callGateway,
   dispatchGatewayMethodInProcess,
   forkSessionEntryFromParent,
@@ -38,17 +38,6 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   resolveContextEngine,
 };
 
-let subagentSpawnDeps = defaultSubagentSpawnDeps;
-
 export function getSubagentSpawnDeps(): SubagentSpawnDeps {
   return subagentSpawnDeps;
-}
-
-export function setSubagentSpawnDepsForTest(overrides?: Partial<SubagentSpawnDeps>): void {
-  subagentSpawnDeps = overrides
-    ? {
-        ...defaultSubagentSpawnDeps,
-        ...overrides,
-      }
-    : defaultSubagentSpawnDeps;
 }

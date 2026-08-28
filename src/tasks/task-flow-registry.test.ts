@@ -583,4 +583,60 @@ describe("task-flow-registry", () => {
       expect(resumed.flow.stateJson).toBeNull();
     });
   });
+
+  // chainId must thread through the typed managed-flow helper so
+  // flow_runs.chain_id is populated on the typed path, not just when callers
+  // bypass via createFlowRecord directly.
+  describe("createManagedTaskFlow chainId threading", () => {
+    it("persists chainId provided to createManagedTaskFlow", async () => {
+      await withFlowRegistryTempDir(async () => {
+        const created = createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/chain-id",
+          goal: "Thread chainId through typed managed-flow helper",
+          chainId: "chain-typed-helper",
+        });
+
+        expect(created.chainId).toBe("chain-typed-helper");
+
+        const fetched = getTaskFlowById(created.flowId);
+        expect(fetched?.chainId).toBe("chain-typed-helper");
+      });
+    });
+
+    it("defaults chainId to null when omitted on createManagedTaskFlow", async () => {
+      await withFlowRegistryTempDir(async () => {
+        const created = createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/chain-id-null",
+          goal: "Omitted chainId stays null",
+        });
+
+        expect(created.chainId ?? null).toBeNull();
+
+        const fetched = getTaskFlowById(created.flowId);
+        expect(fetched?.chainId ?? null).toBeNull();
+      });
+    });
+
+    it("survives a SQLite reload (restart) — not just the in-memory map", async () => {
+      await withFlowRegistryTempDir(async () => {
+        const created = createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/chain-id-reload",
+          goal: "chainId survives a gateway restart",
+          chainId: "chain-reload-abc",
+        });
+        const { flowId } = created;
+
+        // Simulate a gateway restart: drop the in-memory registry WITHOUT
+        // re-persisting, so the next access reloads purely from SQLite. The
+        // chain_id must round-trip through the flow_runs bind/read path.
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const reloaded = getTaskFlowById(flowId);
+        expect(reloaded?.chainId).toBe("chain-reload-abc");
+      });
+    });
+  });
 });

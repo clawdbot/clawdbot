@@ -61,7 +61,7 @@ import { createCronScriptRuntime } from "../cron/trigger-script.js";
 import type { CronJob, CronPayload } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
-import { runHeartbeatOnce } from "../infra/heartbeat-runner-run.js";
+import { runHeartbeatOnceCore } from "../infra/heartbeat-runner-run.js";
 import {
   requestHeartbeat,
   requestHeartbeatRetry,
@@ -875,7 +875,7 @@ export function buildGatewayCronService(params: {
     },
     runHeartbeatOnce: async (opts) => {
       const { runtimeConfig, wake } = resolveCronHeartbeatWake(opts, true);
-      return await runHeartbeatOnce({
+      return await runHeartbeatOnceCore({
         cfg: runtimeConfig,
         ...wake,
         // Preserve ownership across this adapter so the wake does not self-block on

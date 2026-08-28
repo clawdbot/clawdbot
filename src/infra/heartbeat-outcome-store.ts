@@ -7,7 +7,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
-import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
+import type { HeartbeatWakeSource } from "./heartbeat-wake-contracts.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 const HEARTBEAT_OUTCOME_SUMMARY_MAX_CHARS = 4_000;

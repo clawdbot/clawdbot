@@ -6,7 +6,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { applyPatch } from "./apply-patch.test-support.js";
 
-async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
+async function withTestDir<T>(fn: (dir: string) => Promise<T>) {
   // realpath: production sandbox checks compare against canonical paths; on macOS
   // os.tmpdir() is a /var -> /private/var symlink, which otherwise trips the guard.
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-alias-")));
@@ -21,7 +21,7 @@ describe("applyPatch through directory aliases", () => {
   it.runIf(process.platform !== "win32")(
     "updates files through contained directory aliases",
     async () => {
-      await withTempDir(async (dir) => {
+      await withTestDir(async (dir) => {
         const realDir = path.join(dir, "real");
         await fs.mkdir(realDir, { recursive: true });
         await fs.writeFile(path.join(realDir, "note.txt"), "initial\n", "utf8");

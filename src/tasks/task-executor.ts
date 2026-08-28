@@ -29,6 +29,11 @@ import {
   isProvisionalSubagentKillTask,
   isTaskFlowCancellationPending,
 } from "./task-cancellation-state.js";
+import {
+  hasStoredDelegateAttachmentState,
+  isContinuationDelegateFlow,
+  scrubStoredDelegateAttachmentState,
+} from "./task-flow-continuation-state.js";
 import { getTaskFlowByIdForOwner } from "./task-flow-owner-access.js";
 import { isTerminalTaskFlow, type TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
@@ -292,6 +297,30 @@ function cancelManagedFlowAfterChildrenSettle(
   };
 }
 
+function scrubContinuationFlowBeforeCancellation(
+  flow: TaskFlowRecord,
+): TaskFlowRecord | FlowUpdateFailure {
+  if (!isContinuationDelegateFlow(flow) || !hasStoredDelegateAttachmentState(flow.stateJson)) {
+    return flow;
+  }
+  // Cancellation can enter through CLI, plugin, or owner-scoped paths. Scrub
+  // at their shared boundary so no terminal or cancel-pending row keeps input.
+  const result = updateFlowRecordByIdExpectedRevision({
+    flowId: flow.flowId,
+    expectedRevision: flow.revision,
+    patch: {
+      stateJson: scrubStoredDelegateAttachmentState(flow.stateJson),
+    },
+  });
+  if (result.applied) {
+    return result.flow;
+  }
+  return {
+    reason: describeFlowUpdateFailure(result.reason),
+    flow: result.current ?? getTaskFlowById(flow.flowId),
+  };
+}
+
 function mapRunTaskInFlowCreateError(params: {
   error: unknown;
   flowId: string;
@@ -484,7 +513,7 @@ export async function cancelFlowById(params: {
   cfg: OpenClawConfig;
   flowId: string;
 }): Promise<CancelFlowResult> {
-  const flow = getTaskFlowById(params.flowId);
+  let flow = getTaskFlowById(params.flowId);
   if (!flow) {
     return {
       found: false,
@@ -492,6 +521,17 @@ export async function cancelFlowById(params: {
       reason: "Flow not found.",
     };
   }
+  const scrubbedFlow = scrubContinuationFlowBeforeCancellation(flow);
+  if ("reason" in scrubbedFlow) {
+    return {
+      found: true,
+      cancelled: false,
+      reason: scrubbedFlow.reason,
+      flow: scrubbedFlow.flow,
+      tasks: listTasksForFlowId(flow.flowId),
+    };
+  }
+  flow = scrubbedFlow;
   if (isTerminalTaskFlow(flow)) {
     const provisionalTasks = listTasksForFlowId(flow.flowId).filter(isProvisionalSubagentKillTask);
     if (flow.status === "cancelled" && provisionalTasks.length > 0) {

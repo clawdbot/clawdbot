@@ -58,7 +58,7 @@ function sanitizeTaskSuggestionText(text: string): string {
   return text.replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
 }
 
-function updateTaskSuggestionPathFade(element: Element): void {
+function updateTaskSuggestionPathFade(element: EventTarget | null | undefined): void {
   if (!(element instanceof HTMLElement)) {
     return;
   }
@@ -188,8 +188,7 @@ function renderChatTaskSuggestions(props: {
                         requestAnimationFrame(() => updateTaskSuggestionPathFade(element));
                       }
                     })}
-                    @scroll=${(event: Event) =>
-                      updateTaskSuggestionPathFade(event.currentTarget as Element)}
+                    @scroll=${(event: Event) => updateTaskSuggestionPathFade(event.currentTarget)}
                     >${cwd}</code
                   >
                   <pre>${prompt}</pre>

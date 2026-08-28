@@ -26,9 +26,9 @@ function isAwaitingCompletionAnnounceForMaintenance(entry: SubagentRunRecord): b
 }
 
 function shouldPreserveForMaintenance(entry: SubagentRunRecord): boolean {
-  if (entry.killReconciliation || entry.killIntent) {
-    // The killed row is a reconciliation tombstone. Its session owns the
-    // provider result until the sweeper accepts completion or finalizes cancellation.
+  if (entry.killReconciliation || entry.killIntent || entry.acceptedSteerDispatch) {
+    // Reconciliation owners retain the session until the sweeper accepts
+    // completion or proves the exact dispatched run stopped.
     return true;
   }
   if (isCleanupCompleteForMaintenance(entry)) {

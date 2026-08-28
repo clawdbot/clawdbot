@@ -4750,6 +4750,230 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send terminalizes returned validation errors as safe aborts", async () => {
+    await withDirectChatSession(async () => {
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const runId = "idem-validation-loop";
+      const validationSummary = "edit tool validation failed: invalid arguments";
+      const broadcast = vi.fn<GatewayRequestContext["broadcast"]>();
+      const context = createDirectChatContext({
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+        broadcast,
+        getRuntimeConfig: () => ({}),
+      });
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        const dispatch = args as {
+          dispatcher?: {
+            sendFinalReply: (payload: { text: string; isError: true }) => boolean;
+            markComplete: () => void;
+            waitForIdle: () => Promise<void>;
+          };
+          replyOptions?: GetReplyOptions;
+        };
+        dispatch.replyOptions?.onAgentRunStart?.(runId);
+        const active = context.chatAbortControllers.get(runId);
+        expect(active).toBeDefined();
+        if (active) {
+          active.toolErrorSummary = validationSummary;
+        }
+        const dispatcher = expectDefined(
+          dispatch.dispatcher,
+          "chat.send projected reply dispatcher",
+        );
+        dispatcher.sendFinalReply({ text: "LLM request failed.", isError: true });
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+        return {};
+      });
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await expectDefined(
+        chatHandlers["chat.send"],
+        'chatHandlers["chat.send"] test invariant',
+      )({
+        req: {
+          type: "req",
+          id: "validation-loop",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "trigger malformed edit calls",
+            idempotencyKey: runId,
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "trigger malformed edit calls",
+          idempotencyKey: runId,
+        },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.TUI,
+              mode: GATEWAY_CLIENT_MODES.UI,
+            },
+            scopes: ["operator.write", "operator.admin"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: vi.fn() as RespondFn,
+        context,
+      });
+
+      await waitForFast(
+        () => {
+          expect(broadcast).toHaveBeenCalledWith(
+            "chat",
+            expect.objectContaining({
+              runId,
+              sessionKey: "agent:main:main",
+              state: "aborted",
+              errorMessage: validationSummary,
+            }),
+            { sessionKeys: ["agent:main:main"] },
+          );
+        },
+        { timeout: 10_000, interval: 1 },
+      );
+      expect(broadcast).not.toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId, state: "error" }),
+        expect.anything(),
+      );
+      expect(JSON.stringify(broadcast.mock.calls)).not.toContain("LLM request failed");
+      expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
+        ok: false,
+        payload: {
+          runId,
+          status: "error",
+          summary: validationSummary,
+        },
+        error: {
+          message: validationSummary,
+        },
+      });
+    });
+  });
+
+  test("chat.send does not rebroadcast lifecycle-owned returned errors", async () => {
+    await withDirectChatSession(async () => {
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const runId = "idem-lifecycle-owned-error";
+      const errorMessage = "LLM request failed.";
+      const sessionKey = "agent:main:main";
+      const broadcast = vi.fn<GatewayRequestContext["broadcast"]>();
+      const context = createDirectChatContext({
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+        broadcast,
+        getRuntimeConfig: () => ({}),
+      });
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        const dispatch = args as {
+          dispatcher?: {
+            sendFinalReply: (payload: { text: string; isError: true }) => boolean;
+            markComplete: () => void;
+            waitForIdle: () => Promise<void>;
+          };
+          replyOptions?: GetReplyOptions;
+        };
+        dispatch.replyOptions?.onAgentRunStart?.(runId);
+        const active = context.chatAbortControllers.get(runId);
+        expect(active).toBeDefined();
+        if (active) {
+          active.chatTerminalBroadcasted = true;
+        }
+        broadcast(
+          "chat",
+          {
+            runId,
+            sessionKey,
+            seq: 4,
+            state: "error",
+            errorMessage,
+          },
+          { sessionKeys: [sessionKey] },
+        );
+        const dispatcher = expectDefined(
+          dispatch.dispatcher,
+          "chat.send projected reply dispatcher",
+        );
+        dispatcher.sendFinalReply({ text: errorMessage, isError: true });
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+        return {};
+      });
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await expectDefined(
+        chatHandlers["chat.send"],
+        'chatHandlers["chat.send"] test invariant',
+      )({
+        req: {
+          type: "req",
+          id: "lifecycle-owned-error",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "trigger provider failure",
+            idempotencyKey: runId,
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "trigger provider failure",
+          idempotencyKey: runId,
+        },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.TUI,
+              mode: GATEWAY_CLIENT_MODES.UI,
+            },
+            scopes: ["operator.write", "operator.admin"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: vi.fn() as RespondFn,
+        context,
+      });
+
+      await waitForFast(() => {
+        expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
+          ok: false,
+          payload: {
+            runId,
+            status: "error",
+            summary: errorMessage,
+          },
+        });
+      });
+      expect(
+        broadcast.mock.calls.filter(
+          ([event, payload]) =>
+            event === "chat" &&
+            (payload as { runId?: string; state?: string }).runId === runId &&
+            (payload as { state?: string }).state === "error",
+        ),
+      ).toHaveLength(1);
+    });
+  });
+
   test("chat.send terminalizes the client run when a followup is queued", async () => {
     await withDirectChatSession(async (_sessionDir, storePath) => {
       await writeStoredMainSession({});

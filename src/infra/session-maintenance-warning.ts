@@ -9,7 +9,7 @@ import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/m
 import { formatSingleUnitDuration } from "./format-time/format-duration-internal.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
-import { enqueueSystemEvent } from "./system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "./system-events.js";
 
 // Session maintenance warnings notify an active session before warn-only
 // cleanup would prune it, with per-session dedupe and system-event fallback.

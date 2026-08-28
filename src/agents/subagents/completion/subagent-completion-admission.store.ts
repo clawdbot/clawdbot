@@ -47,10 +47,11 @@ function assertCorrelatedEntry(params: {
   const delivery = params.subagent.delivery;
   if (
     !owner ||
+    !delivery ||
     owner.kind !== "subagent_completion" ||
     owner.runId !== params.subagent.runId ||
     owner.taskId !== params.task.taskId ||
-    owner.generation !== delivery?.generation ||
+    owner.generation !== delivery.generation ||
     owner.deadlineAt !== delivery.deadlineAt ||
     params.queueEntry.id !== delivery.queueId ||
     params.task.deliveryStatus !== "session_queued"

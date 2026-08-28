@@ -1,4 +1,5 @@
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
+import { collectErrorGraphCandidates } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const log = createSubsystemLogger("session-init");
@@ -17,9 +18,12 @@ export class ReplySessionInitConflictError extends Error {
 const SESSION_INIT_CONFLICT_MESSAGE_RE = /^reply session initialization conflicted for \S+$/u;
 
 function isReplySessionInitConflictError(error: unknown): boolean {
-  return (
-    error instanceof ReplySessionInitConflictError ||
-    SESSION_INIT_CONFLICT_MESSAGE_RE.test(error instanceof Error ? error.message : String(error))
+  return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
+    (candidate) =>
+      candidate instanceof ReplySessionInitConflictError ||
+      SESSION_INIT_CONFLICT_MESSAGE_RE.test(
+        candidate instanceof Error ? candidate.message : String(candidate),
+      ),
   );
 }
 
@@ -51,15 +55,16 @@ export async function runWithSessionInitConflictRetry<T>(
     retryDelaysMs?.length ?? Number.POSITIVE_INFINITY,
   );
   const sleep = options?.sleep ?? sleepWithAbort;
+  const signal = options?.signal;
+  const isAborted = () => signal?.aborted === true;
   for (let attemptIndex = 0; ; attemptIndex += 1) {
+    if (isAborted()) {
+      throw signal?.reason;
+    }
     try {
       return await attempt();
     } catch (error) {
-      if (
-        !isReplySessionInitConflictError(error) ||
-        attemptIndex >= maxRetries ||
-        options?.signal?.aborted === true
-      ) {
+      if (!isReplySessionInitConflictError(error) || attemptIndex >= maxRetries || isAborted()) {
         throw error;
       }
       const backoffMs =
@@ -68,9 +73,7 @@ export async function runWithSessionInitConflictRetry<T>(
       log.debug(
         `reply session initialization conflicted; retrying in ${backoffMs}ms (attempt ${attemptIndex + 2}/${maxRetries + 1})`,
       );
-      // Cancellation must interrupt the wait itself; otherwise shutdown can
-      // sleep through the backoff and start one more session-init attempt.
-      await sleep(backoffMs, options?.signal);
+      await sleep(backoffMs, signal);
     }
   }
 }

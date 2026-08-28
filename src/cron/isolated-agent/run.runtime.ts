@@ -17,7 +17,7 @@ export {
   isThinkingLevelSupported,
   resolveSupportedThinkingLevel,
 } from "../../auto-reply/thinking.js";
-export { setSessionRuntimeModel } from "../../config/sessions/types.js";
+export { setSessionRuntimeModel } from "../../config/sessions/session-entry-runtime.js";
 export { logWarn } from "../../logger.js";
 export { normalizeAgentId } from "../../routing/session-key.js";
 export {

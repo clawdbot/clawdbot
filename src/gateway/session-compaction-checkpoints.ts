@@ -221,10 +221,10 @@ async function statCheckpointSnapshotBytes(
 
 /** Resolve the stored checkpoint reason from compaction trigger state. */
 export function resolveSessionCompactionCheckpointReason(params: {
-  trigger?: "budget" | "overflow" | "manual";
+  trigger?: "budget" | "overflow" | "manual" | "volitional";
   timedOut?: boolean;
 }): SessionCompactionCheckpointReason {
-  if (params.trigger === "manual") {
+  if (params.trigger === "manual" || params.trigger === "volitional") {
     return "manual";
   }
   if (params.timedOut) {

@@ -687,6 +687,7 @@ export function createGatewayCloseHandler(
     nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
     maintenance: GatewayMaintenanceHandles | null;
     stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
+    delegateArtifactCleanup: ReturnType<typeof setInterval> | null;
     agentUnsub: (() => Promise<void> | void) | null;
     heartbeatUnsub: (() => void) | null;
     transcriptUnsub: (() => void) | null;
@@ -936,7 +937,11 @@ export function createGatewayCloseHandler(
         clearInterval(params.maintenance.healthInterval);
         clearInterval(params.maintenance.dedupeCleanup);
         clearInterval(params.maintenance.worktreeCleanup);
+        clearInterval(params.maintenance.delegateArtifactCleanup);
         params.maintenance.skillUsageCleanup();
+      }
+      if (params.delegateArtifactCleanup) {
+        clearInterval(params.delegateArtifactCleanup);
       }
       if (params.agentUnsub) {
         await shutdownStep("agent-unsub", () => params.agentUnsub!(), warnings);

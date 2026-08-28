@@ -100,6 +100,40 @@ describe("repairOperatorApprovalKinds", () => {
     expect(
       db.prepare("SELECT strict FROM pragma_table_list WHERE name = 'operator_approvals'").get(),
     ).toEqual({ strict: 1 });
+    expect(
+      db.prepare("SELECT name FROM pragma_index_list('operator_approvals') ORDER BY name").all(),
+    ).toEqual([
+      { name: "idx_operator_approvals_resolution_ref" },
+      { name: "idx_operator_approvals_resolved" },
+      { name: "idx_operator_approvals_runtime_pending" },
+      { name: "idx_operator_approvals_source_run_resolved" },
+      { name: "idx_operator_approvals_source_session_created" },
+      { name: "idx_operator_approvals_status_expiry" },
+      { name: "sqlite_autoindex_operator_approvals_1" },
+    ]);
+    db.close();
+  });
+
+  it("does not execute unrelated schema while migrating legacy approvals", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      CREATE TABLE managed_outgoing_image_records (
+        session_key TEXT,
+        created_at INTEGER,
+        attachment_id TEXT,
+        message_id TEXT
+      );
+    `);
+    db.exec(legacyTwoKindCreateSql());
+    seedRow(db, "exec");
+
+    expect(repairOperatorApprovalSchema(db)).toEqual([
+      "Migrated shared state operator approvals → OpenClaw system changes",
+    ]);
+    expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).not.toThrow();
+    expect(
+      db.prepare("SELECT name FROM pragma_table_info('managed_outgoing_image_records')").all(),
+    ).not.toContainEqual({ name: "agent_id" });
     db.close();
   });
 

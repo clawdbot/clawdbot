@@ -99,6 +99,8 @@ export type FollowupRun = {
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   currentInboundEventKind?: InboundEventKind;
+  /** Native inbound event timestamp in epoch milliseconds, when the transport provides one. */
+  currentInboundEventTimestampMs?: number;
   /** Whether the current inbound message contained audio for inbound-only TTS policy. */
   currentInboundAudio?: boolean;
   /** Host-minted participant evidence; raw channel identities never live on this object. */
@@ -250,6 +252,8 @@ export type FollowupRun = {
     terminalReplyExpectation?: RunEmbeddedAgentParams["terminalReplyExpectation"];
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
+    drainsContinuationDelegateQueue?: boolean;
+    traceparent?: string;
     /** Gateway-private optimistic-concurrency constraint for an operator-requested proposal revision. */
     skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   };

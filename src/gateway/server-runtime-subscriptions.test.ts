@@ -8,8 +8,6 @@ import {
   hasExecutionIdentityAdmissionSink,
 } from "../audit/execution-identity-admission.js";
 import { consumeChannelAdmissionEvidence } from "../channels/message-access/admission-evidence.js";
-import type { CronServiceState } from "../cron/service/state.js";
-import { tryFinishCronTaskRunWithoutHistory } from "../cron/service/task-runs.js";
 import {
   emitAgentAuditEvent,
   emitAgentEvent,
@@ -24,7 +22,6 @@ import {
 } from "../sessions/transcript-events.js";
 import {
   createTaskRecord,
-  markTaskLostById,
   markTaskTerminalById,
   recordTaskProgressByRunId,
 } from "../tasks/task-registry.js";
@@ -43,13 +40,7 @@ import {
 } from "./server-chat-state.js";
 import type { AgentEventHandlerOptions } from "./server-chat.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
-import { TerminalSessionManager } from "./terminal/session-manager.js";
-import {
-  agentTerminalOwner,
-  baseOpenRequest,
-  makeFakePty,
-  taskAgentOwner,
-} from "./terminal/session-manager.test-helpers.js";
+import { registerTaskTerminalSubscriptionTests } from "./server-runtime-subscriptions.task-terminals.test-harness.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -370,6 +361,127 @@ describe("startGatewayEventSubscriptions", () => {
 
     await unsubs.agentUnsub();
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("captures active chat.send ownership before lazy lifecycle dispatch", async () => {
+    const handler = Object.assign(vi.fn(), { dispose: vi.fn() });
+    agentEventHandlerMocks.create.mockReturnValue(handler);
+    const params = createParams();
+    const entry: ChatAbortControllerEntry = {
+      controller: new AbortController(),
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      startedAtMs: 1,
+      expiresAtMs: 2,
+    };
+    params.chatAbortControllers.set("run-chat-send", entry);
+    unsubs = startGatewayEventSubscriptions(params);
+
+    emitAgentEvent({
+      runId: "run-chat-send",
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        toolErrorSummary: "edit tool validation failed: edits: must be an array",
+      },
+    });
+    expect(entry.toolErrorSummary).toBe("edit tool validation failed: edits: must be an array");
+    entry.registrationCleanupRequested = true;
+    await waitForFast(() => expect(handler).toHaveBeenCalledOnce());
+
+    const options = agentEventHandlerMocks.create.mock.calls[0]?.[0] as
+      | AgentEventHandlerOptions
+      | undefined;
+    expect(options?.isChatSendRunActive?.("run-chat-send")).toBe(false);
+    expect(options?.wasChatSendActiveAtTerminalObservation?.("run-chat-send")).toBe(true);
+    expect(options?.wasChatSendTerminalBroadcasted?.("run-chat-send")).toBe(false);
+    expect(
+      options?.resolveRunToolErrorSummary?.({
+        runId: "run-chat-send",
+        clientRunId: "run-chat-send",
+      }),
+    ).toBe("edit tool validation failed: edits: must be an array");
+    options?.markChatSendTerminalBroadcasted?.({
+      runId: "run-chat-send",
+      clientRunId: "run-chat-send",
+    });
+
+    expect(entry.chatTerminalBroadcasted).toBe(true);
+    expect(options?.wasChatSendTerminalBroadcasted?.("run-chat-send")).toBe(true);
+  });
+
+  it("rejects raw validation output before lazy lifecycle dispatch", async () => {
+    const handler = Object.assign(vi.fn(), { dispose: vi.fn() });
+    agentEventHandlerMocks.create.mockReturnValue(handler);
+    const params = createParams();
+    const entry: ChatAbortControllerEntry = {
+      controller: new AbortController(),
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      startedAtMs: 1,
+      expiresAtMs: 2,
+      toolErrorSummary: "edit tool validation failed: invalid arguments",
+    };
+    params.chatAbortControllers.set("run-raw-validation", entry);
+    unsubs = startGatewayEventSubscriptions(params);
+
+    emitAgentEvent({
+      runId: "run-raw-validation",
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        toolErrorSummary: "Validation failed for tool edit: Received arguments: SECRET_TOKEN",
+      },
+    });
+
+    expect(entry.toolErrorSummary).toBeUndefined();
+    await waitForFast(() => expect(handler).toHaveBeenCalledOnce());
+  });
+
+  it("keeps ingress validation state authoritative across delayed dispatch", async () => {
+    const handler = Object.assign(vi.fn(), { dispose: vi.fn() });
+    agentEventHandlerMocks.create.mockReturnValue(handler);
+    const params = createParams();
+    const entry: ChatAbortControllerEntry = {
+      controller: new AbortController(),
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      startedAtMs: 1,
+      expiresAtMs: 2,
+      toolErrorSummary: "edit tool validation failed: invalid arguments",
+    };
+    params.chatAbortControllers.set("run-ordered-validation", entry);
+    unsubs = startGatewayEventSubscriptions(params);
+
+    emitAgentEvent({
+      runId: "run-ordered-validation",
+      stream: "assistant",
+      data: { text: "retrying" },
+    });
+    expect(entry.toolErrorSummary).toBeUndefined();
+
+    emitAgentEvent({
+      runId: "run-ordered-validation",
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+    });
+    expect(entry.toolErrorSummary).toBe("edit tool validation failed: invalid arguments");
+
+    emitAgentEvent({
+      runId: "run-ordered-validation",
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        toolErrorSummary: "Validation failed for tool edit: Received arguments: SECRET_TOKEN",
+      },
+    });
+    expect(entry.toolErrorSummary).toBeUndefined();
+
+    await waitForFast(() => expect(handler).toHaveBeenCalledTimes(3));
+    expect(entry.toolErrorSummary).toBeUndefined();
   });
 
   it("uses the persisted bare-key owner for ownerless active-run projections", async () => {
@@ -907,190 +1019,13 @@ describe("startGatewayEventSubscriptions", () => {
     expect(taskEvents.map((event) => event.task.status)).toEqual(["running", "completed"]);
   });
 
-  it.each(["succeeded", "failed", "cancelled", "timed_out", "lost"] as const)(
-    "closes task-run terminals exactly once for a %s transition",
-    async (status) => {
-      const closeTaskSessions = vi.fn(() => 1);
-      unsubs = startGatewayEventSubscriptions({
-        ...createParams(),
-        terminalSessions: { closeTaskSessions },
-      });
-      await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
-
-      const task = createTaskRecord({
-        runtime: "cron",
-        requesterSessionKey: "",
-        ownerKey: "",
-        scopeKind: "system",
-        task: `${status} cron task`,
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-      });
-      if (!task) {
-        throw new Error("expected task record");
-      }
-      const terminalize = () => {
-        if (status === "lost") {
-          markTaskLostById({ taskId: task.taskId, endedAt: 2_000 });
-          return;
-        }
-        markTaskTerminalById({
-          taskId: task.taskId,
-          status,
-          endedAt: 2_000,
-        });
-      };
-
-      terminalize();
-      terminalize();
-
-      expect(closeTaskSessions).toHaveBeenCalledOnce();
-      expect(closeTaskSessions).toHaveBeenCalledWith(task.taskId);
+  registerTaskTerminalSubscriptionTests({
+    startGatewayEventSubscriptions,
+    createParams,
+    waitForFast,
+    setUnsubs: (subscriptions) => {
+      unsubs = subscriptions;
     },
-  );
-
-  it("closes a completed cron task terminal while preserving a conversation terminal", async () => {
-    const taskPty = makeFakePty();
-    const persistentPty = makeFakePty();
-    const ptys = [taskPty, persistentPty];
-    const manager = new TerminalSessionManager({
-      emit: vi.fn(),
-      spawn: async () => ptys.shift() ?? makeFakePty(),
-    });
-    unsubs = startGatewayEventSubscriptions({
-      ...createParams(),
-      terminalSessions: manager,
-    });
-    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
-
-    const runId = "cron:job-1:run-1";
-    const runSessionKey = "agent:main:cron:job-1:run:run-1";
-    const task = createTaskRecord({
-      runtime: "cron",
-      requesterSessionKey: "",
-      ownerKey: "",
-      scopeKind: "system",
-      childSessionKey: runSessionKey,
-      runId,
-      task: "Cron task",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-    if (!task) {
-      throw new Error("expected task record");
-    }
-    const taskOpen = await manager.open(
-      baseOpenRequest({
-        owner: taskAgentOwner(runSessionKey, task.taskId),
-      }),
-    );
-    const persistentOwner = agentTerminalOwner("agent:main:main");
-    const persistentOpen = await manager.open(baseOpenRequest({ owner: persistentOwner }));
-    if (!taskOpen.ok || !persistentOpen.ok) {
-      throw new Error("expected terminal sessions");
-    }
-
-    tryFinishCronTaskRunWithoutHistory({ deps: { log: mockLog } } as unknown as CronServiceState, {
-      taskRunId: runId,
-      status: "ok",
-      endedAt: 2_000,
-      childSessionKey: runSessionKey,
-    });
-
-    expect(taskPty.killed).toBe(true);
-    expect(persistentPty.killed).toBe(false);
-    expect(manager.size).toBe(1);
-    expect(manager.listAgent(persistentOwner)).toHaveLength(1);
-  });
-
-  it("closes task-run terminals only after the authoritative task becomes terminal", async () => {
-    const events: string[] = [];
-    const closeTaskSessions = vi.fn((taskId: string) => {
-      events.push(`terminal:${taskId}`);
-      return 1;
-    });
-    const broadcast = vi.fn<SubscriptionParams["broadcast"]>((event, payload) => {
-      if (event === "task" && (payload as TaskEventPayload).action === "upserted") {
-        const taskPayload = payload as Extract<TaskEventPayload, { action: "upserted" }>;
-        events.push(`task:${taskPayload.task.status}`);
-      }
-    });
-    unsubs = startGatewayEventSubscriptions({
-      ...createParams(),
-      broadcast,
-      terminalSessions: { closeTaskSessions },
-    });
-    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
-
-    const runSessionKey = "agent:main:cron:job-1:run:run-1";
-    const task = createTaskRecord({
-      runtime: "cron",
-      requesterSessionKey: "",
-      ownerKey: "",
-      scopeKind: "system",
-      childSessionKey: runSessionKey,
-      task: "Cron task",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-    if (!task) {
-      throw new Error("expected task record");
-    }
-    expect(closeTaskSessions).not.toHaveBeenCalled();
-    expect(events).toEqual(["task:running"]);
-
-    markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2_000 });
-    expect(closeTaskSessions).toHaveBeenCalledOnce();
-    expect(closeTaskSessions).toHaveBeenCalledWith(task.taskId);
-    expect(events).toEqual(["task:running", "task:completed", `terminal:${task.taskId}`]);
-
-    // Later terminal-row updates cannot close terminals opened by a newer owner.
-    markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2_001 });
-    expect(closeTaskSessions).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a replacement gateway's task observer when a stale unsub runs late", async () => {
-    const staleBroadcast = vi.fn<SubscriptionParams["broadcast"]>();
-    const staleSubs = startGatewayEventSubscriptions({
-      ...createParams(),
-      broadcast: staleBroadcast,
-    });
-    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
-    const staleObservers = getTaskRegistryObservers();
-
-    const replacementBroadcast = vi.fn<SubscriptionParams["broadcast"]>();
-    unsubs = startGatewayEventSubscriptions({
-      ...createParams(),
-      broadcast: replacementBroadcast,
-    });
-    await waitForFast(() => {
-      const current = getTaskRegistryObservers();
-      expect(current).not.toBeNull();
-      expect(current).not.toBe(staleObservers);
-    });
-
-    // The stale dispose must not clear the replacement's observer slot.
-    await staleSubs.taskUnsub();
-    await staleSubs.agentUnsub();
-    staleSubs.heartbeatUnsub();
-    staleSubs.transcriptUnsub();
-    staleSubs.lifecycleUnsub();
-    expect(getTaskRegistryObservers()).not.toBeNull();
-
-    createTaskRecord({
-      runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "After stale dispose",
-      status: "queued",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-    expect(replacementBroadcast.mock.calls.some(([event]) => event === "task")).toBe(true);
-    expect(staleBroadcast.mock.calls.some(([event]) => event === "task")).toBe(false);
+    mockLog,
   });
 });

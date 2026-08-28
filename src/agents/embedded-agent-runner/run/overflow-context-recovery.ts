@@ -2,6 +2,8 @@ import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { requireSessionKeyOrSkip } from "../../../infra/session-keys.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../../infra/system-events.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../../agent-compaction-constants.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -174,6 +176,25 @@ export async function recoverEmbeddedRunOverflow(
     log.warn(
       `context overflow detected (attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${input.provider}/${input.modelId}`,
     );
+    log.warn(
+      `[context-pressure:fire] mid-turn trigger=overflow attempt=${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS} ` +
+        `tokens=${observedOverflowTokens !== undefined ? Math.round(observedOverflowTokens / 1000) : "?"}k/${Math.round(input.contextTokenBudget / 1000)}k ` +
+        `sessionKey=${runParams.sessionKey ?? runParams.sessionId}`,
+    );
+    const overflowSessionKey = requireSessionKeyOrSkip(
+      runParams,
+      log,
+      "pi-runner.overflow-compaction",
+    );
+    if (overflowSessionKey) {
+      enqueueSystemEvent(
+        `[system:context-pressure] Context-overflow compaction triggered mid-turn ` +
+          `(attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}). ` +
+          "Your last reply grew the context past the model's window. Consider evacuating large " +
+          "tool results or delegated work with continue_delegate(post-compaction).",
+        { sessionKey: overflowSessionKey },
+      );
+    }
     let compactResult: CompactResult;
     let previousSessionId: string | undefined;
     await input.runOwnsCompactionBeforeHook("overflow recovery");

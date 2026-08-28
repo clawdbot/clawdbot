@@ -488,6 +488,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
     repairLegacyTaskAgentAttribution(db);
   }
   repairLegacyTaskDeliveryStatuses(db);
+  ensureColumn(db, "flow_runs", "chain_id TEXT");
   ensureColumn(db, "task_runs", "tool_use_count INTEGER");
   ensureColumn(db, "task_runs", "last_tool_name TEXT");
   ensureColumn(db, "task_runs", "detail_json TEXT");

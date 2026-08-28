@@ -259,16 +259,16 @@ function resolveGitInstallRepoDir(params: {
 
 async function withGitStagingDir<T>(
   persistentRepoDir: string | undefined,
-  fn: (tmpDir: string) => Promise<T>,
+  fn: (tmpDir: string, stagedRepoIsTargetLocal: boolean) => Promise<T>,
 ): Promise<T> {
   if (!persistentRepoDir) {
-    return await withInstallWorkspace("openclaw-git-plugin-", fn);
+    return await withInstallWorkspace("openclaw-git-plugin-", (tmpDir) => fn(tmpDir, false));
   }
   const targetParent = path.dirname(persistentRepoDir);
   try {
     await fs.mkdir(targetParent, { recursive: true });
   } catch {
-    return await withInstallWorkspace("openclaw-git-plugin-", fn);
+    return await withInstallWorkspace("openclaw-git-plugin-", (tmpDir) => fn(tmpDir, false));
   }
 
   let callbackStarted = false;
@@ -277,7 +277,7 @@ async function withGitStagingDir<T>(
       "openclaw-git-plugin-",
       async (tmpDir) => {
         callbackStarted = true;
-        return await fn(tmpDir);
+        return await fn(tmpDir, true);
       },
       { rootDir: targetParent },
     );
@@ -287,12 +287,13 @@ async function withGitStagingDir<T>(
     if (callbackStarted) {
       throw err;
     }
-    return await withInstallWorkspace("openclaw-git-plugin-", fn);
+    return await withInstallWorkspace("openclaw-git-plugin-", (tmpDir) => fn(tmpDir, false));
   }
 }
 
 async function replaceManagedGitRepo(params: {
   stagedRepoDir: string;
+  stagedRepoIsTargetLocal: boolean;
   persistentRepoDir: string;
   deferCommit?: boolean;
   onBeforePublish?: (stagedRepoDir: string) => Promise<void>;
@@ -307,8 +308,18 @@ async function replaceManagedGitRepo(params: {
       throw error;
     }
   };
+  const replace = async (stagedDir: string) => {
+    await reviewFinalArtifact(stagedDir);
+    await replaceDirectoryAtomic({
+      stagedDir,
+      targetDir: params.persistentRepoDir,
+      backupPrefix: ".repo-backup-",
+    });
+  };
   try {
     if (params.deferCommit) {
+      // Deferred publication re-stages below the target parent, so it already
+      // preserves same-filesystem atomicity for fallback clones.
       const result = await installPackageDir(
         requestDeferredPackageDirInstall({
           sourceDir: params.stagedRepoDir,
@@ -328,12 +339,23 @@ async function replaceManagedGitRepo(params: {
       const transaction = result.ok ? resolvePackageDirInstallTransaction(result) : undefined;
       return result.ok ? { ok: true, ...(transaction ? { transaction } : {}) } : result;
     }
-    await reviewFinalArtifact(params.stagedRepoDir);
-    await replaceDirectoryAtomic({
-      stagedDir: params.stagedRepoDir,
-      targetDir: params.persistentRepoDir,
-      backupPrefix: ".repo-backup-",
-    });
+    if (params.stagedRepoIsTargetLocal) {
+      await replace(params.stagedRepoDir);
+    } else {
+      // replaceDirectoryAtomic renames into place; copy cross-device fallbacks
+      // beside the managed repository before the atomic replacement.
+      await withInstallWorkspace(
+        "openclaw-git-plugin-commit-",
+        async (targetLocalDir) => {
+          await fs.cp(params.stagedRepoDir, targetLocalDir, {
+            recursive: true,
+            verbatimSymlinks: true,
+          });
+          await replace(targetLocalDir);
+        },
+        { rootDir: path.dirname(params.persistentRepoDir) },
+      );
+    }
     return { ok: true };
   } catch (err) {
     if (artifactConsentFailure) {
@@ -431,7 +453,7 @@ export async function installPluginFromGitSpec(
     return availability;
   }
   const stagingRepoDir = params.dryRun ? undefined : persistentRepoDir;
-  return await withGitStagingDir(stagingRepoDir, async (tmpDir) => {
+  return await withGitStagingDir(stagingRepoDir, async (tmpDir, stagedRepoIsTargetLocal) => {
     const repoDir = path.join(tmpDir, "repo");
     params.logger?.info?.(
       `Cloning ${sanitizeForLog(redactSensitiveUrlLikeString(parsed.label))}...`,
@@ -558,6 +580,7 @@ export async function installPluginFromGitSpec(
     if (!params.dryRun) {
       const replaceResult = await replaceManagedGitRepo({
         stagedRepoDir: repoDir,
+        stagedRepoIsTargetLocal,
         persistentRepoDir,
         deferCommit: isPluginInstallCommitDeferred(params),
         onBeforePublish: async (stagedArtifactDir) => {

@@ -1,5 +1,6 @@
 // Daemon install tests cover service install command behavior and plan handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useHermeticOpenclawEnv } from "../../../test/vitest/hermetic-openclaw-env.js";
 import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
 import { captureFullEnv } from "../../test-utils/env.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
@@ -326,6 +327,7 @@ describe("mergeInstallInvocationEnv", () => {
 });
 
 describe("runDaemonInstall", () => {
+  useHermeticOpenclawEnv();
   beforeEach(() => {
     loadConfigMock.mockReset();
     resolveNodeStartupTlsEnvironmentMock.mockReset();

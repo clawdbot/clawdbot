@@ -4,6 +4,7 @@ import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports"
  * Extracts visible assistant text, reasoning summaries, thinking-tag blocks,
  * and compact tool metadata for channel delivery and transcript replay.
  */
+import { stripContinuationSignal } from "../auto-reply/continuation/signal.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
@@ -30,6 +31,11 @@ function sanitizeAssistantText(text: string, phase?: AssistantPhase): string {
   return phase === "final_answer"
     ? sanitizeAssistantFinalAnswerText(text)
     : sanitizeAssistantVisibleText(text);
+}
+
+function sanitizeAssistantDisplayText(text: string, phase?: AssistantPhase): string {
+  const sanitized = sanitizeAssistantText(text, phase);
+  return stripContinuationSignal(sanitized).text;
 }
 
 function isAssistantTextContentBlockType(value: unknown): boolean {
@@ -69,7 +75,7 @@ function extractEmbeddedAssistantTextForPhase(
     const hadRequestedPhase = phase ? messagePhase === phase : messagePhase === undefined;
     return {
       text: shouldIncludeContent(messagePhase)
-        ? finalizeAssistantExtraction(msg, sanitizeAssistantText(msg.content, messagePhase))
+        ? finalizeAssistantExtraction(msg, sanitizeAssistantDisplayText(msg.content, messagePhase))
         : "",
       hadRequestedPhase,
     };
@@ -110,7 +116,7 @@ function extractEmbeddedAssistantTextForPhase(
       const sanitizerPhase =
         resolvedPhase ??
         (options?.unphasedSignedFinalAnswer === true && signature?.id ? "final_answer" : undefined);
-      const text = sanitizeAssistantText(record.text, sanitizerPhase);
+      const text = sanitizeAssistantDisplayText(record.text, sanitizerPhase);
       return text.trim() ? text : null;
     })
     .filter((value): value is string => typeof value === "string");

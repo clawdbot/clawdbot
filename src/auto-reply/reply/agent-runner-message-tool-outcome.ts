@@ -6,6 +6,7 @@ import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-e
 
 const messageToolOutcomeLog = createSubsystemLogger("auto-reply/message-tool-outcome");
 
+/** Records the durable visible-outcome fact for a message-tool-only run. */
 export function recordMessageToolOnlyRunOutcome(
   params: AgentTurnParams,
   result: AgentTurnExecutionResult | undefined,

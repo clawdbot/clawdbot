@@ -3,7 +3,7 @@ import type { SubagentEndReason } from "../../../context-engine/types.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
-import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
+import type { SubagentRunOutcome } from "../announce/subagent-run-outcome.js";
 import type { SubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
@@ -219,6 +219,22 @@ type SubagentKillIntent = {
   suppressTaskDelivery?: boolean;
 };
 
+export type SubagentAcceptedSteerDispatch = {
+  gatewayRunId: string;
+  phase?: "dispatching" | "accepted";
+  lifecycleGeneration?: string;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
+};
+
+type SubagentAcceptedSpawnRollback = {
+  gatewayRunId: string;
+  requestedAt: number;
+  reason: string;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
+};
+
 export type SubagentRunRecord = {
   runId: string;
   /** Detached task owner; steer/restart changes runId but continues the same task. */
@@ -256,6 +272,10 @@ export type SubagentRunRecord = {
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
   suppressAnnounceReason?: "steer-restart" | "killed";
+  /** Accepted steer run awaiting remap or exact termination confirmation. */
+  acceptedSteerDispatch?: SubagentAcceptedSteerDispatch;
+  /** Accepted child awaiting exact termination before failed spawn ownership can retire. */
+  acceptedSpawnRollback?: SubagentAcceptedSpawnRollback;
   /** Sticky owner while restart recovery replays this exact terminal run. */
   terminalOwner?: "interrupted-recovery";
   /** Present only while a current-version killed run awaits bounded reconciliation. */
@@ -283,6 +303,20 @@ export type SubagentRunRecord = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  /** Continuation: suppress channel echo for silent delegate returns. */
+  silentAnnounce?: boolean;
+  /** When true (with silentAnnounce), trigger a generation cycle after enrichment delivery. */
+  wakeOnReturn?: boolean;
+  /** Continuation: marks this run as a chain-hop that can consume pending delegates. */
+  drainsContinuationDelegateQueue?: boolean;
+  /** Continuation: return to one explicitly addressed session instead of the dispatcher. */
+  continuationTargetSessionKey?: string;
+  /** Continuation: byte-identical return fan-out to explicit sessions. */
+  continuationTargetSessionKeys?: string[];
+  /** Continuation: computed fan-out over the local session graph. */
+  continuationFanoutMode?: "tree" | "all";
+  /** Continuation: producer span carrier available to child completion paths. */
+  traceparent?: string;
   /** Collector-mode runs remain waitable and never announce to the requester. */
   collect?: boolean;
   /** Stable spawning-session owner for caps, scheduling, and wait authorization. */

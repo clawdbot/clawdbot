@@ -88,7 +88,7 @@ vi.mock("openclaw/plugin-sdk/heartbeat-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/heartbeat-runtime")>();
   return {
     ...actual,
-    requestHeartbeat: (...args: unknown[]) => requestHeartbeatMock(...args),
+    requestPluginHeartbeat: (...args: unknown[]) => requestHeartbeatMock(...args),
   };
 });
 

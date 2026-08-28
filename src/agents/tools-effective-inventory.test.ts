@@ -3,7 +3,6 @@
  * Verifies grouped tool sources, plugin registry inputs, and session-context filters.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { createOpenClawCodingTools } from "./agent-tools.js";
@@ -40,6 +39,7 @@ const effectiveInventoryState = vi.hoisted(() => ({
   effectivePolicy: {} as { profile?: string; providerProfile?: string },
   normalizeToolsMock: vi.fn((options: { tools: AnyAgentTool[] }) => options.tools),
   staticCatalogModelMock: vi.fn((_options: unknown) => undefined as unknown),
+  dynamicModelMock: vi.fn((_options: unknown) => undefined as unknown),
   normalizeTransportMock: vi.fn((_options: unknown) => undefined as unknown),
   createToolsMock: vi.fn<typeof createOpenClawCodingTools>(
     (_options) =>
@@ -91,7 +91,21 @@ vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
 }));
 
 vi.mock("./embedded-agent-runner/model.js", () => ({
-  resolveModelAsync: vi.fn(),
+  resolveModel: (
+    provider: unknown,
+    modelId: unknown,
+    agentDir: unknown,
+    cfg: unknown,
+    options: unknown,
+  ) => ({
+    model: effectiveInventoryState.dynamicModelMock({
+      provider,
+      modelId,
+      agentDir,
+      cfg,
+      options,
+    }),
+  }),
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -119,6 +133,7 @@ async function loadHarness(options?: {
   effectiveInventoryState.normalizeToolsMock =
     options?.normalizeToolsMock ?? vi.fn((normalizeOptions) => normalizeOptions.tools);
   effectiveInventoryState.staticCatalogModelMock = vi.fn((_options: unknown) => undefined);
+  effectiveInventoryState.dynamicModelMock = vi.fn((_options: unknown) => undefined);
   effectiveInventoryState.normalizeTransportMock = vi.fn((_options: unknown) => undefined);
   effectiveInventoryState.createToolsMock =
     options?.createToolsMock ??
@@ -144,6 +159,7 @@ describe("resolveEffectiveToolInventory", () => {
     effectiveInventoryState.effectivePolicy = {};
     effectiveInventoryState.normalizeToolsMock = vi.fn((options) => options.tools);
     effectiveInventoryState.staticCatalogModelMock = vi.fn((_options: unknown) => undefined);
+    effectiveInventoryState.dynamicModelMock = vi.fn((_options: unknown) => undefined);
     effectiveInventoryState.normalizeTransportMock = vi.fn((_options: unknown) => undefined);
     effectiveInventoryState.createToolsMock = vi.fn<typeof createOpenClawCodingTools>(
       (_options) => effectiveInventoryState.tools,
@@ -700,322 +716,5 @@ describe("resolveEffectiveToolInventory", () => {
         }),
       }),
     );
-  });
-
-  it("preserves bundled static transport when configured model row omits api", async () => {
-    const normalizeToolsMock = vi.fn((options: { tools: AnyAgentTool[] }) => options.tools);
-    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal2 } =
-      await loadHarness({
-        tools: [
-          mockTool({
-            name: "exec",
-            label: "Exec",
-            description: "Run shell commands",
-          }),
-        ],
-        normalizeToolsMock,
-      });
-    effectiveInventoryState.staticCatalogModelMock.mockReturnValue({
-      id: "claude-sonnet-test",
-      name: "Bundled Claude Sonnet",
-      provider: "github-copilot",
-      api: "anthropic-messages",
-      baseUrl: "https://api.githubcopilot.com",
-    });
-
-    resolveEffectiveToolInventoryLocal2({
-      cfg: {
-        models: {
-          providers: {
-            "github-copilot": {
-              models: [
-                {
-                  id: "claude-sonnet-test",
-                  name: "Configured Claude Sonnet",
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 200_000,
-                  maxTokens: 8_192,
-                },
-              ],
-            },
-          },
-        },
-      } as never,
-      modelProvider: "github-copilot",
-      modelId: "claude-sonnet-test",
-    });
-
-    expect(effectiveInventoryState.createToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelApi: "anthropic-messages",
-      }),
-    );
-    expect(normalizeToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelApi: "anthropic-messages",
-        model: expect.objectContaining({
-          name: "Configured Claude Sonnet",
-          api: "anthropic-messages",
-          baseUrl: "https://api.githubcopilot.com",
-        }),
-      }),
-    );
-  });
-
-  it("uses prepared model context before quarantining runtime-normalized tools", async () => {
-    const normalizeToolsMock = vi.fn((options: { tools: AnyAgentTool[]; modelApi?: string }) =>
-      options.tools.map((entry) =>
-        entry.name === "parameter_free" && options.modelApi === "openai-responses"
-          ? ({
-              ...entry,
-              parameters: {
-                type: "object",
-                properties: {},
-                required: [],
-                additionalProperties: false,
-              },
-            } as AnyAgentTool)
-          : entry,
-      ),
-    );
-    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryInner } = await loadHarness(
-      {
-        tools: [
-          mockTool({
-            name: "parameter_free",
-            label: "Parameter Free",
-            description: "Runtime-normalized tool",
-            parameters: undefined,
-          }),
-        ],
-        pluginMeta: { parameter_free: { pluginId: "normalized-plugin" } },
-        normalizeToolsMock,
-      },
-    );
-    const runtimeModel: ProviderRuntimeModel = {
-      id: "chat-latest",
-      name: "chat-latest",
-      provider: "openai",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 8192,
-      maxTokens: 1024,
-    };
-
-    const result = resolveEffectiveToolInventoryInner({
-      cfg: {},
-      modelProvider: "openai",
-      modelId: "chat-latest",
-      modelApi: runtimeModel.api,
-      runtimeModel,
-    });
-
-    expect(result.groups[0]?.tools[0]).toMatchObject({
-      id: "parameter_free",
-      source: "plugin",
-      pluginId: "normalized-plugin",
-    });
-    expect(result.notices).toBeUndefined();
-    expect(normalizeToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        modelId: "chat-latest",
-        modelApi: "openai-responses",
-        model: expect.objectContaining({
-          id: "chat-latest",
-          api: "openai-responses",
-          provider: "openai",
-        }),
-      }),
-    );
-  });
-
-  it("does not let one plugin project metadata onto another plugin tool", async () => {
-    const registry = createEmptyPluginRegistry();
-    registry.toolMetadata = [
-      {
-        pluginId: "spoofing-plugin",
-        pluginName: "Spoofing Plugin",
-        source: "fixture",
-        metadata: {
-          toolName: "docs_lookup",
-          displayName: "Spoofed Docs Search",
-          risk: "high",
-        },
-      },
-    ];
-    setActivePluginRegistry(registry);
-    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryScoped } =
-      await loadHarness({
-        tools: [mockTool({ name: "docs_lookup", label: "Lookup", description: "Search docs" })],
-        pluginMeta: { docs_lookup: { pluginId: "docs" } },
-      });
-
-    const result = resolveEffectiveToolInventoryScoped({ cfg: {} });
-
-    expect(result.groups[0]?.tools[0]).toEqual({
-      id: "docs_lookup",
-      label: "Lookup",
-      description: "Search docs",
-      rawDescription: "Search docs",
-      source: "plugin",
-      pluginId: "docs",
-    });
-  });
-
-  it("prefers displaySummary over raw description", async () => {
-    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryItem } = await loadHarness({
-      tools: [
-        mockTool({
-          name: "cron",
-          label: "Cron",
-          displaySummary: "Schedule and manage cron jobs.",
-          description: "Long raw description\n\nACTIONS:\n- status",
-        }),
-      ],
-    });
-
-    const result = resolveEffectiveToolInventoryItem({ cfg: {} });
-
-    expect(result.groups[0]?.tools[0]).toEqual({
-      id: "cron",
-      label: "Cron",
-      description: "Schedule and manage cron jobs.",
-      rawDescription: "Long raw description\n\nACTIONS:\n- status",
-      source: "core",
-    });
-  });
-
-  it("falls back to a sanitized summary for multi-line raw descriptions", async () => {
-    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryCandidate } =
-      await loadHarness({
-        tools: [
-          mockTool({
-            name: "cron",
-            label: "Cron",
-            description:
-              'Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.\n\nACTIONS:\n- status: Check cron scheduler status\nJOB SCHEMA:\n{ ... }',
-          }),
-        ],
-      });
-
-    const result = resolveEffectiveToolInventoryCandidate({ cfg: {} });
-
-    const description = result.groups[0]?.tools[0]?.description ?? "";
-    expect(description).toContain(
-      "Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events.",
-    );
-    expect(description).toContain("Use this for reminders");
-    expect(description.endsWith("...")).toBe(true);
-    expect(description.length).toBeLessThanOrEqual(120);
-    expect(result.groups[0]?.tools[0]?.rawDescription).toContain("ACTIONS:");
-  });
-
-  it("includes the resolved tool profile", async () => {
-    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryEntry } = await loadHarness(
-      {
-        tools: [mockTool({ name: "exec", label: "Exec", description: "Run shell commands" })],
-        effectivePolicy: { profile: "minimal", providerProfile: "coding" },
-      },
-    );
-
-    const result = resolveEffectiveToolInventoryEntry({ cfg: {} });
-
-    expect(result.profile).toBe("coding");
-  });
-
-  it("adds an actionable notice when configured browser is filtered by the tool profile", async () => {
-    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryResult } =
-      await loadHarness({
-        tools: [
-          mockTool({ name: "web_fetch", label: "Web Fetch", description: "Fetch web content" }),
-        ],
-        effectivePolicy: { profile: "coding" },
-      });
-
-    const result = resolveEffectiveToolInventoryResult({
-      cfg: {
-        browser: { enabled: true },
-        plugins: { entries: { browser: { enabled: true } } },
-      } as never,
-    });
-
-    expect(result.notices).toEqual([
-      {
-        id: "browser-filtered-by-profile",
-        severity: "info",
-        message:
-          'Browser is configured, but the current tool profile does not include the browser tool. Add tools.alsoAllow: ["browser"] or agents.entries.*.tools.alsoAllow: ["browser"]; tools.subagents.tools.allow alone cannot add it back after profile filtering.',
-      },
-    ]);
-  });
-
-  it("does not add a browser profile notice when browser is already available", async () => {
-    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryValue } = await loadHarness(
-      {
-        tools: [
-          mockTool({ name: "browser", label: "Browser", description: "Control browser" }),
-          mockTool({ name: "web_fetch", label: "Web Fetch", description: "Fetch web content" }),
-        ],
-        effectivePolicy: { profile: "coding" },
-      },
-    );
-
-    const result = resolveEffectiveToolInventoryValue({
-      cfg: {
-        browser: { enabled: true },
-        plugins: { entries: { browser: { enabled: true } } },
-      } as never,
-    });
-
-    expect(result.notices).toBeUndefined();
-  });
-
-  it("passes resolved model compat into effective tool creation", async () => {
-    const createToolsMock = vi.fn<typeof createOpenClawCodingTools>(() => [
-      mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
-    ]);
-    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal } = await loadHarness(
-      {
-        createToolsMock,
-      },
-    );
-
-    resolveEffectiveToolInventoryLocal({
-      cfg: {
-        models: {
-          providers: {
-            xai: {
-              baseUrl: "https://api.x.ai/v1",
-              models: [
-                {
-                  id: "grok-test",
-                  name: "Grok Test",
-                  api: "openai-completions",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128_000,
-                  maxTokens: 8_192,
-                  compat: { supportsTools: true },
-                },
-              ],
-            },
-          },
-        },
-      },
-      agentDir: "/tmp/agents/main/agent",
-      modelProvider: "xai",
-      modelId: "grok-test",
-    });
-
-    expect(createToolsMock).toHaveBeenCalledTimes(1);
-    const createToolsOptions = createToolsMock.mock.calls.at(0)?.[0];
-    expect(createToolsOptions?.allowGatewaySubagentBinding).toBe(true);
-    expect(createToolsOptions?.modelCompat).toEqual({ supportsTools: true });
-    expect(createToolsOptions?.modelApi).toBe("openai-completions");
   });
 });

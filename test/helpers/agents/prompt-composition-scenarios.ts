@@ -453,7 +453,7 @@ function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
     GroupChannel: "#ops-bridge",
     GroupSpace: "guild-123",
     SenderId: "U3",
-    SenderName: "Cael",
+    SenderName: "Alex",
     MessageSid: "1503084621145964846",
     Body: body,
     BodyStripped: body,

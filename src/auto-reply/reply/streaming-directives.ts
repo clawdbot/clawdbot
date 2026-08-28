@@ -5,6 +5,7 @@ import {
   parseInlineDirectives,
   stripInlineDirectiveTagsForDelivery,
 } from "../../utils/directive-tags.js";
+import { stripContinuationSignal } from "../continuation/signal.js";
 import {
   isSilentReplyPrefixText,
   isSilentReplyText,
@@ -28,6 +29,39 @@ type ConsumeOptions = {
   final?: boolean;
   silentToken?: string;
 };
+
+const TRAILING_CONTINUATION_SIGNAL_PATTERNS = [
+  /\[\[\s*CONTINUE_DELEGATE:\s*(?:(?!\]\])[\s\S])+?\s*\]\]\s*$/,
+  /\[\[\s*CONTINUE_WORK(?::\d+)?\s*\]\]\s*$/,
+  /\bCONTINUE_WORK(?::\d+)?\s*$/,
+] as const;
+const TRAILING_CONTINUATION_TOKEN_RE = /([A-Z_][A-Z_0-9:]*)(\s*)$/;
+const CONTINUE_WORK_BARE_TOKEN = "CONTINUE_WORK";
+
+function resolveTrailingContinuationSignalStart(text: string): number | undefined {
+  for (const pattern of TRAILING_CONTINUATION_SIGNAL_PATTERNS) {
+    const match = pattern.exec(text);
+    if (match) {
+      return text.length - match[0].length;
+    }
+  }
+  return undefined;
+}
+
+function resolveTrailingContinuationPrefixStart(text: string): number | undefined {
+  const match = text.match(TRAILING_CONTINUATION_TOKEN_RE);
+  if (!match) {
+    return undefined;
+  }
+  const token = expectDefined(match[1], "continuation token capture");
+  if (!token.startsWith("CONT")) {
+    return undefined;
+  }
+  if (!CONTINUE_WORK_BARE_TOKEN.startsWith(token) && !/^CONTINUE_WORK:\d*$/.test(token)) {
+    return undefined;
+  }
+  return text.length - match[0].length;
+}
 
 // TRANSITIONAL(marker-retirement): streaming tail-buffering exists only because
 // live drafts still carry inline markers mid-run. Delete alongside the marker
@@ -71,6 +105,16 @@ export const splitTrailingDirective = (text: string): { text: string; tail: stri
     }
   }
 
+  const continuationSignalStart = resolveTrailingContinuationSignalStart(text);
+  if (continuationSignalStart !== undefined && continuationSignalStart < bufferStart) {
+    bufferStart = continuationSignalStart;
+  } else {
+    const continuationPrefixStart = resolveTrailingContinuationPrefixStart(text);
+    if (continuationPrefixStart !== undefined && continuationPrefixStart < bufferStart) {
+      bufferStart = continuationPrefixStart;
+    }
+  }
+
   if (bufferStart >= text.length) {
     return { text, tail: "" };
   }
@@ -98,6 +142,12 @@ const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChun
     text = "";
   } else if (startsWithSilentToken(text, silentToken)) {
     text = stripLeadingSilentToken(text, silentToken);
+  }
+  if (text) {
+    const continuation = stripContinuationSignal(text);
+    if (continuation.signal) {
+      text = continuation.text;
+    }
   }
 
   return {

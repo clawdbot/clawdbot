@@ -59,6 +59,10 @@ export type ChatAbortControllerEntry = {
   abortStopReason?: string;
   /** Latest argument-free validation diagnostic for operator-initiated aborts. */
   toolErrorSummary?: string;
+  /** True when lifecycle or chat.send already emitted the client-visible terminal. */
+  chatTerminalBroadcasted?: boolean;
+  /** chat.send still owned terminalization when the lifecycle terminal was observed. */
+  chatSendActiveAtTerminalObservation?: boolean;
   /**
    * False for backend/internal agent runs that may share a session key but must
    * not be projected into operator chat surfaces.

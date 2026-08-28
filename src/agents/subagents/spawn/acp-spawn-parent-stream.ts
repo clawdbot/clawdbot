@@ -23,8 +23,8 @@ import {
   resolveEventSessionKeyForPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../../../infra/event-session-routing.js";
-import { requestHeartbeat } from "../../../infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { requestHeartbeatRaw as requestHeartbeat } from "../../../infra/heartbeat-wake.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../../infra/system-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveNormalizedAccountEntry } from "../../../routing/account-lookup.js";
 import { normalizeAccountId } from "../../../routing/session-key.js";

@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
+  DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
   resolveAgentMaxConcurrent,
   resolveSubagentMaxConcurrent,
@@ -57,4 +58,33 @@ describe("agent concurrency defaults", () => {
       DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
     );
   });
+});
+
+it("rejects maxChildrenPerAgent above schema ceiling (10000)", () => {
+  expect(() =>
+    OpenClawSchema.parse({
+      agents: {
+        defaults: {
+          subagents: { maxChildrenPerAgent: 10001 },
+        },
+        entries: { main: { default: true } },
+      },
+    }),
+  ).toThrow();
+});
+
+it("accepts maxChildrenPerAgent at schema ceiling (10000)", () => {
+  const parsed = OpenClawSchema.parse({
+    agents: {
+      defaults: {
+        subagents: { maxChildrenPerAgent: 10000 },
+      },
+      entries: { main: { default: true } },
+    },
+  });
+  expect(parsed.agents?.defaults?.subagents?.maxChildrenPerAgent).toBe(10000);
+});
+
+it("uses the established maxChildrenPerAgent default", () => {
+  expect(DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT).toBe(5);
 });

@@ -45,9 +45,24 @@ async function installPluginFromDir({ dirPath, ...params }: InstallPluginFromDir
   return await installPluginFromPath({ path: dirPath, ...params });
 }
 
-vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: vi.fn(),
-}));
+type RunCommandWithTimeout = typeof runCommandWithTimeout;
+const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn<RunCommandWithTimeout>());
+
+vi.mock("../process/exec.js", async () => {
+  const actual = await vi.importActual<typeof import("../process/exec-runner.js")>(
+    "../process/exec-runner.js",
+  );
+  return {
+    runCommandWithTimeout: new Proxy(runCommandWithTimeoutMock, {
+      apply(target, thisArg, args: Parameters<RunCommandWithTimeout>) {
+        if (args[0][0] === process.execPath) {
+          return Reflect.apply(actual.runCommandWithTimeout, thisArg, args);
+        }
+        return Reflect.apply(target, thisArg, args);
+      },
+    }),
+  };
+});
 
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync: vi.fn(),
@@ -504,7 +519,7 @@ function mockNpmViewMetadata(params: { name: string; version?: string }) {
   });
 }
 
-let actualExecModulePromise: Promise<typeof import("../process/exec.js")> | undefined;
+let actualExecRunnerPromise: Promise<typeof import("../process/exec-runner.js")> | undefined;
 
 async function runActualInstallPolicyCommandIfNeeded(
   args: Parameters<typeof runCommandWithTimeout>[0],
@@ -513,10 +528,11 @@ async function runActualInstallPolicyCommandIfNeeded(
   if (typeof options === "number" || options.input === undefined) {
     return null;
   }
-  actualExecModulePromise ??=
-    vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
-  const actualExecModule = await actualExecModulePromise;
-  return await actualExecModule.runCommandWithTimeout(args, options);
+  actualExecRunnerPromise ??= vi.importActual<typeof import("../process/exec-runner.js")>(
+    "../process/exec-runner.js",
+  );
+  const actualExecRunner = await actualExecRunnerPromise;
+  return await actualExecRunner.runCommandWithTimeout(args, options);
 }
 
 function countMockedCommands(executable: string): number {

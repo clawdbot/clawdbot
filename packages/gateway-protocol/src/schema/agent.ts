@@ -2,16 +2,14 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { internalProtocolField } from "./internal-fields.js";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
 
-/**
- * Agent and channel-action gateway schemas.
- *
- * These payloads sit on the boundary between external channel adapters, gateway
- * RPC callers, and the agent runtime. Keep public request fields documented
- * because older CLI/channel clients may continue sending them across releases.
- */
-const AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION = "task_completion";
+// Gateway protocol is a published package boundary, so runtime-owned internal
+// event and trace literals are mirrored here instead of importing root src.
+// Keep these byte-compatible with runtime producer/parser contracts.
+const AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION = "task_completion" as const;
+const DIAGNOSTIC_TRACEPARENT_PATTERN = "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$";
 const AGENT_INTERNAL_EVENT_SOURCES = [
   "subagent",
   "cron",
@@ -20,8 +18,16 @@ const AGENT_INTERNAL_EVENT_SOURCES = [
   "music_generation",
 ] as const;
 const AGENT_INTERNAL_EVENT_STATUSES = ["ok", "timeout", "error", "unknown"] as const;
+const CONTINUATION_TRIGGER_VALUES = ["work-wake", "delegate-return", "subagent-return"] as const;
 const CONVERSATION_REF_PATTERN = "^conv_[a-f0-9]{32}$";
 
+/**
+ * Agent and channel-action gateway schemas.
+ *
+ * These payloads sit on the boundary between external channel adapters, gateway
+ * RPC callers, and the agent runtime. Keep public request fields documented
+ * because older CLI/channel clients may continue sending them across releases.
+ */
 /** Generated media/file attachment metadata carried by internal agent events. */
 const AgentGeneratedAttachmentSchema = closedObject({
   type: Type.Optional(Type.String({ enum: ["image", "audio", "video", "file"] })),
@@ -321,6 +327,15 @@ export const AgentParamsSchema = closedObject({
   promptMode: Type.Optional(
     Type.Union([Type.Literal("full"), Type.Literal("minimal"), Type.Literal("none")]),
   ),
+  continuationTrigger: internalProtocolField(
+    Type.Optional(
+      Type.String({
+        enum: [...CONTINUATION_TRIGGER_VALUES],
+        description:
+          "Internal continuation lifecycle metadata for internally-triggered turns; omitted from public generated protocol artifacts.",
+      }),
+    ),
+  ),
   extraSystemPrompt: Type.Optional(Type.String()),
   bootstrapContextMode: Type.Optional(
     Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
@@ -353,6 +368,23 @@ export const AgentParamsSchema = closedObject({
   voiceWakeTrigger: Type.Optional(Type.String()),
   idempotencyKey: NonEmptyString,
   label: Type.Optional(SessionLabelString),
+  drainsContinuationDelegateQueue: internalProtocolField(
+    Type.Optional(
+      Type.Boolean({
+        description:
+          "Internal continuation runner knob; omitted from public generated protocol artifacts.",
+      }),
+    ),
+  ),
+  traceparent: internalProtocolField(
+    Type.Optional(
+      Type.String({
+        description:
+          "Internal continuation trace context for inherited child agent runs; omitted from public generated protocol artifacts.",
+        pattern: DIAGNOSTIC_TRACEPARENT_PATTERN,
+      }),
+    ),
+  ),
 });
 
 /** Identity lookup request for the current or selected agent/session. */

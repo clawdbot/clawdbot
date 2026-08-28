@@ -381,6 +381,10 @@ afterEach(async () => {
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
   resetPreparedModelRuntimeSnapshotsForTest();
+  // Reset the no-op replay guard ledger via the registry import (not importActual)
+  // so the singleton cleared here is the same instance the production gates mutate.
+  const { resetNoOpRearmGuard } = await import("../src/auto-reply/reply/no-op-rearm-guard.js");
+  resetNoOpRearmGuard();
   await installDefaultPluginRegistry();
 });
 

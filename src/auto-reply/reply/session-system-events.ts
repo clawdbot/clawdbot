@@ -1,16 +1,34 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../../agents/date-time.js";
+import {
+  markDelegateArtifactDeliveryUnavailable,
+  prepareDelegateArtifactDelivery,
+  recordDelegateArtifactDeliveryBinding,
+} from "../../agents/delegate-artifacts.js";
+import { replaceManagedDelegateReturnInPrompt } from "../../agents/internal-events.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveSessionStorePathCore,
+} from "../../config/sessions.js";
+import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
+import { emitContinuationQueueDrainSpan } from "../../infra/continuation-tracer.js";
+import { toErrorObject } from "../../infra/errors.js";
 import {
   formatUtcTimestamp,
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
+import {
+  ackSessionDelivery,
+  loadPendingSessionDelivery,
+} from "../../infra/session-delivery-queue-storage.js";
 // Records system-level session events for restarts, forks, and resets.
 import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
 import {
@@ -18,8 +36,10 @@ import {
   peekSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
+import { defaultRuntime } from "../../runtime.js";
 import { acknowledgeSessionStateNotices } from "../../sessions/session-state-events.js";
 import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
+import { resolveContinuationRuntimeConfig } from "../continuation/config.js";
 
 function isCronContextSystemEvent(event: SystemEvent): boolean {
   return event.contextKey?.startsWith("cron:") ?? false;
@@ -101,27 +121,480 @@ function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
   );
 }
 
-/** Drain queued system events, format as `System:` lines, return the block text (or undefined). */
-export async function drainFormattedSystemEvents(params: {
+type PreparedSystemEventBlock = {
+  key?: string;
+  text: string;
+};
+
+export type PreparedManagedSystemEventDelivery = {
+  id: string;
+  acknowledge: () => Promise<void>;
+};
+
+type PreparedFormattedSystemEvents = {
+  blocks: PreparedSystemEventBlock[];
+  managedDeliveries: PreparedManagedSystemEventDelivery[];
+};
+
+const MESSAGE_METADATA_KEY = "__openclaw";
+
+function readSessionDeliveryAckIds(message: unknown): Set<string> {
+  const ids = new Set<string>();
+  if (!isRecord(message)) {
+    return ids;
+  }
+  const metadata = message[MESSAGE_METADATA_KEY];
+  if (!isRecord(metadata)) {
+    return ids;
+  }
+  const deliveryIds = metadata.sessionDeliveryAckIds;
+  if (!Array.isArray(deliveryIds)) {
+    return ids;
+  }
+  for (const id of deliveryIds) {
+    const normalized = normalizeOptionalString(id);
+    if (normalized) {
+      ids.add(normalized);
+    }
+  }
+  return ids;
+}
+
+export async function acknowledgePersistedManagedSystemEvents(params: {
+  deliveries: Iterable<PreparedManagedSystemEventDelivery>;
+  persistedMessage: unknown;
+}): Promise<void> {
+  const adoptedIds = readSessionDeliveryAckIds(params.persistedMessage);
+  let firstError: Error | undefined;
+  for (const delivery of params.deliveries) {
+    if (!adoptedIds.has(delivery.id)) {
+      continue;
+    }
+    try {
+      await delivery.acknowledge();
+    } catch (error) {
+      firstError ??= toErrorObject(error, "Managed session delivery acknowledgement failed");
+    }
+  }
+  if (firstError !== undefined) {
+    throw firstError;
+  }
+}
+
+export async function settleManagedSystemEventsAfterTurnAdoption(params: {
+  deliveries: Iterable<PreparedManagedSystemEventDelivery>;
+  persistedMessage: unknown;
+  onTurnAdopted?: () => void | Promise<void>;
+}): Promise<void> {
+  // The ingress owner must tombstone its claim first. Managed settlement can
+  // replay from the transcript receipt; an untombstoned ingress claim can
+  // replay the already-injected user turn.
+  await params.onTurnAdopted?.();
+  await acknowledgePersistedManagedSystemEvents(params);
+}
+
+type ManagedDeliverySettlement = {
+  event: SystemEvent;
+  id: string;
+  stateDir?: string;
+  receipt?: NonNullable<SystemEvent["delegateArtifactReceipt"]>;
+  deliveryEligible: boolean;
+};
+
+function readAdoptedSessionDeliveryIds(events: readonly unknown[]): Set<string> {
+  const ids = new Set<string>();
+  for (const event of events) {
+    if (!isRecord(event)) {
+      continue;
+    }
+    for (const id of readSessionDeliveryAckIds(event.message)) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
+async function settleManagedDelivery(
+  sessionKey: string,
+  settlement: ManagedDeliverySettlement,
+): Promise<void> {
+  const options = settlement.stateDir
+    ? { env: { ...process.env, OPENCLAW_STATE_DIR: settlement.stateDir } }
+    : undefined;
+  try {
+    if (settlement.receipt) {
+      const receipt = settlement.receipt;
+      if (settlement.deliveryEligible) {
+        recordDelegateArtifactDeliveryBinding({
+          dispatchId: receipt.dispatchId,
+          recipientSessionKey: receipt.recipientSessionKey,
+          recipientSessionId: receipt.recipientSessionId,
+          phase: "acknowledged",
+          ...(options ? { options } : {}),
+        });
+      } else {
+        markDelegateArtifactDeliveryUnavailable({
+          dispatchId: receipt.dispatchId,
+          recipientSessionKey: receipt.recipientSessionKey,
+          recipientSessionId: receipt.recipientSessionId,
+          reason: "recipient-incarnation-changed",
+          ...(options ? { options } : {}),
+        });
+      }
+    }
+    await ackSessionDelivery(settlement.id, settlement.stateDir);
+    consumeSelectedSystemEventEntries(sessionKey, [settlement.event]);
+  } catch (error) {
+    defaultRuntime.log(
+      `[session-system-events] failed to settle adopted session delivery ${settlement.id}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    throw error;
+  }
+}
+
+/**
+ * Prepare queued system events for one prompt. Managed deliveries remain
+ * pending until the caller durably adopts the resulting user turn.
+ */
+export async function prepareFormattedSystemEvents(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
   suppressHeartbeatOwnedEvents?: boolean;
-}): Promise<string | undefined> {
+}): Promise<PreparedFormattedSystemEvents> {
   const summaryLines: string[] = [];
-  const systemLines: string[] = [];
+  const blocks: PreparedSystemEventBlock[] = [];
   // Exec completions have a dedicated heartbeat prompt; leave those entries queued
   // so the heartbeat path can consume and deliver them.
+  // Upstream scopes queued events to the owning agent before generic selection;
+  // keep that ownership filter ahead of our delivery-ack/session filtering.
+  const selected = selectGenericSystemEvents(
+    selectAgentSystemEvents(peekSystemEventEntries(params.sessionKey), params.agentId),
+    { suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents },
+  );
+  // Storage must resolve under the SAME agent the ownership filter selected for,
+  // or a global-scope key under a non-default agent reads the wrong store.
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey, params.agentId);
+  const currentSessionId = loadSessionEntry({
+    agentId,
+    sessionKey: params.sessionKey,
+    storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+    readConsistency: "latest",
+    hydrateSkillPromptRefs: false,
+  })?.sessionId;
+  // Adoption-scoped events settle only after the turn is durably adopted, so a
+  // crash between the transcript write and the queue ack leaves an ack id that
+  // IS already adopted but whose row is still pending. Both kinds must consult
+  // the transcript, or a plain adoption-scoped notice would be re-injected.
+  const hasManagedDelivery = selected.some(
+    (event) =>
+      event.sessionDeliveryAckId &&
+      (event.delegateArtifactReceipt || event.sessionDeliveryAwaitsTurnAdoption),
+  );
+  const adoptedDeliveryIds =
+    currentSessionId && hasManagedDelivery
+      ? readAdoptedSessionDeliveryIds(
+          await loadTranscriptEvents({
+            agentId,
+            sessionId: currentSessionId,
+            sessionKey: params.sessionKey,
+            storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+          }),
+        )
+      : new Set<string>();
+  const runtime = resolveContinuationRuntimeConfig(params.cfg);
+  const deferredManagedEvents = new Set<SystemEvent>();
+  const pendingManagedKeys = new Set<string>();
+  const terminalManagedSettlements: ManagedDeliverySettlement[] = [];
+  const pendingManagedSettlements: ManagedDeliverySettlement[] = [];
+  const refreshedManagedText = new Map<string, string>();
+  const managedKey = (event: SystemEvent): string | undefined => {
+    const receipt = event.delegateArtifactReceipt;
+    if (!receipt) {
+      return undefined;
+    }
+    return `${event.sessionDeliveryAckId ?? ""}\u0000${event.sessionDeliveryAckStateDir ?? ""}\u0000${receipt.dispatchId}\u0000${receipt.recipientSessionKey}\u0000${receipt.recipientSessionId}`;
+  };
+  const refreshManagedEvent = (event: SystemEvent): SystemEvent => {
+    const key = managedKey(event);
+    const text = key ? refreshedManagedText.get(key) : undefined;
+    return text ? { ...event, text } : event;
+  };
+  for (const event of selected) {
+    const receipt = event.delegateArtifactReceipt;
+    const key = managedKey(event);
+    if (!receipt || !key) {
+      continue;
+    }
+    const artifactOptions = event.sessionDeliveryAckStateDir
+      ? {
+          options: {
+            env: {
+              ...process.env,
+              OPENCLAW_STATE_DIR: event.sessionDeliveryAckStateDir,
+            },
+          },
+        }
+      : {};
+    const durable = event.sessionDeliveryAckId
+      ? await loadPendingSessionDelivery(
+          event.sessionDeliveryAckId,
+          event.sessionDeliveryAckStateDir,
+        )
+      : null;
+    const managed =
+      durable?.kind === "systemEvent" ? durable.managedDelegateArtifactDelivery : undefined;
+    if (
+      !managed ||
+      managed.receipt.dispatchId !== receipt.dispatchId ||
+      managed.receipt.recipientSessionKey !== receipt.recipientSessionKey ||
+      managed.receipt.recipientSessionId !== receipt.recipientSessionId
+    ) {
+      markDelegateArtifactDeliveryUnavailable({
+        dispatchId: receipt.dispatchId,
+        recipientSessionKey: receipt.recipientSessionKey,
+        recipientSessionId: receipt.recipientSessionId,
+        reason: "delivery-state-unavailable",
+        ...artifactOptions,
+      });
+      if (event.sessionDeliveryAckId) {
+        terminalManagedSettlements.push({
+          event,
+          id: event.sessionDeliveryAckId,
+          ...(event.sessionDeliveryAckStateDir
+            ? { stateDir: event.sessionDeliveryAckStateDir }
+            : {}),
+          deliveryEligible: false,
+        });
+      }
+      continue;
+    }
+    const prepared = prepareDelegateArtifactDelivery({
+      projection: managed.projection,
+      runtimeEnabled: runtime.enabled,
+      crossSessionEnabled: runtime.crossSessionTargeting === "enabled",
+      currentRecipientSessionId: currentSessionId,
+      ...artifactOptions,
+    });
+    if (prepared.status === "deferred") {
+      deferredManagedEvents.add(event);
+      continue;
+    }
+    if (prepared.status === "acknowledged") {
+      if (event.sessionDeliveryAckId) {
+        terminalManagedSettlements.push({
+          event,
+          id: event.sessionDeliveryAckId,
+          ...(event.sessionDeliveryAckStateDir
+            ? { stateDir: event.sessionDeliveryAckStateDir }
+            : {}),
+          receipt,
+          deliveryEligible: true,
+        });
+      }
+      continue;
+    }
+    if (prepared.status === "unavailable") {
+      markDelegateArtifactDeliveryUnavailable({
+        dispatchId: receipt.dispatchId,
+        recipientSessionKey: receipt.recipientSessionKey,
+        recipientSessionId: receipt.recipientSessionId,
+        reason:
+          currentSessionId === receipt.recipientSessionId
+            ? "delivery-state-unavailable"
+            : "recipient-incarnation-changed",
+        ...artifactOptions,
+      });
+      if (event.sessionDeliveryAckId) {
+        terminalManagedSettlements.push({
+          event,
+          id: event.sessionDeliveryAckId,
+          ...(event.sessionDeliveryAckStateDir
+            ? { stateDir: event.sessionDeliveryAckStateDir }
+            : {}),
+          deliveryEligible: false,
+        });
+      }
+      continue;
+    }
+    recordDelegateArtifactDeliveryBinding({
+      dispatchId: receipt.dispatchId,
+      recipientSessionKey: receipt.recipientSessionKey,
+      recipientSessionId: receipt.recipientSessionId,
+      phase: "attempt",
+      now: prepared.projection.arrivalContext.deliveredAt,
+      availability: prepared.projection.arrivalContext.availability,
+      ...artifactOptions,
+    });
+    const refreshed = prepareDelegateArtifactDelivery({
+      projection: managed.projection,
+      runtimeEnabled: runtime.enabled,
+      crossSessionEnabled: runtime.crossSessionTargeting === "enabled",
+      currentRecipientSessionId: currentSessionId,
+      ...artifactOptions,
+    });
+    if (refreshed.status === "deferred") {
+      deferredManagedEvents.add(event);
+      continue;
+    }
+    if (refreshed.status === "acknowledged") {
+      if (event.sessionDeliveryAckId) {
+        terminalManagedSettlements.push({
+          event,
+          id: event.sessionDeliveryAckId,
+          ...(event.sessionDeliveryAckStateDir
+            ? { stateDir: event.sessionDeliveryAckStateDir }
+            : {}),
+          receipt,
+          deliveryEligible: true,
+        });
+      }
+      continue;
+    }
+    if (refreshed.status === "unavailable") {
+      markDelegateArtifactDeliveryUnavailable({
+        dispatchId: receipt.dispatchId,
+        recipientSessionKey: receipt.recipientSessionKey,
+        recipientSessionId: receipt.recipientSessionId,
+        reason: "delivery-state-unavailable",
+        ...artifactOptions,
+      });
+      if (event.sessionDeliveryAckId) {
+        terminalManagedSettlements.push({
+          event,
+          id: event.sessionDeliveryAckId,
+          ...(event.sessionDeliveryAckStateDir
+            ? { stateDir: event.sessionDeliveryAckStateDir }
+            : {}),
+          deliveryEligible: false,
+        });
+      }
+      continue;
+    }
+    refreshedManagedText.set(
+      key,
+      replaceManagedDelegateReturnInPrompt(event.text, refreshed.projection),
+    );
+    const deliveryId = normalizeOptionalString(event.sessionDeliveryAckId);
+    if (!deliveryId) {
+      continue;
+    }
+    const settlement: ManagedDeliverySettlement = {
+      event,
+      id: deliveryId,
+      ...(event.sessionDeliveryAckStateDir ? { stateDir: event.sessionDeliveryAckStateDir } : {}),
+      receipt,
+      deliveryEligible: currentSessionId === receipt.recipientSessionId,
+    };
+    if (adoptedDeliveryIds.has(deliveryId) || !settlement.deliveryEligible) {
+      terminalManagedSettlements.push(settlement);
+    } else {
+      pendingManagedKeys.add(key);
+      pendingManagedSettlements.push(settlement);
+    }
+  }
+  for (const settlement of terminalManagedSettlements) {
+    await settleManagedDelivery(params.sessionKey, settlement);
+  }
+  // Classify adoption-scoped deliveries BEFORE the prompt is assembled: an id
+  // the persisted turn already adopted must be settled and excluded, not
+  // re-injected.
+  const adoptionScopedDeliveries: PreparedManagedSystemEventDelivery[] = [];
+  const seenAdoptionScopedIds = new Set<string>();
+  const alreadyAdoptedAckIds: { id: string; stateDir?: string }[] = [];
+  // Keyed by ack id, not object identity: consumeSelectedSystemEventEntries
+  // returns different instances than the peeked entries classified here.
+  const excludedAdoptedAckIds = new Set<string>();
+  for (const event of selected) {
+    if (event.delegateArtifactReceipt || !event.sessionDeliveryAwaitsTurnAdoption) {
+      continue;
+    }
+    const id = normalizeOptionalString(event.sessionDeliveryAckId);
+    if (!id || seenAdoptionScopedIds.has(id)) {
+      continue;
+    }
+    seenAdoptionScopedIds.add(id);
+    const stateDir = normalizeOptionalString(event.sessionDeliveryAckStateDir);
+    if (adoptedDeliveryIds.has(id)) {
+      // The persisted turn already adopted this id; only the queue ack was lost.
+      // Settle it and keep it out of this prompt so a restart cannot surface the
+      // same outcome twice.
+      alreadyAdoptedAckIds.push({ id, ...(stateDir ? { stateDir } : {}) });
+      excludedAdoptedAckIds.add(id);
+      continue;
+    }
+    adoptionScopedDeliveries.push({
+      id,
+      acknowledge: async () => {
+        await ackSessionDelivery(id, stateDir);
+      },
+    });
+  }
+  for (const ack of alreadyAdoptedAckIds) {
+    try {
+      await ackSessionDelivery(ack.id, ack.stateDir);
+    } catch (error) {
+      defaultRuntime.log(
+        `[session-system-events] failed to settle already-adopted session delivery ${ack.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
   const queued = consumeSelectedSystemEventEntries(
     params.sessionKey,
-    selectGenericSystemEvents(
-      selectAgentSystemEvents(peekSystemEventEntries(params.sessionKey), params.agentId),
-      { suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents },
-    ),
+    selected.filter((event) => !event.delegateArtifactReceipt && !deferredManagedEvents.has(event)),
+  ).map(refreshManagedEvent);
+  const deliverable = queued.filter(
+    (event) =>
+      !(event.sessionDeliveryAckId && excludedAdoptedAckIds.has(event.sessionDeliveryAckId)) &&
+      (!event.expectedSessionId || event.expectedSessionId === currentSessionId),
   );
-  const sessionStateTargets = queued
+  const pendingManagedEvents = selected
+    .filter((event) => pendingManagedKeys.has(managedKey(event) ?? ""))
+    .map(refreshManagedEvent);
+  const promptEvents = [...deliverable, ...pendingManagedEvents];
+  const sessionDeliveryAcks = new Map<
+    string,
+    {
+      id: string;
+      stateDir?: string;
+    }
+  >();
+  // Adoption-scoped events are NOT acked here: prompt preparation is not
+  // adoption, and a crash or admission failure after this point would otherwise
+  // complete the durable row with nothing delivered. They were classified above
+  // and settle via settleManagedSystemEventsAfterTurnAdoption.
+  for (const event of selected.filter(
+    (entry) => !entry.delegateArtifactReceipt && !entry.sessionDeliveryAwaitsTurnAdoption,
+  )) {
+    const id = normalizeOptionalString(event.sessionDeliveryAckId);
+    if (!id) {
+      continue;
+    }
+    const stateDir = normalizeOptionalString(event.sessionDeliveryAckStateDir);
+    const dedupeKey = `${id}\u0000${stateDir ?? ""}`;
+    sessionDeliveryAcks.set(dedupeKey, {
+      id,
+      ...(stateDir ? { stateDir } : {}),
+    });
+  }
+  for (const ack of sessionDeliveryAcks.values()) {
+    try {
+      await ackSessionDelivery(ack.id, ack.stateDir);
+    } catch (error) {
+      defaultRuntime.log(
+        `[session-system-events] failed to ack consumed session delivery ${ack.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+  const sessionStateTargets = promptEvents
     .map((event) =>
       event.contextKey ? decodeSessionStateNoticeContextKey(event.contextKey) : undefined,
     )
@@ -129,20 +602,34 @@ export async function drainFormattedSystemEvents(params: {
   if (sessionStateTargets.length > 0) {
     acknowledgeSessionStateNotices(params.sessionKey, sessionStateTargets);
   }
-  for (const event of queued) {
+  const drainedContinuationCount = promptEvents.filter((event) =>
+    event.text.startsWith("[continuation:"),
+  ).length;
+  const traceparent = promptEvents.find((event) => event.traceparent)?.traceparent;
+  emitContinuationQueueDrainSpan({
+    drainedCount: promptEvents.length,
+    drainedContinuationCount,
+    ...(traceparent ? { traceparent } : {}),
+    log: (message) => defaultRuntime.log(message),
+  });
+  for (const event of promptEvents) {
     const compacted = compactSystemEvent(event.text);
     if (!compacted) {
       continue;
     }
     const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
-    let index = 0;
+    const lines = compacted
+      .split("\n")
+      .map((subline, index) => `System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
     // Inbound text is deliberately not rewritten to neutralize look-alike `System:` lines.
     // Role separation plus external-content wrapping is the boundary.
     // This is an explicit product decision.
-    for (const subline of compacted.split("\n")) {
-      systemLines.push(`System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
-      index += 1;
-    }
+    blocks.push({
+      ...(event.sessionDeliveryAckId
+        ? { key: `session-delivery:${event.sessionDeliveryAckId}` }
+        : {}),
+      text: lines.join("\n"),
+    });
   }
   if (params.isMainSession && params.isNewSession) {
     const summary = await buildChannelSummary(params.cfg);
@@ -154,13 +641,30 @@ export async function drainFormattedSystemEvents(params: {
       }
     }
   }
-  if (summaryLines.length === 0 && systemLines.length === 0) {
-    return undefined;
+  if (summaryLines.length > 0) {
+    blocks.unshift({ key: "session-summary", text: summaryLines.join("\n") });
   }
+  return {
+    blocks,
+    managedDeliveries: [
+      ...pendingManagedSettlements.map((settlement) => ({
+        id: settlement.id,
+        acknowledge: () => settleManagedDelivery(params.sessionKey, settlement),
+      })),
+      ...adoptionScopedDeliveries,
+    ],
+  };
+}
 
-  // Each sub-line gets its own prefix so continuation lines can't be mistaken
-  // for regular user content.
-  return summaryLines.length > 0
-    ? [...summaryLines, ...systemLines].join("\n")
-    : systemLines.join("\n");
+/** Drain queued system events and immediately acknowledge prepared deliveries. */
+export async function drainFormattedSystemEvents(
+  params: Parameters<typeof prepareFormattedSystemEvents>[0],
+): Promise<string | undefined> {
+  const prepared = await prepareFormattedSystemEvents(params);
+  for (const delivery of prepared.managedDeliveries) {
+    await delivery.acknowledge();
+  }
+  return prepared.blocks.length > 0
+    ? prepared.blocks.map((block) => block.text).join("\n")
+    : undefined;
 }

@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ErrorCodes } from "../packages/gateway-protocol/src/schema/error-codes.js";
+import { stripInternalProtocolFields } from "../packages/gateway-protocol/src/schema/internal-fields.js";
 import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema/protocol-schemas.js";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
@@ -789,7 +790,10 @@ function emitGatewayFrame(): string {
 }
 
 async function generate() {
-  const definitions = Object.entries(ProtocolSchemas) as Array<[string, JsonSchema]>;
+  const definitions = Object.entries(ProtocolSchemas).flatMap(([name, schema]) => {
+    const publicSchema = stripInternalProtocolFields(schema);
+    return publicSchema === undefined ? [] : ([[name, publicSchema as JsonSchema]] as const);
+  }) as Array<[string, JsonSchema]>;
 
   for (const [name, schema] of definitions) {
     registerNamedSchema(name, schema);

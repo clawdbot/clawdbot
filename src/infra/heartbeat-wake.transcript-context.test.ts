@@ -3,7 +3,10 @@ import {
   getOwnedSessionTranscriptWriterFence,
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
-import { requestHeartbeat, setHeartbeatWakeHandler } from "./heartbeat-wake.js";
+import {
+  requestHeartbeatRaw as requestHeartbeat,
+  setHeartbeatWakeHandler,
+} from "./heartbeat-wake.js";
 
 let dispose = () => {};
 

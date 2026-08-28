@@ -2,6 +2,7 @@
 import { Box, Container, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
+import { resolveRedactedToolArgumentSummary } from "../../chat/tool-argument-redaction.js";
 import { markdownTheme, tuiTheme as theme } from "../theme/theme.js";
 import * as tuiFormatters from "../tui-formatters.js";
 import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
@@ -21,6 +22,7 @@ type ToolResult = {
 };
 
 const PREVIEW_LINES = 12;
+
 const MAX_PREVIEW_CHARS = PREVIEW_LINES * 256;
 
 // Bound the actual wrapped Markdown, not just source newlines: a single long
@@ -72,8 +74,12 @@ class ToolOutputComponent extends HyperlinkMarkdown {
   }
 }
 
-// Prefer curated display summaries, then fall back to sanitized JSON args.
+// Redact sensitive tools before consulting shared detail-key fallbacks.
 function formatArgs(toolName: string, args: unknown): string {
+  const redactedFallback = resolveRedactedToolArgumentSummary(toolName);
+  if (redactedFallback) {
+    return redactedFallback;
+  }
   const display = resolveToolDisplay({ name: toolName, args });
   const detail = formatToolDetail(display);
   if (detail) {

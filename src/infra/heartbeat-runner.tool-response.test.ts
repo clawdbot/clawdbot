@@ -40,7 +40,7 @@ import {
 } from "./heartbeat-runner.test-utils.js";
 import { isRetryableHeartbeatSkipReason } from "./heartbeat-wake.js";
 import {
-  enqueueSystemEvent,
+  enqueueSystemEventRaw as enqueueSystemEvent,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "./system-events.js";

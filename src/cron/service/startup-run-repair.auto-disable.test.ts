@@ -4,12 +4,12 @@ import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { HeartbeatRunOptions } from "../../infra/heartbeat-runner-execution.js";
 import { resolveHeartbeatRunPrompt } from "../../infra/heartbeat-runner-prompt.js";
-import { startHeartbeatRunner } from "../../infra/heartbeat-runner-scheduler.js";
+import { startHeartbeatRunner } from "../../infra/heartbeat-runner.js";
 import { resolveHeartbeatWakePayloadFlags } from "../../infra/heartbeat-wake-policy.js";
-import { requestHeartbeat as requestHeartbeatWake } from "../../infra/heartbeat-wake.js";
+import { requestHeartbeatRaw as requestHeartbeatWake } from "../../infra/heartbeat-wake.js";
 import {
   drainSystemEvents,
-  enqueueSystemEvent as queueSystemEvent,
+  enqueueSystemEventRaw as queueSystemEvent,
   peekSystemEventEntries,
 } from "../../infra/system-events.js";
 import * as cronSchedule from "../schedule.js";

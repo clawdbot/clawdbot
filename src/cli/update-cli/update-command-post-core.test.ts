@@ -26,7 +26,7 @@ afterEach(async () => {
   );
 });
 
-async function withTempDir(): Promise<string> {
+async function withTestDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-post-core-records-"));
   tempDirs.push(dir);
   return dir;
@@ -38,13 +38,13 @@ describe("readPostCorePluginInstallRecordsFile", () => {
   });
 
   it("returns undefined when the handoff file is missing", async () => {
-    const dir = await withTempDir();
+    const dir = await withTestDir();
     const missing = path.join(dir, "missing-plugin-install-records.json");
     await expect(readPostCorePluginInstallRecordsFile(missing)).resolves.toBeUndefined();
   });
 
   it("loads a prototype-safe install-records handoff with legal special ids", async () => {
-    const dir = await withTempDir();
+    const dir = await withTestDir();
     const filePath = path.join(dir, "plugin-install-records.json");
     await fs.writeFile(
       filePath,
@@ -69,7 +69,7 @@ describe("readPostCorePluginInstallRecordsFile", () => {
   });
 
   it("fails closed on structurally invalid handoff records", async () => {
-    const dir = await withTempDir();
+    const dir = await withTestDir();
     const filePath = path.join(dir, "plugin-install-records.json");
     await fs.writeFile(filePath, '{"demo":{"source":"bogus"}}\n', "utf-8");
 
@@ -79,7 +79,7 @@ describe("readPostCorePluginInstallRecordsFile", () => {
   });
 
   it("writes UTF-8 byte order and preserves special ids and passthrough fields", async () => {
-    const dir = await withTempDir();
+    const dir = await withTestDir();
     const filePath = path.join(dir, "plugin-install-records.json");
     const records = createPluginInstallRecordMap<PluginInstallRecord>();
     setPluginInstallRecordMapEntry(records, "\u{10000}", { source: "git" });
@@ -111,7 +111,7 @@ describe("readPostCorePluginInstallRecordsFile", () => {
   });
 
   it("fails closed on malformed handoff JSON with a path-labelled error", async () => {
-    const dir = await withTempDir();
+    const dir = await withTestDir();
     const filePath = path.join(dir, "plugin-install-records.json");
     await fs.writeFile(filePath, "{invalid json", "utf-8");
 
@@ -125,7 +125,7 @@ describe("readPostCorePluginInstallRecordsFile", () => {
 
   it("live FS: corrupt handoff is not silently dropped as empty records", async () => {
     // L3: real temp file + real fs.readFile/JSON.parse (no stubs).
-    const dir = await withTempDir();
+    const dir = await withTestDir();
     const filePath = path.join(dir, "plugin-install-records.json");
     await fs.writeFile(filePath, '[{"not":"a-record-map"', "utf-8");
 

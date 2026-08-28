@@ -1,9 +1,18 @@
+import { execFile } from "node:child_process";
 // Stage Bundled Plugin Runtime tests cover stage bundled plugin runtime script behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  copyStaticExtensionAssets,
+  copyStaticExtensionAssetsToRuntimeOverlay,
+} from "../../scripts/lib/static-extension-assets.mts";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mts";
+
+const execFileAsync = promisify(execFile);
 
 async function withTempDir(run: (dir: string) => Promise<void>) {
   const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-stage-runtime-"));
@@ -53,6 +62,71 @@ describe("stageBundledPluginRuntime", () => {
       expect(await fs.promises.readFile(runtimeFile, "utf8")).toBe("asset-body\n");
       expect(fs.lstatSync(runtimeFile).isSymbolicLink()).toBe(false);
       expect(symlinkSpy).toHaveBeenCalled();
+    });
+  });
+
+  it("resolves plugin SDK imports from copied static assets in both runtime roots", async () => {
+    await withTempDir(async (repoRoot) => {
+      const pluginDir = path.join(repoRoot, "extensions", "onepassword");
+      const staticAsset = path.join(pluginDir, "onepassword-op-path.js");
+      await fs.promises.writeFile(
+        path.join(repoRoot, "package.json"),
+        JSON.stringify({ type: "module" }),
+        "utf8",
+      );
+      await fs.promises.mkdir(pluginDir, { recursive: true });
+      await fs.promises.writeFile(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "@openclaw/onepassword",
+          openclaw: {
+            build: {
+              staticAssets: [
+                { source: "./onepassword-op-path.js", output: "onepassword-op-path.js" },
+              ],
+            },
+          },
+        }),
+        "utf8",
+      );
+      await fs.promises.writeFile(
+        staticAsset,
+        'import { marker } from "openclaw/plugin-sdk/secret-ref-runtime";\nexport { marker };\n',
+        "utf8",
+      );
+      await fs.promises.mkdir(path.join(repoRoot, "dist", "extensions", "onepassword"), {
+        recursive: true,
+      });
+      await fs.promises.writeFile(
+        path.join(repoRoot, "dist", "extensions", "onepassword", "index.js"),
+        "export {};\n",
+        "utf8",
+      );
+      await fs.promises.mkdir(path.join(repoRoot, "dist", "plugin-sdk"), { recursive: true });
+      await fs.promises.writeFile(
+        path.join(repoRoot, "dist", "plugin-sdk", "secret-ref-runtime.js"),
+        'export const marker = "runtime-sdk";\n',
+        "utf8",
+      );
+
+      stageBundledPluginRuntime({ repoRoot });
+      copyStaticExtensionAssets({ rootDir: repoRoot });
+      copyStaticExtensionAssetsToRuntimeOverlay({ rootDir: repoRoot });
+
+      for (const runtimeRoot of ["dist", "dist-runtime"]) {
+        const extensionsRoot = path.join(repoRoot, runtimeRoot, "extensions");
+        const emittedAsset = path.join(extensionsRoot, "onepassword", "onepassword-op-path.js");
+        const { stdout } = await execFileAsync(process.execPath, [
+          "--no-opt",
+          "--input-type=module",
+          "--eval",
+          `import { marker } from ${JSON.stringify(pathToFileURL(emittedAsset).href)}; process.stdout.write(marker);`,
+        ]);
+        expect(stdout).toBe("runtime-sdk");
+        expect(
+          fs.existsSync(path.join(extensionsRoot, "node_modules", "openclaw", "package.json")),
+        ).toBe(true);
+      }
     });
   });
 

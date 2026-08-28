@@ -40,6 +40,8 @@ export type HeartbeatWakeRequest = {
   reason?: string;
   agentId?: string;
   sessionKey?: string;
+  /** Continuation lineage carried from the requesting run into the woken turn. */
+  parentRunId?: string;
   heartbeat?: HeartbeatWakeOverride;
   /** Persisted cron monitor cadence carried with a scheduled heartbeat tick. */
   scheduledEveryMs?: number;

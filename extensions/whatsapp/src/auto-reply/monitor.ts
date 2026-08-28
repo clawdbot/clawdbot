@@ -18,7 +18,7 @@ import {
   warn,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueuePluginSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../accounts.js";
 import { WHATSAPP_AUTH_UNSTABLE_CODE, WhatsAppAuthUnstableError } from "../auth-store.js";
 import {
@@ -500,7 +500,7 @@ export async function monitorWebChannel(
         channel: "whatsapp",
         accountId: account.accountId,
       });
-      enqueueSystemEvent(`WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`, {
+      enqueuePluginSystemEvent(`WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`, {
         sessionKey: connectRoute.sessionKey,
       });
 
@@ -593,7 +593,7 @@ export async function monitorWebChannel(
         "web reconnect: connection closed",
       );
 
-      enqueueSystemEvent(
+      enqueuePluginSystemEvent(
         `WhatsApp gateway disconnected (status ${decision.normalized.statusLabel})`,
         {
           sessionKey: connectRoute.sessionKey,

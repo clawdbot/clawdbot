@@ -1,4 +1,5 @@
 // Codex tests cover native subagent task mirror plugin behavior.
+import type { AgentHarnessTaskRecord } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   codexNativeSubagentRunId,
@@ -8,11 +9,25 @@ import {
 type TaskLifecycleRuntime = ConstructorParameters<typeof CodexNativeSubagentTaskMirror>[1];
 
 function createRuntime() {
+  const task: AgentHarnessTaskRecord = {
+    taskId: "task-native-subagent",
+    runtime: "subagent",
+    requesterSessionKey: "agent:main:main",
+    ownerKey: "agent:main:main",
+    scopeKind: "session",
+    task: "native subagent",
+    status: "running",
+    deliveryStatus: "not_applicable",
+    notifyPolicy: "silent",
+    createdAt: 0,
+  };
   return {
-    tryCreateRunningTaskRun: vi.fn((params) => ({ taskId: "task-native-subagent", ...params })),
-    recordTaskRunProgressByRunId: vi.fn(() => []),
-    finalizeTaskRunByRunId: vi.fn(() => []),
-  } as unknown as TaskLifecycleRuntime;
+    tryCreateRunningTaskRun: vi.fn<TaskLifecycleRuntime["tryCreateRunningTaskRun"]>(() => task),
+    recordTaskRunProgressByRunId: vi.fn<TaskLifecycleRuntime["recordTaskRunProgressByRunId"]>(
+      () => [],
+    ),
+    finalizeTaskRunByRunId: vi.fn<TaskLifecycleRuntime["finalizeTaskRunByRunId"]>(() => []),
+  } satisfies TaskLifecycleRuntime;
 }
 
 describe("CodexNativeSubagentTaskMirror", () => {

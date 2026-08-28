@@ -227,6 +227,10 @@ export function createDiagnosticsEventHandler(params: {
           return;
         case "diagnostic.async_queue.dropped":
           recordAsyncQueueDropped(evt);
+          break;
+        case "diagnostic.continuation_queue.sample":
+          // Continuation queue samples are already represented by the shared
+          // diagnostic stream; no second OTEL metric/event path is needed.
           return;
         case "telemetry.exporter":
           recordTelemetryExporter(evt, metadata);

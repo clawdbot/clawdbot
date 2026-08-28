@@ -1,8 +1,8 @@
 import { buildMainSessionRecoveryClearPatch } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
+import { mergeSessionEntry } from "../config/sessions/session-entry-runtime.js";
 import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
-import { mergeSessionEntry } from "../config/sessions/types.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 
 /** Builds the fresh runtime identity paired with a recovered transcript. */

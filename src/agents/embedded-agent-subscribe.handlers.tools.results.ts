@@ -28,7 +28,6 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
 import { extractToolResultText, truncateLiveExecOutput } from "./embedded-agent-tool-results.js";
-import type { ProcessTerminalDiagnostic } from "./tool-error-summary.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 
@@ -88,90 +87,6 @@ export function isMiddlewareToolResultError(result: unknown): boolean {
     !Array.isArray(details) &&
     (details as { middlewareError?: unknown }).middlewareError === true,
   );
-}
-
-export function hasTerminalControlCharacter(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-const PROCESS_TERMINATION_REASONS = new Set([
-  "manual-cancel",
-  "overall-timeout",
-  "no-output-timeout",
-  "spawn-error",
-  "signal",
-  "exit",
-]);
-
-function readSafeProcessSessionId(value: unknown): string | undefined {
-  const sessionId = readStringValue(value)?.trim();
-  if (!sessionId || sessionId.length > 160 || hasTerminalControlCharacter(sessionId)) {
-    return undefined;
-  }
-  return sessionId;
-}
-
-export function buildProcessTerminalDiagnostic(
-  toolName: string,
-  args: Record<string, unknown>,
-  sanitizedResult: unknown,
-): ProcessTerminalDiagnostic | undefined {
-  if (toolName !== "process") {
-    return undefined;
-  }
-  const action = normalizeOptionalLowercaseString(args.action);
-  if (action !== "poll" && action !== "log") {
-    return undefined;
-  }
-  const details = readToolResultDetails(sanitizedResult);
-  const sessionId = readSafeProcessSessionId(details?.sessionId);
-  if (!sessionId) {
-    return undefined;
-  }
-
-  const exitReason = normalizeOptionalLowercaseString(details?.exitReason);
-  const hasCanonicalExitReason = PROCESS_TERMINATION_REASONS.has(exitReason ?? "");
-  if (action === "log" && !hasCanonicalExitReason) {
-    return undefined;
-  }
-  const timeoutKind =
-    exitReason === "overall-timeout" || exitReason === "no-output-timeout" ? exitReason : undefined;
-  let reason: ProcessTerminalDiagnostic["reason"] | undefined;
-  if (details?.timedOut === true || timeoutKind) {
-    reason = { kind: "timeout", ...(timeoutKind ? { timeoutKind } : {}) };
-  } else if (
-    (typeof details?.exitSignal === "string" &&
-      details.exitSignal.trim().length > 0 &&
-      details.exitSignal.trim().length <= 32) ||
-    (typeof details?.exitSignal === "number" && Number.isFinite(details.exitSignal))
-  ) {
-    const signal =
-      typeof details.exitSignal === "string" ? details.exitSignal.trim() : details.exitSignal;
-    if (!hasTerminalControlCharacter(String(signal))) {
-      reason = { kind: "signal", signal };
-    }
-  } else if (
-    typeof details?.exitCode === "number" &&
-    Number.isSafeInteger(details.exitCode) &&
-    details.exitCode !== 0
-  ) {
-    reason = { kind: "exit", exitCode: details.exitCode };
-  }
-  if (!reason) {
-    return undefined;
-  }
-
-  return {
-    kind: "process",
-    sessionId,
-    reason,
-  };
 }
 
 function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
@@ -594,11 +509,34 @@ export async function emitToolResultOutput(params: {
   isToolError: boolean;
   result: unknown;
   sanitizedResult: unknown;
+  deliveryGeneration?: number;
 }) {
-  const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
+  const {
+    ctx,
+    toolName,
+    rawToolName,
+    meta,
+    isToolError,
+    result,
+    sanitizedResult,
+    deliveryGeneration,
+  } = params;
+  const isCurrentDeliveryGeneration = () =>
+    deliveryGeneration === undefined ||
+    deliveryGeneration === ctx.getBlockReplyDeliveryGeneration();
+  if (!isCurrentDeliveryGeneration()) {
+    return;
+  }
   const recordApprovalPromptDeliveryFailure = (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
+    // The generation can advance while the prompt delivery awaits. Keep the warn
+    // unconditional so the failure is never silent, but let a superseded
+    // generation stop here: writing lastToolError/approval state back would
+    // clobber the live generation's terminal outcome.
+    if (!isCurrentDeliveryGeneration()) {
+      return;
+    }
     const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
     const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))({
       toolName,
@@ -628,6 +566,9 @@ export async function emitToolResultOutput(params: {
     ctx.state.deterministicApprovalPromptPending = true;
     try {
       const { buildTypedExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
+      if (!isCurrentDeliveryGeneration()) {
+        return;
+      }
       await ctx.params.onToolResult(
         buildTypedExecApprovalPendingReplyPayload({
           approvalId: approvalPending.approvalId,
@@ -641,11 +582,15 @@ export async function emitToolResultOutput(params: {
           warningText: approvalPending.warningText,
         }),
       );
-      ctx.state.deterministicApprovalPromptSent = true;
+      if (isCurrentDeliveryGeneration()) {
+        ctx.state.deterministicApprovalPromptSent = true;
+      }
     } catch (error) {
       recordApprovalPromptDeliveryFailure(error);
     } finally {
-      ctx.state.deterministicApprovalPromptPending = false;
+      if (isCurrentDeliveryGeneration()) {
+        ctx.state.deterministicApprovalPromptPending = false;
+      }
     }
     return;
   }
@@ -658,6 +603,9 @@ export async function emitToolResultOutput(params: {
     // Setup notices are progress, not pending prompts that replace the final answer.
     try {
       const { buildExecApprovalUnavailableReplyPayload } = await loadExecApprovalReply();
+      if (!isCurrentDeliveryGeneration()) {
+        return;
+      }
       await ctx.params.onToolResult?.(
         buildExecApprovalUnavailableReplyPayload({
           reason: approvalUnavailable.reason,

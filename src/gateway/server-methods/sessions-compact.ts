@@ -1,12 +1,16 @@
 // Manual transcript trimming and model-backed session compaction.
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
+import { stagedPostCompactionDelegateCount } from "../../auto-reply/continuation/delegate-store-post-compaction.js";
+import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   resolveSessionWorkStartError,
@@ -14,19 +18,23 @@ import {
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   applySessionPatchProjection,
   preflightSessionTranscriptForManualCompact,
   readTranscriptStatsSync,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
@@ -34,6 +42,7 @@ import {
 import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveGatewaySessionStoreTargetWithStore,
+  resolveSessionModelRef,
 } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
@@ -49,6 +58,92 @@ import {
 } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+const log = createSubsystemLogger("gateway/sessions");
+
+function buildManualCompactionReleaseFollowupRun(params: {
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  model: { provider: string; model: string };
+  sessionFile: string;
+  sessionId: string;
+  sessionKey: string;
+  targetAgentId: string;
+  workspaceDir: string;
+}): FollowupRun {
+  const deliveryContext = deliveryContextFromSession(params.entry);
+  const cwd = normalizeOptionalString(params.entry.spawnedCwd);
+  return {
+    prompt: "",
+    enqueuedAt: Date.now(),
+    ...(deliveryContext?.channel ? { originatingChannel: deliveryContext.channel } : {}),
+    ...(deliveryContext?.to ? { originatingTo: deliveryContext.to } : {}),
+    ...(deliveryContext?.accountId ? { originatingAccountId: deliveryContext.accountId } : {}),
+    ...(deliveryContext?.threadId !== undefined
+      ? { originatingThreadId: deliveryContext.threadId }
+      : {}),
+    run: {
+      agentId: params.targetAgentId,
+      agentDir: params.workspaceDir,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionFile: params.sessionFile,
+      workspaceDir: params.workspaceDir,
+      ...(cwd ? { cwd } : {}),
+      config: params.cfg,
+      provider: params.model.provider,
+      model: params.model.model,
+      ...(deliveryContext?.channel ? { messageProvider: deliveryContext.channel } : {}),
+      ...(deliveryContext?.accountId ? { agentAccountId: deliveryContext.accountId } : {}),
+      timeoutMs: 0,
+      blockReplyBreak: "message_end",
+    },
+  };
+}
+
+function sessionHasPostCompactionDelegates(params: {
+  entry?: SessionEntry;
+  sessionKey: string;
+}): boolean {
+  return (
+    stagedPostCompactionDelegateCount(params.sessionKey) > 0 ||
+    (params.entry?.pendingPostCompactionDelegates?.length ?? 0) > 0
+  );
+}
+
+async function releaseManualPostCompactionDelegatesIfNeeded(params: {
+  cfg: OpenClawConfig;
+  compactionCount: number | undefined;
+  entry: SessionEntry;
+  model: { provider: string; model: string };
+  sessionFile: string;
+  sessionId: string;
+  sessionKey: string;
+  store: Record<string, SessionEntry>;
+  storePath: string;
+  targetAgentId: string;
+  workspaceDir: string;
+}): Promise<void> {
+  if (!sessionHasPostCompactionDelegates(params)) {
+    return;
+  }
+  try {
+    const { releasePostCompactionDelegatesAfterCompaction } =
+      await import("../../auto-reply/reply/agent-runner-post-compaction-release.js");
+    await releasePostCompactionDelegatesAfterCompaction({
+      activeSessionStore: params.store,
+      compactionCount: params.compactionCount,
+      followupRun: buildManualCompactionReleaseFollowupRun(params),
+      sessionEntry: params.entry,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+  } catch (error) {
+    log.warn(
+      `[sessions.compact:post-compaction-release-failed] session=${params.sessionKey} reason=${formatErrorMessage(error)}`,
+    );
+  }
+}
 
 export const sessionCompactHandlers: GatewayRequestHandlers = {
   "sessions.compact": async ({ params, respond, context }) => {
@@ -334,6 +429,32 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               undefined,
             );
             if (trimResult.compacted) {
+              const loadedAfterTrim = loadAccessorSessionEntryForGatewayTarget({
+                key,
+                cfg,
+                agentId: requestedAgentId,
+              });
+              const entryAfterTrim = loadedAfterTrim.entry ?? latestEntry;
+              const targetAgentId = target.agentId ?? requestedAgentId;
+              await releaseManualPostCompactionDelegatesIfNeeded({
+                cfg,
+                compactionCount: entryAfterTrim.compactionCount ?? 0,
+                entry: entryAfterTrim,
+                model: resolveSessionModelRef(cfg, entryAfterTrim, targetAgentId),
+                sessionFile: formatSqliteSessionFileMarker({
+                  agentId: targetAgentId,
+                  sessionId: entryAfterTrim.sessionId ?? sessionId,
+                  storePath,
+                }),
+                sessionId: entryAfterTrim.sessionId ?? sessionId,
+                sessionKey: target.canonicalKey,
+                store: loadedAfterTrim.target.store,
+                storePath,
+                targetAgentId,
+                workspaceDir:
+                  normalizeOptionalString(entryAfterTrim.spawnedWorkspaceDir) ??
+                  resolveAgentWorkspaceDir(cfg, targetAgentId),
+              });
               recordSessionCompacted({
                 sessionKey: target.canonicalKey,
                 operationId,
@@ -403,6 +524,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           }
           if (result.ok && result.compacted) {
             let persisted: boolean;
+            let releaseSessionEntry: SessionEntry | undefined;
+            let releaseSessionStore: Record<string, SessionEntry> | undefined;
             try {
               // Skip terminal persistence when session ownership rotated during compaction.
               const persistProjection = await applySessionPatchProjection({
@@ -451,6 +574,10 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 },
               });
               persisted = persistProjection.ok;
+              if (persistProjection.ok) {
+                releaseSessionEntry = persistProjection.entry;
+                releaseSessionStore = { [target.canonicalKey]: persistProjection.entry };
+              }
             } catch (err) {
               emitCompactionEnd(false, formatErrorMessage(err));
               throw err;
@@ -466,6 +593,28 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 }),
               );
               return;
+            }
+            if (releaseSessionEntry && releaseSessionStore) {
+              const targetAgentId = target.agentId ?? requestedAgentId;
+              await releaseManualPostCompactionDelegatesIfNeeded({
+                cfg,
+                compactionCount: releaseSessionEntry.compactionCount ?? 0,
+                entry: releaseSessionEntry,
+                model: resolveSessionModelRef(cfg, releaseSessionEntry, targetAgentId),
+                sessionFile: formatSqliteSessionFileMarker({
+                  agentId: targetAgentId,
+                  sessionId: releaseSessionEntry.sessionId ?? result.result?.sessionId ?? sessionId,
+                  storePath,
+                }),
+                sessionId: releaseSessionEntry.sessionId ?? result.result?.sessionId ?? sessionId,
+                sessionKey: target.canonicalKey,
+                store: releaseSessionStore,
+                storePath,
+                targetAgentId,
+                workspaceDir:
+                  normalizeOptionalString(releaseSessionEntry.spawnedWorkspaceDir) ??
+                  resolveAgentWorkspaceDir(cfg, targetAgentId),
+              });
             }
             recordSessionCompacted({
               sessionKey: target.canonicalKey,

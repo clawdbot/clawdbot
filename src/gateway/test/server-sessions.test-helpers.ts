@@ -8,7 +8,6 @@ import path from "node:path";
 import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -340,6 +339,10 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
     const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
+    testState.agentConfig = undefined;
+    testState.agentsConfig = undefined;
+    testState.sessionConfig = undefined;
+    testState.sessionStorePath = undefined;
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSubagentsForRequester.mockClear();
     bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
@@ -733,20 +736,7 @@ export async function directSessionReq<TPayload = unknown>(
   return result;
 }
 
-export function isInternalHookEvent(value: unknown): value is InternalHookEvent {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.type === "string" &&
-    typeof candidate.action === "string" &&
-    typeof candidate.sessionKey === "string" &&
-    Array.isArray(candidate.messages) &&
-    typeof candidate.context === "object" &&
-    candidate.context !== null
-  );
-}
+export { isInternalHookEvent } from "./server-sessions.internal-hook-event-test-helpers.js";
 
 export {
   bootstrapCacheMocks,

@@ -20,7 +20,7 @@ type ServerEndpointCompactionResult = Awaited<
 
 /** Try provider-owned compaction and persist its replay checkpoint on the session owner. */
 export async function attemptServerEndpointCompaction(params: {
-  trigger: "budget" | "overflow" | "manual";
+  trigger: "budget" | "overflow" | "manual" | "volitional";
   streamFn: Parameters<typeof requestPreparedOpenAIResponsesCompaction>[0];
   model: Parameters<typeof requestPreparedOpenAIResponsesCompaction>[1];
   context: { systemPrompt: string; messages: readonly AgentMessage[] };

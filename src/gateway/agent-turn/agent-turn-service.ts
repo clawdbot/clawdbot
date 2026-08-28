@@ -232,18 +232,18 @@ export function createAgentTurnService(
         to,
       } = content;
       let resolvedSessionId = requestedSessionId;
-      let sessionEntry: SessionEntry | undefined;
+      let sessionEntry: SessionEntry | undefined, sessionTraceparent: string | undefined;
       let effectiveBootstrapContextRunKind = request.bootstrapContextRunKind;
       let restoredCronContinuation: RestoredCronContinuation | undefined;
       let restoredCronContinuationIdentity:
         | Pick<RestoredCronContinuation, "lifecycleRevision" | "sessionId">
         | undefined;
       let sessionPersistedBeforeGatewayAdmission = false;
-      let bestEffortDeliver = requestedBestEffortDeliver ?? false;
+      let bestEffortDeliver = requestedBestEffortDeliver ?? false,
+        isNewSession = false;
       let cfgForAgent: OpenClawConfig | undefined;
       let resolvedSessionKey = requestedSessionKey;
       let resolvedSessionAgentId: string | undefined;
-      let isNewSession = false;
       let supersededSessionId: string | undefined;
       let skipAgentInitialSessionTouch = false;
       let pendingChatRun: { sessionKey: string; agentId?: string } | undefined;
@@ -366,13 +366,11 @@ export function createAgentTurnService(
         sessionPersistedBeforeGatewayAdmission =
           preparedSession.sessionPersistedBeforeGatewayAdmission;
         isNewSession = preparedSession.isNewSession;
-        const sessionAgent = canonicalSessionAgentId;
         const requestDeliveryHint = normalizeDeliveryContext({
           channel: recipientChannel?.trim(),
           to,
           accountId: recipientAccountId?.trim(),
-          // Pass threadId directly — normalizeDeliveryContext handles both
-          // string and numeric threadIds (e.g., Matrix uses integers).
+          // normalizeDeliveryContext accepts string and numeric thread IDs.
           threadId: recipientThreadId,
         });
         const explicitSessionKey = normalizeOptionalString(request.sessionKey);
@@ -381,7 +379,7 @@ export function createAgentTurnService(
             freshEntry,
             initialEntry: entry,
             cfg: cfgLocal,
-            sessionAgentId: sessionAgent,
+            sessionAgentId: canonicalSessionAgentId,
             canonicalSessionKey: canonicalKey,
             storePath,
             normalizedSpawned,
@@ -479,6 +477,7 @@ export function createAgentTurnService(
           return;
         }
         sessionEntry = persistedSession.sessionEntry;
+        sessionTraceparent = persistedSession.consumedContinuationTraceparent;
         resolvedSessionId = persistedSession.resolvedSessionId;
         sessionPersistedBeforeGatewayAdmission =
           persistedSession.sessionPersistedBeforeGatewayAdmission;
@@ -590,6 +589,7 @@ export function createAgentTurnService(
         cfg,
         cfgForAgent,
         sessionEntry,
+        sessionContinuationTraceparent: sessionTraceparent,
         resolvedSessionKey,
         requestedSessionKey,
         resolvedSessionId,

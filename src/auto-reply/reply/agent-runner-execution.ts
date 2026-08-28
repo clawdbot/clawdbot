@@ -24,6 +24,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-context.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
+import type { ContinueWorkRequest } from "../../agents/tools/continue-work-tool.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -193,7 +194,7 @@ async function executeAgentTurnInternalWithRetryState(
         params.followupRun.run.messageProvider ??
         params.sessionCtx.Surface ??
         params.sessionCtx.Provider,
-      trigger: params.isHeartbeat ? "heartbeat" : "user",
+      trigger: params.hookTrigger ?? (params.isHeartbeat ? "heartbeat" : "user"),
     });
   }
   let replyMediaContext: ReplyMediaContext;
@@ -292,6 +293,9 @@ async function executeAgentTurnInternalWithRetryState(
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let fallbackExhausted = false;
   let terminalRunFailed = false;
+  let continueWorkRequests: ContinueWorkRequest[] = [];
+  let compactionTraceparent: string | undefined;
+  let rawContinuationText: string | undefined;
   const modelPatch = createAgentPatchedSessionModelRunGuard({
     cfg: runtimeConfig,
     agentId: params.followupRun.run.agentId,
@@ -372,6 +376,9 @@ async function executeAgentTurnInternalWithRetryState(
       fallbackExhausted = cycle.fallbackExhausted;
       fallbackAttempts = cycle.fallbackAttempts;
       terminalRunFailed = cycle.terminalRunFailed;
+      continueWorkRequests = cycle.continueWorkRequests;
+      compactionTraceparent = cycle.compactionTraceparent;
+      rawContinuationText = cycle.rawContinuationText;
       break;
     } catch (err) {
       if (isAgentRunRestartAbortReason(err)) {
@@ -504,6 +511,9 @@ async function executeAgentTurnInternalWithRetryState(
     fallbackAttempts,
     didLogHeartbeatStrip: heartbeatState.didLogStrip,
     autoCompactionCount,
+    compactionTraceparent,
+    continueWorkRequests,
+    rawContinuationText,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
     directlySentBlockPayloads: directlySentBlockPayloads.filter(
       (payload): payload is ReplyPayload => payload !== undefined,
@@ -643,6 +653,9 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
         status: internal.terminalFailurePayload ? "failed" : "ok",
         ...(abortReason ? { abortReason } : {}),
         result: internal.result,
+        continueWorkRequests: internal.continueWorkRequests,
+        compactionTraceparent: internal.compactionTraceparent,
+        rawContinuationText: internal.rawContinuationText,
         resolved: { provider, model },
         fallback: {
           exhausted: internal.fallbackExhausted === true,

@@ -2,14 +2,17 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasConfiguredModelFallbacks } from "../../agents/agent-scope.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
+import { isCliProvider } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { emitContinuationCompactionReleasedSpan } from "../../infra/continuation-tracer.js";
+import { defaultRuntime } from "../../runtime.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
+import { scheduleReplyContinuation } from "./agent-runner-continuation-schedule.js";
 import {
   buildInlinePluginStatusPayload,
   markBeforeAgentRunBlockedPayloads,
@@ -27,6 +30,7 @@ import {
   type TraceContextManagementView,
   type TracePromptSegmentView,
   type TraceToolSummaryView,
+  mergeExecutionTrace,
 } from "./agent-runner-trace.js";
 import { appendUsageLine } from "./agent-runner-usage-line.js";
 import {
@@ -34,7 +38,7 @@ import {
   normalizePendingFinalDeliveryPayloads,
   normalizePendingFinalRecoveryPayloads,
 } from "./pending-final-delivery.js";
-import { readPostCompactionContext } from "./post-compaction-context.js";
+import { dispatchPostCompactionDelegates } from "./post-compaction-delegate-dispatch.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, refreshQueuedFollowupSession } from "./queue.js";
 import { incrementRunCompactionCount } from "./session-run-accounting.js";
@@ -49,6 +53,7 @@ type PreparedReplyAgentPayloads = {
   completedSourceReplyDelivery: boolean;
   guardedReplyPayloads: ReplyPayload[];
   responseUsageLine: string | undefined;
+  wasSilentContinuation: boolean;
 };
 
 export async function completeReplyAgentRun(input: {
@@ -61,8 +66,10 @@ export async function completeReplyAgentRun(input: {
     activeIsNewSession,
     activeSessionStore,
     cfg,
+    continuation,
     execution,
     followupRun,
+    getActiveSessionEntry,
     isHeartbeat,
     opts,
     preflightCompactionApplied,
@@ -75,18 +82,33 @@ export async function completeReplyAgentRun(input: {
     runtimePolicySessionKey,
     sessionCtx,
     sessionKey,
+    setActiveSessionEntry,
     storePath,
   } = context;
   const {
     autoCompactionCount,
     contextTokensUsed,
+    continuationExtractionFromBracket,
+    continuationWorkReason,
+    effectiveContinuationSignal,
+    effectiveContinueWorkRequests,
+    fallbackAttempts,
+    fallbackExhausted,
+    internalBracketTraceparent,
     modelUsed,
     promptTokens,
     providerUsed,
+    runId,
     runResult,
+    usage,
     verboseEnabled,
   } = accounting;
-  const { completedSourceReplyDelivery, guardedReplyPayloads, responseUsageLine } = prepared;
+  const {
+    completedSourceReplyDelivery,
+    guardedReplyPayloads,
+    responseUsageLine,
+    wasSilentContinuation,
+  } = prepared;
   let { activeSessionEntry } = prepared;
 
   // Prepend verbose operational notices. Model fallback notices are prepared
@@ -125,15 +147,31 @@ export async function completeReplyAgentRun(input: {
       });
     }
 
-    // Inject post-compaction workspace context for the next agent turn
+    // Inject post-compaction workspace context for the next agent turn,
+    // and dispatch any staged continuation post-compaction delegates.
+    // The dispatch helper internally awaits readPostCompactionContext
+    // against followupRun.run.workspaceDir and enqueues the resulting system
+    // event, so we don't call it again here. That await also carries upstream's
+    // sequencing fix (context injection is no longer fire-and-forget).
     if (sessionKey) {
-      const contextContent = await readPostCompactionContext(followupRun.run.workspaceDir, {
+      const releasedCount = activeSessionEntry?.pendingPostCompactionDelegates?.length ?? 0;
+      await dispatchPostCompactionDelegates({
         cfg,
-        agentId: followupRun.run.agentId,
+        compactionCount: count,
+        continuationSignalKind: effectiveContinuationSignal?.kind,
+        followupRun,
+        postCompactionDelegatesToPreserve: continuation.postCompactionDelegatesToPreserve,
+        sessionEntry: activeSessionEntry,
+        sessionKey,
+        sessionStore: activeSessionStore,
+        storePath,
       });
-      if (contextContent) {
-        enqueueSystemEvent(contextContent, { sessionKey });
-      }
+      emitContinuationCompactionReleasedSpan({
+        releasedCount,
+        compactionId: count,
+        traceparent: execution.compactionTraceparent,
+        log: (message) => defaultRuntime.log(message),
+      });
     }
 
     if (verboseEnabled) {
@@ -144,141 +182,184 @@ export async function completeReplyAgentRun(input: {
   if (execution.abortReason) {
     return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
   }
-  const prefixPayloads = [...prefixNotices];
+  // Skip verbose/usage augmentation for silent continuations — a bare
+  // CONTINUE_WORK should produce no user-visible output.
   const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
-  const rawUserText = isHookBlockedRun
-    ? runResult.meta?.finalPromptText
-    : (runResult.meta?.finalPromptText ?? (sessionCtx.commandText || sessionCtx.agentText));
   const rawAssistantText = isHookBlockedRun
     ? undefined
     : (runResult.meta?.finalAssistantRawText ?? runResult.meta?.finalAssistantVisibleText);
-  const traceAuthorized = followupRun.run.traceAuthorized === true;
-  const executionTrace = runResult.meta?.executionTrace;
-  const requestShaping = {
-    authMode:
-      runResult.meta?.requestShaping?.authMode ??
-      (cfg?.models?.providers && providerUsed in cfg.models.providers
-        ? (resolveModelAuthMode(providerUsed, cfg, undefined, {
-            workspaceDir: followupRun.run.workspaceDir,
-          }) ?? undefined)
-        : undefined),
-    thinking:
-      runResult.meta?.requestShaping?.thinking ??
-      normalizeOptionalString(followupRun.run.thinkLevel),
-    reasoning:
-      runResult.meta?.requestShaping?.reasoning ??
-      normalizeOptionalString(followupRun.run.reasoningLevel),
-    verbose:
-      runResult.meta?.requestShaping?.verbose ?? normalizeOptionalString(resolvedVerboseLevel),
-    trace:
-      runResult.meta?.requestShaping?.trace ??
-      normalizeOptionalString(activeSessionEntry?.traceLevel),
-    fallbackEligible:
-      runResult.meta?.requestShaping?.fallbackEligible ??
-      hasConfiguredModelFallbacks({
-        cfg,
-        agentId: followupRun.run.agentId,
-        sessionKey: followupRun.run.sessionKey,
-      }),
-    blockStreaming:
-      runResult.meta?.requestShaping?.blockStreaming ??
-      normalizeOptionalString(resolvedBlockStreamingBreak),
-  };
-  const promptSegments =
-    (runResult.meta?.promptSegments as TracePromptSegmentView[] | undefined) ??
-    derivePromptSegments(rawUserText);
-  const toolSummary = runResult.meta?.toolSummary as TraceToolSummaryView | undefined;
-  const completion =
-    (runResult.meta?.completion as TraceCompletionView | undefined) ??
-    (runResult.meta?.stopReason
-      ? {
-          stopReason: runResult.meta.stopReason,
-          finishReason: runResult.meta.stopReason,
-          ...(runResult.meta.stopReason.toLowerCase().includes("refusal") ? { refusal: true } : {}),
-        }
-      : undefined);
-  const contextManagement = {
-    ...(typeof activeSessionEntry?.compactionCount === "number"
-      ? { sessionCompactions: activeSessionEntry.compactionCount }
-      : {}),
-    ...(typeof runResult.meta?.contextManagement?.lastTurnCompactions === "number"
-      ? { lastTurnCompactions: runResult.meta.contextManagement.lastTurnCompactions }
-      : typeof runResult.meta?.agentMeta?.compactionCount === "number"
-        ? { lastTurnCompactions: runResult.meta.agentMeta.compactionCount }
-        : {}),
-    ...(runResult.meta?.contextManagement &&
-    typeof runResult.meta.contextManagement.preflightCompactionApplied === "boolean"
-      ? {
-          preflightCompactionApplied: runResult.meta.contextManagement.preflightCompactionApplied,
-        }
-      : preflightCompactionApplied
-        ? { preflightCompactionApplied }
-        : {}),
-    ...(runResult.meta?.contextManagement &&
-    typeof runResult.meta.contextManagement.postCompactionContextInjected === "boolean"
-      ? {
-          postCompactionContextInjected:
-            runResult.meta.contextManagement.postCompactionContextInjected,
-        }
-      : {}),
-  } satisfies TraceContextManagementView;
-  const sessionUsage =
-    traceAuthorized && activeSessionEntry?.traceLevel === "raw"
-      ? await accumulateSessionUsageFromTranscript({
-          agentId: followupRun.run.agentId,
-          sessionId: runResult.meta?.agentMeta?.sessionId ?? followupRun.run.sessionId,
-          sessionKey: followupRun.run.sessionKey,
-          storePath,
-          sessionFile: followupRun.run.sessionFile,
-        })
-      : undefined;
-  const traceEnabledForSender =
-    traceAuthorized &&
-    (activeSessionEntry?.traceLevel === "on" || activeSessionEntry?.traceLevel === "raw");
-  const shouldAppendTracePayload = verboseEnabled || traceEnabledForSender;
-  let trailingPluginStatusPayload: ReplyPayload | undefined;
-  if (shouldAppendTracePayload) {
-    const pluginStatusPayload = buildInlinePluginStatusPayload({
-      entry: activeSessionEntry,
-      includeTraceLines: traceEnabledForSender,
+  if (!wasSilentContinuation) {
+    const prefixPayloads = [...prefixNotices];
+    const rawUserText = isHookBlockedRun
+      ? runResult.meta?.finalPromptText
+      : (runResult.meta?.finalPromptText ??
+        sessionCtx.CommandBody ??
+        sessionCtx.RawBody ??
+        sessionCtx.BodyForAgent ??
+        sessionCtx.Body);
+    const traceAuthorized = followupRun.run.traceAuthorized === true;
+    const executionTrace = mergeExecutionTrace({
+      fallbackAttempts,
+      executionTrace: runResult.meta?.executionTrace,
+      provider: providerUsed,
+      model: modelUsed,
+      runner: isCliProvider(providerUsed, cfg) ? "cli" : "embedded",
+      exhausted: fallbackExhausted,
     });
-    const rawTracePayload =
+    const requestShaping = {
+      authMode:
+        runResult.meta?.requestShaping?.authMode ??
+        (cfg?.models?.providers && providerUsed in cfg.models.providers
+          ? (resolveModelAuthMode(providerUsed, cfg, undefined, {
+              workspaceDir: followupRun.run.workspaceDir,
+            }) ?? undefined)
+          : undefined),
+      thinking:
+        runResult.meta?.requestShaping?.thinking ??
+        normalizeOptionalString(followupRun.run.thinkLevel),
+      reasoning:
+        runResult.meta?.requestShaping?.reasoning ??
+        normalizeOptionalString(followupRun.run.reasoningLevel),
+      verbose:
+        runResult.meta?.requestShaping?.verbose ?? normalizeOptionalString(resolvedVerboseLevel),
+      trace:
+        runResult.meta?.requestShaping?.trace ??
+        normalizeOptionalString(activeSessionEntry?.traceLevel),
+      fallbackEligible:
+        runResult.meta?.requestShaping?.fallbackEligible ??
+        hasConfiguredModelFallbacks({
+          cfg,
+          agentId: followupRun.run.agentId,
+          sessionKey: followupRun.run.sessionKey,
+        }),
+      blockStreaming:
+        runResult.meta?.requestShaping?.blockStreaming ??
+        normalizeOptionalString(resolvedBlockStreamingBreak),
+    };
+    const promptSegments =
+      (runResult.meta?.promptSegments as TracePromptSegmentView[] | undefined) ??
+      derivePromptSegments(rawUserText);
+    const toolSummary = runResult.meta?.toolSummary as TraceToolSummaryView | undefined;
+    const completion =
+      (runResult.meta?.completion as TraceCompletionView | undefined) ??
+      (runResult.meta?.stopReason
+        ? {
+            stopReason: runResult.meta.stopReason,
+            finishReason: runResult.meta.stopReason,
+            ...(runResult.meta.stopReason.toLowerCase().includes("refusal")
+              ? { refusal: true }
+              : {}),
+          }
+        : undefined);
+    const contextManagement = {
+      ...(typeof activeSessionEntry?.compactionCount === "number"
+        ? { sessionCompactions: activeSessionEntry.compactionCount }
+        : {}),
+      ...(typeof runResult.meta?.contextManagement?.lastTurnCompactions === "number"
+        ? { lastTurnCompactions: runResult.meta.contextManagement.lastTurnCompactions }
+        : typeof runResult.meta?.agentMeta?.compactionCount === "number"
+          ? { lastTurnCompactions: runResult.meta.agentMeta.compactionCount }
+          : {}),
+      ...(runResult.meta?.contextManagement &&
+      typeof runResult.meta.contextManagement.preflightCompactionApplied === "boolean"
+        ? {
+            preflightCompactionApplied: runResult.meta.contextManagement.preflightCompactionApplied,
+          }
+        : preflightCompactionApplied
+          ? { preflightCompactionApplied }
+          : {}),
+      ...(runResult.meta?.contextManagement &&
+      typeof runResult.meta.contextManagement.postCompactionContextInjected === "boolean"
+        ? {
+            postCompactionContextInjected:
+              runResult.meta.contextManagement.postCompactionContextInjected,
+          }
+        : {}),
+    } satisfies TraceContextManagementView;
+    const sessionUsage =
       traceAuthorized && activeSessionEntry?.traceLevel === "raw"
-        ? buildInlineRawTracePayload({
-            entry: activeSessionEntry,
-            rawUserText,
-            rawAssistantText,
-            sessionUsage,
-            usage: runResult.meta?.agentMeta?.usage,
-            lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-            provider: providerUsed,
-            model: modelUsed,
-            contextLimit: contextTokensUsed,
-            promptTokens,
-            executionTrace,
-            requestShaping,
-            promptSegments,
-            toolSummary,
-            completion,
-            contextManagement,
+        ? await accumulateSessionUsageFromTranscript({
+            agentId: followupRun.run.agentId,
+            sessionId: runResult.meta?.agentMeta?.sessionId ?? followupRun.run.sessionId,
+            sessionKey: followupRun.run.sessionKey,
+            storePath,
+            sessionFile: followupRun.run.sessionFile,
           })
         : undefined;
-    trailingPluginStatusPayload =
-      pluginStatusPayload && rawTracePayload
-        ? { text: `${pluginStatusPayload.text}\n\n${rawTracePayload.text}` }
-        : (pluginStatusPayload ?? rawTracePayload);
+    const traceEnabledForSender =
+      traceAuthorized &&
+      (activeSessionEntry?.traceLevel === "on" || activeSessionEntry?.traceLevel === "raw");
+    const shouldAppendTracePayload = verboseEnabled || traceEnabledForSender;
+    let trailingPluginStatusPayload: ReplyPayload | undefined;
+    if (shouldAppendTracePayload) {
+      const pluginStatusPayload = buildInlinePluginStatusPayload({
+        entry: activeSessionEntry,
+        includeTraceLines: traceEnabledForSender,
+      });
+      const rawTracePayload =
+        traceAuthorized && activeSessionEntry?.traceLevel === "raw"
+          ? buildInlineRawTracePayload({
+              entry: activeSessionEntry,
+              rawUserText,
+              rawAssistantText,
+              sessionUsage,
+              usage: runResult.meta?.agentMeta?.usage,
+              lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+              provider: providerUsed,
+              model: modelUsed,
+              contextLimit: contextTokensUsed,
+              promptTokens,
+              executionTrace,
+              requestShaping,
+              promptSegments,
+              toolSummary,
+              completion,
+              contextManagement,
+            })
+          : undefined;
+      trailingPluginStatusPayload =
+        pluginStatusPayload && rawTracePayload
+          ? { text: `${pluginStatusPayload.text}\n\n${rawTracePayload.text}` }
+          : (pluginStatusPayload ?? rawTracePayload);
+    }
+    if (prefixPayloads.length > 0) {
+      finalPayloads = [...prefixPayloads, ...finalPayloads];
+    }
+    if (trailingPluginStatusPayload) {
+      finalPayloads = [...finalPayloads, trailingPluginStatusPayload];
+    }
+    if (responseUsageLine) {
+      finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    }
+    if (isHookBlockedRun) {
+      finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);
+    }
   }
-  if (prefixPayloads.length > 0) {
-    finalPayloads = [...prefixPayloads, ...finalPayloads];
+
+  setActiveSessionEntry(activeSessionEntry);
+  await scheduleReplyContinuation({
+    cfg,
+    sessionKey,
+    followupRun,
+    runId,
+    usage,
+    effectiveContinuationSignal,
+    continuationExtractionFromBracket,
+    effectiveContinueWorkRequests,
+    continuationWorkReason,
+    internalBracketTraceparent,
+    continuation,
+    getActiveSessionEntry,
+  });
+  activeSessionEntry = getActiveSessionEntry() ?? activeSessionEntry;
+
+  // Silent continuations should produce no user-visible output.
+  if (wasSilentContinuation) {
+    return returnWithQueuedFollowupDrain(undefined);
   }
-  if (trailingPluginStatusPayload) {
-    finalPayloads = [...finalPayloads, trailingPluginStatusPayload];
-  }
-  if (responseUsageLine) {
-    finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
-  }
-  if (isHookBlockedRun) {
-    finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);
+
+  if (finalPayloads.length === 0 && effectiveContinuationSignal) {
+    return returnWithQueuedFollowupDrain(undefined);
   }
 
   // Capture only policy-visible final payloads in session store to support

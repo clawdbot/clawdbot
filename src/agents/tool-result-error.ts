@@ -20,6 +20,30 @@ const protectedNetworkToolTimeoutErrors = new WeakSet<object>();
 const trustedToolInputErrors = new WeakSet<object>();
 const trustedToolNoStartErrors = new WeakSet<object>();
 
+const TOOL_TIMEOUT_RESULT_STATUSES = new Set(["timeout", "timed_out"]);
+const TOOL_BLOCKED_RESULT_STATUSES = new Set([
+  "blocked",
+  "denied",
+  "forbidden",
+  "disabled",
+  "approval-unavailable",
+]);
+const TOOL_CANCELLED_RESULT_STATUSES = new Set(["aborted", "cancelled", "canceled", "killed"]);
+const TOOL_FAILURE_RESULT_STATUSES = new Set([
+  "error",
+  "failed",
+  "failure",
+  ...TOOL_TIMEOUT_RESULT_STATUSES,
+  ...TOOL_BLOCKED_RESULT_STATUSES,
+  "unavailable",
+  ...TOOL_CANCELLED_RESULT_STATUSES,
+  "invalid",
+]);
+
+function hasToolResultStatus(status: string | undefined, statuses: ReadonlySet<string>): boolean {
+  return status !== undefined && statuses.has(status);
+}
+
 function readToolErrorField(error: object, key: string): unknown {
   try {
     return key in error ? (error as Record<string, unknown>)[key] : undefined;
@@ -48,7 +72,7 @@ function hasStructuredToolTimeoutIdentity(error: unknown): boolean {
     for (const key of ["reason", "status"] as const) {
       const value = readToolErrorField(current, key);
       const normalized = normalizeOptionalLowercaseString(value);
-      if (normalized === "timeout" || normalized === "timed_out") {
+      if (hasToolResultStatus(normalized, TOOL_TIMEOUT_RESULT_STATUSES)) {
         return true;
       }
       if (value && typeof value === "object") {
@@ -93,23 +117,7 @@ export function isToolResultError(result: unknown): boolean {
   if (ok === false || success === false) {
     return true;
   }
-  const hasFailureStatus =
-    normalized === "error" ||
-    normalized === "failed" ||
-    normalized === "failure" ||
-    normalized === "timeout" ||
-    normalized === "timed_out" ||
-    normalized === "blocked" ||
-    normalized === "denied" ||
-    normalized === "forbidden" ||
-    normalized === "unavailable" ||
-    normalized === "approval-unavailable" ||
-    normalized === "disabled" ||
-    normalized === "aborted" ||
-    normalized === "cancelled" ||
-    normalized === "canceled" ||
-    normalized === "killed" ||
-    normalized === "invalid";
+  const hasFailureStatus = hasToolResultStatus(normalized, TOOL_FAILURE_RESULT_STATUSES);
   if (hasFailureStatus && !explicitlySuccessful) {
     return true;
   }
@@ -232,26 +240,15 @@ export function resolveToolResultFailureKind(result: unknown): ToolResultFailure
     return undefined;
   }
   const status = readToolResultStatus(result);
-  if (
-    status === "blocked" ||
-    status === "denied" ||
-    status === "forbidden" ||
-    status === "disabled" ||
-    status === "approval-unavailable"
-  ) {
+  if (hasToolResultStatus(status, TOOL_BLOCKED_RESULT_STATUSES)) {
     return "blocked";
   }
   const details = readToolResultDetails(result);
   const timedOut = details ? readToolErrorField(details, "timedOut") : undefined;
-  if (timedOut === true || status === "timeout" || status === "timed_out") {
+  if (timedOut === true || hasToolResultStatus(status, TOOL_TIMEOUT_RESULT_STATUSES)) {
     return "timed_out";
   }
-  if (
-    status === "aborted" ||
-    status === "cancelled" ||
-    status === "canceled" ||
-    status === "killed"
-  ) {
+  if (hasToolResultStatus(status, TOOL_CANCELLED_RESULT_STATUSES)) {
     return "cancelled";
   }
   return "failed";

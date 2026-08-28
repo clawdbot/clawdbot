@@ -2,6 +2,7 @@
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
+import { purgeExpiredDelegateArtifacts } from "../agents/delegate-artifacts.js";
 import { createManagedWorktreeOwnerProtection } from "../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
@@ -55,6 +56,9 @@ import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-ag
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
 // stage-before-row-commit window.
 const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
+const DELEGATE_ARTIFACT_GC_INTERVAL_MS = 60 * 60_000;
+const DELEGATE_ARTIFACT_GC_BATCH_SIZE = 100;
+const DELEGATE_ARTIFACT_GC_YIELD_BATCHES = 10;
 const TELEMETRY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
 
 export function startGatewayMaintenanceTimers(params: {
@@ -94,6 +98,7 @@ export function startGatewayMaintenanceTimers(params: {
   getRuntimeConfig: () => OpenClawConfig;
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
+  runDelegateArtifactGc?: () => number | Promise<number>;
   runManagedOutgoingMediaGc?: () => Promise<unknown>;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
@@ -102,6 +107,7 @@ export function startGatewayMaintenanceTimers(params: {
   startMediaCleanup: () => void;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   worktreeCleanup: ReturnType<typeof setInterval>;
+  delegateArtifactCleanup: ReturnType<typeof setInterval>;
   skillUsageCleanup: () => void;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
@@ -204,6 +210,51 @@ export function startGatewayMaintenanceTimers(params: {
   };
   void performDeliveryQueueMediaGc();
 
+  const runDelegateArtifactGc =
+    params.runDelegateArtifactGc ?? (() => purgeExpiredDelegateArtifacts());
+  let delegateArtifactGcInFlight: Promise<void> | null = null;
+  let delegateArtifactGcCancelled = false;
+  const performDelegateArtifactGc = () => {
+    if (delegateArtifactGcInFlight || delegateArtifactGcCancelled) {
+      return delegateArtifactGcInFlight;
+    }
+    delegateArtifactGcInFlight = Promise.resolve()
+      .then(async () => {
+        let fullBatchesSinceYield = 0;
+        while (true) {
+          if (delegateArtifactGcCancelled) {
+            break;
+          }
+          const purged = await runDelegateArtifactGc();
+          if (delegateArtifactGcCancelled || purged < DELEGATE_ARTIFACT_GC_BATCH_SIZE) {
+            break;
+          }
+          fullBatchesSinceYield += 1;
+          if (fullBatchesSinceYield >= DELEGATE_ARTIFACT_GC_YIELD_BATCHES) {
+            fullBatchesSinceYield = 0;
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 0);
+            });
+            if (delegateArtifactGcCancelled) {
+              break;
+            }
+          }
+        }
+      })
+      .catch((err: unknown) => {
+        params.logHealth.error(`delegate artifact cleanup failed: ${formatError(err)}`);
+      })
+      .finally(() => {
+        delegateArtifactGcInFlight = null;
+      });
+    return delegateArtifactGcInFlight;
+  };
+  const delegateArtifactCleanup = setInterval(
+    () => void performDelegateArtifactGc(),
+    DELEGATE_ARTIFACT_GC_INTERVAL_MS,
+  );
+  void performDelegateArtifactGc();
+
   let devicePairSetupCompletionGcInFlight: Promise<void> | null = null;
   const performDevicePairSetupCompletionGc = (nowMs: number) => {
     if (devicePairSetupCompletionGcInFlight) {
@@ -221,7 +272,12 @@ export function startGatewayMaintenanceTimers(params: {
   };
   void performDevicePairSetupCompletionGc(Date.now());
 
-  const skillUsageCleanup = registerSkillUsageTracking();
+  const stopSkillUsageTracking = registerSkillUsageTracking();
+  const skillUsageCleanup = () => {
+    delegateArtifactGcCancelled = true;
+    clearInterval(delegateArtifactCleanup);
+    stopSkillUsageTracking();
+  };
 
   // dedupe cache cleanup
   const dedupeCleanup = setInterval(() => {
@@ -501,6 +557,7 @@ export function startGatewayMaintenanceTimers(params: {
     startMediaCleanup,
     stopMediaCleanup,
     worktreeCleanup,
+    delegateArtifactCleanup,
     skillUsageCleanup,
   };
 }

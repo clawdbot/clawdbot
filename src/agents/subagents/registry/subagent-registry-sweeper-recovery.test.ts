@@ -20,6 +20,7 @@ const killRuntime = vi.hoisted(() => ({
   isEmbeddedAgentRunActive: vi.fn(() => false),
   clearSessionQueues: vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] })),
 }));
+const agentEvents = vi.hoisted(() => ({ lifecycleCurrent: true }));
 const killSessionEntry = vi.hoisted(() => ({
   current: undefined as
     | { sessionId: string; lifecycleRevision?: string; updatedAt: number }
@@ -33,7 +34,7 @@ vi.mock("./subagent-registry-restart-recovery.js", async (importOriginal) => {
   };
 });
 vi.mock("../../../infra/agent-events.js", () => ({
-  isAgentEventLifecycleGenerationCurrent: () => true,
+  isAgentEventLifecycleGenerationCurrent: () => agentEvents.lifecycleCurrent,
 }));
 vi.mock("../../../infra/agent-run-registry.js", () => ({
   getAgentRunContext,
@@ -82,16 +83,31 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
   const completeCleanupBookkeeping = vi.fn();
   const emitSubagentEndedHookForRun = vi.fn();
   const notifyContextEngineSubagentEnded = vi.fn();
+  const startSubagentAnnounceCleanupFlow = vi.fn(() => true);
+  const persistOrThrow = vi.fn();
+  const clearSubagentRunSteerRestart = vi.fn((_runId: string, expected?: SubagentRunRecord) => {
+    if (expected) {
+      expected.suppressAnnounceReason = undefined;
+      expected.acceptedSteerDispatch = undefined;
+    }
+    return true;
+  });
+  const resumeRequesterSettleWake = vi.fn();
   const callGateway = vi.fn();
   const warn = vi.fn();
   const sweeper = createSubagentRegistrySweeper({
     runs,
     resumedRuns: new Set(),
     persist: vi.fn(),
+    persistOrThrow,
+    recordAcceptedSubagentSpawnRollback: vi.fn(() => ({ status: "rejected" as const })),
+    rollbackSubagentRunRegistration: vi.fn(() => false),
+    settleFailedQueuedSubagentLaunch: vi.fn(() => false),
     clearPendingLifecycleError: vi.fn(),
     clearPendingLifecycleTimeout: vi.fn(),
     sweepPendingLifecycle: vi.fn(),
     completeSubagentRunWithRecovery,
+    clearSubagentRunSteerRestart,
     getGatewayRecoveryRuntime: () => runtime.current,
     abandonSubagentRestartRecoveryLaunch: vi.fn(() => true),
     clearAcceptedSubagentRestartRecovery: vi.fn(() => true),
@@ -121,12 +137,13 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
     ),
     resetSubagentRestartRecoveryLaunchAttempt: vi.fn(() => true),
     finalizeInterruptedSubagentRun,
-    resumeRequesterSettleWake: vi.fn(),
-    startSubagentAnnounceCleanupFlow: vi.fn(() => true),
+    resumeRequesterSettleWake,
+    startSubagentAnnounceCleanupFlow,
     completeCleanupBookkeeping,
     discardTerminalDelivery: vi.fn(),
     shouldEmitEndedHookForRun: vi.fn(() => false),
     emitSubagentEndedHookForRun,
+    shouldDeferArchive: vi.fn(() => false),
     callGateway,
     cleanupCollectorLaunchResources: vi.fn(async () => true),
     runContextEngineSubagentEnded: vi.fn(),
@@ -145,6 +162,9 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
     emitSubagentEndedHookForRun,
     finalizeInterruptedSubagentRun,
     notifyContextEngineSubagentEnded,
+    persistOrThrow,
+    resumeRequesterSettleWake,
+    startSubagentAnnounceCleanupFlow,
     sweeper,
     warn,
   };
@@ -154,6 +174,7 @@ describe("subagent registry recovery scheduling", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     resetGatewayWorkAdmission();
+    agentEvents.lifecycleCurrent = true;
     recoverRow.mockReset();
     getAgentRunContext.mockReset().mockReturnValue(undefined);
     killRuntime.abortEmbeddedAgentRun.mockReset().mockReturnValue(false);
@@ -176,6 +197,93 @@ describe("subagent registry recovery scheduling", () => {
   afterEach(() => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
+  });
+
+  it("reconciles one accepted steer after ordinary rows progress", async () => {
+    const harness = createHarness({});
+    harness.entry.suppressAnnounceReason = "steer-restart";
+    harness.entry.acceptedSteerDispatch = { gatewayRunId: "accepted-steer-one" };
+    const second = {
+      ...run(),
+      runId: "accepted-steer-two-source",
+      childSessionKey: "agent:main:subagent:accepted-steer-two",
+      suppressAnnounceReason: "steer-restart" as const,
+      acceptedSteerDispatch: { gatewayRunId: "accepted-steer-two" },
+    };
+    const ordinary = {
+      ...run(),
+      runId: "requester-settle-row",
+      childSessionKey: "agent:main:subagent:requester-settle",
+      requesterSettleWake: {
+        status: "pending" as const,
+        attemptCount: 0,
+      },
+    };
+    harness.runs.set(second.runId, second);
+    harness.runs.set(ordinary.runId, ordinary);
+    harness.callGateway.mockImplementation(async (request) => {
+      const runId = (request.params as { runId: string }).runId;
+      return {
+        aborted: true,
+        runIds: [runId === "accepted-steer-one" ? "different-run" : runId],
+      };
+    });
+
+    await harness.sweeper.sweepOnce();
+
+    expect(harness.resumeRequesterSettleWake).toHaveBeenCalledWith(ordinary.runId, ordinary);
+    expect(harness.callGateway).toHaveBeenCalledOnce();
+    expect(harness.entry.acceptedSteerDispatch).toEqual({
+      gatewayRunId: "accepted-steer-one",
+    });
+    expect(second.acceptedSteerDispatch).toEqual({ gatewayRunId: "accepted-steer-two" });
+
+    await harness.sweeper.sweepOnce();
+
+    expect(harness.callGateway).toHaveBeenCalledTimes(2);
+    expect(harness.entry.acceptedSteerDispatch).toEqual({
+      gatewayRunId: "accepted-steer-one",
+    });
+    expect(second.acceptedSteerDispatch).toBeUndefined();
+  });
+
+  it("reconciles a restored wake receipt before generic cleanup", async () => {
+    const harness = createHarness({});
+    const wakeDispatchId = "announce-wake-after-restart";
+    agentEvents.lifecycleCurrent = false;
+    harness.entry.cleanup = "delete";
+    harness.entry.execution = {
+      ...harness.entry.execution,
+      status: "terminal",
+      endedAt: Date.now() - 1_000,
+      outcome: { status: "ok" },
+    };
+    harness.entry.acceptedSteerDispatch = {
+      gatewayRunId: wakeDispatchId,
+      phase: "dispatching",
+      lifecycleGeneration: "prior-gateway-lifecycle",
+      expectedSessionId: "session-id",
+      expectedLifecycleRevision: "session-revision",
+    };
+    harness.callGateway.mockResolvedValue({
+      aborted: true,
+      runIds: [wakeDispatchId],
+    });
+
+    await harness.sweeper.sweepOnce();
+
+    expect(harness.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "chat.abort",
+        params: {
+          sessionKey: harness.entry.childSessionKey,
+          runId: wakeDispatchId,
+        },
+      }),
+    );
+    expect(harness.startSubagentAnnounceCleanupFlow).not.toHaveBeenCalled();
+    expect(harness.completeCleanupBookkeeping).not.toHaveBeenCalled();
+    expect(harness.entry.acceptedSteerDispatch).toBeUndefined();
   });
 
   it("makes four dispatch attempts and three separate terminal attempts", async () => {

@@ -66,17 +66,20 @@ function formatCompactionReason(reason?: string): string | undefined {
     return undefined;
   }
   const classification = classifyCompactionReason(reason);
-  if (classification === "no_compactable_entries") {
-    return "nothing compactable in this session yet";
+  const lower = normalizeLowercaseStringOrEmpty(reason);
+  switch (classification) {
+    case "no_compactable_entries":
+    case "no_real_conversation_messages":
+      return "nothing compactable in this session yet";
+    case "below_threshold":
+      return lower.includes("already under target")
+        ? "context is already under the compaction target"
+        : "context is below the compaction threshold";
+    case "already_compacted":
+      return "session is already compacted";
+    default:
+      return text;
   }
-  if (classification === "already_compacted") {
-    return "session is already compacted";
-  }
-  return classification === "below_threshold"
-    ? normalizeLowercaseStringOrEmpty(reason).includes("already under target")
-      ? "context is already under the compaction target"
-      : "context is below the compaction threshold"
-    : text;
 }
 
 function compactionUnavailable(reason: string, text: string): CommandHandlerResult {

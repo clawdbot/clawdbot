@@ -1,6 +1,8 @@
 /** Tests silent-reply and heartbeat token parsing helpers. */
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
+  HEARTBEAT_TOKEN,
+  SILENT_REPLY_TOKEN,
   isInternalFormattingArtifact,
   isSilentReplyPrefixText,
   isSilentReplyPayloadText,
@@ -71,6 +73,10 @@ describe("isInternalFormattingArtifact", () => {
   });
 });
 
+/* ------------------------------------------------------------------ */
+/*  isSilentReplyText                                                 */
+/* ------------------------------------------------------------------ */
+
 describe("isSilentReplyText", () => {
   it("returns true for exact token", () => {
     expect(isSilentReplyText("NO_REPLY")).toBe(true);
@@ -93,21 +99,42 @@ describe("isSilentReplyText", () => {
 
   it("returns false for undefined/empty", () => {
     expect(isSilentReplyText(undefined)).toBe(false);
+  });
+
+  it("returns false for empty string", () => {
     expect(isSilentReplyText("")).toBe(false);
   });
 
-  it("returns false for substantive text ending with token (#19537)", () => {
-    const text = "Here is a helpful response.\n\nNO_REPLY";
-    expect(isSilentReplyText(text)).toBe(false);
+  it("returns true for exact NO_REPLY", () => {
+    expect(isSilentReplyText("NO_REPLY")).toBe(true);
   });
 
-  it("returns false for substantive text starting with token", () => {
-    const text = "NO_REPLY but here is more content";
-    expect(isSilentReplyText(text)).toBe(false);
+  it("returns true for NO_REPLY with leading whitespace", () => {
+    expect(isSilentReplyText("  NO_REPLY")).toBe(true);
   });
 
-  it("returns false for token embedded in text", () => {
-    expect(isSilentReplyText("Please NO_REPLY to this")).toBe(false);
+  it("returns false for substantive text ending with NO_REPLY (#19537)", () => {
+    // Substantive replies ending with NO_REPLY must NOT be silently dropped.
+    // Only exact-match (entire message is NO_REPLY) should be treated as silent.
+    expect(isSilentReplyText("Some text NO_REPLY")).toBe(false);
+  });
+
+  it("returns false for NO_REPLY embedded in a word", () => {
+    // The regex uses \b word boundary, so embedded shouldn't match at suffix
+    // But the prefix check just looks at start-of-string
+    expect(isSilentReplyText("NOTNO_REPLY")).toBe(false);
+  });
+
+  it("returns true for HEARTBEAT_OK when token is overridden", () => {
+    expect(isSilentReplyText("HEARTBEAT_OK", HEARTBEAT_TOKEN)).toBe(true);
+  });
+
+  it("returns true for NO_REPLY followed by newline", () => {
+    expect(isSilentReplyText("NO_REPLY\n")).toBe(true);
+  });
+
+  it("returns false for normal conversational text", () => {
+    expect(isSilentReplyText("Hello, how are you?")).toBe(false);
   });
 
   it.each([
@@ -280,6 +307,10 @@ describe("custom silent tokens", () => {
   });
 });
 
+/* ------------------------------------------------------------------ */
+/*  isSilentReplyPrefixText                                           */
+/* ------------------------------------------------------------------ */
+
 describe("stripLeadingSilentToken", () => {
   it("strips glued leading token text", () => {
     expect(stripLeadingSilentToken("NO_REPLYThe user is saying")).toBe("The user is saying");
@@ -382,5 +413,16 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("HELP", "HELP-QUIET")).toBe(false);
     expect(isSilentReplyPrefixText("HELP-", "HELP-QUIET")).toBe(true);
     expect(isSilentReplyPrefixText("HELP-QUIET", "HELP-QUIET")).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  Token constants                                                   */
+/* ------------------------------------------------------------------ */
+
+describe("token constants", () => {
+  it("exports expected token values", () => {
+    expect(HEARTBEAT_TOKEN).toBe("HEARTBEAT_OK");
+    expect(SILENT_REPLY_TOKEN).toBe("NO_REPLY");
   });
 });

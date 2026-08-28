@@ -1314,6 +1314,22 @@ describe("projectChatDisplayMessages", () => {
         },
       ],
     },
+    {
+      name: "redacts raw validation text from structured assistant errors",
+      message: {
+        content: [
+          { type: "text", text: 'Received arguments: {"secret":"value"}' },
+          {
+            type: "toolCall",
+            id: "call-1",
+            name: "edit",
+            arguments: { secret: "value" },
+          },
+        ],
+        errorMessage: privateError,
+      },
+      content: safeFailureContent,
+    },
   ];
 
   it.each(displayErrorCases)("$name", ({ message, content, visibleText }) => {
@@ -1442,6 +1458,33 @@ describe("projectChatDisplayMessages", () => {
       expect(JSON.stringify(result)).not.toContain("secret.internal.example");
     },
   );
+
+  it("projects raw validation-loop assistant errors as a generic safe failure", () => {
+    const result = projectChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: 'Stopped after 2 identical failed edit tool calls. Received arguments: {"secret":"value"}',
+          },
+        ],
+        stopReason: "error",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        stopReason: "error",
+        timestamp: 1,
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("Received arguments");
+    expect(JSON.stringify(result)).not.toContain("secret");
+  });
 
   it.each([undefined, ""])(
     "projects repaired stream errors with errorMessage %j as a generic safe failure",

@@ -543,7 +543,7 @@ vi.mock("../sessions/send-policy.js", () => ({
   resolveSendPolicy: () => "allow",
 }));
 
-vi.mock("../terminal/ansi.js", () => ({
+vi.mock("../../packages/terminal-core/src/ansi.js", () => ({
   sanitizeForLog: (s: string) => s,
 }));
 

@@ -9,7 +9,6 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import {
   hasNonEmptyString as hasNonEmptyStringField,
   normalizeLowercaseStringOrEmpty,
-  readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import {
   classifyToolUseResultPairing,
@@ -18,7 +17,11 @@ import {
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
 import { extractToolCallsFromAssistant, extractToolResultIds } from "./tool-call-id.js";
-import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
+import {
+  isAllowedToolCallName,
+  normalizeAllowedToolNames,
+  sanitizeTranscriptToolCallBlock,
+} from "./tool-call-shared.js";
 
 type RawToolCallBlock = {
   type?: unknown;
@@ -103,26 +106,6 @@ function isFinalizedOpenAIResponsesToolCall(
   return separator > 0 && separator < block.id.length - 1;
 }
 
-function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
-  // This repair path normalizes replay shape only. Tool payloads are local
-  // trusted-operator transcript state per SECURITY.md, so do not redact or
-  // rewrite sessions_spawn arguments here.
-  const rawName = readStringValue(block.name);
-  const trimmedName = rawName?.trim();
-  const hasTrimmedName = typeof trimmedName === "string" && trimmedName.length > 0;
-  const normalizedName = hasTrimmedName ? trimmedName : undefined;
-  const nameChanged = hasTrimmedName && rawName !== trimmedName;
-
-  if (!nameChanged) {
-    return block;
-  }
-  const next = { ...(block as Record<string, unknown>) };
-  if (nameChanged && normalizedName) {
-    next.name = normalizedName;
-  }
-  return next as RawToolCallBlock;
-}
-
 function countRawToolCallBlocks(content: unknown[]): number {
   let count = 0;
   for (const block of content) {
@@ -155,7 +138,11 @@ function isReplaySafeThinkingAssistantTurn(
       return false;
     }
     seenToolCallIds.add(toolCallId);
-    if (sanitizeToolCallBlock(block) !== block) {
+    if (
+      sanitizeTranscriptToolCallBlock(block, {
+        preserveLegacyContinueDelegateAttachmentName: true,
+      }) !== block
+    ) {
       return false;
     }
   }
@@ -364,14 +351,18 @@ function repairToolCallInputs(
       }
       if (isRawToolCallBlock(workBlock)) {
         if (RAW_TOOL_CALL_BLOCK_TYPES.has((workBlock as { type?: string }).type ?? "")) {
-          // Only sanitize (redact) sessions_spawn blocks; all others are passed through
-          // unchanged to preserve provider-specific shapes (e.g. toolUse.input for Anthropic).
+          // Keep provider-specific shapes intact. Only continuation snapshot
+          // calls need payload redaction; sessions_spawn still gets name repair.
           const blockName =
             typeof (workBlock as { name?: unknown }).name === "string"
               ? (workBlock as { name: string }).name.trim()
               : undefined;
-          if (normalizeLowercaseStringOrEmpty(blockName) === "sessions_spawn") {
-            const sanitized = sanitizeToolCallBlock(workBlock);
+          const normalizedBlockName = normalizeLowercaseStringOrEmpty(blockName);
+          if (
+            normalizedBlockName === "sessions_spawn" ||
+            normalizedBlockName === "continue_delegate"
+          ) {
+            const sanitized = sanitizeTranscriptToolCallBlock(workBlock as RawToolCallBlock);
             if (sanitized !== workBlock) {
               changed = true;
               messageChanged = true;

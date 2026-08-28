@@ -101,7 +101,7 @@ export function resolveUiAssetVersion(
     if (!fs.existsSync(indexPath) || !fs.statSync(indexPath).isFile()) {
       return null;
     }
-    const hash = createHash("sha1");
+    const hash = createHash("sha256");
     for (const relativeFile of listUiAssetFiles(distDir)) {
       hash.update(relativeFile);
       hash.update("\0");

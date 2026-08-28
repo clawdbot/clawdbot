@@ -4,6 +4,7 @@
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { stripContinuationSignal } from "../auto-reply/continuation/signal.js";
 import {
   parseReplyDirectives,
   type ReplyDirectiveParseResult,
@@ -403,10 +404,20 @@ export function resolveStreamingReplyText(params: {
 
   return (
     resolveIncrementalStreamingReplyText(params) ??
-    parseReplyDirectives(
+    parseFullStreamingReplyText(
       params.evtType === "text_end" ? params.next : splitTrailingDirective(params.next).text,
-    ).text
+    )
   );
+}
+
+/** Removes a completed continuation signal from text bound for a display stream. */
+export function stripContinuationSignalFromDisplayText(text: string): string {
+  const stripped = stripContinuationSignal(text);
+  return stripped.signal ? stripped.text : text;
+}
+
+function parseFullStreamingReplyText(text: string): string {
+  return stripContinuationSignalFromDisplayText(parseReplyDirectives(text).text);
 }
 
 /** Records parsed reply directives until a sendable reply payload is built. */

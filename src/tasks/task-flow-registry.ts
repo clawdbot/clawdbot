@@ -65,6 +65,11 @@ type FlowRecordPatch = Omit<
 
 type FlowRecordCreateFields = {
   ownerKey: string;
+  /**
+   * Originating continuation chain id. Optional; default NULL when
+   * undefined (legacy/disabled). Set-once at create-time; ignored on update.
+   */
+  chainId?: string | null;
   requesterOrigin?: TaskFlowRecord["requesterOrigin"];
   status?: TaskFlowStatus;
   notifyPolicy?: TaskNotifyPolicy;
@@ -138,6 +143,7 @@ function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
     ...record,
     syncMode,
     ownerKey: assertFlowOwnerKey(record.ownerKey),
+    ...(record.chainId ? { chainId: record.chainId } : {}),
     ...(record.requesterOrigin
       ? { requesterOrigin: cloneStructuredValue(record.requesterOrigin)! }
       : {}),
@@ -388,10 +394,12 @@ function buildFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord {
   const now = params.createdAt ?? Date.now();
   const syncMode = params.syncMode ?? "managed";
   const controllerId = syncMode === "managed" ? assertControllerId(params.controllerId) : undefined;
+  const chainId = normalizeOptionalString(params.chainId);
   return {
     flowId: crypto.randomUUID(),
     syncMode,
     ownerKey: assertFlowOwnerKey(params.ownerKey),
+    ...(chainId ? { chainId } : {}),
     ...(params.requesterOrigin
       ? { requesterOrigin: cloneStructuredValue(params.requesterOrigin)! }
       : {}),
@@ -474,6 +482,9 @@ function createFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord | null
   return writeFlowRecord(record);
 }
 
+// chainId is threaded through createManagedTaskFlow via FlowRecordCreateFields,
+// so flow_runs.chain_id is populated on the common managed-flow create path,
+// not just when callers bypass via createFlowRecord directly.
 export function createManagedTaskFlow(
   params: FlowRecordCreateFields & {
     controllerId: string;

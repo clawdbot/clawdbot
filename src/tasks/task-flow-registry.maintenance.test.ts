@@ -183,6 +183,50 @@ describe("task-flow-registry maintenance", () => {
     },
   );
 
+  it("retains a terminal flow that still owes a durable obligation", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      // A terminal row is normally just a record, but continuation's terminal
+      // continue_work notice keeps its ONLY restart backstop on the row after
+      // bounded handoff retries fail. Pruning it would strand the outcome.
+      const endedAt = Date.now() - 8 * 24 * 60 * 60_000;
+      const owing = createManagedTaskFlow({
+        ownerKey: "agent:main:owes-notice",
+        controllerId: "core/continuation-work",
+        goal: "Terminal wake owing an agent-visible outcome",
+        status: "failed",
+        blockedSummary: "Continuation work wake failed",
+        stateJson: {
+          kind: "continuation_work",
+          sessionKey: "agent:main:owes-notice",
+          terminalNoticePending: "retry-exhausted",
+        },
+        createdAt: endedAt,
+        updatedAt: endedAt,
+        endedAt,
+      });
+      // Same shape and age, no outstanding obligation: must still be pruned.
+      const settled = createManagedTaskFlow({
+        ownerKey: "agent:main:settled",
+        controllerId: "core/continuation-work",
+        goal: "Terminal wake with nothing owed",
+        status: "failed",
+        blockedSummary: "Continuation work wake failed",
+        stateJson: {
+          kind: "continuation_work",
+          sessionKey: "agent:main:settled",
+        },
+        createdAt: endedAt,
+        updatedAt: endedAt,
+        endedAt,
+      });
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({ reconciled: 0, pruned: 1 });
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({ reconciled: 0, pruned: 1 });
+      expect(getTaskFlowById(owing.flowId)).toMatchObject({ status: "failed" });
+      expect(getTaskFlowById(settled.flowId)).toBeUndefined();
+    });
+  });
+
   it("prunes ended blocked flows without removing resumable managed flows", async () => {
     await withTaskFlowMaintenanceStateDir(async () => {
       const endedAt = Date.now() - 8 * 24 * 60 * 60_000;

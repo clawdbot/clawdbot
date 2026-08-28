@@ -79,6 +79,6 @@ export {
   normalizeE164,
   PortInUseError,
   resolveSessionKey,
-  resolveSessionStorePathCore as resolveStorePath,
+  resolveSessionStorePathCore,
   waitForever,
 };

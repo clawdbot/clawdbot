@@ -1425,6 +1425,15 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), fastWait);
+    await vi.waitFor(
+      () =>
+        expect(onRunProgress).toHaveBeenCalledWith(
+          expect.objectContaining({
+            reason: "request:item/tool/requestUserInput:start",
+          }),
+        ),
+      fastWait,
+    );
     const pendingStartedAt = Date.now();
     await new Promise((resolve) => {
       setTimeout(resolve, pendingHoldMs);

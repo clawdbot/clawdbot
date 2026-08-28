@@ -38,7 +38,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         ],
       } as AssistantMessage,
     });
-
     expect(payloads).toStrictEqual([]);
   });
 
@@ -133,7 +132,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
     });
   });
-
   it("does not revive signed unphased text when explicit final-answer text is empty", () => {
     expectNoPayloads({
       lastAssistant: {

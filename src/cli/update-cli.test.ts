@@ -9,6 +9,7 @@ import { Command } from "commander";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { useHermeticOpenclawEnv } from "../../test/vitest/hermetic-openclaw-env.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -541,6 +542,7 @@ type UpdateCliScenario = {
 };
 
 describe("update-cli", () => {
+  useHermeticOpenclawEnv();
   // Per-run unique root: concurrent runs on one machine (CI shards, sibling checkouts) must
   // never share fixture paths — some cases write real files and rm them in cleanup. Realpath'd
   // because macOS os.tmpdir() is a /var -> /private/var symlink.

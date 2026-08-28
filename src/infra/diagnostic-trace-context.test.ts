@@ -5,6 +5,7 @@ import {
   createDiagnosticTraceContext,
   createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
+  formatActiveDiagnosticTraceparent,
   formatDiagnosticTraceparent,
   getActiveDiagnosticTraceContext,
   isValidDiagnosticSpanId,
@@ -12,6 +13,7 @@ import {
   isValidDiagnosticTraceId,
   parseDiagnosticTraceparent,
   runWithDiagnosticTraceContext,
+  runWithDiagnosticTraceparent,
 } from "./diagnostic-trace-context.js";
 
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
@@ -88,6 +90,7 @@ describe("diagnostic-trace-context", () => {
       traceId: TRACE_ID,
       spanId: SPAN_ID,
       traceFlags: "01",
+      spanIdSource: "remote",
     });
   });
 
@@ -117,6 +120,20 @@ describe("diagnostic-trace-context", () => {
     expect(
       createChildDiagnosticTraceContext(parent, { spanId: SPAN_ID }).parentSpanId,
     ).toBeUndefined();
+  });
+
+  it("marks child parent ids inherited from remote traceparents", () => {
+    const parent = createDiagnosticTraceContext({
+      traceparent: `00-${TRACE_ID}-${SPAN_ID}-01`,
+    });
+
+    expect(createChildDiagnosticTraceContext(parent, { spanId: CHILD_SPAN_ID })).toEqual({
+      traceId: TRACE_ID,
+      spanId: CHILD_SPAN_ID,
+      parentSpanId: SPAN_ID,
+      traceFlags: "01",
+      parentSpanIdSource: "remote",
+    });
   });
 
   it("freezes a defensive trace context copy", () => {
@@ -185,5 +202,36 @@ describe("diagnostic-trace-context", () => {
       spanId: CHILD_SPAN_ID,
       traceFlags: "01",
     });
+  });
+
+  it("formats the active runtime trace context for propagation", () => {
+    const trace = createDiagnosticTraceContext({
+      traceId: TRACE_ID,
+      spanId: SPAN_ID,
+      traceFlags: "00",
+    });
+
+    runWithDiagnosticTraceContext(trace, () => {
+      expect(formatActiveDiagnosticTraceparent()).toBe(`00-${TRACE_ID}-${SPAN_ID}-00`);
+    });
+
+    expect(formatActiveDiagnosticTraceparent()).toBeUndefined();
+  });
+
+  it("runs callbacks with an inherited traceparent as the active runtime context", async () => {
+    const traceparent = `00-${TRACE_ID}-${SPAN_ID}-00`;
+
+    await runWithDiagnosticTraceparent(traceparent, async () => {
+      expect(getActiveDiagnosticTraceContext()).toEqual({
+        traceId: TRACE_ID,
+        spanId: SPAN_ID,
+        traceFlags: "00",
+        spanIdSource: "remote",
+      });
+      await Promise.resolve();
+      expect(formatActiveDiagnosticTraceparent()).toBe(traceparent);
+    });
+
+    expect(getActiveDiagnosticTraceContext()).toBeUndefined();
   });
 });

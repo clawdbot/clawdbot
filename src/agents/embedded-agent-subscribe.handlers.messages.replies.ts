@@ -20,7 +20,7 @@ export function hasReplyDirectiveMetadata(
   );
 }
 
-function hasReplyDirectiveMetadataResult(
+export function hasReplyDirectiveMetadataResult(
   parsed: ReplyDirectiveParseResult | null | undefined,
 ): parsed is ReplyDirectiveParseResult {
   return hasReplyDirectiveMetadata(parsed);
@@ -271,6 +271,20 @@ export function hasAssistantVisibleReply(params: {
   audioAsVoice?: boolean;
 }): boolean {
   return resolveSendableOutboundReplyParts(params).hasContent || Boolean(params.audioAsVoice);
+}
+
+/**
+ * A terminal snapshot that only carries a reply target is still evidence the turn
+ * spoke, so continuation finals must not treat its empty text as "nothing sent".
+ */
+export function hasReplyTargetOnlyTerminalEvidence(parsed: ReplyDirectiveParseResult): boolean {
+  const hasReplyTarget = Boolean(parsed.replyToId || parsed.replyToTag || parsed.replyToCurrent);
+  return (
+    hasReplyTarget &&
+    parsed.text.trim().length === 0 &&
+    !resolveSendableOutboundReplyParts(parsed).hasMedia &&
+    !parsed.audioAsVoice
+  );
 }
 
 /** Builds normalized stream payload data for assistant visible output. */

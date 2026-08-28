@@ -97,8 +97,8 @@ type TaskRegistryMaintenanceRuntime = {
   }) => Promise<void>;
   listSessionBindingsBySession?: ReturnType<typeof getSessionBindingService>["listBySession"];
   unbindSessionBindings?: ReturnType<typeof getSessionBindingService>["unbind"];
-  listSessionEntries: typeof listSessionEntriesReadOnly;
-  resolveStorePath: typeof resolveSessionStorePathCore;
+  listSessionEntriesCore: typeof listSessionEntriesReadOnly;
+  resolveSessionStorePathCore: typeof resolveSessionStorePathCore;
   deriveSessionChatTypeFromKey?: typeof deriveSessionChatTypeFromKey;
   isCronJobActive: typeof isCronJobActive;
   getAgentRunContext: typeof getAgentRunContext;
@@ -136,8 +136,8 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   listSessionBindingsBySession: (sessionKey) =>
     getSessionBindingService().listBySession(sessionKey),
   unbindSessionBindings: (input) => getSessionBindingService().unbind(input),
-  listSessionEntries: listSessionEntriesReadOnly,
-  resolveStorePath: resolveSessionStorePathCore,
+  listSessionEntriesCore: listSessionEntriesReadOnly,
+  resolveSessionStorePathCore,
   deriveSessionChatTypeFromKey,
   isCronJobActive,
   getAgentRunContext,
@@ -239,7 +239,7 @@ function getSessionEntryLookup(
 ): SessionEntryLookup {
   if (!context) {
     return buildSessionEntryLookup(
-      taskRegistryMaintenanceRuntime.listSessionEntries({ storePath }),
+      taskRegistryMaintenanceRuntime.listSessionEntriesCore({ storePath }),
     );
   }
   const cached = context.sessionEntriesByPath.get(storePath);
@@ -247,7 +247,7 @@ function getSessionEntryLookup(
     return cached;
   }
   const lookup = buildSessionEntryLookup(
-    taskRegistryMaintenanceRuntime.listSessionEntries({ storePath }),
+    taskRegistryMaintenanceRuntime.listSessionEntriesCore({ storePath }),
   );
   context.sessionEntriesByPath.set(storePath, lookup);
   return lookup;
@@ -287,7 +287,9 @@ function findTaskSessionEntry(
     return undefined;
   }
   const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId;
-  const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
+  const storePath = taskRegistryMaintenanceRuntime.resolveSessionStorePathCore(undefined, {
+    agentId,
+  });
   return findSessionEntryByKey(getSessionEntryLookup(storePath, context), childSessionKey);
 }
 

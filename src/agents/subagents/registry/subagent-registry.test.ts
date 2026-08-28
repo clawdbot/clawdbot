@@ -167,7 +167,7 @@ const mocks = vi.hoisted(() => ({
   resolveAgentIdFromSessionKey: vi.fn((sessionKey: string) => {
     return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
   }),
-  resolveStorePath: vi.fn(() => "/tmp/test-session-store.json"),
+  resolveSessionStorePathCore: vi.fn(() => "/tmp/test-session-store.json"),
   updateSessionStore: vi.fn(),
   emitSessionLifecycleEvent: vi.fn(),
   clearSubagentRunsReadCacheForTest: vi.fn(),
@@ -238,7 +238,7 @@ vi.mock("../../../config/config.js", () => {
 vi.mock("../../../config/sessions.js", () => ({
   loadSessionStore: mocks.loadSessionStore,
   resolveAgentIdFromSessionKey: mocks.resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveSessionStorePathCore,
   updateSessionStore: mocks.updateSessionStore,
 }));
 
@@ -513,7 +513,7 @@ describe("subagent registry seam flow", () => {
     mocks.resolveAgentIdFromSessionKey.mockImplementation((sessionKey: string) => {
       return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
     });
-    mocks.resolveStorePath.mockReturnValue("/tmp/test-session-store.json");
+    mocks.resolveSessionStorePathCore.mockReturnValue("/tmp/test-session-store.json");
     mocks.loadSessionStore.mockReturnValue(
       createSessionStore({ lifecycleRevision: "revision-child" }),
     );
@@ -1157,6 +1157,217 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
+  it("retries an accepted steer termination before clearing durable ownership", async () => {
+    const runId = "run-steer-termination-retry";
+    const gatewayRunId = "run-steer-termination-retry-next";
+    const childSessionKey = "agent:main:subagent:steer-termination-retry";
+    const entry = createSubagentRunRecord({
+      runId,
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "retry accepted steer cleanup",
+      cleanup: "keep",
+      createdAt: Date.now() - 1_000,
+      startedAt: Date.now() - 500,
+    });
+    mod.addSubagentRunForTests(entry);
+    const stored = mod.getSubagentRunByRunId(runId);
+    expect(stored).toBeDefined();
+    if (!stored) {
+      throw new Error("expected steer termination owner");
+    }
+    expect(mod.markSubagentRunForSteerRestart(runId, stored)).toBe(true);
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
+      throw new Error("owner write unavailable");
+    });
+    expect(
+      mod.recordAcceptedSubagentSteerDispatch({
+        runId,
+        expected: stored,
+        gatewayRunId,
+      }),
+    ).toMatchObject({
+      status: "pending-persistence",
+      ownerRunId: runId,
+      dispatch: { gatewayRunId },
+    });
+
+    let abortAttempts = 0;
+    mocks.callGateway.mockImplementation(
+      async (request: { method?: string; params?: Record<string, unknown> }) => {
+        if (request.method !== "chat.abort") {
+          return {};
+        }
+        abortAttempts += 1;
+        return {
+          aborted: true,
+          runIds: [abortAttempts === 1 ? "another-run" : String(request.params?.runId)],
+        };
+      },
+    );
+
+    await mod.testing.sweepOnceForTests();
+    expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
+      suppressAnnounceReason: "steer-restart",
+      acceptedSteerDispatch: { gatewayRunId },
+    });
+
+    await mod.testing.sweepOnceForTests();
+    expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
+      suppressAnnounceReason: undefined,
+      acceptedSteerDispatch: undefined,
+    });
+    expect(abortAttempts).toBe(2);
+    expect(mocks.persistSubagentRunsToDiskOrThrow.mock.calls.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("promotes only the exact current steer reservation to an accepted run", () => {
+    const runId = "run-steer-exact-reservation";
+    const entry = createSubagentRunRecord({
+      runId,
+      childSessionKey: "agent:main:subagent:steer-exact-reservation",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "bind the accepted gateway run",
+      cleanup: "keep",
+      createdAt: Date.now() - 1_000,
+      startedAt: Date.now() - 500,
+    });
+    mod.addSubagentRunForTests(entry);
+    const stored = mod.getSubagentRunByRunId(runId);
+    if (!stored) {
+      throw new Error("expected exact steer reservation owner");
+    }
+    expect(mod.markSubagentRunForSteerRestart(runId, stored)).toBe(true);
+    const reserved = mod.recordAcceptedSubagentSteerDispatch({
+      runId,
+      expected: stored,
+      gatewayRunId: "deterministic-reservation",
+      phase: "dispatching",
+    });
+    expect(reserved.status).toBe("persisted");
+    if (reserved.status === "rejected") {
+      throw new Error("expected persisted steer reservation");
+    }
+
+    expect(
+      mod.recordAcceptedSubagentSteerDispatch({
+        runId,
+        expected: stored,
+        gatewayRunId: "unbound-runtime-run",
+        expectedDispatch: { gatewayRunId: "stale-reservation", phase: "dispatching" },
+        phase: "accepted",
+      }),
+    ).toEqual({ status: "rejected" });
+    expect(stored.acceptedSteerDispatch).toBe(reserved.dispatch);
+
+    const accepted = mod.recordAcceptedSubagentSteerDispatch({
+      runId,
+      expected: stored,
+      gatewayRunId: "bound-runtime-run",
+      expectedDispatch: reserved.dispatch,
+      phase: "accepted",
+    });
+    expect(accepted).toMatchObject({
+      status: "persisted",
+      ownerRunId: runId,
+      dispatch: {
+        gatewayRunId: "bound-runtime-run",
+        phase: "accepted",
+      },
+    });
+    expect(
+      mod.recordAcceptedSubagentSteerDispatch({
+        runId,
+        expected: stored,
+        gatewayRunId: "late-runtime-run",
+        expectedDispatch: reserved.dispatch,
+        phase: "accepted",
+      }),
+    ).toEqual({ status: "rejected" });
+  });
+
+  it("keeps killed ownership while reconciling an accepted steer dispatch", async () => {
+    const runId = "run-steer-kill-race";
+    const gatewayRunId = "run-steer-kill-race-next";
+    const entry = createSubagentRunRecord({
+      runId,
+      childSessionKey: "agent:main:subagent:steer-kill-race",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "kill during accepted steer",
+      cleanup: "keep",
+      createdAt: Date.now() - 1_000,
+      startedAt: Date.now() - 500,
+    });
+    mod.addSubagentRunForTests(entry);
+    const stored = mod.getSubagentRunByRunId(runId);
+    if (!stored) {
+      throw new Error("expected steer kill-race owner");
+    }
+    expect(mod.markSubagentRunForSteerRestart(runId, stored)).toBe(true);
+    expect(mod.markSubagentRunTerminated({ runId, reason: "killed" })).toBe(1);
+    expect(
+      mod.recordAcceptedSubagentSteerDispatch({
+        runId,
+        expected: stored,
+        gatewayRunId,
+      }),
+    ).toMatchObject({
+      status: "persisted",
+      ownerRunId: runId,
+      dispatch: { gatewayRunId },
+    });
+    mocks.callGateway.mockImplementation(
+      async (request: { method?: string; params?: Record<string, unknown> }) => ({
+        aborted: true,
+        runIds: [String(request.params?.runId)],
+      }),
+    );
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
+      suppressAnnounceReason: "killed",
+      acceptedSteerDispatch: undefined,
+      killReconciliation: expect.any(Object),
+    });
+  });
+
+  it("keeps accepted steer dispatches out of generic resume cleanup", () => {
+    const runId = "run-accepted-steer-resume-guard";
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey: "agent:main:subagent:accepted-steer-resume-guard",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "leave exact termination to the sweeper",
+      cleanup: "delete",
+      createdAt: Date.now() - 2_000,
+      startedAt: Date.now() - 1_500,
+      endedAt: Date.now() - 1_000,
+      execution: {
+        status: "terminal",
+        startedAt: Date.now() - 1_500,
+        endedAt: Date.now() - 1_000,
+        outcome: { status: "error", error: "killed" },
+      },
+      suppressAnnounceReason: "killed",
+      acceptedSteerDispatch: {
+        gatewayRunId: "gateway-accepted-steer-resume-guard",
+      },
+    });
+    mocks.loadSessionStore.mockReturnValue({});
+
+    mod.resumeSubagentRun(runId);
+
+    expect(mod.getSubagentRunByRunId(runId)?.acceptedSteerDispatch).toEqual({
+      gatewayRunId: "gateway-accepted-steer-resume-guard",
+    });
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
   it("records early structured output through the child session identity", () => {
     const childSessionKey = "agent:main:subagent:early-structured-output";
     mod.addSubagentRunForTests({
@@ -1223,11 +1434,26 @@ describe("subagent registry seam flow", () => {
       killReconciliation: { killedAt: now - 5 },
       cleanupCompletedAt: now - 4,
     });
+    mod.addSubagentRunForTests({
+      runId: "run-wake-reconciling",
+      childSessionKey: "agent:main:subagent:wake-reconciling",
+      task: "reconcile accepted wake",
+      cleanup: "delete",
+      expectsCompletionMessage: false,
+      createdAt: now - 8,
+      endedAt: now - 7,
+      cleanupCompletedAt: now - 6,
+      acceptedSteerDispatch: {
+        gatewayRunId: "wake-dispatch-id",
+        phase: "accepted",
+      },
+    });
 
     expect(mod.listSessionMaintenanceProtectedSubagentSessionKeys().toSorted()).toEqual([
       "agent:main:subagent:active",
       "agent:main:subagent:killed-reconciling",
       "agent:main:subagent:pending",
+      "agent:main:subagent:wake-reconciling",
     ]);
   });
 
@@ -1665,6 +1891,228 @@ describe("subagent registry seam flow", () => {
     expect(agentCalls).toBe(1);
     deleteReleases[1]?.();
     await waitForFast(() => expect(agentCalls).toBe(2));
+  });
+
+  it("retries exact termination without redispatching an unconfirmed restored collector", async () => {
+    vi.useRealTimers();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    const now = Date.now();
+    mocks.getRuntimeConfig.mockReturnValue({
+      tools: { swarm: { enabled: true, maxConcurrent: 1 } },
+      agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+      session: { mainKey: "main", scope: "per-sender" as const },
+    });
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+      runs: Map<string, unknown>;
+    }) => {
+      params.runs.set(
+        "run-unconfirmed-one",
+        makeQueuedRun({
+          runId: "run-unconfirmed-one",
+          groupId: "restore-unconfirmed",
+          createdAt: now,
+        }),
+      );
+      params.runs.set(
+        "run-unconfirmed-two",
+        makeQueuedRun({
+          runId: "run-unconfirmed-two",
+          groupId: "restore-unconfirmed",
+          createdAt: now + 1,
+        }),
+      );
+      return 2;
+    }) as never);
+    const sessionStore: Record<string, SessionEntry> = {
+      "agent:main:subagent:run-unconfirmed-one": {
+        sessionId: "one",
+        lifecycleRevision: "revision-one",
+        updatedAt: now,
+      },
+      "agent:main:subagent:run-unconfirmed-two": {
+        sessionId: "two",
+        lifecycleRevision: "revision-two",
+        updatedAt: now,
+      },
+    };
+    mocks.loadSessionStore.mockReturnValue(sessionStore);
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
+      throw new Error("sqlite unavailable after Gateway acceptance");
+    });
+    const launchedIds: string[] = [];
+    let abortAttempts = 0;
+    mocks.callGateway.mockImplementation(
+      async (request: { method?: string; params?: Record<string, unknown> }) => {
+        if (request.method === "agent") {
+          launchedIds.push(String(request.params?.idempotencyKey));
+          const sessionEntry = sessionStore["agent:main:subagent:run-unconfirmed-one"];
+          if (!sessionEntry) {
+            throw new Error("expected restored collector session");
+          }
+          delete sessionEntry.lifecycleRevision;
+          return { runId: "gateway-unconfirmed-one" };
+        }
+        if (request.method === "chat.abort") {
+          abortAttempts += 1;
+          return { aborted: true, runIds: ["different-run"] };
+        }
+        return request.method === "agent.wait" ? { status: "pending" } : {};
+      },
+    );
+
+    hydrateAndActivateRegistry();
+
+    await waitForFast(() => expect(abortAttempts).toBeGreaterThan(1));
+    expect(launchedIds).toEqual(["run-unconfirmed-one"]);
+    expect(launchedIds).not.toContain("run-unconfirmed-two");
+    expect(mod.getSubagentRunByRunId("run-unconfirmed-one")).toMatchObject({
+      execution: { status: "queued", suppressSessionEffects: true },
+      acceptedSpawnRollback: { gatewayRunId: "gateway-unconfirmed-one" },
+      suppressCompletionDelivery: true,
+    });
+    expect(mocks.callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.delete" }),
+    );
+  });
+
+  it("keeps restored accepted ownership without replaying its launch", async () => {
+    vi.useRealTimers();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    const now = Date.now();
+    mocks.getRuntimeConfig.mockReturnValue({
+      tools: { swarm: { enabled: true, maxConcurrent: 1 } },
+      agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+      session: { mainKey: "main", scope: "per-sender" as const },
+    });
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+      runs: Map<string, unknown>;
+    }) => {
+      params.runs.set(
+        "run-attempt-first",
+        makeQueuedRun({
+          runId: "run-attempt-first",
+          groupId: "restore-attempt-local",
+          createdAt: now,
+        }),
+      );
+      params.runs.set(
+        "run-attempt-next",
+        makeQueuedRun({
+          runId: "run-attempt-next",
+          groupId: "restore-attempt-local",
+          createdAt: now + 1,
+        }),
+      );
+      return 2;
+    }) as never);
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:run-attempt-first": { sessionId: "first", updatedAt: now },
+      "agent:main:subagent:run-attempt-next": { sessionId: "next", updatedAt: now },
+    });
+    const launchedIds: string[] = [];
+    mocks.callGateway.mockImplementation(
+      async (request: { method?: string; params?: Record<string, unknown> }) => {
+        if (request.method === "agent") {
+          const idempotencyKey = String(request.params?.idempotencyKey);
+          launchedIds.push(idempotencyKey);
+          if (idempotencyKey === "run-attempt-first") {
+            if (launchedIds.length === 1) {
+              return { runId: "run-attempt-next" };
+            }
+            throw new Error("retry failed before acceptance");
+          }
+          return { runId: "gateway-attempt-next" };
+        }
+        if (request.method === "chat.abort") {
+          return { aborted: true, runIds: ["another-run"] };
+        }
+        return request.method === "agent.wait" ? { status: "pending" } : {};
+      },
+    );
+
+    hydrateAndActivateRegistry();
+
+    await waitForFast(() =>
+      expect(
+        mocks.callGateway.mock.calls.filter(([request]) => request.method === "chat.abort").length,
+      ).toBeGreaterThanOrEqual(2),
+    );
+    expect(launchedIds.filter((runId) => runId === "run-attempt-first")).toHaveLength(1);
+    expect(launchedIds).not.toContain("run-attempt-next");
+    expect(mod.getSubagentRunByRunId("run-attempt-first")).toMatchObject({
+      execution: { status: "queued" },
+    });
+
+    expect(mod.markSubagentRunTerminated({ runId: "run-attempt-first", reason: "killed" })).toBe(1);
+    await waitForFast(() => expect(launchedIds).toContain("run-attempt-next"));
+    expect(mod.getSubagentRunByRunId("gateway-attempt-next")).toMatchObject({
+      execution: { status: "running" },
+    });
+  });
+
+  it("releases a restored FIFO slot only after exact accepted termination succeeds", async () => {
+    vi.useRealTimers();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    const now = Date.now();
+    mocks.getRuntimeConfig.mockReturnValue({
+      tools: { swarm: { enabled: true, maxConcurrent: 1 } },
+      agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+      session: { mainKey: "main", scope: "per-sender" as const },
+    });
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+      runs: Map<string, unknown>;
+    }) => {
+      params.runs.set(
+        "run-durable-one",
+        makeQueuedRun({
+          runId: "run-durable-one",
+          groupId: "restore-durable",
+          createdAt: now,
+        }),
+      );
+      params.runs.set(
+        "run-durable-two",
+        makeQueuedRun({
+          runId: "run-durable-two",
+          groupId: "restore-durable",
+          createdAt: now + 1,
+        }),
+      );
+      return 2;
+    }) as never);
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:run-durable-one": { sessionId: "one", updatedAt: now },
+      "agent:main:subagent:run-durable-two": { sessionId: "two", updatedAt: now },
+    });
+    const launchedIds: string[] = [];
+    let abortAttempts = 0;
+    mocks.callGateway.mockImplementation(
+      async (request: { method?: string; params?: Record<string, unknown> }) => {
+        if (request.method === "agent") {
+          launchedIds.push(String(request.params?.idempotencyKey));
+          // A Gateway run id already owned by the sibling row is a durable
+          // post-acceptance refusal: the queued row can never transition.
+          return { runId: "run-durable-two" };
+        }
+        if (request.method === "chat.abort") {
+          abortAttempts += 1;
+          return {
+            aborted: true,
+            runIds: [abortAttempts === 1 ? "unrelated-run" : String(request.params?.runId)],
+          };
+        }
+        return request.method === "agent.wait" ? { status: "pending" } : {};
+      },
+    );
+
+    hydrateAndActivateRegistry();
+
+    await waitForFast(() => expect(launchedIds).toEqual(["run-durable-one", "run-durable-two"]));
+    expect(abortAttempts).toBe(2);
+    expect(mod.getSubagentRunByRunId("run-durable-one")).toMatchObject({
+      execution: { status: "terminal" },
+      collectorCompletion: { status: "failed" },
+    });
   });
 
   it("holds a restored FIFO slot while an indeterminate launch session is deleted", async () => {
@@ -5292,14 +5740,23 @@ describe("subagent registry seam flow", () => {
     });
     mockPendingAgentWait();
 
-    expect(() =>
+    let thrown: unknown;
+    try {
       mod.registerSubagentRun({
         runId: "run-task-row-rollback-new",
         childSessionKey,
         task: "retain the last durable snapshot",
         taskRowOwnership: "required",
-      }),
-    ).toThrowError("rollback disk full");
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(AggregateError);
+    expect((thrown as AggregateError).errors.map((error) => (error as Error).message)).toEqual([
+      "detached task runtime created no task row for run run-task-row-rollback-new",
+      "rollback disk full",
+    ]);
+    expect((thrown as AggregateError).cause).toBe((thrown as AggregateError).errors[0]);
 
     expect(findRequesterRun("run-task-row-rollback-new")).toMatchObject({
       runId: "run-task-row-rollback-new",
@@ -5377,6 +5834,65 @@ describe("subagent registry seam flow", () => {
         .listSubagentRunsForRequester("agent:main:main")
         .some((entry) => entry.runId === "run-registration-rollback-new"),
     ).toBe(false);
+  });
+
+  it("removes an exact provisional registration and cancels its task projection", () => {
+    const runId = "run-registration-handoff-rollback";
+    const childSessionKey = "agent:main:subagent:handoff-rollback";
+    mod.registerSubagentRun({
+      runId,
+      childSessionKey,
+      task: "rollback stale accepted handoff",
+    });
+
+    expect(mod.rollbackSubagentRunRegistration({ runId, childSessionKey })).toBe(true);
+
+    expect(findRequesterRun(runId)).toBeUndefined();
+    expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "cancelled" });
+  });
+
+  it("retains and retries an accepted rollback tombstone after persistence and abort faults", async () => {
+    const runId = "run-registration-rollback-retry";
+    const childSessionKey = "agent:main:subagent:handoff-rollback-retry";
+    mod.registerSubagentRun({
+      runId,
+      childSessionKey,
+      task: "retry exact accepted rollback",
+    });
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
+      throw new Error("rollback owner disk full");
+    });
+
+    expect(
+      mod.recordAcceptedSubagentSpawnRollback({
+        runId,
+        childSessionKey,
+        gatewayRunId: "gateway-rollback-retry",
+        reason: " ",
+      }),
+    ).toMatchObject({
+      status: "pending-persistence",
+      error: expect.objectContaining({ message: "rollback owner disk full" }),
+    });
+    expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
+      acceptedSpawnRollback: {
+        gatewayRunId: "gateway-rollback-retry",
+        reason: "Accepted subagent rollback pending.",
+      },
+      suppressCompletionDelivery: true,
+      execution: { suppressSessionEffects: true },
+    });
+
+    mocks.callGateway
+      .mockResolvedValueOnce({ aborted: true, runIds: ["different-run"] })
+      .mockResolvedValueOnce({ aborted: true, runIds: ["gateway-rollback-retry"] });
+    await mod.testing.sweepOnceForTests();
+    expect(mod.getSubagentRunByRunId(runId)).toBeDefined();
+    await mod.testing.sweepOnceForTests();
+    expect(mod.getSubagentRunByRunId(runId)).toBeUndefined();
+    expect(
+      mocks.callGateway.mock.calls.filter(([request]) => request.method === "chat.abort"),
+    ).toHaveLength(2);
   });
 
   it("rolls back a killed tombstone when its durable registry write fails", () => {

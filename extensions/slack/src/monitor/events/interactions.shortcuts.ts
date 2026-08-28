@@ -5,7 +5,7 @@ import type {
   MessageShortcut,
   SlackShortcutMiddlewareArgs,
 } from "@slack/bolt";
-import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
+import { requestPluginHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -135,7 +135,7 @@ async function handleSlackShortcut(params: {
     },
   });
   if (queued) {
-    requestHeartbeat({
+    requestPluginHeartbeat({
       source: "hook",
       intent: "immediate",
       reason: "hook:slack-interaction",

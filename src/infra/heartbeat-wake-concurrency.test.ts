@@ -5,7 +5,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import {
   getHeartbeatWakeAbortSignal,
-  requestHeartbeat,
+  requestHeartbeatRaw as requestHeartbeat,
   setHeartbeatWakeHandler as setRuntimeHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 

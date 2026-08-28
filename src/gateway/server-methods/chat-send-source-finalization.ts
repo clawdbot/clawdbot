@@ -62,6 +62,7 @@ type FinalizeChatSendAgentRepliesBase = {
   accountId: string | undefined;
   context: GatewayRequestContext;
   emitFirstAssistantServerTiming: () => void;
+  markTerminalBroadcasted?: () => void;
   session: Pick<
     PreparedChatSendSession,
     "agentId" | "backingSessionId" | "cfg" | "clientRunId" | "sessionKey" | "sessionLoadOptions"
@@ -87,7 +88,8 @@ export function createChatSendLateReplyFinalizer(
 async function finalizeChatSendAgentReplyPayloads(
   params: FinalizeChatSendAgentRepliesBase & { payloads: readonly ReplyPayload[] },
 ): Promise<ChatSendAgentReplyFinalization> {
-  const { accountId, context, emitFirstAssistantServerTiming, session } = params;
+  const { accountId, context, emitFirstAssistantServerTiming, markTerminalBroadcasted, session } =
+    params;
   const { agentId, backingSessionId, cfg, clientRunId, sessionKey, sessionLoadOptions } = session;
   const agentRunReplyPayloads = [...params.payloads];
   if (agentRunReplyPayloads.length === 0) {
@@ -301,6 +303,7 @@ async function finalizeChatSendAgentReplyPayloads(
   if (hasVisibleAssistantFinalMessage(message)) {
     emitFirstAssistantServerTiming();
   }
+  markTerminalBroadcasted?.();
   broadcastChatFinal({
     context,
     runId: clientRunId,
@@ -316,12 +319,14 @@ export async function finalizeChatSendSourceReplies(
   params: FinalizeChatSendAgentRepliesBase & {
     deliveredReplies: readonly DeliveredReply[];
     hasReturnedAgentErrorPayloads: boolean;
+    markTerminalBroadcasted: () => void;
   },
 ): Promise<boolean> {
   const result = await finalizeChatSendAgentReplyPayloads({
     accountId: params.accountId,
     context: params.context,
     emitFirstAssistantServerTiming: params.emitFirstAssistantServerTiming,
+    markTerminalBroadcasted: params.markTerminalBroadcasted,
     payloads: selectChatSendAgentReplyPayloads(params),
     session: params.session,
   });

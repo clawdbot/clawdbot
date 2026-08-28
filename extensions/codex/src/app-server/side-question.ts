@@ -62,8 +62,8 @@ import {
 } from "./dynamic-tool-build.js";
 import {
   emitDynamicToolErrorDiagnostic,
-  emitDynamicToolStartedDiagnostic,
   emitDynamicToolTerminalDiagnostic,
+  startDynamicToolDiagnosticExecution,
 } from "./dynamic-tool-diagnostics.js";
 import {
   handleDynamicToolCallWithTimeout,
@@ -611,19 +611,22 @@ export async function runCodexAppServerSideQuestion(
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
         };
-        emitDynamicToolStartedDiagnostic(diagnosticContext);
-        const toolCall = handleDynamicToolCallWithTimeout({
-          call,
-          toolBridge,
-          signal: runAbortController.signal,
-          timeoutMs,
-          observeToolTerminal: sideRunParams.observeToolTerminal,
-        });
+        const diagnosticExecution = startDynamicToolDiagnosticExecution(diagnosticContext, () =>
+          handleDynamicToolCallWithTimeout({
+            call,
+            toolBridge,
+            signal: runAbortController.signal,
+            timeoutMs,
+            observeToolTerminal: sideRunParams.observeToolTerminal,
+          }),
+        );
+        const toolCall = diagnosticExecution.execution;
         activeDynamicToolCalls.add(toolCall);
         try {
           const response = await toolCall;
           emitDynamicToolTerminalDiagnostic({
             ...diagnosticContext,
+            trace: diagnosticExecution.trace,
             response,
             durationMs: Math.max(0, Date.now() - toolStartedAt),
           });
@@ -634,6 +637,7 @@ export async function runCodexAppServerSideQuestion(
         } catch (error) {
           emitDynamicToolErrorDiagnostic({
             ...diagnosticContext,
+            trace: diagnosticExecution.trace,
             durationMs: Math.max(0, Date.now() - toolStartedAt),
             terminalReason: runAbortController.signal.aborted
               ? resolveCodexToolAbortTerminalReason(runAbortController.signal)
@@ -1175,6 +1179,9 @@ async function createCodexSideToolBridge(input: {
         currentChannelId: input.params.currentChannelId,
       }).channelId,
       sandbox,
+      // A /btw fork has no ownership of the parent turn lifecycle, so it must
+      // not expose continuation or compaction controls from that parent.
+      disableContinuationTools: true,
       ...(toolConstructionPlan ? { toolConstructionPlan } : {}),
       emitBeforeToolCallDiagnostics: false,
       modelHasVision: runtimeModel.input?.includes("image") ?? false,

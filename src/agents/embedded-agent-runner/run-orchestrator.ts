@@ -2,6 +2,7 @@
  * Embedded-agent run orchestration implementation.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resetContinueDelegateTurnBudget } from "../../auto-reply/continuation/delegate-turn-admission.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -196,6 +197,9 @@ async function runEmbeddedAgentInternal(
 
   return enqueueSession(async () => {
     throwIfAborted();
+    if (params.sessionKey) {
+      resetContinueDelegateTurnBudget(params.sessionKey);
+    }
     // Same-session reads below must see any prior deferred transcript rewrite.
     // Checkpoint before the global lane so unrelated sessions can still start
     // while this session waits on its own maintenance lane.

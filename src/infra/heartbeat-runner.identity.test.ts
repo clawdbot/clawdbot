@@ -13,7 +13,7 @@ import {
 } from "./heartbeat-runner.test-utils.js";
 import { withSystemEventOwner } from "./system-event-ownership.js";
 import {
-  enqueueSystemEvent,
+  enqueueSystemEventRaw as enqueueSystemEvent,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "./system-events.js";

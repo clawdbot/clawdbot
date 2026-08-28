@@ -513,6 +513,8 @@ describe("buildGatewayReloadPlan", () => {
     "tools.allow",
     "tools.profile",
     "tools.byProvider.openai.deny",
+    "tools.sessions.visibility",
+    "agents.defaults.continuation.maxDelegatesPerTurn",
   ])("refreshes prepared model runtime policy without restarting subsystems: %s", (path) => {
     const plan = buildGatewayReloadPlan([path]);
 

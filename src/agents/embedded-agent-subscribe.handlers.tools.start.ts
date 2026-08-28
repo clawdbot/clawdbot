@@ -327,7 +327,14 @@ export function handleToolExecutionStart(
     hideFromChannelProgress?: boolean;
     lifecycleProvenance?: "nested";
   },
+  options?: { deliveryGeneration?: number },
 ): void | Promise<void> {
+  const isCurrentDeliveryGeneration = () =>
+    options?.deliveryGeneration === undefined ||
+    options.deliveryGeneration === ctx.getBlockReplyDeliveryGeneration();
+  if (!isCurrentDeliveryGeneration()) {
+    return;
+  }
   const startToolName = normalizeToolPolicyName(evt.toolName);
   ctx.state.liveEditDiffStateById.delete(evt.toolCallId);
   const isQuestionTool =
@@ -371,7 +378,7 @@ export function handleToolExecutionStart(
     }
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.then(
-        () => continueToolExecutionStart(),
+        () => (isCurrentDeliveryGeneration() ? continueToolExecutionStart() : undefined),
         (error: unknown) => {
           cancelQuestionPromptReservation();
           throw error;
@@ -382,6 +389,10 @@ export function handleToolExecutionStart(
   };
 
   const continueToolExecutionStart = (): void | Promise<void> => {
+    if (!isCurrentDeliveryGeneration()) {
+      cancelQuestionPromptReservation();
+      return;
+    }
     const rawToolName = evt.toolName;
     const toolName = normalizeToolPolicyName(rawToolName);
     const hideFromChannelProgress = evt.hideFromChannelProgress === true;
@@ -603,7 +614,7 @@ export function handleToolExecutionStart(
         const questionId = payload.questionId;
         void waitForAskUserPromptReady(questionId)
           .then((questions) => {
-            if (!questions) {
+            if (!questions || !isCurrentDeliveryGeneration()) {
               return;
             }
             if (toolName === "secrets") {

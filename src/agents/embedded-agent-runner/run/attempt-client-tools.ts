@@ -8,6 +8,7 @@ import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { isCodeModeExecTool } from "../../code-mode-control-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
+import { isCoreToolResultMediaTrustedName } from "../../embedded-agent-tool-media.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
 import {
@@ -77,6 +78,18 @@ export function prepareEmbeddedAttemptClientTools(params: {
       !getPluginToolMeta(tool) &&
       !getChannelAgentToolMeta(tool),
   );
+  const trustedPluginLocalMediaToolNames = new Set(
+    params.uncompactedEffectiveTools.flatMap((tool) => {
+      const name = tool.name?.trim();
+      // SAFETY: getPluginToolMeta keys its WeakMap by object identity; the cast only reconciles two structurally distinct AgentTool types.
+      const meta = getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0]);
+      return name && meta?.trustedLocalMedia === true ? [name] : [];
+    }),
+  );
+  const trustedLocalMediaToolNames = new Set([
+    ...[...coreBuiltinToolNames].filter(isCoreToolResultMediaTrustedName),
+    ...trustedPluginLocalMediaToolNames,
+  ]);
   const isReplaySafeTool = (tool: { name?: string }) =>
     isAgentToolReplaySafe(tool, params.replaySafetyOptions);
   const replaySafeTools = new Set(params.uncompactedEffectiveTools.filter(isReplaySafeTool));
@@ -189,8 +202,6 @@ export function prepareEmbeddedAttemptClientTools(params: {
   const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(allCustomTools));
   return {
     allCustomTools,
-    builtinToolNames,
-    coreBuiltinToolNames,
     coreReadAuthorized,
     clientToolCallSlots,
     clientToolDefs,
@@ -199,5 +210,11 @@ export function prepareEmbeddedAttemptClientTools(params: {
     codeModeExecToolNames,
     sideEffectToolOwners,
     sessionToolAllowlist,
+    subscriptionToolTrust: {
+      builtinToolNames,
+      coreBuiltinToolNames,
+      replaySafeToolNames,
+      trustedLocalMediaToolNames,
+    },
   };
 }

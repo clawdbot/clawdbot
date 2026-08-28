@@ -1,5 +1,6 @@
 // Daemon lifecycle config guard tests cover config checks before service lifecycle actions.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useHermeticOpenclawEnv } from "../../../test/vitest/hermetic-openclaw-env.js";
 import { VERSION } from "../../version.js";
 import {
   lifecycleTestRuntime,
@@ -104,6 +105,7 @@ function createServiceRunArgs() {
 }
 
 describe("runServiceRestart config pre-flight (#35862)", () => {
+  useHermeticOpenclawEnv();
   let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
 
   beforeAll(async () => {
@@ -201,6 +203,7 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
 });
 
 describe("runServiceStart config pre-flight (#35862)", () => {
+  useHermeticOpenclawEnv();
   let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
 
   beforeAll(async () => {
@@ -282,6 +285,7 @@ describe("runServiceStart config pre-flight (#35862)", () => {
 });
 
 describe("runServiceStop future-config guard", () => {
+  useHermeticOpenclawEnv();
   let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
 
   beforeAll(async () => {

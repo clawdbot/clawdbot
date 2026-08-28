@@ -14,6 +14,7 @@ import {
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
@@ -38,6 +39,7 @@ import {
 import {
   clearSubagentRunSteerRestart,
   markSubagentRunForSteerRestart,
+  recordAcceptedSubagentSteerDispatch,
   replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -45,6 +47,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const STEER_RATE_LIMIT_MS = 2_000;
 const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 const SUBAGENT_REPLY_HISTORY_LIMIT = 50;
+const log = createSubsystemLogger("agents/subagent-control");
 
 const steerRateLimit = new Map<string, number>();
 
@@ -325,8 +328,123 @@ export async function steerControlledSubagentRun(params: {
       text: `${resolveSubagentLabel(params.entry)} is already finished.`,
     };
   }
+  let acceptedSteerDispatchRecorded = false;
+  let acceptedSteerDispatchPersisted = false;
+  let acceptedSteerDispatchOwner:
+    | {
+        runId: string;
+        entry: SubagentRunRecord;
+        dispatch: NonNullable<SubagentRunRecord["acceptedSteerDispatch"]>;
+      }
+    | undefined;
+  let acceptedSessionEntry: SessionEntry | undefined;
+  const steerLifecycleGeneration = getAgentEventLifecycleGeneration();
+  const recordSteerDispatch = (
+    gatewayRunId: string,
+    phase: NonNullable<SubagentRunRecord["acceptedSteerDispatch"]>["phase"],
+    sessionEntry?: SessionEntry,
+  ) => {
+    const result = recordAcceptedSubagentSteerDispatch({
+      runId: params.entry.runId,
+      expected: currentEntry,
+      gatewayRunId,
+      phase,
+      lifecycleGeneration: steerLifecycleGeneration,
+      expectedSessionId: sessionEntry?.sessionId,
+      expectedLifecycleRevision: sessionEntry?.lifecycleRevision,
+    });
+    acceptedSteerDispatchRecorded = result.status !== "rejected";
+    acceptedSteerDispatchPersisted = result.status === "persisted";
+    if (result.status !== "rejected") {
+      acceptedSteerDispatchOwner = {
+        runId: result.ownerRunId,
+        entry: result.owner,
+        dispatch: result.dispatch,
+      };
+    }
+    return result;
+  };
+  const settleFailedSteerDispatch = async (error: string) => {
+    if (acceptedSteerDispatchRecorded && !acceptedSteerDispatchPersisted) {
+      // The sweeper first retries the strict receipt write, then attempts exact
+      // termination. Cleaning up here would create a crash window with no
+      // durable gateway run identity.
+      log.warn("steer termination deferred until accepted dispatch is durable", {
+        runId: params.entry.runId,
+        gatewayRunId: runId,
+        childSessionKey: params.entry.childSessionKey,
+      });
+      return {
+        status: "error" as const,
+        runId,
+        sessionKey: params.entry.childSessionKey,
+        sessionId: restartSessionId,
+        error,
+      };
+    }
+    const terminated = await terminateAcceptedCollectorRun({
+      childSessionKey: params.entry.childSessionKey,
+      gatewayRunId: runId,
+      expectedSessionId: acceptedSessionEntry?.sessionId,
+      expectedLifecycleRevision: acceptedSessionEntry?.lifecycleRevision,
+      callGateway: subagentMessagingDeps.callGateway,
+      timeoutMs: 10_000,
+    });
+    if (terminated) {
+      if (acceptedSteerDispatchOwner) {
+        clearSubagentRunSteerRestart(
+          acceptedSteerDispatchOwner.runId,
+          acceptedSteerDispatchOwner.entry,
+          acceptedSteerDispatchOwner.dispatch,
+        );
+      } else {
+        clearSubagentRunSteerRestart(params.entry.runId, currentEntry);
+      }
+    } else {
+      // The accepted run identity was persisted before remap. Keeping the
+      // steer-restart marker lets the registry sweeper retry exact termination
+      // without deleting a session the Gateway may still be writing.
+      log.warn("steer run termination unconfirmed; retained steer-restart ownership", {
+        runId: params.entry.runId,
+        gatewayRunId: runId,
+        childSessionKey: params.entry.childSessionKey,
+        acceptedDispatchRecorded: acceptedSteerDispatchRecorded,
+      });
+    }
+    return {
+      status: "error" as const,
+      runId,
+      sessionKey: params.entry.childSessionKey,
+      sessionId: restartSessionId,
+      error,
+    };
+  };
+  const initialDispatchOwner = recordSteerDispatch(idempotencyKey, "dispatching");
+  if (initialDispatchOwner.status !== "persisted") {
+    if (initialDispatchOwner.status !== "rejected") {
+      const rollbackCleared = clearSubagentRunSteerRestart(
+        initialDispatchOwner.ownerRunId,
+        initialDispatchOwner.owner,
+        initialDispatchOwner.dispatch,
+        true,
+      );
+      if (!rollbackCleared) {
+        // No RPC was sent, but an uncommitted rollback still needs the same
+        // durable reconciliation path instead of a permanent steer marker.
+        recordSteerDispatch(idempotencyKey, "accepted");
+      }
+    } else {
+      clearSubagentRunSteerRestart(params.entry.runId, currentEntry);
+    }
+    return {
+      status: "error",
+      runId,
+      sessionKey: params.entry.childSessionKey,
+      sessionId: restartSessionId,
+      error: "Failed to persist steer dispatch ownership.",
+    };
+  }
   try {
-    const steerLifecycleGeneration = getAgentEventLifecycleGeneration();
     const response = await subagentMessagingDeps.callGateway<{ runId: string }>({
       method: "agent",
       params: {
@@ -345,7 +463,6 @@ export async function steerControlledSubagentRun(params: {
       runId = response.runId;
     }
     recordSubagentControllerParticipant(params);
-    let acceptedSessionEntry: SessionEntry | undefined;
     try {
       acceptedSessionEntry = loadSessionEntry({
         storePath: targetSession.storePath,
@@ -357,25 +474,11 @@ export async function steerControlledSubagentRun(params: {
       // chat.abort remains the primary cleanup; exact session deletion is only
       // the fallback when the accepted session row can be resolved.
     }
-    const terminateUnownedSteer = () =>
-      terminateAcceptedCollectorRun({
-        childSessionKey: params.entry.childSessionKey,
-        gatewayRunId: runId,
-        expectedSessionId: acceptedSessionEntry?.sessionId,
-        expectedLifecycleRevision: acceptedSessionEntry?.lifecycleRevision,
-        callGateway: subagentMessagingDeps.callGateway,
-        timeoutMs: 10_000,
-      });
+    recordSteerDispatch(runId, "accepted", acceptedSessionEntry);
     if (!isAgentEventLifecycleGenerationCurrent(steerLifecycleGeneration)) {
-      await terminateUnownedSteer();
-      clearSubagentRunSteerRestart(params.entry.runId, currentEntry);
-      return {
-        status: "error",
-        runId,
-        sessionKey: params.entry.childSessionKey,
-        sessionId: restartSessionId,
-        error: "Gateway lifecycle changed before the steered run could be registered.",
-      };
+      return await settleFailedSteerDispatch(
+        "Gateway lifecycle changed before the steered run could be registered.",
+      );
     }
 
     const replaced = replaceSubagentRunAfterSteerCore({
@@ -390,17 +493,13 @@ export async function steerControlledSubagentRun(params: {
       task: params.message,
     });
     if (!replaced) {
-      await terminateUnownedSteer();
-      clearSubagentRunSteerRestart(params.entry.runId, currentEntry);
-      return {
-        status: "error",
-        runId,
-        sessionKey: params.entry.childSessionKey,
-        sessionId: restartSessionId,
-        error: "failed to replace steered subagent run",
-      };
+      return await settleFailedSteerDispatch("failed to replace steered subagent run");
     }
   } catch (err) {
+    if (acceptedSteerDispatchRecorded) {
+      recordSteerDispatch(runId, "accepted", acceptedSessionEntry);
+      return await settleFailedSteerDispatch(formatErrorMessage(err));
+    }
     clearSubagentRunSteerRestart(params.entry.runId, currentEntry);
     const error = formatErrorMessage(err);
     return {

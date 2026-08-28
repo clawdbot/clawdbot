@@ -34,6 +34,8 @@ type BundledPluginRecord = {
 
 const EXTENSIONS_ROOT = path.resolve(process.cwd(), "extensions");
 const DIR_ID_EXCEPTIONS = new Map<string, string>([
+  // Public speech-plugin id was renamed without moving the workspace package directory.
+  ["fish-audio", "fish-audio-speech"],
   // Historical directory name kept until a wider repo cleanup is worth the churn.
   ["kimi-coding", "kimi"],
 ]);

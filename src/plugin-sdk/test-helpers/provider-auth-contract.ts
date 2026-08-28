@@ -80,8 +80,8 @@ function buildOpenAICodexOAuthResult(params: {
   access: string;
   refresh: string;
   expires: number;
-  email?: string;
   defaultModel: string;
+  email?: string;
 }) {
   return {
     profiles: [

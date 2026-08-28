@@ -47,6 +47,8 @@ export type UserTurnInput = {
   } | null;
   timestamp?: number;
   idempotencyKey?: string;
+  /** Private durable receipts for managed system events adopted by this turn. */
+  sessionDeliveryAckIds?: readonly string[];
   /** Durable transcript message reference used to render and hydrate replies. */
   replyToId?: string;
   /** Bounded display fallback for replies whose target is outside loaded history. */
@@ -162,6 +164,7 @@ export type UserTurnTranscriptRecorder = {
   confirmSteerTargetRunIdForPersistence?: (targetRunId: string) => Promise<void>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
+  replaceSessionDeliveryAckIds?: (deliveryIds: readonly string[]) => boolean;
   setAdmissionHandler?: (handler: (admission: UserTurnTranscriptAdmissionReceipt) => void) => void;
   markSentToProvider?: () => void;
   markRuntimePersistencePending: (pending: Promise<void>) => void;

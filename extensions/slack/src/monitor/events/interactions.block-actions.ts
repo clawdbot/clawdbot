@@ -6,7 +6,7 @@ import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-r
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
-import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
+import { requestPluginHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import {
   parseStrictFiniteNumber,
   timestampMsToIsoString,
@@ -1003,7 +1003,7 @@ function enqueueSlackBlockActionEvent(params: {
     },
   });
   if (queued) {
-    requestHeartbeat({
+    requestPluginHeartbeat({
       source: "hook",
       intent: "immediate",
       reason: "hook:slack-interaction",
