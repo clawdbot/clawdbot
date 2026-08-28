@@ -112,31 +112,31 @@ ${publish(2)}
       const abortController = new AbortController();
       const stdout = vi.spyOn(process.stdout, "write");
       let output = "";
-      const run = startProcessWatchdogFixture(async () =>
-        runner === "preparation"
-          ? runNodeStep("nested", [wrapper], 100, { abortController })
-          : runManagedCommand({
-              bin: process.execPath,
-              args: [wrapper],
-              stdio: runner === "managed-inherit" ? "inherit" : ["ignore", "pipe", "pipe"],
-              timeoutMs: 100,
-              onReady: (child) =>
-                child.stdout?.on("data", (chunk) => {
-                  output += String(chunk);
-                }),
-            }),
-      );
-      const outcome = run.runPromise.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+      const releaseAndWait = startProcessWatchdogFixture(() => {
+        const command =
+          runner === "preparation"
+            ? runNodeStep("nested", [wrapper], 100, { abortController })
+            : runManagedCommand({
+                bin: process.execPath,
+                args: [wrapper],
+                stdio: runner === "managed-inherit" ? "inherit" : ["ignore", "pipe", "pipe"],
+                timeoutMs: 100,
+                onReady: (child) =>
+                  child.stdout?.on("data", (chunk) => {
+                    output += String(chunk);
+                  }),
+              });
+        return command.then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      });
       const pids: number[] = [];
       try {
         for (const pidPath of pidPaths) pids.push(await waitForPidFile(pidPath, 10_000));
         expect(pids.every(isProcessAlive)).toBe(true);
         if (abort) abortController.abort();
-        run.releaseTimeout();
-        expect(await outcome).toMatchObject({
+        expect(await releaseAndWait()).toMatchObject({
           message: expect.stringContaining(
             abort ? "canceled after sibling failure" : "timed out after 100ms",
           ),
@@ -153,8 +153,7 @@ ${publish(2)}
           expect(stdout.mock.calls.some(([chunk]) => String(chunk) === "shutdown-tail")).toBe(true);
         } else expect(output).toBe("shutdown-tail");
       } finally {
-        run.releaseTimeout();
-        await outcome;
+        await releaseAndWait();
         stdout.mockRestore();
         for (const pidPath of [...pidPaths].reverse()) {
           if (!fs.existsSync(pidPath)) continue;
@@ -792,36 +791,40 @@ require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(le
       ];
       let child: ReturnType<typeof spawn> | undefined;
       let escapedPid = 0;
-      const run = startProcessWatchdogFixture(async () =>
-        mode === "timeout"
-          ? runManagedCommand({
-              bin: process.execPath,
-              args,
-              stdio: ["ignore", "pipe", "pipe"],
-              timeoutMs: 100,
-              onReady: (owned) => {
-                child = owned;
-              },
-            })
-          : runNodeStepsInParallel([
-              { label: "blocked", args, timeoutMs: 100 },
-              {
-                label: "primary",
-                args: [
-                  "-e",
-                  `setInterval(() => { if (require('node:fs').existsSync(${JSON.stringify(failPath)})) process.exit(2); }, 5);`,
-                ],
-                timeoutMs: 30_000,
-              },
-            ]),
-      );
-      const outcome = run.runPromise.catch((error: unknown) => error);
+      let outcome!: Promise<unknown>;
+      const releaseAndWait = startProcessWatchdogFixture(() => {
+        const command =
+          mode === "timeout"
+            ? runManagedCommand({
+                bin: process.execPath,
+                args,
+                stdio: ["ignore", "pipe", "pipe"],
+                timeoutMs: 100,
+                onReady: (owned) => {
+                  child = owned;
+                },
+              })
+            : runNodeStepsInParallel([
+                { label: "blocked", args, timeoutMs: 100 },
+                {
+                  label: "primary",
+                  args: [
+                    "-e",
+                    `setInterval(() => { if (require('node:fs').existsSync(${JSON.stringify(failPath)})) process.exit(2); }, 5);`,
+                  ],
+                  timeoutMs: 30_000,
+                },
+              ]);
+        // Observe sibling cancellation without releasing the blocked watchdog.
+        outcome = command.catch((error: unknown) => error);
+        return outcome;
+      });
       try {
         escapedPid = await waitForPidFile(pidPath, 10_000);
         const parentPid = await waitForPidFile(parentPidPath, 10_000);
         const canceledAt = Date.now();
         if (mode === "sibling failure") fs.writeFileSync(failPath, "fail");
-        else run.releaseTimeout();
+        else await releaseAndWait();
         const failure = await outcome;
         const cleanupFailure = {
           code: "EPROCESSGROUP_CLEANUP_FAILED",
@@ -842,9 +845,8 @@ require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(le
         expect(isProcessAlive(parentPid)).toBe(false);
         expect(isProcessAlive(escapedPid)).toBe(true);
       } finally {
-        run.releaseTimeout();
         fs.writeFileSync(failPath, "fail");
-        await outcome;
+        await releaseAndWait();
         if (!escapedPid && fs.existsSync(pidPath))
           escapedPid = Number(fs.readFileSync(pidPath, "utf8"));
         if (escapedPid && isProcessAlive(escapedPid)) {

@@ -389,24 +389,22 @@ describe("run-oxlint", () => {
       const runner = join(tempDir, "timeout-runner.mjs");
       const childPidPath = join(tempDir, "child.pid");
       let childPid = 0;
-      let releaseTimeout = () => {};
-      let command: Promise<number> | undefined;
       const childScript = [
         "const fs = require('node:fs');",
         "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
         "fs.writeFileSync(process.env.CHILD_PID_PATH + '.tmp', String(process.pid));",
         "fs.renameSync(process.env.CHILD_PID_PATH + '.tmp', process.env.CHILD_PID_PATH);",
       ].join("\n");
-      try {
-        writeModule(runner, [
-          "import { spawn } from 'node:child_process';",
-          `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-          "process.on('SIGTERM', () => process.exit(0));",
-          "setInterval(() => {}, 1000);",
-        ]);
+      writeModule(runner, [
+        "import { spawn } from 'node:child_process';",
+        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ]);
 
-        // The watchdog must test teardown, not win a race against child startup.
-        const run = startProcessWatchdogFixture(() =>
+      // The watchdog must test teardown, not win a race against child startup.
+      const releaseAndWait = startProcessWatchdogFixture(() =>
+        expect(
           runShard({
             env: {
               ...process.env,
@@ -419,24 +417,23 @@ describe("run-oxlint", () => {
             runner,
             shard: { name: "timeout-group-test", args: [] },
           }),
-        );
-        command = run.runPromise;
-        releaseTimeout = run.releaseTimeout;
-
+        ).resolves.toBe(124),
+      );
+      try {
         childPid = await waitForPidFile(childPidPath, 15_000);
         expect(isProcessAlive(childPid)).toBe(true);
-        releaseTimeout();
-
-        await expect(command).resolves.toBe(124);
+        await releaseAndWait();
         await waitFor(() => !isProcessAlive(childPid), 15_000);
       } finally {
-        releaseTimeout();
-        await command;
-        if (!childPid && existsSync(childPidPath))
-          childPid = Number(readFileSync(childPidPath, "utf8"));
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-          await waitForDead(childPid, 2_000);
+        try {
+          await releaseAndWait();
+        } finally {
+          if (!childPid && existsSync(childPidPath))
+            childPid = Number(readFileSync(childPidPath, "utf8"));
+          if (childPid && isProcessAlive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+            await waitForDead(childPid, 2_000);
+          }
         }
       }
     },
