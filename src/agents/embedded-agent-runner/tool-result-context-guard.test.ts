@@ -2,11 +2,18 @@
 // prechecks, and context-engine loop hooks for oversized tool outputs.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { Agent, type AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { createAssistantMessageEventStream, type Message } from "openclaw/plugin-sdk/llm";
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine, ContextEngineRuntimeSettings } from "../../context-engine/types.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
-import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
+import { convertToLlm } from "../sessions/messages.js";
+import {
+  castAgentMessage,
+  makeAgentAssistantMessage,
+} from "../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { resolveLiveToolResultMaxChars } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
@@ -265,6 +272,135 @@ describe("installToolResultContextGuard", () => {
 
     expect(transformed).toBe(contextForNextCall);
   });
+
+  it.each([64, 8_192])(
+    "reserves or omits %i characters of non-text content without exceeding the cap",
+    async (metadataChars) => {
+      const metadata = { type: "custom", value: "m".repeat(metadataChars) };
+      const hint = { type: "text", text: "Inspect src/fixture.ts before retrying." };
+      const source = castAgentMessage({
+        ...makeToolResult("call_blocks", ""),
+        content: [{ type: "text", text: "x".repeat(6_000) }, metadata, hint],
+        details: { privateReference: "not model context" },
+      });
+      const original = structuredClone(source);
+      const transformed = (await applyGuardToContext(
+        makeGuardableAgent(),
+        [source],
+        8_192,
+      )) as AgentMessage[];
+      const projected = expectDefined(transformed[0], "bounded mixed result");
+      expect(
+        estimateMessageCharsCached(projected, createMessageCharEstimateCache()),
+      ).toBeLessThanOrEqual(8_192);
+      expect(source).toEqual(original);
+      expect(projected).not.toHaveProperty("details");
+      expect(getAllToolResultText(projected)).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+      expect(getAllToolResultText(projected)).toContain(hint.text);
+      const content = (projected as { content: unknown[] }).content;
+      if (metadataChars === 64) {
+        expect(content).toContain(metadata);
+        expect(content).toContainEqual(hint);
+      } else {
+        expect(content).not.toContain(metadata);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "delivers actionable tool text through the real agent loop (separate block: %s)",
+    async (separate) => {
+      const hint = "Inspect src/fixture.ts before retrying.";
+      const preamble = "progress output\n".repeat(400);
+      const sourceTexts = separate
+        ? [preamble, hint]
+        : [preamble + "Error: missing import; " + hint];
+      const content = sourceTexts.map((text) => ({ type: "text" as const, text }));
+      const original = structuredClone(content);
+      const requests: Message[][] = [];
+      const execute = vi.fn(async () => ({ content, details: { privateReference: "fixture" } }));
+      const model = makeProviderModelFixture({
+        id: "test-model",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://example.test",
+        contextWindow: 8_192,
+      });
+      const agent = new Agent({
+        initialState: {
+          model,
+          tools: [
+            {
+              name: "diagnostic",
+              label: "Diagnostic",
+              description: "Read diagnostic output",
+              parameters: Type.Object({}),
+              execute,
+            },
+          ],
+        },
+        convertToLlm,
+        streamFn: (_model, context) => {
+          requests.push(structuredClone(context.messages));
+          const result = context.messages.find((message) => message.role === "toolResult");
+          const hasHint = result && getAllToolResultText(result).includes(hint);
+          const message = makeAgentAssistantMessage({
+            content:
+              requests.length === 1
+                ? [{ type: "toolCall", id: "call_diagnostic", name: "diagnostic", arguments: {} }]
+                : [{ type: "text", text: hasHint ? hint : "The diagnostic hint was unavailable." }],
+            stopReason: requests.length === 1 ? "toolUse" : "stop",
+          });
+          const stream = createAssistantMessageEventStream();
+          stream.push({
+            type: "done",
+            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+            message,
+          });
+          stream.end();
+          return stream;
+        },
+      });
+      const dispose = installToolResultContextGuard({
+        agent,
+        contextWindowTokens: model.contextWindow,
+      });
+      try {
+        await agent.prompt("Read the diagnostic and report its next step.");
+      } finally {
+        agent.abort();
+        await agent.waitForIdle();
+        dispose();
+      }
+
+      expect(execute).toHaveBeenCalledOnce();
+      expect(requests).toHaveLength(2);
+      expect(content).toEqual(original);
+      const stored = expectDefined(
+        agent.state.messages.find((message) => message.role === "toolResult"),
+        "raw agent tool result",
+      );
+      expect(stored.content).toEqual(original);
+      expect(stored).toHaveProperty("details.privateReference", "fixture");
+      const projected = expectDefined(
+        requests[1]?.find((message) => message.role === "toolResult"),
+        "provider-bound tool result",
+      );
+      expect(projected).not.toHaveProperty("details");
+      expect(
+        estimateMessageCharsCached(projected, createMessageCharEstimateCache()),
+      ).toBeLessThanOrEqual(model.contextWindow);
+      expect(getAllToolResultText(projected)).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+      expect(getAllToolResultText(projected)).toContain(hint);
+      expect(agent.state.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: hint }],
+        stopReason: "stop",
+      });
+      expect(agent.state.isStreaming).toBe(false);
+      expect(agent.state.errorMessage).toBeUndefined();
+    },
+  );
 
   it("does not preemptively overflow large non-tool context that is still under the high-water mark", async () => {
     const agent = makeGuardableAgent();
