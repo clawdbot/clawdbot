@@ -248,7 +248,7 @@ async function updateCommandInternal(
   }
 
   const installKind = updateStatus.installKind;
-  const channel =
+  const selectedChannel =
     requestedChannel ??
     storedChannel ??
     (installKind === "git"
@@ -257,7 +257,7 @@ async function updateCommandInternal(
           currentVersion: VERSION,
           installKind,
         }).channel);
-  if (channel === "extended-stable" && installKind === "git") {
+  if (selectedChannel === "extended-stable" && installKind === "git") {
     await reportPreMutationUpdateFailure({
       root,
       installKind,
@@ -267,17 +267,19 @@ async function updateCommandInternal(
     });
     return;
   }
-  // An effective dev channel (stored or explicit) selects the git flow — the
-  // documented dev contract is a git checkout. Exception: --tag is a one-run
-  // package-target override, so it keeps a stored-dev package install on the
-  // package path; only an explicitly requested dev channel outranks it.
-  const explicitTag = normalizeTag(opts.tag);
-  const switchToGit =
-    installKind !== "git" &&
-    (requestedChannel === "dev" || (channel === "dev" && explicitTag === null));
+  const switchToGit = requestedChannel === "dev" && installKind !== "git";
   const switchToPackage =
     requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
   const updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
+  const channel =
+    requestedChannel ??
+    storedChannel ??
+    (updateInstallKind === "git"
+      ? DEFAULT_GIT_CHANNEL
+      : resolveEffectiveUpdateChannel({
+          currentVersion: VERSION,
+          installKind: updateInstallKind,
+        }).channel);
   if (channel === "dev" && requestedChannel !== "dev") {
     const resolvedDevTarget = readDevUpdateTargetOrExit();
     if (!resolvedDevTarget.ok) {
@@ -286,6 +288,7 @@ async function updateCommandInternal(
     devTarget = resolvedDevTarget.target;
   }
 
+  const explicitTag = normalizeTag(opts.tag);
   const unsupportedMainTag = updateInstallKind === "package" && explicitTag === "main";
   if ((channel === "extended-stable" && explicitTag) || unsupportedMainTag) {
     await reportPreMutationUpdateFailure({

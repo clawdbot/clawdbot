@@ -3888,6 +3888,14 @@ describe("update-cli", () => {
       expectedPersistedChannel: undefined,
     },
     {
+      name: "keeps explicit dev channel precedence over a one-off --tag",
+      installKind: "package" as const,
+      options: { channel: "dev", tag: "latest", yes: true },
+      storedChannel: "dev" as const,
+      expectedChannel: "dev" as const,
+      expectedPersistedChannel: undefined,
+    },
+    {
       name: "switches git installs to package mode for explicit beta and persists it",
       installKind: "git" as const,
       options: { channel: "beta" },
@@ -3912,8 +3920,8 @@ describe("update-cli", () => {
       }
 
       if (installKind === "package" && expectedChannel !== undefined) {
-        // Routing a package install into the git flow performs a real transactional
-        // clone. Left on the default <home>/openclaw it outlives this case and makes
+        // Git commands are mocked, but package-to-git routing stages real directories.
+        // Left on the default <home>/openclaw they outlive this case and make
         // a later test fail with "OPENCLAW_GIT_DIR appeared while cloning".
         await withEnvAsync({ OPENCLAW_GIT_DIR: createCaseDir("openclaw-update-git") }, async () => {
           await updateCommand(options);
