@@ -1,14 +1,14 @@
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
-import { describe, expect, it, vi } from "vitest";
-import { createHostChannelInboundEventContextBuilder } from "../../../src/channels/inbound-event/host-context-builder.js";
 import {
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
+  createHostChannelInboundEventContextBuilder,
   readChannelContextAdmissionEvidence,
   registerChannelAdmissionEvidenceOwner,
-} from "../../../src/channels/message-access/admission-evidence.js";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
+import { describe, expect, it, vi } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
 import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
