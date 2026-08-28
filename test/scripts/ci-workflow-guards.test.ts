@@ -10615,6 +10615,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow.on).toHaveProperty("workflow_dispatch");
     expect(job["runs-on"]).toBe("ubuntu-24.04");
     expect(job.environment).toBe("qa-live-shared");
+    expect(job["timeout-minutes"]).toBe(270);
     expect(job.permissions).toEqual({
       checks: "write",
       contents: "read",
@@ -10642,7 +10643,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       },
       run: "node scripts/pr-crabbox-gate-publisher.mjs",
     });
-    expect(job.steps.slice(2, 4)).toMatchObject([
+    expect(job.steps[2].run).toContain("crabbox_0.46.0_linux_amd64.tar.gz");
+    expect(job.steps[2].run).toContain(
+      "6a9341e810307356361dbed4c4b84be28a036b5cc291af1566d2ccd376570d90",
+    );
+    expect(job.steps.slice(3, 5)).toMatchObject([
       {
         id: "app-token",
         uses: CREATE_GITHUB_APP_TOKEN_V3,
@@ -10659,6 +10664,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'CRABBOX_GATE_CHECK_NAME = "openclaw/crabbox-gate"',
     );
     expect(publisher).not.toContain('const CHECK_NAME = "openclaw/ci-gate"');
-    expect(workflow.on.workflow_dispatch.inputs).toHaveProperty("base_sha");
+    expect(Object.keys(workflow.on.workflow_dispatch.inputs).toSorted()).toEqual([
+      "base_sha",
+      "head_sha",
+      "pr_number",
+    ]);
   });
 });

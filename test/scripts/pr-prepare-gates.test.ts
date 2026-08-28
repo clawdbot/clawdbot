@@ -258,24 +258,6 @@ describe("resolve_pr_gates_remote_mode", () => {
 });
 
 describe("remote Crabbox AWS gate contract", () => {
-  it("accepts only a successful released AWS timing stamp", () => {
-    const dir = tempDirs.make("openclaw-pr-gates-aws-stamp-");
-    const log = join(dir, "gate.log");
-    writeFileSync(
-      log,
-      [
-        '{"provider":"aws","leaseId":"cbx_bad","runId":"run_bad","exitCode":1,"runStatus":"failed","leaseStopped":true}',
-        '{"provider":"aws","leaseId":"cbx_ok","runId":"run_ok","exitCode":0,"runStatus":"succeeded","leaseStopped":true}',
-        "",
-      ].join("\n"),
-    );
-    const result = runGatesBash(
-      `read_remote_crabbox_aws_gate_stamp '${log}' | jq -r '[.runId, .leaseId] | @tsv'`,
-    );
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("run_ok\tcbx_ok");
-  });
-
   it("builds the canonical deterministic proof command", () => {
     const planPath = join(tempDirs.make("openclaw-crabbox-command-"), "plan.json");
     writeFileSync(
@@ -312,56 +294,64 @@ describe("remote Crabbox AWS gate contract", () => {
     expect(result.stdout).not.toContain("pnpm check:changed");
   });
 
-  it("bounds the direct AWS lease for the PR-derived proof", () => {
-    const dir = tempDirs.make("openclaw-pr-gates-aws-run-");
+  it("records only trusted publisher metadata after synchronous success", () => {
+    const dir = tempDirs.make("openclaw-pr-gates-aws-publisher-");
     const workDir = join(dir, "work");
-    const crabbox = join(dir, "crabbox");
     mkdirSync(workDir);
     mkdirSync(join(workDir, ".local"));
-    writeFileSync(
-      crabbox,
-      [
-        "#!/bin/sh",
-        'if [ "$1" = "config" ]; then',
-        `  printf '%s\\n' '{"aws":{"instanceProfile":""},"coordinator":"https://example.test"}'`,
-        "  exit 0",
-        "fi",
-        "printf 'ARG:%s\\n' \"$@\"",
-        `printf '%s\\n' '{"provider":"aws","leaseId":"cbx_stub","runId":"run_stub","exitCode":0,"runStatus":"succeeded","leaseStopped":true}'`,
-      ].join("\n"),
-    );
-    chmodSync(crabbox, 0o755);
+    const base = "a".repeat(40);
+    const head = "b".repeat(40);
+    const runUrl = "https://github.com/openclaw/openclaw/actions/runs/99";
 
     const result = runGatesBash(
       [
-        "require_active_org_admin_for_crabbox_gate() { printf 'maintainer\\n'; }",
-        `install_crabbox_release_v046() { printf '%s\\n' '${crabbox}'; }`,
-        "git() { printf '#!/bin/sh\\n'; }",
-        "node() {",
-        '  case "$*" in',
-        `    *crabbox-gate-plan.mts*) printf '%s\\n' '{"baseSha":"${"a".repeat(40)}","changedPaths":[],"headSha":"${"b".repeat(40)}","targets":[],"version":1,"digest":"${"c".repeat(64)}"}' ;;`,
-        "    *pr-crabbox-gate-publisher.mjs*) printf 'true\\n' ;;",
-        `    *) command '${process.execPath}' "$@" ;;`,
-        "  esac",
+        "require_active_org_admin_for_crabbox_gate() { :; }",
+        `read_crabbox_gate_pr_binding() { printf '%s\\n' '${base}'; }`,
+        "ci_dispatch() {",
+        `  printf '%s\\n' '${JSON.stringify({
+          actionsRunUrl: runUrl,
+          backend: "crabbox",
+          baseSha: base,
+          headSha: head,
+          leaseId: "cbx_stub",
+          provider: "aws",
+          runId: "run_stub",
+          target: "linux",
+        })}'`,
         "}",
-        `run_remote_crabbox_aws_gate 424242 '${"a".repeat(40)}' '${"b".repeat(40)}' >/dev/null`,
+        `finalize_remote_crabbox_aws_gate 424242 '${head}'`,
+        "cat .local/gates.env",
       ].join("\n"),
       { cwd: workDir },
     );
 
     expect(result.status, result.stderr).toBe(0);
-    const args = readFileSync(join(workDir, ".local/gates-crabbox-aws.log"), "utf8")
-      .split("\n")
-      .filter((line) => line.startsWith("ARG:"))
-      .map((line) => line.slice(4));
-    const idleTimeoutIndex = args.indexOf("--idle-timeout");
-    expect(idleTimeoutIndex).toBeGreaterThan(-1);
-    expect(args.slice(idleTimeoutIndex, idleTimeoutIndex + 4)).toEqual([
-      "--idle-timeout",
-      "90m",
-      "--ttl",
-      "240m",
-    ]);
+    expect(result.stdout).toContain("GATES_MODE=remote_crabbox_aws");
+    expect(result.stdout).toContain(`FULL_GATES_HEAD_SHA=${head}`);
+    expect(result.stdout).toContain("REMOTE_GATES_PROVIDER=aws");
+    expect(result.stdout).toContain("REMOTE_GATES_RUN_ID=run_stub");
+    expect(result.stdout).toContain("REMOTE_GATES_LEASE_ID=cbx_stub");
+    expect(result.stdout).toContain(`REMOTE_GATES_RUN_URL=${runUrl}`);
+  });
+
+  it("keeps pending evidence when the protected publisher fails", () => {
+    const workDir = join(tempDirs.make("openclaw-pr-gates-aws-failure-"), "work");
+    mkdirSync(workDir, { recursive: true });
+    mkdirSync(join(workDir, ".local"));
+    writeFileSync(join(workDir, ".local/gates.env"), "GATES_MODE=remote_crabbox_aws_pending\n");
+    const result = runGatesBash(
+      [
+        "require_active_org_admin_for_crabbox_gate() { :; }",
+        `read_crabbox_gate_pr_binding() { printf '%s\\n' '${"a".repeat(40)}'; }`,
+        "ci_dispatch() { return 1; }",
+        `finalize_remote_crabbox_aws_gate 424242 '${"b".repeat(40)}'`,
+      ].join("\n"),
+      { cwd: workDir },
+    );
+    expect(result.status).not.toBe(0);
+    expect(readFileSync(join(workDir, ".local/gates.env"), "utf8")).toBe(
+      "GATES_MODE=remote_crabbox_aws_pending\n",
+    );
   });
 });
 

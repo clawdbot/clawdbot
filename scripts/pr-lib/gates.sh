@@ -218,78 +218,6 @@ require_active_org_admin_for_crabbox_gate() {
   printf '%s\n' "$actor"
 }
 
-resolve_crabbox_release_asset() {
-  local os arch checksum
-  case "$(uname -s)" in
-    Darwin) os=darwin ;;
-    Linux) os=linux ;;
-    *)
-      echo "Crabbox AWS PR gates support Darwin and Linux operators only." >&2
-      return 1
-      ;;
-  esac
-  case "$(uname -m)" in
-    x86_64 | amd64) arch=amd64 ;;
-    arm64 | aarch64) arch=arm64 ;;
-    *)
-      echo "Unsupported Crabbox operator architecture: $(uname -m)" >&2
-      return 1
-      ;;
-  esac
-  case "$os-$arch" in
-    darwin-amd64) checksum=18035770b5b654114fa95d2e468268b13c69862137cc1f083bd674bbb2bf83bb ;;
-    darwin-arm64) checksum=2216da0acbcc6e822ee341ec313aaab58875db951fa1daf0d13dd710ebfba9b8 ;;
-    linux-amd64) checksum=6a9341e810307356361dbed4c4b84be28a036b5cc291af1566d2ccd376570d90 ;;
-    linux-arm64) checksum=d95730856cd3909dab0703ec024e3017a094fff2a065516782b47019fec9533d ;;
-  esac
-  printf '%s\t%s\n' "crabbox_0.46.0_${os}_${arch}.tar.gz" "$checksum"
-}
-
-install_crabbox_release_v046() {
-  local asset_record asset checksum release_dir archive actual_checksum
-  asset_record=$(resolve_crabbox_release_asset)
-  asset="${asset_record%%$'\t'*}"
-  checksum="${asset_record#*$'\t'}"
-  release_dir=".local/crabbox-v0.46.0"
-  archive="$release_dir/$asset"
-  rm -rf "$release_dir"
-  mkdir -p "$release_dir"
-  gh_plain release download v0.46.0 \
-    --repo openclaw/crabbox \
-    --pattern "$asset" \
-    --pattern checksums.txt \
-    --dir "$release_dir"
-  actual_checksum=$(shasum -a 256 "$archive" | awk '{print $1}')
-  if [ "$actual_checksum" != "$checksum" ] ||
-    ! awk -v checksum="$checksum" -v asset="$asset" '$1 == checksum && $2 == asset { found = 1 } END { exit !found }' "$release_dir/checksums.txt"; then
-    echo "Crabbox v0.46.0 release checksum validation failed for $asset." >&2
-    return 1
-  fi
-  tar -xzf "$archive" -C "$release_dir"
-  if [ ! -x "$release_dir/crabbox" ] ||
-    [ "$("$release_dir/crabbox" version | awk '{print $NF}')" != "0.46.0" ]; then
-    echo "Downloaded Crabbox release is not executable v0.46.0." >&2
-    return 1
-  fi
-  printf '%s\n' "$release_dir/crabbox"
-}
-
-read_remote_crabbox_aws_gate_stamp() {
-  local log_file="$1"
-  jq -c -R '
-    fromjson?
-    | select(type == "object")
-    | select(
-        .provider == "aws"
-        and .exitCode == 0
-        and .runStatus == "succeeded"
-        and .leaseStopped == true
-        and ((.runId // "") | startswith("run_"))
-        and ((.leaseId // "") | startswith("cbx_"))
-      )
-  ' "$log_file" | tail -n 1
-}
-
 read_crabbox_gate_pr_binding() {
   local pr="$1"
   local expected_head="$2"
@@ -313,98 +241,38 @@ read_crabbox_gate_pr_binding() {
   printf '%s\n' "$base_sha"
 }
 
-run_remote_crabbox_aws_gate() {
-  local pr="$1"
-  local base_sha="$2"
-  local head_sha="$3"
-  local actor crabbox_bin bootstrap_path bootstrap_sha command log_file config_json coordinator plan_file
-  actor=$(require_active_org_admin_for_crabbox_gate)
-  crabbox_bin=$(install_crabbox_release_v046)
-  bootstrap_path=".local/crabbox-untrusted-bootstrap.sh"
-  git show refs/remotes/origin/main:scripts/crabbox-untrusted-bootstrap.sh >"$bootstrap_path"
-  chmod 700 "$bootstrap_path"
-  bootstrap_sha=$(shasum -a 256 "$bootstrap_path" | awk '{print $1}')
-  plan_file=".local/crabbox-gate-plan.json"
-  node --import "$script_parent_dir/tsx.mjs" \
-    "$script_parent_dir/pr-lib/crabbox-gate-plan.mts" \
-    --base "$base_sha" \
-    --head "$head_sha" \
-    >"$plan_file"
-  config_json=$(
-    env -u CRABBOX_AWS_INSTANCE_PROFILE \
-      "$crabbox_bin" config show --provider aws --json
-  )
-  if ! printf '%s\n' "$config_json" | jq -e '(.aws.instanceProfile // "") == ""' >/dev/null; then
-    echo "Crabbox AWS PR gate refuses a resolved instance profile." >&2
-    return 1
-  fi
-  coordinator=$(printf '%s\n' "$config_json" | jq -r '.coordinator // empty')
-  case "$coordinator" in
-    https://*) ;;
-    *)
-      echo "Crabbox AWS PR gate requires a resolved HTTPS coordinator URL." >&2
-      return 1
-      ;;
-  esac
-  command=$(
-    node "$script_parent_dir/pr-crabbox-gate-publisher.mjs" \
-      --print-command "$plan_file" "$bootstrap_sha"
-  )
-  log_file=".local/gates-crabbox-aws.log"
-  echo "Running exact-base/head Crabbox AWS build, check, and PR-derived test proof as active org admin $actor." >&2
-  run_quiet_logged "Crabbox AWS exact-head gates" "$log_file" \
-    env \
-    -u AWS_ACCESS_KEY_ID \
-    -u AWS_SECRET_ACCESS_KEY \
-    -u AWS_SESSION_TOKEN \
-    -u AWS_PROFILE \
-    -u CRABBOX_AWS_INSTANCE_PROFILE \
-    -u CRABBOX_TAILSCALE_AUTH_KEY \
-    -u CRABBOX_TAILSCALE_EXIT_NODE \
-    -u CRABBOX_TAILSCALE_ROUTES \
-    CRABBOX_ENV_ALLOW=CI \
-    "$crabbox_bin" run \
-    --provider aws \
-    --target linux \
-    --class standard \
-    --market on-demand \
-    --network public \
-    --tailscale=false \
-    --no-hydrate \
-    --fresh-pr "openclaw/openclaw#$pr" \
-    --idle-timeout 90m \
-    --ttl 240m \
-    --stop-after always \
-    --timing-json \
-    --label "openclaw-pr-gate:$pr:$base_sha:$head_sha" \
-    --script "$bootstrap_path" \
-    -- "$head_sha" /bin/bash -lc "$command" >&2
-  local stamp
-  stamp=$(read_remote_crabbox_aws_gate_stamp "$log_file")
-  if [ -z "$stamp" ]; then
-    echo "Crabbox AWS gate passed but no successful, released v0.46 timing record was found." >&2
-    return 1
-  fi
-  printf '%s\n' "$stamp" |
-    jq -c \
-      --arg bootstrapSha256 "$bootstrap_sha" \
-      --arg actor "$actor" \
-      --arg coordinator "$coordinator" \
-      '. + {bootstrapSha256: $bootstrapSha256, actor: $actor, coordinator: $coordinator}'
-}
-
 finalize_remote_crabbox_aws_gate() {
   local pr="$1"
   local head_sha="$2"
-  local base_sha stamp run_id lease_id coordinator run_url bootstrap_sha
+  local base_sha log_file stamp run_id lease_id run_url
   base_sha=$(read_crabbox_gate_pr_binding "$pr" "$head_sha") || return 1
-  stamp=$(run_remote_crabbox_aws_gate "$pr" "$base_sha" "$head_sha")
+  require_active_org_admin_for_crabbox_gate >/dev/null || return 1
+  log_file=".local/gates-crabbox-aws.log"
+  run_quiet_logged "protected-main Crabbox AWS exact-head gate" "$log_file" \
+    ci_dispatch "$pr" --backend crabbox
+  stamp=$(jq -c -R \
+    --arg baseSha "$base_sha" \
+    --arg headSha "$head_sha" '
+      fromjson?
+      | select(
+          .backend == "crabbox"
+          and .provider == "aws"
+          and .target == "linux"
+          and .baseSha == $baseSha
+          and .headSha == $headSha
+          and ((.runId // "") | startswith("run_"))
+          and ((.leaseId // "") | startswith("cbx_"))
+          and ((.actionsRunUrl // "") | startswith("https://github.com/openclaw/openclaw/actions/runs/"))
+        )
+    ' "$log_file" | tail -n 1)
+  if [ -z "$stamp" ]; then
+    echo "Protected-main Crabbox publisher passed without trusted exact-head metadata." >&2
+    return 1
+  fi
   read_crabbox_gate_pr_binding "$pr" "$head_sha" "$base_sha" >/dev/null || return 1
   run_id=$(printf '%s\n' "$stamp" | jq -r .runId)
   lease_id=$(printf '%s\n' "$stamp" | jq -r .leaseId)
-  bootstrap_sha=$(printf '%s\n' "$stamp" | jq -r .bootstrapSha256)
-  coordinator=$(printf '%s\n' "$stamp" | jq -r .coordinator)
-  run_url="${coordinator%/}/portal/runs/$run_id"
+  run_url=$(printf '%s\n' "$stamp" | jq -r .actionsRunUrl)
   write_gates_env_stamp \
     "$pr" \
     "${DOCS_ONLY:-false}" \
@@ -417,12 +285,6 @@ finalize_remote_crabbox_aws_gate() {
     "$run_id" \
     "$lease_id" \
     "$run_url"
-  ci_dispatch \
-    "$pr" \
-    --backend crabbox \
-    --run-id "$run_id" \
-    --lease-id "$lease_id" \
-    --bootstrap-sha256 "$bootstrap_sha"
 }
 
 write_gates_env_stamp() {
