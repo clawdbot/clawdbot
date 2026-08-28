@@ -33,6 +33,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import type { ChatImageContent, OffloadedRef } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
@@ -47,6 +48,7 @@ import {
   resolveGatewayCronCreatorAuthorityAdmission,
   type GatewayCronCreatorAuthorityAdmission,
 } from "../server-methods/cron-creator-authority-admission.js";
+import { resolveGatewayInputParticipant } from "../session-input-participant.js";
 import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
 import { consumeSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import { formatForLog } from "../ws-log.js";
@@ -90,6 +92,7 @@ export type PreparedAgentRunDispatch = {
 };
 
 export async function prepareAgentRunDispatch(params: {
+  promptedAt: number;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
@@ -600,6 +603,25 @@ export async function prepareAgentRunDispatch(params: {
     },
   });
   params.io.emitAcceptance([true, accepted, undefined], { runId: params.runId });
+  const participant = resolveGatewayInputParticipant(params.client, params.inputProvenance);
+  if (
+    participant &&
+    params.resolvedSessionKey &&
+    !params.suppressVisibleSessionEffects &&
+    !userTurn.suppressPromptPersistence
+  ) {
+    recordSessionParticipantBestEffort({
+      identity: participant,
+      promptedAt: params.promptedAt,
+      agentId: params.activeSessionAgentId,
+      sessionKey: params.resolvedSessionKey,
+      storePath: lifecycleStorePath,
+      onError: (error) =>
+        params.context.logGateway.warn(
+          `agent participant persistence failed: ${formatForLog(error)}`,
+        ),
+    });
+  }
   const cronCreatorAuthority = resolveGatewayCronCreatorAuthorityAdmission({
     runId: params.runId,
     resolvedSessionKey: params.resolvedSessionKey,

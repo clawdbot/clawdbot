@@ -1,5 +1,6 @@
 import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
+import type { DeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
@@ -49,9 +50,11 @@ export type AgentFallbackCandidateCommonParams = {
   presentation: ReturnType<typeof createAgentTurnPresentation>;
   timing: AgentTurnTimingTracker;
   onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => void;
+  deferredLifecycle: DeferredEmbeddedRunLifecycleManager;
 };
 
 export type AgentFallbackCycleState = {
+  deferredLifecycle: DeferredEmbeddedRunLifecycleManager;
   lifecycleGeneration: string;
   autoCompactionCount: number;
   attemptedRuntimeProvider: string;

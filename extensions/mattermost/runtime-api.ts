@@ -19,6 +19,7 @@ export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 export type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 export type {
   BlockStreamingCoalesceConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
 } from "openclaw/plugin-sdk/config-contracts";

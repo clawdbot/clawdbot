@@ -1,17 +1,21 @@
 // Verifies model IDs declared by plugin manifests are normalized.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 // Registers the snapshot resolver in the runtime bridge slot. Production and
 // jiti load it via the bridge's require fallback; vitest workers lack a CJS TS
 // hook, so the no-snapshot fallback path needs the ESM registration.
-import "./plugin-metadata-snapshot.js";
-import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import {
+  projectPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 const tempDirs = createTempDirTracker();
@@ -97,10 +101,32 @@ describe("manifest model id normalization", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     resetPluginRuntimeStateForTest();
     clearPluginMetadataLifecycleCaches();
     restoreEnv();
     tempDirs.cleanup();
+  });
+
+  it("does not reuse broader normalization policies in a narrowed metadata view", () => {
+    const stateDir = tempDirs.make("openclaw-model-id-normalization-");
+    const pluginDir = path.join(stateDir, "extensions", "normalizer");
+    writeInstallIndex({ stateDir, pluginDir });
+    writeNormalizerManifest({ pluginDir, prefix: "scoped" });
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    deleteTestEnvValue("OPENCLAW_HOME");
+    setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
+    const snapshot = resolvePluginMetadataSnapshot({ config: {}, env: process.env });
+    const narrowed = projectPluginMetadataSnapshot(snapshot, []);
+    const normalize = (view: typeof snapshot) =>
+      withPluginMetadataSnapshotScope(view, () => normalizeDemoModel(), {
+        trustConfigIdentity: true,
+      });
+
+    expect(normalize(snapshot)).toBe("scoped/demo-model");
+    expect(normalize(narrowed)).toBeUndefined();
+    expect(normalize(snapshot)).toBe("scoped/demo-model");
   });
 
   it("keeps process metadata stable until the lifecycle owner reloads it", () => {
@@ -150,9 +176,14 @@ describe("manifest model id normalization", () => {
         (record) => record.pluginDir === pluginDir,
       );
     const firstRecords = listNormalizerRecords();
+    const readFile = vi.spyOn(fs, "readFileSync");
+    const readBytes = vi.spyOn(fs, "readSync");
     const secondRecords = listNormalizerRecords();
     expect(firstRecords).toHaveLength(1);
     expect(secondRecords).toHaveLength(1);
-    expect(secondRecords[0]).toBe(firstRecords[0]);
+    expect(secondRecords).toEqual(firstRecords);
+    expect(secondRecords[0]?.manifest).toBe(firstRecords[0]?.manifest);
+    expect(readFile).not.toHaveBeenCalled();
+    expect(readBytes).not.toHaveBeenCalled();
   });
 });

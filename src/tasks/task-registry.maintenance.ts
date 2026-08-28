@@ -841,12 +841,6 @@ export function inspectTasksReadOnly(): {
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
 
-function isActiveTaskRestartBlockerStatus(
-  status: TaskStatus,
-): status is ActiveTaskRestartBlocker["status"] {
-  return status === "running";
-}
-
 function isTaskRestartBlocker(task: TaskRecord): task is TaskRecord & {
   status: ActiveTaskRestartBlocker["status"];
 } {
@@ -854,12 +848,16 @@ function isTaskRestartBlocker(task: TaskRecord): task is TaskRecord & {
   // work can survive a gateway restart and should not indefinitely block one.
   // Likewise, stale records that still say "running" but already have endedAt
   // are registry inconsistencies, not live restart blockers.
-  return isActiveTaskRestartBlockerStatus(task.status) && !task.endedAt;
+  return task.status === "running" && !task.endedAt;
 }
 
 export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBlocker[] {
+  taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+  // Reconciliation can retire a blocker, never revive a non-blocker. Select first
+  // so frequent restart polls do not clone and sort retained terminal history.
+  const candidates = taskRegistryMaintenanceRuntime.listTaskRecords(isTaskRestartBlocker);
   const blockers: ActiveTaskRestartBlocker[] = [];
-  for (const task of reconcileInspectableTasks()) {
+  for (const task of reconcileTaskRecordsForOperatorInspection(candidates)) {
     if (!isTaskRestartBlocker(task)) {
       continue;
     }

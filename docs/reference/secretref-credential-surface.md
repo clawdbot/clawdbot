@@ -46,6 +46,7 @@ The lists below are generated from the source target registry and checked agains
 - `plugins.entries.brave.config.webSearch.apiKey`
 - `plugins.entries.codex.config.appServer.authToken`
 - `plugins.entries.codex.config.appServer.headers.*`
+- `plugins.entries.comfy.config.headers.*`
 - `plugins.entries.exa.config.webSearch.apiKey`
 - `plugins.entries.firecrawl.config.webFetch.apiKey`
 - `plugins.entries.google-meet.config.realtime.providers.*.apiKey`

@@ -25,6 +25,7 @@ import {
   inspectManagedPlugin,
   installManagedPlugin,
   listManagedPlugins,
+  refreshManagedPluginMetadata,
   setManagedPluginEnabled,
   uninstallManagedPlugin,
 } from "../../plugins/management-service.js";
@@ -48,8 +49,23 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validatePluginsRefreshParams, "plugins.refresh", respond)) {
       return;
     }
-    context.notifyPluginMetadataChanged();
-    respond(true, { ok: true }, undefined);
+    try {
+      refreshManagedPluginMetadata({ config: context.getRuntimeConfig() });
+    } catch (error) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `Plugin inventory refresh failed: ${formatErrorMessage(error)}. Restart the Gateway to load updated plugins.`,
+          { details: { restartRequired: true } },
+        ),
+      );
+      return;
+    } finally {
+      context.notifyPluginMetadataChanged();
+    }
+    respond(true, { ok: true, restartRequired: true }, undefined);
   },
   "plugins.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validatePluginsListParams, "plugins.list", respond)) {

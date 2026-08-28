@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
@@ -398,9 +399,9 @@ suite.define(() => {
       await trigger.click();
       const retainedCloudProfile = place.getByRole("button", { name: "Cloud · aws" });
       await expect.poll(() => retainedCloudProfile.isDisabled()).toBe(false);
-      expect(await retainedCloudProfile.getAttribute("title")).toBe(
-        "Cloud worker provider: crabbox",
-      );
+      await expect
+        .poll(() => tooltipTitleText(retainedCloudProfile))
+        .toBe("Cloud worker provider: crabbox");
       await expect.poll(() => place.getByRole("button", { name: /Fast/ }).isVisible()).toBe(true);
       if (captureUiProofEnabled) {
         await page.screenshot({

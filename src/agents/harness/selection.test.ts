@@ -12,9 +12,17 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
+import { createPluginRecord } from "../../plugins/loader-records.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  bindGatewayContextResolver,
+  clearGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -573,6 +581,109 @@ describe("runAgentHarnessAttempt", () => {
 
     expect(observedApprovalOwner).toBe("actual-owner");
   });
+
+  it.each(["declared", "unlisted", "missing", "expanded"] as const)(
+    "limits selected harness Full authority to its captured node commands (%s)",
+    async (descriptor) => {
+      const root = trajectoryTempDirs.make("openclaw-harness-node-authority-");
+      const sessionTarget = {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        storePath: path.join(root, "agents", "main", "sessions", "sessions.json"),
+      };
+      await replaceSessionEntry(sessionTarget, {
+        sessionId: sessionTarget.sessionId,
+        updatedAt: 10,
+        permissionMode: "full",
+      });
+      const workspace = {
+        workspaceDir: path.join(root, "workspace"),
+        sessionId: sessionTarget.sessionId,
+        sessionKey: sessionTarget.sessionKey,
+        environmentId: "environment-1",
+        ownerEpoch: 1,
+      };
+      const launchCommand = "fixture.exec.launch";
+      const unrelatedCommand = "fixture.maintenance.apply";
+      const requiredNodeCommands = [launchCommand];
+      const command =
+        descriptor === "unlisted" || descriptor === "expanded" ? unrelatedCommand : launchCommand;
+      const effect = vi.fn(async (assertCurrent: () => void) => {
+        assertCurrent();
+        return "launched";
+      });
+      registerAgentHarness(
+        {
+          id: "node-harness",
+          label: "Node harness",
+          cloudPlacement: {
+            mode: "remote-exec",
+            ...(descriptor !== "missing"
+              ? { devicePlacement: { requiredNodeCommands, consumesWorkerSlot: false } }
+              : {}),
+          },
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt: async () => {
+            const invoke = getPluginRuntimeGatewayRequestScope()?.invokeWithSessionNodeAuthority;
+            if (!invoke) {
+              throw new Error("Expected the selected harness's admitted node invocation scope");
+            }
+            // Plugin initialization cannot widen the descriptor captured before its handoff.
+            if (descriptor === "expanded") {
+              requiredNodeCommands.push(unrelatedCommand);
+            }
+            const result = await invoke(
+              { source: "session-full", pluginId: "fixture", nodeId: "node-1", command, workspace },
+              effect,
+            );
+            expect(result).toBe(descriptor === "declared" ? "launched" : undefined);
+            return createAttemptResult("node-harness");
+          },
+        },
+        { ownerPluginId: "fixture" },
+      );
+      const registry = getActivePluginRegistry();
+      if (!registry) {
+        throw new Error("Expected the registered harness's plugin registry");
+      }
+      const record = createPluginRecord({
+        id: "fixture",
+        source: "fixture",
+        origin: "bundled",
+        enabled: true,
+        configSchema: true,
+      });
+      registry.plugins.push(record);
+      const context = {} as GatewayRequestContext;
+      bindGatewayContextResolver(selectionAdmittedRunContext, () => context);
+      try {
+        const params = createAttemptParams(providerRuntimeConfig("codex", "node-harness"));
+        params.agentId = sessionTarget.agentId;
+        params.sessionKey = sessionTarget.sessionKey;
+        params.sessionTarget = sessionTarget;
+        params.permissionMode = "full";
+        await withPluginRuntimeGatewayRequestScope(
+          {
+            isWebchatConnect: () => false,
+            assertNodeExecutionCurrent: (request) => {
+              expect(request).toMatchObject({
+                runId: params.runId,
+                agentId: sessionTarget.agentId,
+                nodeId: "node-1",
+                workspace,
+              });
+            },
+          },
+          () => runAgentHarnessAttempt(params),
+        );
+        expect(effect).toHaveBeenCalledTimes(descriptor === "declared" ? 1 : 0);
+      } finally {
+        clearGatewayContextResolver(selectionAdmittedRunContext);
+        registry.plugins.splice(registry.plugins.indexOf(record), 1);
+      }
+    },
+  );
 
   it("routes settled turns only through an explicit harness finalizer", async () => {
     const internalKey = "__openclawSourceReplyDeliveryRuntime";

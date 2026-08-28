@@ -380,7 +380,10 @@ const OPENCLAW_BRIDGE_EXECUTABLE = "openclaw";
 const OPENCLAW_BRIDGE_SUBCOMMAND = "acp";
 const CODEX_ACP_AGENT_ID = "codex";
 const CODEX_ACP_OPENCLAW_PREFIX = "openai/";
-const CLAUDE_ACP_OPENCLAW_PREFIX = "anthropic/";
+// Documented OpenClaw provider prefixes the Claude Agent SDK does not understand.
+// Strip only these; a generic first-slash split would corrupt native Bedrock
+// inference-profile ids and ARNs the SDK accepts as-is.
+const CLAUDE_ACP_OPENCLAW_PREFIX = /^(?:anthropic|amazon-bedrock)\//i;
 const CODEX_ACP_THINKING_ALIASES = new Map<string, string | undefined>([
   ["off", undefined],
   ["minimal", "low"],
@@ -648,10 +651,11 @@ function normalizeClaudeAcpModelOverride(rawModel: string | undefined): string |
   if (!raw) {
     return undefined;
   }
-  if (!raw.toLowerCase().startsWith(CLAUDE_ACP_OPENCLAW_PREFIX)) {
+  const prefix = raw.match(CLAUDE_ACP_OPENCLAW_PREFIX);
+  if (!prefix) {
     return raw;
   }
-  return raw.slice(CLAUDE_ACP_OPENCLAW_PREFIX.length).trim() || undefined;
+  return raw.slice(prefix[0].length).trim() || undefined;
 }
 
 function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegateEnsureInput {

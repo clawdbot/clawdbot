@@ -1183,12 +1183,13 @@ function resolveExplicitTestPrefixTargets(targetArg: string, cwd: string) {
   }
   const directory = path.posix.dirname(relative);
   const prefix = `${relative}.`;
+  // Bound filesystem probes to matching tests, even with a cached repo-wide inventory.
   const targets = listExplicitTestTargetFilesForCwd(cwd).filter(
     (file) =>
-      fs.existsSync(path.join(cwd, file)) &&
       path.posix.dirname(file) === directory &&
       file.startsWith(prefix) &&
-      isTestFileTarget(file),
+      isTestFileTarget(file) &&
+      fs.existsSync(path.join(cwd, file)),
   );
   return targets.length > 0 ? targets.toSorted((left, right) => left.localeCompare(right)) : null;
 }

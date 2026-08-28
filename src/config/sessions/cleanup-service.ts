@@ -5,7 +5,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   pruneUnreferencedSessionArtifacts,
@@ -108,10 +107,8 @@ type SessionsCleanupRunResult = {
 };
 
 function resolveCleanupSqlitePath(target: SessionStoreTarget): string {
-  return (
-    resolveSqliteTargetFromSessionStorePath(target.storePath, { agentId: target.agentId }).path ??
-    resolveOpenClawAgentSqlitePath({ agentId: target.agentId })
-  );
+  return resolveSqliteTargetFromSessionStorePath(target.storePath, { agentId: target.agentId })
+    .path;
 }
 
 function loadCleanupSessionStore(
@@ -159,6 +156,7 @@ function isTranscriptMessageRecord(entry: unknown): boolean {
 }
 
 function inspectConfirmedMessageFreeTranscript(params: {
+  agentId: string;
   sessionId: string;
   sessionKey: string;
   storePath: string;
@@ -287,7 +285,7 @@ export function serializeSessionCleanupResult(params: {
 
 function pruneMissingTranscriptEntries(params: {
   store: Record<string, SessionEntry>;
-  storePath: string;
+  target: SessionStoreTarget;
   onPruned?: (
     key: string,
     entry: SessionEntry,
@@ -324,9 +322,9 @@ function pruneMissingTranscriptEntries(params: {
       continue;
     }
     const inspection = inspectConfirmedMessageFreeTranscript({
+      ...params.target,
       sessionId: entry.sessionId,
       sessionKey: key,
-      storePath: params.storePath,
     });
     if (inspection) {
       delete params.store[key];
@@ -383,7 +381,7 @@ async function previewStoreCleanup(params: {
     params.fixMissing === true
       ? pruneMissingTranscriptEntries({
           store: previewStore,
-          storePath: params.target.storePath,
+          target: params.target,
           onPruned: (key) => {
             missingKeys.add(key);
           },
@@ -576,7 +574,7 @@ export async function runSessionsCleanup(params: {
       if (opts.fixMissing) {
         pruneMissingTranscriptEntries({
           store: applyStore,
-          storePath: target.storePath,
+          target,
           onPruned: (sessionKey, entry, inspection) => {
             missingRemovals.push({
               sessionKey,
@@ -607,6 +605,7 @@ export async function runSessionsCleanup(params: {
         ...dmScopeRetiredRemovals,
       ];
       const lifecycleResult = await applySessionEntryLifecycleMutation({
+        agentId: target.agentId,
         storePath: target.storePath,
         removals,
         activeSessionKey: opts.activeKey,
@@ -698,24 +697,20 @@ export async function purgeAgentSessionStoreEntries(
   const normalizedAgentId = normalizeAgentId(agentId);
   let storePath = typeof cfg.session?.store === "string" ? cfg.session.store : "<default>";
   try {
-    const storeConfig = cfg.session?.store;
-    const storeAgentId =
-      typeof storeConfig === "string" && !storeConfig.includes("{agentId}")
-        ? resolveSessionStoreCompatibilityAgentId(cfg)
-        : normalizedAgentId;
     storePath = resolveSessionStorePathCore(cfg.session?.store, {
       agentId: normalizedAgentId,
     });
-    const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
-      agentId: storeAgentId,
-    }).path;
-    if (!sqlitePath || !fs.existsSync(sqlitePath)) {
+    const sqliteTarget = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: normalizedAgentId,
+      defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
+    });
+    if (!fs.existsSync(sqliteTarget.path)) {
       return false;
     }
     await purgeDeletedAgentSessionEntries({
       cfg,
       agentId: normalizedAgentId,
-      storeAgentId,
+      storeAgentId: sqliteTarget.agentId ?? normalizedAgentId,
       storePath,
     });
     return false;

@@ -14,7 +14,12 @@ function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSessio
     createdAt: Date.now() - 2 * 60 * 60_000,
     startedAt: Date.now() - 2 * 60 * 60_000,
     updatedAt: Date.now() - 5 * 60_000,
-    createdActor: { type: "human", id: "alice", label: "Alice Baker" },
+    createdActor: {
+      type: "human",
+      id: "alice",
+      identity: { type: "profile", id: "alice" },
+      label: "Alice Baker",
+    },
     subtitle: "openclaw ⎇ feature/session-hovercard",
     workContext: {
       kind: "project",
@@ -332,11 +337,11 @@ describe("renderSessionHovercard", () => {
         selfUserId: "self",
         row: row({
           participants: [
-            { type: "human", id: "alice", label: "Alice Baker" },
-            { type: "human", id: "self", label: "You" },
-            { type: "human", id: "mira", label: "Mira" },
-            { type: "human", id: "riley", label: "Riley" },
-            { type: "human", id: "mira", label: "Mira duplicate" },
+            { identity: { type: "profile", id: "alice" }, label: "Alice Baker" },
+            { identity: { type: "profile", id: "self" }, label: "You" },
+            { identity: { type: "profile", id: "mira" }, label: "Mira" },
+            { identity: { type: "profile", id: "riley" }, label: "Riley" },
+            { identity: { type: "profile", id: "mira" }, label: "Mira duplicate" },
           ],
           participantCount: 7,
         }),
@@ -386,9 +391,9 @@ describe("renderSessionHovercard", () => {
         selfUserId: "self",
         row: row({
           participants: [
-            { type: "human", id: "self", label: "You" },
-            { type: "human", id: "mira", label: "Mira" },
-            { type: "human", id: "riley", label: "Riley" },
+            { identity: { type: "profile", id: "self" }, label: "You" },
+            { identity: { type: "profile", id: "mira" }, label: "Mira" },
+            { identity: { type: "profile", id: "riley" }, label: "Riley" },
           ],
           participantCount: 5,
         }),
@@ -432,10 +437,10 @@ describe("renderSessionHovercard", () => {
         selfUserId: "self",
         row: row({
           participants: [
-            { type: "human", id: "mira", label: "Mira" },
-            { type: "human", id: "riley", label: "Riley" },
-            { type: "human", id: "sam", label: "Sam" },
-            { type: "human", id: "lee", label: "Lee" },
+            { identity: { type: "profile", id: "mira" }, label: "Mira" },
+            { identity: { type: "profile", id: "riley" }, label: "Riley" },
+            { identity: { type: "profile", id: "sam" }, label: "Sam" },
+            { identity: { type: "profile", id: "lee" }, label: "Lee" },
           ],
           participantCount: 5,
         }),

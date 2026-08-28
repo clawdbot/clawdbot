@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
-import { registerChannelAdmissionEvidenceOwner } from "../channels/message-access/admission-evidence.js";
+import { registerChannelIngressHostOwner } from "../channels/message-access/ingress-host-owner.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import {
@@ -184,7 +184,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       isLive: () =>
         ownsLiveRegistrySlot() && isPluginRecordLifecycleEpochActive(registry, record, epoch),
     });
-    const disposeOwner = registerChannelAdmissionEvidenceOwner(owner);
+    const disposeOwner = registerChannelIngressHostOwner(owner);
     registeredAdmissionOwnerByRecord.set(record, {
       isLive: owner.isLive,
       dispose: disposeOwner,

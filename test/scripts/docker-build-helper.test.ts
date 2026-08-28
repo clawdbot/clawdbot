@@ -126,10 +126,11 @@ function extractUpgradeSurvivorPayload(script: string) {
   const marker = " bash -lc ";
   const start = script.indexOf(marker);
   const quoted = script.slice(start + marker.length).trimEnd();
-  if (start < 0 || !quoted.startsWith("'") || !quoted.endsWith("'")) {
+  const end = quoted.search(/\n'(?:\n|$)/u);
+  if (start < 0 || !quoted.startsWith("'") || end < 0) {
     throw new Error("upgrade survivor bash -lc payload not found");
   }
-  return quoted.slice(1, -1).replaceAll(`'"'"'`, "'");
+  return quoted.slice(1, end + 1).replaceAll(`'"'"'`, "'");
 }
 
 // Prompt-driving scripts must consume public prompts in the order the CLI renders them.
@@ -2986,7 +2987,9 @@ exec "$@"
     const exitPromise = new Promise<{
       code: number | null;
       signal: NodeJS.Signals | null;
-    }>((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+    }>((resolve) => {
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
 
     try {
       for (let attempt = 0; attempt < 500 && !existsSync(markerPath); attempt += 1) {
@@ -4895,7 +4898,6 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       "assert-config-channel beta",
       "assert-installed-version",
       "assert-status-kind package",
-      "openclaw update --channel dev",
       "openclaw update --channel stable",
     ]);
     expect(updateRunner).toContain("openclaw update --channel beta --yes --json --no-restart");
@@ -5280,7 +5282,7 @@ done
     expect(unitPath.stdout).toContain("/etc/systemd/system");
   });
 
-  it("reports the installed doctor switch unit through the systemd manager", () => {
+  it("reports the installed doctor switch unit through the systemd manager", async () => {
     const home = tempDirs.make("openclaw-doctor-busctl-shim-");
     const serviceName = "openclaw-gateway.service";
     const unitPath = join(home, ".config", "systemd", "user", serviceName);
@@ -5364,12 +5366,31 @@ done
         "FragmentPath",
         "DropInPaths",
         "NeedDaemonReload",
+        "LoadState",
       ]),
     ).toEqual([
       { type: "s", data: unitPath },
       { type: "as", data: [] },
       { type: "b", data: false },
+      { type: "s", data: "loaded" },
     ]);
+
+    const binDir = join(home, "bin");
+    writeExecutables(binDir, { busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8") });
+    const { readSystemdServiceExecStart } =
+      await import("../../src/daemon/systemd-service-files.js");
+    expect(
+      await readSystemdServiceExecStart(
+        { HOME: home, PATH: `${binDir}:${process.env.PATH}`, OPENCLAW_SYSTEMD_UNIT: serviceName },
+        { requireEffective: true },
+      ),
+    ).toMatchObject({
+      programArguments,
+      workingDirectory: "/opt/openclaw git",
+      sourcePath: unitPath,
+      definitionPaths: [unitPath],
+      environment: { GREETING: "hello world", OPENCLAW_PROFILE: "fixture" },
+    });
 
     const unexpected = spawnSync(
       DOCTOR_SWITCH_BUSCTL_SHIM_PATH,
@@ -5381,6 +5402,75 @@ done
     );
     expect(unexpected.status).toBe(1);
     expect(unexpected.stderr).toContain("unexpected invocation");
+  });
+
+  it("distinguishes a missing named doctor switch unit from failed or unsupported inspection", async () => {
+    const home = tempDirs.make("openclaw-doctor-busctl-absence-");
+    const binDir = join(home, "bin");
+    const serviceName = "openclaw-gateway-fixture.service";
+    const unitPath = join(home, ".config/systemd/user", serviceName);
+    writeExecutables(binDir, { busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8") });
+    const env = {
+      HOME: home,
+      PATH: `${binDir}:${process.env.PATH}`,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-fixture",
+    };
+    const { readSystemdServiceExecStart } =
+      await import("../../src/daemon/systemd-service-files.js");
+    expect(await readSystemdServiceExecStart(env, { requireEffective: true })).toBeNull();
+    const loadArgs = [
+      "--user",
+      "--json=short",
+      "call",
+      "org.freedesktop.systemd1",
+      "/org/freedesktop/systemd1",
+      "org.freedesktop.systemd1.Manager",
+      "LoadUnit",
+      "s",
+      serviceName,
+    ];
+    const invoke = (args: string[]) =>
+      spawnSync(join(binDir, "busctl"), args, { env, encoding: "utf8" });
+    const missing = invoke(loadArgs);
+    expect(missing.status).toBe(1);
+    expect(missing.stderr.trim()).toBe(`Call failed: Unit ${serviceName} not found.`);
+    for (const args of [
+      [...loadArgs, "extra"],
+      [...loadArgs.slice(0, -1), "../missing.service"],
+      [...loadArgs.slice(0, -1), "unrelated.service"],
+      ["--user", "--json=short", "list"],
+    ]) {
+      const unsupported = invoke(args);
+      expect(unsupported.status).toBe(1);
+      expect(unsupported.stderr).not.toContain("not found.");
+    }
+    mkdirSync(dirname(unitPath), { recursive: true });
+    writeFileSync(
+      unitPath,
+      "[Service]\nExecStart=/usr/bin/node /opt/profile/openclaw.mjs gateway\nEnvironment=OLD=stale\nEnvironment=\nEnvironment=KEEP=current REMOVE=value\nUnsetEnvironment=KEEP\nUnsetEnvironment=\nUnsetEnvironment=REMOVE\nEnvironmentFile=/missing/required.env\nEnvironmentFile=\n",
+    );
+    const command = await readSystemdServiceExecStart(env, { requireEffective: true });
+    expect(command?.sourcePath).toBe(unitPath);
+    expect(command?.environment).toEqual({ KEEP: "current" });
+    rmSync(unitPath);
+    mkdirSync(unitPath);
+    const unreadable = invoke(loadArgs);
+    expect(unreadable.status).toBe(1);
+    expect(unreadable.stderr).not.toContain("not found.");
+    const staleObject = invoke([
+      "--user",
+      "--json=short",
+      "get-property",
+      "org.freedesktop.systemd1",
+      "/org/freedesktop/systemd1/unit/openclaw_2dgateway_2dfixture_2eservice",
+      "org.freedesktop.systemd1.Unit",
+      "FragmentPath",
+      "DropInPaths",
+      "NeedDaemonReload",
+      "LoadState",
+    ]);
+    expect(staleObject.status).toBe(1);
+    expect(staleObject.stdout).not.toContain('"loaded"');
   });
 
   it("routes doctor install switch commands through the E2E timeout helper", () => {

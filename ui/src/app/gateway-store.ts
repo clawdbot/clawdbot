@@ -19,7 +19,7 @@ import { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } from "../build-info.
 import { t } from "../i18n/index.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
-import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { readSessionDefaults } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";

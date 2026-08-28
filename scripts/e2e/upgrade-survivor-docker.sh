@@ -4,6 +4,32 @@
 # baseline first and upgrades it to the selected candidate.
 set -euo pipefail
 
+PACKAGE_TGZ=""
+AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT=""
+run_completed="0"
+cleanup_outer() {
+  local exit_status="$?"
+  trap - EXIT
+  set +e
+  if [ -n "$PACKAGE_TGZ" ]; then
+    docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
+  fi
+  if [ -n "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT" ]; then
+    rm -rf "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT"
+  fi
+  # Bash 3.2 can enter EXIT with status 0 after a fatal nounset expansion.
+  # Only a successfully joined scenario may turn cleanup into a successful exit.
+  if [ "$exit_status" -eq 0 ] && [ "$run_completed" != "1" ]; then
+    echo "Upgrade survivor exited before the scenario completed." >&2
+    exit_status=1
+  fi
+  if [ "$exit_status" -ne 0 ]; then
+    printf '[upgrade-survivor] FAILED (exit %s)\n' "$exit_status" >&2
+  fi
+  exit "$exit_status"
+}
+trap cleanup_outer EXIT
+
 HARNESS_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$HARNESS_ROOT_DIR}" && pwd)"
 DOCKER_E2E_HARNESS_ROOT_DIR="$HARNESS_ROOT_DIR"
@@ -93,7 +119,6 @@ LANE_ARTIFACT_SUFFIX="${LANE_ARTIFACT_SUFFIX//[^A-Za-z0-9_.-]/_}"
 ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor/$LANE_ARTIFACT_SUFFIX}"
 DOCKER_RUN_USER_ARGS=()
 OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS=()
-AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT=""
 PROBE_ENV_ARGS=(
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS="$PROBE_TIMEOUT_MS"
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS="$PROBE_ATTEMPT_TIMEOUT_MS"
@@ -113,14 +138,6 @@ if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
   openclaw_prepublish_plugin_registry_configure_docker_args \
     "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
 fi
-cleanup_outer() {
-  docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
-  if [ -n "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT" ]; then
-    rm -rf "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT"
-  fi
-}
-trap cleanup_outer EXIT
-
 if [ "$ROOT_MANAGED_VPS" = "1" ]; then
   if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
     echo "OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1 requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
@@ -249,6 +266,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \
     "$IMAGE_NAME" \
     timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash /tmp/openclaw-upgrade-survivor-run.sh
+  run_completed="1"
   exit 0
 fi
 
@@ -293,9 +311,9 @@ docker_e2e_run_with_harness \
   -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
   -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \
   -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/config-parking.mjs:/tmp/openclaw-config-parking.mjs:ro" \
-  "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}" \
-  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-  "${DOCKER_RUN_USER_ARGS[@]}" \
+  ${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]+"${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}"} \
+  ${DOCKER_E2E_PACKAGE_ARGS[@]+"${DOCKER_E2E_PACKAGE_ARGS[@]}"} \
+  ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \
   "$IMAGE_NAME" \
  timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash -lc 'set -euo pipefail
  source scripts/lib/openclaw-e2e-instance.sh
@@ -355,7 +373,11 @@ export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR="$BASELINE_SERVICE
 gateway_pid=""
 plugin_registry_pid=""
 clawhub_fixture_pid=""
+run_completed="0"
 cleanup() {
+  local exit_status="$?"
+  trap - EXIT
+  set +e
   if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
     systemctl --user stop openclaw-gateway.service >/dev/null 2>&1 || true
   fi
@@ -365,6 +387,11 @@ cleanup() {
   fi
   openclaw_e2e_stop_process "${plugin_registry_pid:-}"
   openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"
+  if [ "$exit_status" -eq 0 ] && [ "$run_completed" != "1" ]; then
+    echo "Upgrade survivor exited before all assertions completed." >&2
+    exit_status=1
+  fi
+  exit "$exit_status"
 }
 trap cleanup EXIT
 
@@ -468,7 +495,7 @@ NODE
      "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:-}" \
      "$fixture_root" \
      plugin_registry_pid \
-     "${registry_args[@]}"
+     ${registry_args[@]+"${registry_args[@]}"}
  }
 
 install_companion_plugins() {
@@ -509,7 +536,8 @@ install_companion_plugins() {
     return "$restore_status"
   fi
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-    assert-companion-installs "$package_version"
+    assert-companion-installs "$package_version" \
+    "${OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED:?missing candidate capability-consent support}"
 }
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
@@ -548,6 +576,8 @@ if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   # shellcheck disable=SC1091
   source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
   prepare_update_restart_probe_current_install "$PORT" "$GATEWAY_LOG"
+  pre_update_service_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE")"
+  pre_update_systemctl_lines="$(wc -l <"$SYSTEMCTL_SHIM_LOG")"
 fi
 
 echo "Running package update against the mounted tarball..."
@@ -592,6 +622,7 @@ node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
 
 startup_summary="n/a"
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+  assert_update_restart_service_replaced "$pre_update_service_pid" "$pre_update_systemctl_lines"
   echo "Gateway restart was handled by openclaw update."
 else
   echo "Starting gateway from upgraded state..."
@@ -649,4 +680,6 @@ fi
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json /tmp/openclaw-upgrade-survivor-status.json
 
 echo "Upgrade survivor Docker E2E passed scenario=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base} updateRestartMode=${UPDATE_RESTART_MODE} startup=${startup_summary} status=${status_seconds}s."
+run_completed="1"
 '
+run_completed="1"

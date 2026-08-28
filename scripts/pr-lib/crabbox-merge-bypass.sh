@@ -105,12 +105,24 @@ verify_crabbox_admin_merge_bypass() {
   encoded_actor=$(jq -rn --arg value "$actor" '$value | @uri')
   gh_plain api "orgs/openclaw/memberships/$encoded_actor" \
     >"$proof_dir/membership.json" || return 1
-  # Keep this as the final remote authority read before the verifier returns.
   gh_plain api "repos/{owner}/{repo}/git/ref/heads/main" >"$proof_dir/main-ref.json" || return 1
+  local workflow_sha
+  local main_sha
+  workflow_sha=$(jq -er '.head_sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+    "$proof_dir/publisher-run.json") || return 1
+  main_sha=$(jq -er '.object.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+    "$proof_dir/main-ref.json") || return 1
+  gh_plain api "repos/{owner}/{repo}/compare/$workflow_sha...$main_sha" \
+    >"$proof_dir/main-comparison.json" || return 1
+  # Keep this as the final remote authority read before the verifier returns.
+  gh_plain api "repos/{owner}/{repo}/git/ref/heads/main" \
+    >"$proof_dir/final-main-ref.json" || return 1
   if ! node "$script_parent_dir/pr-lib/crabbox-merge-bypass.mjs" \
     --actor "$proof_dir/actor.json" \
     --membership "$proof_dir/membership.json" \
     --main-ref "$proof_dir/main-ref.json" \
+    --main-comparison "$proof_dir/main-comparison.json" \
+    --final-main-ref "$proof_dir/final-main-ref.json" \
     --pull-request "$proof_dir/pull-request.json" \
     --publisher-run "$proof_dir/publisher-run.json" \
     --required-checks "$proof_dir/required-checks.json" \

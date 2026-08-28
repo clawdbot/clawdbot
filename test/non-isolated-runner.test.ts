@@ -34,6 +34,56 @@ function childEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+function documentFocusFixtureFiles(): Record<string, string> {
+  const files: Record<string, string> = {};
+  for (const shadowDepth of [0, 1, 2]) {
+    for (const detachEarly of [false, true]) {
+      const prefix = `10-focus-${shadowDepth}-${detachEarly}`;
+      files[`${prefix}-a-producer.test.ts`] = `
+/* @vitest-environment jsdom */
+import { afterEach, expect, it } from "vitest";
+let wrapper: HTMLDivElement;
+afterEach(() => {
+  if (${detachEarly}) wrapper.remove();
+});
+it("establishes native focus before file cleanup", () => {
+  wrapper = document.createElement("div");
+  document.body.append(wrapper);
+  let parent: Element | ShadowRoot = wrapper;
+  for (let depth = 0; depth < ${shadowDepth}; depth++) {
+    const host = document.createElement("div");
+    parent.append(host);
+    parent = host.attachShadow({ mode: "open" });
+  }
+  const button = document.createElement("button");
+  parent.append(button);
+  button.focus();
+  expect(document.activeElement).toBe(wrapper.firstElementChild);
+  document.body.className = "file-owned";
+  document.body.style.display = "none";
+  document.body.tabIndex = 7;
+  const style = document.createElement("style");
+  style.id = "${prefix}";
+  document.head.append(style);
+});
+`;
+      files[`${prefix}-b-observer.test.ts`] = `
+/* @vitest-environment jsdom */
+import { expect, it } from "vitest";
+it("starts with an empty, attribute-free body and native default focus", () => {
+  expect(document.body.childNodes).toHaveLength(0);
+  expect(document.body.getAttributeNames()).toEqual([]);
+  expect(document.activeElement).toBe(document.body);
+  const style = document.getElementById("${prefix}");
+  expect(style).not.toBeNull();
+  style?.remove();
+});
+`;
+    }
+  }
+  return files;
+}
+
 function fixtureFiles(): Record<string, string> {
   const gatewayMocksPath = JSON.stringify(
     path.join(repoRoot, "src", "gateway", "test-helpers.mocks.ts"),
@@ -57,6 +107,7 @@ function fixtureFiles(): Record<string, string> {
   ].join("\n");
 
   return {
+    "runner.ts": `export { default } from ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))};\n`,
     "01-dep.ts": 'export function flavor(): string {\n  return "real";\n}\n',
     "01-mid.ts": [
       'import { flavor } from "./01-dep.js";',
@@ -203,6 +254,8 @@ function fixtureFiles(): Record<string, string> {
     ].join("\n"),
     // Native require keeps only the constructors stable across module resets.
     // Plain factory closures avoid vi.fn's separate process-lifetime mock set.
+    // Each census collects and traverses the heap, so check presence and release
+    // across files without also scanning before allocation.
     "mock-payloads.cjs": [
       'class ManualPayload { value = "manual"; }',
       "class AutoPayload extends Date {}",
@@ -222,7 +275,6 @@ function fixtureFiles(): Record<string, string> {
       "  return { flavor: () => payload.value };",
       "});",
       'it("creates a file-owned manual mock payload", async () => {',
-      "  expect(queryObjects(ManualPayload)).toBe(0);",
       '  const { flavor } = await import("./07-manual-dep.js");',
       '  expect(flavor()).toBe("manual");',
       "  expect(queryObjects(ManualPayload)).toBe(1);",
@@ -275,7 +327,6 @@ function fixtureFiles(): Record<string, string> {
       payloadImports,
       'vi.mock("./08-auto-dep.js");',
       'it("creates a file-owned automock payload", async () => {',
-      "  expect(queryObjects(AutoPayload)).toBe(0);",
       '  const { payload } = await import("./08-auto-dep.js");',
       "  expect(payload.getTime()).toBe(1234);",
       "  expect(queryObjects(AutoPayload)).toBe(1);",
@@ -320,6 +371,7 @@ function fixtureFiles(): Record<string, string> {
       "});",
       "",
     ].join("\n"),
+    ...documentFocusFixtureFiles(),
   };
 }
 
@@ -351,7 +403,7 @@ it("cleans every shared runner surface between files", async () => {
         "    fileParallelism: false,",
         "    maxWorkers: 1,",
         "    sequence: { sequencer: AlphabeticalSequencer },",
-        `    runner: ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))},`,
+        `    runner: ${JSON.stringify(path.join(root, "runner.ts"))},`,
         "  },",
         "});",
         "",
@@ -368,6 +420,8 @@ it("cleans every shared runner surface between files", async () => {
         root,
         "--config",
         path.join(root, "vitest.config.ts"),
+        "--configLoader",
+        "runner",
       ],
       { cwd: repoRoot, env: childEnv(), maxBuffer: 16 * 1024 * 1024 },
     ).catch((error: unknown) => error as { stdout?: string; stderr?: string });
@@ -376,7 +430,7 @@ it("cleans every shared runner surface between files", async () => {
     // The collection failure is intentional. Every behavior test after it must
     // pass; any leaked surface turns the summary into a second failure.
     expect(output).toContain("synthetic collect failure");
-    expect(output).toContain("1 failed | 20 passed");
+    expect(output).toContain("1 failed | 32 passed");
     expect(output).not.toContain("first-file");
   } finally {
     await fs.rm(root, { recursive: true, force: true });

@@ -105,22 +105,35 @@ describe("runSessionRegistryMaintenance", () => {
     });
   });
 
-  it("prunes stale rows when the cron store is readable", async () => {
-    await withMaintenanceState(async (state) => {
-      const storePath = path.join(state.sessionsDir("main"), "sessions.json");
-      const staleKey = "agent:main:cron:done-job:run:old-run";
-      await replaceSessionEntry(
-        { sessionKey: staleKey, storePath },
-        { sessionId: "old-run", updatedAt: Date.now() - 8 * DAY_MS },
-      );
+  it.each(["per-agent", "fixed selector", "exact database"])(
+    "prunes every configured agent's stale cron rows with a %s store",
+    async (kind) => {
+      await withMaintenanceState(async (state) => {
+        const store =
+          kind === "per-agent"
+            ? undefined
+            : state.statePath(kind === "fixed selector" ? "shared.json" : "shared.sqlite");
+        await state.writeConfig({
+          agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
+          ...(store ? { session: { store } } : {}),
+        });
+        const scopes = [];
+        for (const agentId of ["main", "beta"]) {
+          const storePath = store ?? path.join(state.sessionsDir(agentId), "sessions.json");
+          const sessionKey = await writeStaleCronSession(storePath, agentId);
+          scopes.push({ agentId, sessionKey, storePath });
+        }
 
-      const summary = await runSessionRegistryMaintenance({ apply: true });
+        const summary = await runSessionRegistryMaintenance({ apply: true });
 
-      expect(summary.skippedReason).toBeUndefined();
-      expect(summary.pruned).toBe(1);
-      expect(loadSessionEntry({ sessionKey: staleKey, storePath })).toBeUndefined();
-    });
-  });
+        expect(summary.skippedReason).toBeUndefined();
+        expect(summary.pruned).toBe(2);
+        for (const scope of scopes) {
+          expect(loadSessionEntry(scope)).toBeUndefined();
+        }
+      });
+    },
+  );
 
   it.each([
     { apply: false, mainEntrySurvives: true },

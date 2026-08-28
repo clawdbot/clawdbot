@@ -442,7 +442,7 @@ export async function updateGitCheckout(params: {
         managerScriptArgs(manager.manager, "build"),
         gitRoot,
         resolveBuildEnv(
-          manager.env,
+          manager.env ?? defaultCommandEnv,
           channel === "dev" ? path.join(gitRoot, ".artifacts", "build-all-cache") : undefined,
         ),
       ),

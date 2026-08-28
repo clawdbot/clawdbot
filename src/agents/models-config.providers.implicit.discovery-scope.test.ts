@@ -694,6 +694,38 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(providers?.minimax?.models.map((model) => model.id)).toEqual(["MiniMax-M2.7"]);
   });
 
+  it("inherits discovered input for a configured model whose source row omitted it", async () => {
+    const explicitProvider = {
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      apiKey: "AWS_PROFILE",
+      models: [createTextModel("vision-model", "Vision Model")],
+    };
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      createProvider("amazon-bedrock"),
+    ]);
+    mocks.runProviderCatalog.mockResolvedValue({
+      provider: {
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+        models: [
+          { ...createTextModel("vision-model", "Vision Model"), input: ["text", "image"] },
+          createTextModel("discovered-only", "Discovered Only"),
+        ],
+      },
+    });
+
+    const providers = await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: { models: { providers: { "amazon-bedrock": explicitProvider } } },
+      env: { AWS_PROFILE: "default" } as NodeJS.ProcessEnv,
+      explicitProviders: { "amazon-bedrock": explicitProvider },
+      sourceModelInputOmissions: new Set(["amazon-bedrock/vision-model"]),
+    });
+
+    expect(providers?.["amazon-bedrock"]?.models).toMatchObject([
+      { id: "vision-model", input: ["text", "image"] },
+    ]);
+  });
+
   it("keeps explicit provider models manual without provider wildcard visibility", async () => {
     const explicitProvider = {
       baseUrl: "http://vllm.example/v1",

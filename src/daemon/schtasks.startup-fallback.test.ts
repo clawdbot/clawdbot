@@ -1426,19 +1426,36 @@ describe("Windows startup fallback", () => {
     });
   });
 
-  it("removes an old Startup-folder launcher after Scheduled Task restart is proven", async () => {
-    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      const startupEntryPath = await writeStartupFallbackEntry(env);
-      const hiddenStartupEntryPath = await writeStartupFallbackEntry(env, "vbs");
-      await writeGatewayScript(env);
-      addSuccessfulScheduledTaskRestartResponses();
+  it.each([false, true])(
+    "preserves Startup definitions only when requested (%s)",
+    async (preserveDefinition) => {
+      await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+        const startupEntryPath = await writeStartupFallbackEntry(env);
+        const hiddenStartupEntryPath = await writeStartupFallbackEntry(env, "vbs");
+        const files = [startupEntryPath, hiddenStartupEntryPath];
+        const snapshot = () =>
+          Promise.all(
+            files.map(async (file) => ({
+              bytes: await fs.readFile(file),
+              mode: (await fs.stat(file)).mode,
+            })),
+          );
+        const before = await snapshot();
+        await writeGatewayScript(env);
+        addSuccessfulScheduledTaskRestartResponses();
 
-      await restartScheduledTask({ env, stdout: new PassThrough() });
+        await restartScheduledTask({ env, stdout: new PassThrough(), preserveDefinition });
 
-      await expect(fs.access(startupEntryPath)).rejects.toThrow();
-      await expect(fs.access(hiddenStartupEntryPath)).rejects.toThrow();
-    });
-  });
+        if (preserveDefinition) {
+          expect(await snapshot()).toEqual(before);
+        } else {
+          for (const file of files) {
+            await expect(fs.access(file)).rejects.toThrow();
+          }
+        }
+      });
+    },
+  );
 
   it("waits for running evidence before removing a Startup-folder launcher", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {

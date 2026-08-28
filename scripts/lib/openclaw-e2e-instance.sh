@@ -534,6 +534,9 @@ openclaw_e2e_fixture_plugin_command() {
   done
   shift
   local help consent
+  # Preserve the successful candidate help result for evidence checks after mutation.
+  # Clear it first so a failed replacement probe cannot expose stale capabilities.
+  OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED=
   # Use the caller's bounded runner for both calls; never cache across package replacement.
   help="$("${runner[@]}" "$1" "$2" --help)" || {
     local probe_status=$?
@@ -542,7 +545,10 @@ openclaw_e2e_fixture_plugin_command() {
   }
   consent="$(printf '%s' "$help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)" || return $?
   if [[ -n "$consent" ]]; then
+    OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED=1
     set -- "$@" "$consent"
+  else
+    OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED=0
   fi
   "${runner[@]}" "$@"
 }

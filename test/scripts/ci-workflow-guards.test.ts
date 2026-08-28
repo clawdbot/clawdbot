@@ -5389,6 +5389,91 @@ server.listen(0, "127.0.0.1", () => {
     expect(pointStep.run).toContain('rm -rf "$sticky_root/gradle-user-home"');
   });
 
+  it("caches Robolectric SDK artifacts for Android test tasks only", () => {
+    const workflowSource = readFileSync(".github/workflows/ci.yml", "utf8");
+    const androidSteps = readCiWorkflow().jobs.android.steps as WorkflowStep[];
+    const restoreIndex = androidSteps.findIndex(
+      (step) => step.name === "Restore Robolectric Maven cache",
+    );
+    const configureIndex = androidSteps.findIndex(
+      (step) => step.name === "Configure Robolectric Maven cache",
+    );
+    const runIndex = androidSteps.findIndex(
+      (step) => step.name === "Run Android ${{ matrix.task }}",
+    );
+    const saveIndex = androidSteps.findIndex(
+      (step) => step.name === "Save Robolectric Maven cache",
+    );
+    const restoreStep = expectDefined(androidSteps[restoreIndex], "Robolectric cache restore");
+    const configureStep = expectDefined(
+      androidSteps[configureIndex],
+      "Robolectric cache configuration",
+    );
+    const runStep = expectDefined(androidSteps[runIndex], "Android task runner");
+    const saveStep = expectDefined(androidSteps[saveIndex], "Robolectric cache save");
+
+    expect([restoreIndex, configureIndex, runIndex, saveIndex]).toEqual(
+      [...[restoreIndex, configureIndex, runIndex, saveIndex]].toSorted((a, b) => a - b),
+    );
+    expect(restoreStep).toMatchObject({
+      id: "robolectric-cache",
+      if: "startsWith(matrix.task, 'test-') && needs.preflight.outputs.cache_mode != 'off'",
+      uses: CACHE_V5,
+      with: {
+        path: "/var/tmp/openclaw-robolectric-m2",
+      },
+    });
+    const cacheKey = String(restoreStep.with?.key);
+    expect(cacheKey).toContain("${{ github.repository }}-robolectric-m2-v1-");
+    expect(cacheKey).toContain("${{ runner.os }}-${{ runner.arch }}-${{ matrix.task }}-");
+    expect(cacheKey).toContain("apps/android/**/*.gradle*");
+    expect(cacheKey).toContain("apps/android/**/gradle-wrapper.properties");
+    expect(cacheKey).toContain("apps/android/gradle/libs.versions.toml");
+    expect(cacheKey).toContain("apps/android/**/src/test*/**");
+    for (const forbiddenDimension of [
+      "github.run_id",
+      "github.sha",
+      "github.ref",
+      "github.event.pull_request.number",
+    ]) {
+      expect(cacheKey).not.toContain(forbiddenDimension);
+    }
+    expect(String(restoreStep.with?.["restore-keys"]).trim()).toBe(
+      "${{ github.repository }}-robolectric-m2-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.task }}-",
+    );
+
+    expect(configureStep.if).toBe("startsWith(matrix.task, 'test-')");
+    expect(configureStep.run).toContain("OPENCLAW_ROBOLECTRIC_M2");
+    expect(configureStep.run).toContain("OPENCLAW_ROBOLECTRIC_INIT");
+    expect(configureStep.run).toContain(
+      'systemProperty "maven.repo.local", System.getenv("OPENCLAW_ROBOLECTRIC_M2")',
+    );
+    expect(workflowSource).not.toContain("robolectric.dependency.repo.url");
+
+    expect(saveStep).toMatchObject({
+      if: "success() && startsWith(matrix.task, 'test-') && needs.preflight.outputs.cache_write_allowed == 'true' && steps.robolectric-cache.outputs.cache-hit != 'true'",
+      uses: CACHE_SAVE_V5,
+      with: {
+        key: "${{ steps.robolectric-cache.outputs.cache-primary-key }}",
+        path: "/var/tmp/openclaw-robolectric-m2",
+      },
+    });
+
+    const taskCases = new Map(
+      [...String(runStep.run).matchAll(/^\s{2}([a-z-]+)\)\n([\s\S]*?)^\s{4};;$/gmu)].map(
+        (match) => [match[1], match[2]],
+      ),
+    );
+    for (const task of ["test-play", "test-play-compat", "test-third-party", "test-wear"]) {
+      expect(taskCases.get(task), task).toContain('--init-script "$OPENCLAW_ROBOLECTRIC_INIT"');
+    }
+    for (const task of ["build-play", "build-wear", "build-play-compat", "ktlint"]) {
+      expect(taskCases.get(task), task).not.toContain("--init-script");
+    }
+    expect(runStep.run).not.toMatch(/\bsleep\b/u);
+    expect(runStep.run).not.toMatch(/\bretry\b/iu);
+  });
+
   it("never keys a Blacksmith sticky disk by unbounded run dimensions", () => {
     // Blacksmith caps backing disks per installation; per-PR, per-commit,
     // per-run, or per-hash key segments mint disks until every mount 429s.
@@ -10271,8 +10356,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(sparseCheckoutPaths).toEqual([
       "scripts/full-release-validation-state.mjs",
       "scripts/full-release-validation-policy.mjs",
+      "scripts/full-release-candidate-contract.mjs",
       "scripts/release-ci-summary.mjs",
+      "scripts/lib/canonical-json.mjs",
       "scripts/lib/plain-gh.mjs",
+      "scripts/lib/record-shared.mjs",
+      "scripts/lib/upgrade-survivor-policy.mjs",
     ]);
     for (const sparsePath of sparseCheckoutPaths) {
       expect({ sparsePath, exists: existsSync(sparsePath) }).toEqual({
@@ -10615,6 +10704,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow.on).toHaveProperty("workflow_dispatch");
     expect(job["runs-on"]).toBe("ubuntu-24.04");
     expect(job.environment).toBe("qa-live-shared");
+    expect(job["timeout-minutes"]).toBe(270);
     expect(job.permissions).toEqual({
       checks: "write",
       contents: "read",
@@ -10642,7 +10732,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       },
       run: "node scripts/pr-crabbox-gate-publisher.mjs",
     });
-    expect(job.steps.slice(2, 4)).toMatchObject([
+    expect(job.steps[2].run).toContain("crabbox_0.46.0_linux_amd64.tar.gz");
+    expect(job.steps[2].run).toContain(
+      "6a9341e810307356361dbed4c4b84be28a036b5cc291af1566d2ccd376570d90",
+    );
+    expect(job.steps.slice(3, 5)).toMatchObject([
       {
         id: "app-token",
         uses: CREATE_GITHUB_APP_TOKEN_V3,
@@ -10659,6 +10753,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'CRABBOX_GATE_CHECK_NAME = "openclaw/crabbox-gate"',
     );
     expect(publisher).not.toContain('const CHECK_NAME = "openclaw/ci-gate"');
-    expect(workflow.on.workflow_dispatch.inputs).toHaveProperty("base_sha");
+    expect(Object.keys(workflow.on.workflow_dispatch.inputs).toSorted()).toEqual([
+      "base_sha",
+      "head_sha",
+      "pr_number",
+    ]);
   });
 });

@@ -801,6 +801,16 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         targeted_docker_lane_group_size: 2,
       },
     });
+    expect(dockerSuite.with.enable_prepublish_plugin_registry).toBe(true);
+    expect(
+      Object.keys(dockerSuite.with).filter((key) => key.startsWith("prepublish_plugin_registry_")),
+    ).toEqual([]);
+    expect(dockerSuite.with.package_artifact_id).toBe(
+      "${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactId || '' }}",
+    );
+    expect(dockerSuite.with.shared_image_artifact_id).toBe(
+      "${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactId || '' }}",
+    );
     expect(dockerSuite.secrets).toBeUndefined();
     expect(suite.needs).toEqual([
       "preflight",
@@ -895,7 +905,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
     expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.fail_fast).toEqual({
       description:
-        "Cancel only an exact active child after its first blocking job; false drains all children to completion",
+        "Cancel only an exact active child after its first blocking job; false drains all children and permits same-parent recovery",
       required: false,
       default: false,
       type: "boolean",

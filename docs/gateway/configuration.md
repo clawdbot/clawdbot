@@ -576,6 +576,13 @@ stopped accounts; use an explicit channel start to resume those accounts.
 `gateway.reload` and `gateway.remote` are exceptions under `gateway.*` - changing them does **not** trigger a restart. Individual plugins can also override this table: a loaded plugin may declare its own restart-triggering config prefixes (for example the bundled Canvas plugin restarts the Gateway for `plugins.enabled`, `plugins.allow`, and `plugins.deny`, not just its own `plugins.entries.canvas`), so the actual behavior depends on which plugins are active.
 </Note>
 
+Plugin hot reload uses the package metadata discovered at Gateway startup.
+Enablement, plugin config, and account changes do not rescan plugin files.
+Install, update, uninstall, and explicit plugin metadata refresh require a
+Gateway restart; `hybrid` schedules that restart, while `off` leaves it to you.
+Changing an agent's workspace also does not discover plugins in the new
+directory until restart. See [Plugin metadata snapshots](/plugins/architecture#plugin-metadata-snapshot-and-lookup-table).
+
 ### Reload planning
 
 When you edit a source file that is referenced through `$include`, OpenClaw plans

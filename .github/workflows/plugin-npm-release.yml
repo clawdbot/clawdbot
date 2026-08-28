@@ -700,7 +700,7 @@ jobs:
           artifacts_json="${RUNNER_TEMP}/${EXTENSION_ID}-artifacts.json"
           gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" |
-            jq -s '{artifacts: [.[].artifacts[]]}' > "${artifacts_json}"
+            jq -s '{artifacts: [.[].artifacts[]] | unique_by(.id)}' > "${artifacts_json}"
           artifact_count="$(
             jq --arg name "${ARTIFACT_NAME}" \
               '[.artifacts[] | select(.name == $name and .expired == false)] | length' \

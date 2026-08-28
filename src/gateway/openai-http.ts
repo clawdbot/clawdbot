@@ -20,7 +20,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
-import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import {
@@ -1233,7 +1233,7 @@ export async function handleOpenAiHttpRequest(
     maybeFinalize();
   };
 
-  const unsubscribe = onAgentEvent((evt) => {
+  const unsubscribe = onAgentEventForRun(runId, (evt) => {
     if (evt.runId !== runId) {
       return;
     }

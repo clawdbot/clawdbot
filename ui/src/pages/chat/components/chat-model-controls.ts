@@ -274,6 +274,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     }
     if (option.disabled) {
       pickerOption.disabled = true;
+      pickerOption.unavailableReason = option.unavailableReason;
     }
     return pickerOption;
   });
@@ -291,7 +292,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       ...(typeof currentCatalogEntry?.supportsTools === "boolean"
         ? { supportsTools: currentCatalogEntry.supportsTools }
         : {}),
-      ...(currentCatalogEntry?.available === false ? { disabled: true } : {}),
+      ...(currentCatalogEntry?.available === false
+        ? { disabled: true, unavailableReason: currentCatalogEntry.unavailableReason }
+        : {}),
       isDefault: false,
       value: currentOverride,
       label: currentCatalogEntry?.name.trim() || currentOverride,

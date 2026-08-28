@@ -641,7 +641,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         return result;
       } catch (error) {
         const trustedNoStart = consumeTrustedToolNoStartError(error);
-        const terminal = await handleToolExecutionEnd(ctx, {
+        await handleToolExecutionEnd(ctx, {
           type: "tool_execution_end",
           toolName: toolParams.toolName,
           toolCallId: toolParams.toolCallId,
@@ -650,7 +650,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           result: buildToolLifecycleErrorResult(error),
           hideFromChannelProgress: toolParams.hideFromChannelProgress,
         } as never);
-        if (trustedNoStart && !terminal.executionStarted) {
+        // Operation-owned no-start proof survives generic implementation entry.
+        // Only relay the same error after completion succeeds; replacements cannot inherit it.
+        if (trustedNoStart) {
           registerTrustedToolNoStartError(error);
         }
         throw error;

@@ -1,6 +1,6 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model } from "../../../../packages/ai/src/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -256,6 +256,10 @@ async function streamIncompleteMistralResponseOverLoopback() {
 }
 
 describe("handleEmbeddedAssistantFailure", () => {
+  beforeEach(() => {
+    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReset();
+  });
+
   it.each(["auth", "auth_permanent"] as const)(
     "carries %s profile failures into terminal resolution",
     async (reason) => {
@@ -302,17 +306,14 @@ describe("handleEmbeddedAssistantFailure", () => {
     fixture.input.model = modelId;
     fixture.input.activeErrorContext = { provider, model: modelId };
     fixture.input.authProfileId = undefined;
-    fixture.input.providerOwner = { id: "openrouter" };
+    fixture.input.providerOwner = {
+      id: "openrouter",
+      classifyFailoverReason: ({ errorMessage: classifiedError }) =>
+        classifiedError === errorMessage ? "billing" : undefined,
+    };
     fixture.input.resolveAuthProfileFailureReason = vi.fn((reason) =>
       reason === "billing" ? "billing" : null,
     );
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockImplementation(
-      ({ provider: classifiedProvider, context }) =>
-        classifiedProvider === "openrouter" && context.errorMessage === errorMessage
-          ? "billing"
-          : undefined,
-    );
-
     const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
     expect(outcome).toMatchObject({
@@ -328,6 +329,43 @@ describe("handleEmbeddedAssistantFailure", () => {
         stage: "assistant",
       },
     ]);
+  });
+
+  it("uses the prepared OpenAI owner for structured Responses failures", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      stopReason: "error",
+      errorMessage: "server_error: provider failed",
+      errorCode: "server_error",
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    fixture.input.attempt = attempt;
+    fixture.input.attemptAssistant = assistant;
+    fixture.input.currentAttemptAssistant = assistant;
+    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+    fixture.input.provider = "openai";
+    fixture.input.providerOwner = {
+      id: "openai",
+      classifyFailoverReason: ({ code }) =>
+        code?.toUpperCase() === "SERVER_ERROR" ? "server_error" : undefined,
+    };
+    fixture.input.modelId = "gpt-5.6-luna";
+    fixture.input.model = "gpt-5.6-luna";
+    fixture.input.activeErrorContext = { provider: "openai", model: "gpt-5.6-luna" };
+    fixture.input.authProfileId = undefined;
+    fixture.input.advanceAuthProfile = vi.fn(async () => false);
+    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValue(undefined);
+
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
+      reason: "server_error",
+      status: 500,
+    });
+    expect(fixture.input.maybeBackoffBeforeOverloadFailover).toHaveBeenCalledWith("server_error");
   });
 
   it.each([PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE, PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE])(

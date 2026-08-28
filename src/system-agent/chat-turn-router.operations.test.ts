@@ -21,6 +21,7 @@ import {
 } from "./chat-engine.test-support.js";
 import { ChatTurnRouter } from "./chat-turn-router.js";
 import { ChatWizardHost } from "./chat-wizard-host.js";
+import type { SystemAgentOperation } from "./operation-types.js";
 import { installSystemAgentClaudeCliBackendTestFixture } from "./system-agent.test-helpers.js";
 
 const loggingMocks = vi.hoisted(() => ({ chatWarn: vi.fn() }));
@@ -82,6 +83,55 @@ function createRouterHarness(
 }
 
 describe("SystemAgentChatEngine operations", () => {
+  describe.each(["typed", "tool", "planner"] as const)("delegated %s navigation", (source) => {
+    it.each([
+      ["connect telegram", { kind: "channel-setup", channel: "telegram" }],
+      ["configure skills", { kind: "skills-setup" }],
+      ["configure search", { kind: "search-setup" }],
+      ["configure gateway", { kind: "gateway-config-setup" }],
+      ["import memory", { kind: "memory-import" }],
+      ["model setup", { kind: "model-setup" }],
+      ["open channel wizard", { kind: "open-setup", target: "channels" }],
+      ["talk to agent", { kind: "open-tui" }],
+    ] satisfies Array<[string, SystemAgentOperation]>)(
+      "keeps %s with the operator",
+      async (command, directive) => {
+        const startWizard = vi.fn(async () => {});
+        const importMemory = vi.fn(async () => ({
+          status: "workspace-missing" as const,
+          providers: [] as [],
+          workspace: "/tmp/openclaw-no-workspace",
+        }));
+        const router = createRouterHarness(
+          {
+            operatorApprovalOnly: true,
+            runAgentTurn: async () =>
+              source === "tool" ? { text: "Opening setup.", directive } : null,
+            planWithAssistant: async () => ({ command }),
+          },
+          {
+            wizardDependencies: {
+              runChannelSetupWizard: startWizard,
+              runSkillsSetupWizard: startWizard,
+              runSearchSetupWizard: startWizard,
+              runGatewaySetupWizard: startWizard,
+              runMemoryImportWizard: importMemory,
+            },
+          },
+        );
+
+        const reply = await router.resolveTurn(source === "typed" ? command : "help me set up");
+
+        expect(reply.action).toBe("none");
+        expect(reply.handoff).toBeUndefined();
+        expect(reply.step).toBeUndefined();
+        expect(reply.text).toContain("cannot run from a delegated agent request");
+        expect(startWizard).not.toHaveBeenCalled();
+        expect(importMemory).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   it("handles the exact agent handoff without consulting a usable model", async () => {
     const runAgentTurn = vi.fn(async () => ({ text: "model reply without a directive" }));
     const engine = new SystemAgentChatEngine({
@@ -414,7 +464,10 @@ describe("SystemAgentChatEngine operations", () => {
     expect(reply.text).toContain("Let's point your agent at gpt-5.5.");
     expect(reply.text).toContain("(claude-cli → `set default model openai/gpt-5.5`)");
     expect(reply.text).toContain("Apply this operation");
-    expect(router.hasPendingProposal()).toBe(true);
+    expect(router.getPendingOperatorProposal()?.operation).toEqual({
+      kind: "set-default-model",
+      model: "openai/gpt-5.5",
+    });
   });
 
   it("records an executor-reported interactive exit without sniffing reply text", async () => {
@@ -527,7 +580,11 @@ describe("SystemAgentChatEngine operations", () => {
     expect(reply.text).toContain("That port was not a number");
     expect(reply.text).toContain("config set gateway.port 18789");
     // The corrective write is proposed, not auto-applied.
-    expect(engine.hasPendingProposal()).toBe(true);
+    expect(engine.getPendingOperatorProposal()?.operation).toEqual({
+      kind: "config-set",
+      path: "gateway.port",
+      value: "18789",
+    });
     expect(planner.mock.calls[0]?.[0]?.input).toContain("[config-verify]");
   });
 

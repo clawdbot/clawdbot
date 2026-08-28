@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
@@ -138,8 +139,22 @@ describe("openclaw agent database handle cache", () => {
     openOpenClawAgentDatabase({ agentId: "durability-evictor", env });
     expect(evicted.db.isOpen).toBe(false);
 
+    const { DatabaseSync } = requireNodeSqlite();
+    const divergent = new DatabaseSync(evicted.path);
+    try {
+      divergent.exec("ALTER TABLE session_nodes DROP COLUMN project_id;");
+    } finally {
+      divergent.close();
+    }
+
     const reopened = openOpenClawAgentDatabase({ agentId: evicted.agentId, env });
     expect(reopened).not.toBe(evicted);
+    expect(
+      reopened.db
+        .prepare("PRAGMA table_info(session_nodes)")
+        .all()
+        .some((row) => (row as { name?: unknown }).name === "project_id"),
+    ).toBe(true);
     expect(
       reopened.db
         .prepare("SELECT state_json, updated_at FROM auth_profile_state WHERE state_key = ?")

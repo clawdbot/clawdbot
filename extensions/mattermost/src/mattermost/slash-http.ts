@@ -576,7 +576,11 @@ async function authorizeSlashInvocation(params: {
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
   const { account, cfg, runtime, registeredCommands, triggerMap, log, bodyTimeoutMs } = params;
 
-  return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+  return async (
+    req: IncomingMessage,
+    res: ServerResponse,
+    bufferedBody?: string,
+  ): Promise<void> => {
     if (req.method !== "POST") {
       res.statusCode = 405;
       res.setHeader("Allow", "POST");
@@ -586,7 +590,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
 
     let body: string;
     try {
-      body = await readBody(req, MAX_BODY_BYTES, bodyTimeoutMs);
+      body = bufferedBody ?? (await readBody(req, MAX_BODY_BYTES, bodyTimeoutMs));
     } catch (error) {
       if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
         res.statusCode = 408;

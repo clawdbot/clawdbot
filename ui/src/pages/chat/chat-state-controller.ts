@@ -91,7 +91,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       const pending = sendChat(messageOverride, options, submissionAction);
       renderLifecycle.invalidate();
       try {
-        await pending;
+        return await pending;
       } finally {
         renderLifecycle.invalidate();
       }

@@ -426,7 +426,7 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
   });
 
   it.each([
-    { tier: "priority", model: "ultima-alpha" },
+    { tier: "priority", model: "test-no-tier-model" },
     { tier: "flex", model: "test-no-tier-model" },
   ])("logs unsupported $tier tiers without projecting a UI notice", async ({ tier, model }) => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
@@ -446,7 +446,7 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
   it.each([
     "Project hooks were disabled.",
     "Configured service tier `priority` requires account access.",
-    "Configured service tier `priority` is not advertised as supported for model `ultima-alpha` and will be omitted from requests. Additional action required.",
+    "Configured service tier `priority` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests. Additional action required.",
   ])("surfaces startup and thread warnings: %s", async (message) => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });

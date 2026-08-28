@@ -2390,7 +2390,7 @@ describe("session accessor seam", () => {
       for (let promptedAt = 0; promptedAt < count; promptedAt += 1) {
         recordSessionParticipant(
           { sessionKey, storePath },
-          { actor: { type: "human", id: "profile-shared" }, promptedAt, source: "profile" },
+          { identity: { type: "profile", id: "profile-shared" }, promptedAt },
         );
       }
     }
@@ -2444,6 +2444,27 @@ describe("session accessor seam", () => {
         .get("profile-shared"),
     ).toEqual({ contribution_count: 5 });
     expect(identityListener.mock.calls.map(([event]) => event.kind)).toEqual(["move", "replace"]);
+    await expect(
+      applySessionEntryCanonicalReplacements({
+        sessionKeys: [canonicalKey, previousKey],
+        storePath,
+        update: (entries) => ({
+          replacements: [
+            {
+              entry: entries.find((entry) => entry.sessionKey === canonicalKey)!.entry,
+              previousSessionKeys: [previousKey],
+              sessionKey: canonicalKey,
+            },
+          ],
+          result: undefined,
+        }),
+      }),
+    ).rejects.toThrow("cannot replace missing alias");
+    expect(
+      database.db
+        .prepare("SELECT contribution_count FROM session_participants WHERE actor_id = ?")
+        .get("profile-shared"),
+    ).toEqual({ contribution_count: 5 });
   });
 
   it("rejects internal canonical targets and alias sources without changing rows or events", async () => {
@@ -2637,8 +2658,13 @@ describe("session accessor seam", () => {
     // No owner or createdActor, so this participant survives owner filtering and the
     // transaction-side read hydrates fields the status-selected snapshot never sees.
     recordSessionParticipant(scope, {
-      actor: { id: "8167215807", type: "human" },
-      source: "channel",
+      identity: {
+        type: "observation",
+        id: "8167215807",
+        pluginId: null,
+        accountId: null,
+        senderKind: "unknown",
+      },
     });
 
     await applySessionEntryReplacements({

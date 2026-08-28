@@ -4471,6 +4471,34 @@ jobs:
           mkdir -p "$sticky_root/gradle-user-home"
           echo "GRADLE_USER_HOME=$sticky_root/gradle-user-home" >> "$GITHUB_ENV"
 
+      - name: Restore Robolectric Maven cache
+        id: robolectric-cache
+        if: startsWith(matrix.task, 'test-') && needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/tmp/openclaw-robolectric-m2
+          key: ${{ github.repository }}-robolectric-m2-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.task }}-${{ hashFiles('apps/android/**/*.gradle*', 'apps/android/**/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml', 'apps/android/**/src/test*/**') }}
+          restore-keys: |
+            ${{ github.repository }}-robolectric-m2-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.task }}-
+
+      - name: Configure Robolectric Maven cache
+        if: startsWith(matrix.task, 'test-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          maven_repo=/var/tmp/openclaw-robolectric-m2
+          init_script="$RUNNER_TEMP/openclaw-robolectric-init.gradle"
+          mkdir -p "$maven_repo"
+          cat >"$init_script" <<'GROOVY'
+          allprojects {
+            tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
+              systemProperty "maven.repo.local", System.getenv("OPENCLAW_ROBOLECTRIC_M2")
+            }
+          }
+          GROOVY
+          echo "OPENCLAW_ROBOLECTRIC_M2=$maven_repo" >> "$GITHUB_ENV"
+          echo "OPENCLAW_ROBOLECTRIC_INIT=$init_script" >> "$GITHUB_ENV"
+
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android
         env:
@@ -4481,20 +4509,23 @@ jobs:
           set -euo pipefail
           case "$TASK" in
             test-play)
-              ./gradlew --no-daemon --build-cache \
+              ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :app:testPlayDebugUnitTest \
                 :wear-shared:testDebugUnitTest
               ;;
             test-play-compat)
               # Frozen targets predate the Wear shared project. Keep their app-owned
               # Play unit tests without importing current Android modules.
-              ./gradlew --no-daemon --build-cache :app:testPlayDebugUnitTest
+              ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
+                :app:testPlayDebugUnitTest
               ;;
             test-third-party)
-              ./gradlew --no-daemon --build-cache :app:testThirdPartyDebugUnitTest
+              ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
+                :app:testThirdPartyDebugUnitTest
               ;;
             test-wear)
-              ./gradlew --no-daemon --build-cache :wear:testDebugUnitTest
+              ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
+                :wear:testDebugUnitTest
               ;;
             build-play)
               if [ "$CI_RUNNER_BACKEND" = "github" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
@@ -4544,6 +4575,13 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Save Robolectric Maven cache
+        if: success() && startsWith(matrix.task, 'test-') && needs.preflight.outputs.cache_write_allowed == 'true' && steps.robolectric-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/tmp/openclaw-robolectric-m2
+          key: ${{ steps.robolectric-cache.outputs.cache-primary-key }}
 
   docker-seed-e2e:
     permissions:

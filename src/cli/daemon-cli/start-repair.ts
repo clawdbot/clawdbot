@@ -12,6 +12,7 @@ import {
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
 import { resolveBunRuntimeInfo } from "../../daemon/runtime-paths.js";
 import {
+  assertServiceDefinitionWritable,
   hasGatewayServiceEnvironmentDifference,
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
@@ -29,7 +30,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { mergeInstallInvocationEnv } from "./install.js";
 
 type GatewayServiceRepairParams = {
-  service: GatewayService;
+  service: Pick<GatewayService, "install" | "isLoaded" | "readDefinitionMutationCapability">;
   state: GatewayServiceState;
   issues: GatewayServiceStartRepairIssue[];
   json: boolean;
@@ -149,6 +150,16 @@ export async function repairLoadedGatewayServiceForStart(
   loaded: boolean;
 }> {
   assertGatewayServiceMutationAllowed("repair the gateway service");
+  // Repair can persist a generated token; check definition authority before planning it.
+  const capability = await params.service
+    .readDefinitionMutationCapability?.({ env: process.env, environment: params.state.env })
+    .catch(() => ({ kind: "unknown" as const, detail: "" }));
+  if (capability && capability.kind !== "writable") {
+    assertServiceDefinitionWritable({
+      kind: capability.kind,
+      detail: "Service definition cannot be safely modified.",
+    });
+  }
   if (
     hasGatewayServiceLauncherOverride(params.state.command) ||
     hasGatewayServiceEnvironmentDifference(params.state.command, GATEWAY_TARGET_ENV_KEYS)
@@ -214,6 +225,7 @@ export async function repairLoadedGatewayServiceForStart(
       runtime,
       runtimePath: runtime === "bun" ? installedRuntimePath : undefined,
       wrapperPath,
+      existingCommand: params.state.command,
       existingEnvironment,
       existingEnvironmentValueSources,
       config: cfg,

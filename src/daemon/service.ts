@@ -30,6 +30,7 @@ import {
   uninstallScheduledTask,
 } from "./schtasks.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
+import { resolveServiceEntrypoint } from "./service-layout.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -46,6 +47,7 @@ import type {
   GatewayServiceStageArgs,
   GatewayServiceState,
 } from "./service-types.js";
+import { readSystemdDefinitionMutationCapability } from "./systemd-definition-mutation.js";
 import {
   findInstalledSystemdGatewayScope,
   installSystemdService,
@@ -87,6 +89,9 @@ export type GatewayService = {
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   isEnabled?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   hasInstalledDefinition?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  readDefinitionMutationCapability?: (
+    args: GatewayServiceEnvArgs & { environment?: GatewayServiceEnv },
+  ) => ReturnType<typeof readSystemdDefinitionMutationCapability>;
   readCommand: (
     env: GatewayServiceEnv,
     opts?: GatewayServiceReadOptions,
@@ -98,6 +103,7 @@ export type GatewayService = {
 };
 
 type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
+  requireEffective?: boolean;
   validateEnvBeforeStatusRead?: (env: GatewayServiceEnv) => void;
 };
 
@@ -142,7 +148,10 @@ function collectGatewayServiceStartRepairIssues(
       message: `service port ${servicePort} does not match current gateway config port ${expectedPort}`,
     });
   }
-  for (const candidate of command.programArguments.slice(0, 2)) {
+  for (const candidate of new Set([
+    command.programArguments[0],
+    resolveServiceEntrypoint(command),
+  ])) {
     if (isTemporaryProgramPath(candidate)) {
       issues.push({
         code: "temporary-program",
@@ -167,10 +176,7 @@ export async function inspectGatewayServiceStartRepair(
   expectedPort?: number,
 ): Promise<{ state: GatewayServiceState; issues: GatewayServiceStartRepairIssue[] }> {
   const state = await readGatewayServiceState(service, args);
-  return {
-    state,
-    issues: collectGatewayServiceStartRepairIssues(state, expectedPort),
-  };
+  return { state, issues: collectGatewayServiceStartRepairIssues(state, expectedPort) };
 }
 
 export function formatGatewayServiceStartRepairIssues(
@@ -184,8 +190,7 @@ export async function readGatewayServiceLoadState(
   args: GatewayServiceEnvArgs = {},
 ): Promise<GatewayServiceLoadState> {
   try {
-    const loaded = await service.isLoaded(args);
-    return { status: loaded ? "loaded" : "not-loaded" };
+    return { status: (await service.isLoaded(args)) ? "loaded" : "not-loaded" };
   } catch (error) {
     return { status: "unknown", detail: String(error) };
   }
@@ -197,24 +202,27 @@ export async function readGatewayServiceState(
 ): Promise<GatewayServiceState> {
   const baseEnv = args.env ?? (process.env as GatewayServiceEnv);
   const { timeoutMs } = args;
-  // Keep command and status probes on the same fail-soft manager deadline.
-  const command = await service.readCommand(baseEnv, { timeoutMs }).catch(() => null);
+  const command = args.requireEffective
+    ? await service.readCommand(baseEnv, { timeoutMs, requireEffective: true })
+    : await service.readCommand(baseEnv, { timeoutMs }).catch(() => null);
   const env = mergeGatewayServiceEnv(baseEnv, command);
-  // Callers that may mutate the selected service can reject persisted selector
-  // drift before isLoaded/readRuntime invoke the native service manager.
+  // Reject persisted selector drift before invoking the native service manager.
   args.validateEnvBeforeStatusRead?.(env);
-  const [installed, loadState, runtime] = await Promise.all([
+  const [installed, loadState, runtime, definitionMutationCapability] = await Promise.all([
     command !== null
       ? true
       : (service.hasInstalledDefinition?.({ env, timeoutMs }).catch(() => false) ?? false),
     readGatewayServiceLoadState(service, { env, timeoutMs }),
-    service.readRuntime(env, { timeoutMs }).catch(
-      (error: unknown) =>
-        ({
-          status: "unknown",
-          detail: String(error),
-        }) satisfies GatewayServiceRuntime,
-    ),
+    service.readRuntime(env, { timeoutMs }).catch((error: unknown) => ({
+      status: "unknown" as const,
+      detail: String(error),
+    })),
+    // Update policy needs definition authority; ordinary status/start reads do not.
+    args.requireEffective
+      ? service
+          .readDefinitionMutationCapability?.({ env: baseEnv, environment: env, timeoutMs })
+          .catch(() => ({ kind: "unknown" as const, detail: "Cannot inspect service definition." }))
+      : undefined,
   ]);
   return {
     installed,
@@ -222,6 +230,7 @@ export async function readGatewayServiceState(
     running: runtime?.status === "running",
     env,
     command,
+    ...(definitionMutationCapability ? { definitionMutationCapability } : {}),
     runtime,
   };
 }
@@ -382,6 +391,8 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     isLoaded: isSystemdServiceEnabled,
     hasInstalledDefinition: async ({ env }) =>
       (await findInstalledSystemdGatewayScope(env ?? process.env)) !== null,
+    readDefinitionMutationCapability: ({ env, environment, timeoutMs }) =>
+      readSystemdDefinitionMutationCapability(env ?? process.env, { environment, timeoutMs }),
     readCommand: readSystemdServiceExecStart,
     readRuntime: readSystemdServiceRuntime,
   },

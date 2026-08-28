@@ -36,11 +36,7 @@ import {
   loadReplySessionInitializationSnapshot,
 } from "../../config/sessions/session-accessor.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
-import {
-  buildSessionCreationStamp,
-  resolveProfileParticipantIdFromSessionCreation,
-  type SessionCreatedActor,
-} from "../../config/sessions/session-entry-provenance.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import type { SessionResetBoundaryRequest } from "../../config/sessions/session-reset-boundary-event.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -88,7 +84,10 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
+import {
+  prepareChannelParticipantObservation,
+  recordAcceptedSessionParticipantInput,
+} from "../../sessions/session-participant-input.js";
 import {
   recordSessionCreated,
   classifySessionStateActor,
@@ -212,6 +211,7 @@ type InitSessionStateParams = {
   ctx: FinalizedRuntimeMsgContext;
   expectedExistingSessionId?: string;
   pinExpectedExistingSession?: boolean;
+  newlyCreatedSessionId?: string;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   signal?: AbortSignal;
@@ -437,6 +437,7 @@ function resolveReplySessionRolloverState(
 }
 
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
+  prepareChannelParticipantObservation(params.ctx);
   return await runWithSessionInitConflictRetry(
     async () => await initSessionStateAttempt(params, false),
     { signal: params.signal },
@@ -1079,34 +1080,20 @@ async function initSessionStateAttemptLocked(
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
+  // Admission may commit the first row before dispatch. Preserve its Goal and generation
+  // through initialization, then report the first lifecycle only for that winning dispatch.
+  const createdByAdmission =
+    pinExpectedExistingSession &&
+    params.newlyCreatedSessionId === sessionId &&
+    !previousSessionEntry;
+  const isFirstSessionTurn = isNewSession || createdByAdmission;
   if (!isSystemEvent && !isInterSession) {
-    const creation = ctx.SessionCreation;
-    const creationActor = creation?.actor;
-    const profileParticipantId = resolveProfileParticipantIdFromSessionCreation(creation);
-    const senderId = normalizeOptionalString(ctx.SenderId);
-    const participant:
-      | { actor: SessionCreatedActor & { id: string }; source: "profile" | "channel" | "agent" }
-      | undefined = profileParticipantId
-      ? { actor: { type: "human", id: profileParticipantId }, source: "profile" }
-      : creationActor?.type === "agent" && creationActor.id
-        ? {
-            actor: { ...creationActor, id: creationActor.id },
-            source: "agent",
-          }
-        : senderId
-          ? { actor: { type: "human", id: senderId }, source: "channel" }
-          : undefined;
-    if (participant) {
-      recordSessionParticipantBestEffort({
-        actor: participant.actor,
-        agentId,
-        sessionKey,
-        source: participant.source,
-        storePath,
-        promptedAt: now,
-        onError: (error) => log.warn("failed to record session participant", { error }),
-      });
-    }
+    recordAcceptedSessionParticipantInput(ctx, {
+      agentId,
+      sessionKey,
+      storePath,
+      onError: (error) => log.warn("failed to record session participant", { error }),
+    });
   }
   clearBootstrapSnapshotOnSessionBoundary({
     boundaryAppended: resetBoundaryAppended,
@@ -1192,12 +1179,12 @@ async function initSessionStateAttemptLocked(
     agentText: normalizeInboundTextNewlines(bodyStripped ?? sessionCtxForState.agentText),
     BodyStripped: normalizeInboundTextNewlines(bodyStripped ?? sessionCtxForState.agentText),
     SessionId: sessionId,
-    IsNewSession: isNewSession ? "true" : "false",
+    IsNewSession: isFirstSessionTurn ? "true" : "false",
   };
 
   // Run session plugin hooks (fire-and-forget)
   const hookRunner = getGlobalHookRunner();
-  if (hookRunner && isNewSession) {
+  if (hookRunner && isFirstSessionTurn) {
     const effectiveSessionId = sessionId ?? "";
 
     // If replacing an existing session, fire session_end for the old one
@@ -1259,7 +1246,7 @@ async function initSessionStateAttemptLocked(
       sessionStore,
       sessionKey,
       sessionId: sessionId ?? crypto.randomUUID(),
-      isNewSession,
+      isNewSession: isFirstSessionTurn,
       resetTriggered,
       systemSent,
       abortedLastRun,

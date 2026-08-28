@@ -1199,6 +1199,7 @@ describe("preflightDiscordMessage", () => {
           name: "Echo",
           tag: "Echo",
           isPluralKit: true,
+          authorKind: "bot",
         },
       }),
     );

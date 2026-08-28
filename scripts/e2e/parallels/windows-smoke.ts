@@ -46,6 +46,7 @@ import {
   expectedPackageBuildCommit,
   expectedPackageTargetVersion,
   extractLastOpenClawVersion,
+  installSmokeRuntimeCompanions,
   npmRegistryEnv,
   packAndServeSmokeArtifact,
   parseSmokeCliArgs,
@@ -296,6 +297,19 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     );
     this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
     await this.phase("fresh.verify-main-version", 120, () => this.verifyTargetVersion());
+    await this.phase("fresh.install-companions", 600, () =>
+      installSmokeRuntimeCompanions({
+        provider: this.options.provider,
+        readCli: (args) =>
+          this.guestPowerShell(`Invoke-OpenClaw ${args.map(psSingleQuote).join(" ")}`),
+        installCli: (args) =>
+          this.guestPowerShellBackground(
+            "install-companion",
+            `Invoke-OpenClaw ${args.map(psSingleQuote).join(" ")}\nif ($LASTEXITCODE -ne 0) { throw "runtime companion install failed with exit code $LASTEXITCODE" }`,
+            600_000,
+          ),
+      }),
+    );
     await this.phase("fresh.onboard-ref", 720, () => this.runRefOnboard());
     await this.phase("fresh.gateway-restart", 420, () => this.gatewayAction("restart"));
     await this.phase("fresh.gateway-status", 420, () => this.verifyGatewayReachable());

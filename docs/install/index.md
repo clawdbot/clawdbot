@@ -155,11 +155,13 @@ For contributors or anyone who wants to run from a local checkout:
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
 pnpm install && pnpm build && pnpm ui:build
-pnpm link --global
+pnpm add --global .
 openclaw onboard --install-daemon
 ```
 
-Or skip the link and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
+`pnpm add --global .` links the CLI to this checkout without changing its package files. If pnpm reports that its global bin directory is not on `PATH`, run `pnpm setup`, reopen your shell, and retry.
+
+Or skip the global install and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
 
 ### Install from the GitHub main checkout
 
