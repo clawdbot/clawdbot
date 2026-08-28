@@ -1,13 +1,15 @@
 // Skill install tests cover lifecycle install flows and validation failures.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
-import { captureEnv } from "../../test-utils/env.js";
+import { hasBinary, resetBinaryDetectionCache } from "../../shared/config-eval.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import {
   resolveSkillInvocationPolicy,
@@ -122,6 +124,8 @@ async function withWorkspaceCase(
 }
 
 describe("installSkill before_install hooks", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeEach(() => {
     resetGlobalHookRunner();
     runCommandWithTimeoutMock.mockClear();
@@ -317,6 +321,37 @@ describe("installSkill before_install hooks", () => {
         },
       });
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("stops returning a pre-install hasBinary miss once a real install succeeds", async () => {
+    await withWorkspaceCase(async ({ workspaceDir }) => {
+      const envSnapshot = captureEnv(["PATH"]);
+      const dir = tempDirs.make("hasbinary-cache-");
+      const binPath = path.join(dir, "provisioned-tool-probe");
+      try {
+        // The install lands the binary in a directory already on PATH, so the
+        // PATH-string check that normally invalidates hasBinary's cache never fires.
+        setTestEnvValue("PATH", `${dir}${path.delimiter}${process.env.PATH ?? ""}`);
+        resetBinaryDetectionCache();
+        expect(hasBinary("provisioned-tool-probe")).toBe(false);
+
+        await fs.writeFile(binPath, "#!/bin/sh\nexit 0\n");
+        await fs.chmod(binPath, 0o755);
+
+        await writeInstallableSkill(workspaceDir, "cache-invalidation-skill");
+        const result = await installSkill({
+          workspaceDir,
+          skillName: "cache-invalidation-skill",
+          installId: "deps",
+        });
+
+        expect(result.ok).toBe(true);
+        expect(hasBinary("provisioned-tool-probe")).toBe(true);
+      } finally {
+        envSnapshot.restore();
+        resetBinaryDetectionCache();
+      }
     });
   });
 });

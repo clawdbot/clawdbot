@@ -11,6 +11,7 @@ import {
   type SkillInstallSpecMetadata,
 } from "../../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
+import { resetBinaryDetectionCache } from "../../shared/config-eval.js";
 import { resolveUserPath } from "../../utils.js";
 import {
   hasBinary as defaultHasBinary,
@@ -57,6 +58,12 @@ function getSkillsInstallDeps(): SkillsInstallDeps {
 }
 
 function withWarnings(result: SkillInstallResult, warnings: string[]): SkillInstallResult {
+  if (result.ok) {
+    // A successful install may have just landed a binary this process already
+    // cached as missing (e.g. a brew/uv prefix already on PATH); every
+    // installSkill return funnels through here.
+    resetBinaryDetectionCache();
+  }
   if (warnings.length === 0) {
     return result;
   }
