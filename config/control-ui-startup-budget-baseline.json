@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 346461,
-  "reason": "standing-grant scope line + grants ledger (#131602); recorded at the CI e2e-lane build (346461 B) — checks-ui and local builds of the same tree measure ~600 B less, beyond the 64 B variance allowance",
+  "startupJsGzipBytes": 347134,
+  "reason": "main drift past the recorded baseline (#131602); recorded at the CI build-artifacts lane (347134 B), which measures ~1.3 KiB above local and checks-ui builds of the same tree",
   "updatedAt": "2026-08-28"
 }
