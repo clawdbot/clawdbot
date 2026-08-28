@@ -5,11 +5,13 @@ import {
   type QuestionRequestQuestion,
   type SecretsStoreListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ENV_SECRET_REF_ID_RE, type SecretRef } from "../../config/types.secrets.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
+import { resolveDefaultSecretProviderAlias } from "../../secrets/ref-contract.js";
 import { stringEnum } from "../schema/string-enum.js";
 import { describeSecretsTool } from "../tool-description-presets.js";
-import { DEFAULT_ASK_USER_TIMEOUT_SECONDS } from "./ask-user-tool-normalization.js";
+import { normalizeQuestionTimeoutSeconds } from "./ask-user-tool-normalization.js";
 import { beginAskUserPromptDelivery } from "./ask-user-tool.js";
 import { type AnyAgentTool, readToolStringParam, ToolInputError } from "./common.js";
 import {
@@ -44,7 +46,7 @@ const SecretsToolSchema = Type.Object(
         maxItems: 128,
         uniqueItems: true,
         description:
-          "Exact hostnames allowed to receive a secret, without scheme or port (api.stripe.com). Secret entries only; leaving this empty stores a secret that can never be substituted.",
+          "Exact hostnames allowed to receive a secret, without scheme or port (api.stripe.com). Leaving this empty prevents egress substitution; config SecretRefs remain usable.",
       }),
     ),
     reason: Type.Optional(
@@ -55,7 +57,8 @@ const SecretsToolSchema = Type.Object(
     ),
     timeoutSeconds: Type.Optional(
       Type.Integer({
-        description: "Seconds to wait for the human on request; defaults to 900, clamped 30-3600.",
+        description:
+          "Maximum human wait in seconds on request; default 900, clamped 30-3600. Earlier run cancellation or overall run timeout still applies.",
       }),
     ),
   },
@@ -113,21 +116,14 @@ export function normalizeSecretsRequestParams(value: unknown): NormalizedSecrets
   if (reason && reason.length > 200) {
     throw new ToolInputError("reason must be at most 200 characters");
   }
-  const timeout = params.timeoutSeconds;
-  if (
-    timeout !== undefined &&
-    (typeof timeout !== "number" || !Number.isFinite(timeout) || !Number.isInteger(timeout))
-  ) {
-    throw new ToolInputError("timeoutSeconds must be an integer");
-  }
-  const timeoutSeconds = Math.min(3_600, Math.max(30, timeout ?? DEFAULT_ASK_USER_TIMEOUT_SECONDS));
+  const timeoutSeconds = normalizeQuestionTimeoutSeconds(params.timeoutSeconds);
   const binding: NonNullable<QuestionRequestQuestion["secretStore"]> = {
     name,
     kind: "secret",
     ...(allowedHosts !== undefined ? { allowedHosts } : {}),
     ...(reason ? { reason } : {}),
   };
-  const question = `Provide the secret for ${name}.${reason ? ` ${reason}` : ""}`;
+  const question = `Provide the secret for ${name}.`;
   return {
     ...binding,
     kind: "secret",
@@ -154,18 +150,17 @@ function noSecretAnswerResult(status: "pending" | "expired" | "cancelled") {
   return textResult(`${note}\n\n${JSON.stringify(details, null, 2)}`, details);
 }
 
-function storedSecretResult(params: NormalizedSecretsRequestParams, replacedExisting: boolean) {
+function storedSecretResult(params: NormalizedSecretsRequestParams, provider: string) {
   const details = {
     status: "stored" as const,
     name: params.name,
     kind: params.kind,
-    ...(params.allowedHosts !== undefined ? { allowedHosts: params.allowedHosts } : {}),
-    replacedExisting,
-    ref: { source: "store" as const, id: params.name },
+    ref: { source: "store", provider, id: params.name } satisfies SecretRef,
   };
   const guidance = [
     `Stored ${params.name} without exposing its value.`,
-    `Reference {source:"store", id:"${params.name}"} in config SecretRefs.`,
+    "Use the returned ref in supported config SecretRef fields.",
+    "Human may edit allowed hosts; list current metadata before using them.",
     "Secret values are substituted at egress only when secrets.egressProxy.enabled is true and the destination matches their allowed hosts.",
   ];
   return textResult(`${guidance.join(" ")}\n\n${JSON.stringify(details, null, 2)}`, details);
@@ -191,12 +186,14 @@ function listSecretStoreResult(result: SecretsStoreListResult) {
 
 /** Creates the metadata-only secret-store tool and its human-entered write flow. */
 export function createSecretsTool(params: {
+  config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
   runId?: string;
   gatewayCall?: GatewayQuestionCall;
 }): AnyAgentTool {
   const gatewayCall: GatewayQuestionCall = params.gatewayCall ?? callGatewayTool;
+  const storeProvider = resolveDefaultSecretProviderAlias(params.config ?? {}, "store");
   return {
     label: "Secrets",
     name: "secrets",
@@ -268,24 +265,17 @@ export function createSecretsTool(params: {
             },
             // Store-bound requests are gated on an admin client server-side; the
             // default least-privilege scope for question.request is not enough.
-            { scopes: [ADMIN_SCOPE], ...(signal ? { signal } : {}) },
+            {
+              scopes: [ADMIN_SCOPE],
+              requireAgentRuntimeIdentity: true,
+              ...(signal ? { signal } : {}),
+            },
           ),
         );
         registered = true;
         if (registration?.id !== delivery.questionId) {
           throw new Error("question.request returned an unexpected question id");
         }
-        const record = await gatewayCall(
-          "question.get",
-          {},
-          { id: delivery.questionId },
-          signal ? { signal } : undefined,
-        ).catch(() => undefined);
-        const questionRecord = asNullableRecord(asNullableRecord(record)?.question);
-        const questions = questionRecord?.questions;
-        const replacedExisting =
-          Array.isArray(questions) &&
-          asNullableRecord(questions[0])?.secretStoreExisting !== undefined;
         signal?.addEventListener("abort", cancelOnAbort, { once: true });
         if (signal?.aborted) {
           cancelOnAbort();
@@ -319,7 +309,7 @@ export function createSecretsTool(params: {
           if (result.answers.answers.secret_value?.[0] !== "stored") {
             throw new Error("credential request returned an unexpected answer marker");
           }
-          return storedSecretResult(request, replacedExisting);
+          return storedSecretResult(request, storeProvider);
         }
         if (result.status === "pending") {
           // The human may have submitted between the wait timeout and this
@@ -327,7 +317,7 @@ export function createSecretsTool(params: {
           // answer, which means the credential is already stored.
           const answered = await cancelPendingQuestion("wait-timeout");
           if (answered) {
-            return storedSecretResult(request, replacedExisting);
+            return storedSecretResult(request, storeProvider);
           }
         }
         if (

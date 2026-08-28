@@ -1,6 +1,16 @@
-export const TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT = [
-  "Credentials and secrets include authentication and pairing codes; never ask or request users to report, share, or provide them in chat, conversation messages, replies, or transcripts.",
-  "Never echo or repeat credentials or secrets in chat, conversation messages, replies, or any other transcript.",
-  "Never place, put, or include credentials or secrets—or recommend or suggest doing so—in commands, command-line arguments, URLs, logs, or other visible text, including shell variables or interpolation.",
-  "Use only a dedicated host-owned masked or secure structured credential-entry setup. If no such setup is available, direct the user to a safe external setup instead of collecting the credential in the transcript.",
-].join("\n");
+/** Shared transcript safety; name the credential tool only when it is callable. */
+export function buildCredentialSafetyPrompt(secretsToolName?: string): string {
+  return [
+    "Never request or echo credentials/secrets (including authentication/pairing codes) in chat, replies, or transcripts; never ask users to share them there.",
+    "Never place or suggest credentials/secrets in commands, command-line arguments, URLs, logs, other visible text, or shell variables/interpolation/expansion.",
+    "Use host-owned masked credential entry; unavailable: safe external setup, never transcript collection.",
+    ...(secretsToolName
+      ? [
+          `\`${secretsToolName}\`: list metadata first; request only missing task-needed credentials: name + reason, exact allowedHosts for egress.`,
+          "Human masked entry -> protected shared store; metadata/ref only. Use returned store SecretRef on supported config fields.",
+          "Gateway egress needs enabled proxy + allowed hosts; no plaintext fallback. Existing run credential snapshots may predate this request.",
+          "no_answer: report blocker or continue with best judgment; never ask in chat.",
+        ]
+      : []),
+  ].join("\n");
+}

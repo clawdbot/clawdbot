@@ -50,10 +50,8 @@ function promptDraftAnswers(prompt: QuestionPrompt): Record<string, string[]> {
   return Object.fromEntries(
     prompt.questions.map((question) => {
       const draft = prompt.drafts.get(question.questionId);
-      return [
-        question.questionId,
-        [...(draft?.selected ?? []), ...(draft?.freeText.trim() ? [draft.freeText.trim()] : [])],
-      ];
+      const freeText = question.isSecret ? draft?.freeText : draft?.freeText.trim();
+      return [question.questionId, [...(draft?.selected ?? []), ...(freeText ? [freeText] : [])]];
     }),
   );
 }
@@ -252,9 +250,14 @@ class ChatQuestionPanel extends LitElement {
     this.querySelector<HTMLElement>(".chat-question-panel")?.focus({ preventScroll: true });
   }
 
+  private freeTextValue(question: QuestionPanelQuestion): string | undefined {
+    const draft = this.freeTextById.get(question.questionId);
+    return question.isSecret ? draft : draft?.trim();
+  }
+
   private answerValues(question: QuestionPanelQuestion): string[] {
     const selected = this.selectedById.get(question.questionId) ?? [];
-    const freeText = this.freeTextById.get(question.questionId)?.trim();
+    const freeText = this.freeTextValue(question);
     return [...selected, ...(freeText ? [freeText] : [])];
   }
 
@@ -317,7 +320,7 @@ class ChatQuestionPanel extends LitElement {
     value: string,
   ): void {
     this.freeTextById = new Map(this.freeTextById).set(question.questionId, value);
-    if (!question.multiSelect && value.trim()) {
+    if (!question.multiSelect && (question.isSecret ? value : value.trim())) {
       this.selectedById = new Map(this.selectedById).set(question.questionId, []);
     }
     this.answersChanged(model);
@@ -653,9 +656,9 @@ class ChatQuestionPanel extends LitElement {
         ${question.isOther || question.options.length === 0
           ? html`
               <label
-                class="chat-question-panel__option chat-question-panel__option--other ${this.freeTextById
-                  .get(question.questionId)
-                  ?.trim()
+                class="chat-question-panel__option chat-question-panel__option--other ${this.freeTextValue(
+                  question,
+                )
                   ? "chat-question-panel__option--selected"
                   : ""}"
               >

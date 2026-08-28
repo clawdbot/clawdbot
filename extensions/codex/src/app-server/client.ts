@@ -10,7 +10,9 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseSemver } from "semver";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
+import { resolveDynamicToolServerRequestTimeoutMs } from "./dynamic-tool-execution.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
+import { readCodexDynamicToolCallParams } from "./protocol-validators.js";
 import {
   type CodexAppServerRequestMethod,
   type CodexAppServerRequestParams,
@@ -37,9 +39,6 @@ import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 8 * 1024 * 1024;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
-// agents_wait can use a 600s inner budget plus 30s handler grace. Keep the
-// app-server request guard outside that window so Codex receives the tool result.
-const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 const CODEX_APP_SERVER_OVERLOADED_ERROR_CODE = -32_001;
 const CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES = 3;
@@ -905,10 +904,13 @@ export class CodexAppServerClient {
     request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
   ): Promise<JsonValue | undefined> {
     const controller = new AbortController();
-    const timeoutResponse = timeoutServerRequestResponse(request);
-    if (!timeoutResponse) {
+    if (request.method !== "item/tool/call") {
       return await this.runServerRequestHandlersWithoutTimeout(request, controller.signal);
     }
+    const timeoutMs = resolveDynamicToolServerRequestTimeoutMs(
+      readCodexDynamicToolCallParams(request.params),
+    );
+    const timeoutResponse = timeoutServerRequestResponse(timeoutMs);
 
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -919,11 +921,11 @@ export class CodexAppServerClient {
             embeddedAgentLog.warn("codex app-server server request timed out", {
               id: request.id,
               method: request.method,
-              timeoutMs: CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
+              timeoutMs,
             });
             controller.abort(new Error("codex app-server server request timed out"));
             resolve(timeoutResponse);
-          }, CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
+          }, timeoutMs);
           timeout.unref?.();
         }),
       ]);
@@ -1045,17 +1047,12 @@ function stringifyCodexAppServerMessage(message: RpcRequest | RpcResponse): stri
   );
 }
 
-function timeoutServerRequestResponse(
-  request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
-): JsonValue | undefined {
-  if (request.method !== "item/tool/call") {
-    return undefined;
-  }
+function timeoutServerRequestResponse(timeoutMs: number): JsonValue {
   return {
     contentItems: [
       {
         type: "inputText",
-        text: `OpenClaw dynamic tool call timed out after ${CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS}ms before sending a response to Codex.`,
+        text: `OpenClaw dynamic tool call timed out after ${timeoutMs}ms before sending a response to Codex.`,
       },
     ],
     success: false,

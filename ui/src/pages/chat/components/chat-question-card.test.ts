@@ -181,16 +181,55 @@ describe("shared question panel", () => {
     await panel.updateComplete;
     expect(prompt.secretStoreAllowedHostsDraft).toBe("api.example.test, uploads.example.test");
 
-    const fakeSecret = "fake-secret-value-for-ui-test";
+    const fakeSecret = "  fake-secret-value-for-ui-test  ";
     secret.value = fakeSecret;
     secret.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await panel.updateComplete;
+    expect(prompt.drafts.get("api_key")?.freeText).toBe(fakeSecret);
+    expect(secret.value).toBe(fakeSecret);
     expect(container.textContent).not.toContain(fakeSecret);
     expect(container.innerHTML).not.toContain(fakeSecret);
 
     container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.click();
     expect(onSubmit).toHaveBeenCalledWith({ api_key: [fakeSecret] });
   });
+
+  it.each([
+    { isSecret: true, value: "  synthetic-value  ", expected: "  synthetic-value  " },
+    { isSecret: true, value: "   ", expected: "   " },
+    { isSecret: true, value: "", expected: null },
+    { isSecret: false, value: "  normal answer  ", expected: "normal answer" },
+    { isSecret: false, value: "   ", expected: null },
+  ])(
+    "preserves or normalizes hydrated drafts: $isSecret / '$value'",
+    async ({ isSecret, value, expected }) => {
+      const prompt = gatewayPrompt({
+        questions: [
+          {
+            questionId: "value",
+            header: "Value",
+            question: "Provide a value",
+            options: [],
+            isSecret,
+          },
+        ],
+        drafts: new Map([["value", { selected: new Set<string>(), freeText: value }]]),
+      });
+      const onSubmit = vi.fn();
+      drawGateway(prompt, { onSubmit });
+      await panelIn(container);
+      const input = container.querySelector<HTMLInputElement>("input")!;
+      const submit = container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!;
+      expect(input.value).toBe(expected ?? "");
+      expect(submit.disabled).toBe(expected === null);
+      submit.click();
+      if (expected === null) {
+        expect(onSubmit).not.toHaveBeenCalled();
+      } else {
+        expect(onSubmit).toHaveBeenCalledWith({ value: [expected] });
+      }
+    },
+  );
 
   it("keeps environment store requests masked without exposing a destination-host editor", async () => {
     drawGateway(

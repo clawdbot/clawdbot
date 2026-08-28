@@ -183,11 +183,9 @@ export function describeAskUserTool(): string {
 /** Describes the secrets tool and the store semantics the model cannot observe. */
 export function describeSecretsTool(): string {
   return [
-    "Obtain and manage credentials you never see: `request` asks the human to type a value into a trusted prompt that stores it directly, `list` returns entry metadata, and `delete` removes an entry.",
-    "A requested value is never readable back by any action; use `request` when you need a credential you do not have instead of asking for one in conversation, and never repeat a credential a human pasted into chat.",
-    "`request` blocks until the human answers, so ask only for a credential the current task actually needs.",
-    "Only protected secrets may be requested, and they reach a service through config references or, where the egress proxy is enabled, substitution into outbound requests; plain environment values are set by the operator in Settings or the CLI, never requested here.",
-    "List every hostname that will receive the value in `allowedHosts`: a secret with no allowed hosts can never be substituted, so the request silently produces an unusable credential.",
-    '`reason` is shown to the human deciding whether to provide the value. Stored entries are referenced elsewhere as {source:"store", id:NAME}; if the result is no_answer, continue with best judgment.',
+    "Protected credentials: `list` metadata first; `request` missing task-needed name + reason via human masked entry; `delete` removes an entry.",
+    "Request waits for human; value goes straight to shared store, never model/chat. Use the returned store SecretRef for supported config fields.",
+    "Gateway egress only: enabled proxy + exact allowedHosts required; no hosts blocks egress, not config refs. No plaintext fallback.",
+    "Operator-set env entries are readable; never request them here. no_answer: report blocker or use best judgment, never ask for credentials in chat.",
   ].join(" ");
 }

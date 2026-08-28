@@ -4,9 +4,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { normalizeControlUiBasePath } from "@openclaw/session-url-contract";
 import { resolveControlUiSessionLinkBase } from "../config/control-ui-link-base.js";
-import { resolveGatewayPort } from "../config/paths.js";
 import { emitAgentActivityEvent, type AgentItemEventData } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
@@ -602,7 +600,7 @@ export function handleToolExecutionStart(
       if (payload) {
         const questionId = payload.questionId;
         void waitForAskUserPromptReady(questionId)
-          .then((questions) => {
+          .then(async (questions) => {
             if (!questions) {
               return;
             }
@@ -611,12 +609,14 @@ export function handleToolExecutionStart(
               if (!binding) {
                 return;
               }
-              const config = ctx.params.config;
-              const controlUiBase =
-                resolveControlUiSessionLinkBase(config) ??
-                `http://127.0.0.1:${resolveGatewayPort(config)}${normalizeControlUiBasePath(
-                  config?.gateway?.controlUi?.basePath,
-                )}`;
+              const controlUiBase = resolveControlUiSessionLinkBase(ctx.params.config);
+              if (!controlUiBase) {
+                const message =
+                  "Credential request unavailable here: no reachable Control UI link. Open a trusted Control UI or native app and retry, or ask the operator to enable Control UI and configure gateway.publicOrigin. Never send credentials in chat.";
+                await ctx.params.onToolResult?.({ text: message });
+                // A visible blocker is not a delivered entry form; cancel the pending wait.
+                throw new Error(message);
+              }
               const url = `${controlUiBase}/ask/${encodeURIComponent(questionId)}`;
               return ctx.params.onToolResult?.({
                 text: `🔑 Agent requests credential ${binding.name} (${binding.kind}). Reply is disabled for secrets — open to provide it: ${url}`,

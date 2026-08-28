@@ -3529,10 +3529,12 @@ class ChatController internal constructor(
   ) {
     val gatewayId = currentCacheScope()?.gatewayId
     var claimedOwner: Any? = null
+    var allowedHosts: List<String>? = null
     updateQuestions { prompts ->
       prompts.map { prompt ->
         if (prompt.promptOwner === expected.promptOwner && prompt.status() == ChatQuestionStatus.Pending) {
           claimedOwner = prompt.promptOwner
+          allowedHosts = prompt.draft.secretStoreAllowedHosts(prompt.record.questions)
           prompt.copy(submitting = true, skipping = cancel, errorText = null)
         } else {
           prompt
@@ -3551,6 +3553,7 @@ class ChatController internal constructor(
             if (cancel) {
               put("cancel", JsonPrimitive(true))
             } else {
+              allowedHosts?.let { put("secretStoreAllowedHosts", JsonArray(it.map(::JsonPrimitive))) }
               put(
                 "answers",
                 buildJsonObject {

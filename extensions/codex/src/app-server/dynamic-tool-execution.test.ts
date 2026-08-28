@@ -329,6 +329,51 @@ describe("dynamic tool execution helpers", () => {
     expect(CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS).toBeGreaterThan(fullWaitTimeoutMs);
   });
 
+  it.each([
+    { name: "default", timeoutSeconds: undefined, expectedMs: 930_000 },
+    { name: "explicit 15 minutes", timeoutSeconds: 900, expectedMs: 930_000 },
+    { name: "one hour", timeoutSeconds: 3600, expectedMs: 3_630_000 },
+    { name: "clamped maximum", timeoutSeconds: 99_999, expectedMs: 3_630_000 },
+    { name: "clamped minimum", timeoutSeconds: 1, expectedMs: 60_000 },
+    { name: "invalid fractional", timeoutSeconds: 1.5, expectedMs: 90_000 },
+  ])("preserves the $name human question wait", ({ timeoutSeconds, expectedMs }) => {
+    for (const tool of ["secrets", "ask_user"]) {
+      expect(
+        resolveDynamicToolCallTimeoutMs({
+          call: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: "credential-wait",
+            namespace: null,
+            tool,
+            arguments: {
+              action: "request",
+              name: "TEST_API_KEY",
+              ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
+            },
+          },
+          config: undefined,
+        }),
+      ).toBe(expectedMs);
+    }
+  });
+
+  it.each(["list", "delete"])("keeps secrets %s on the ordinary tool deadline", (action) => {
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "credential-metadata",
+          namespace: null,
+          tool: "secrets",
+          arguments: { action, name: "TEST_API_KEY" },
+        },
+        config: undefined,
+      }),
+    ).toBe(90_000);
+  });
+
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
     vi.useFakeTimers();
     let capturedSignal: AbortSignal | undefined;

@@ -1,5 +1,5 @@
 /** Store-backed exec environment tests cover run snapshots, precedence, and security filtering. */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
@@ -196,6 +196,7 @@ async function captureStoreExecEnvironment(params: {
 }
 
 describe("exec store environment", () => {
+  afterEach(() => vi.unstubAllEnvs());
   beforeAll(async () => {
     ({ createExecTool } = await import("./bash-tools.exec-run.js"));
     ({ createLazyExecTool } = await import("./lazy-exec-tool.js"));
@@ -402,9 +403,14 @@ describe("exec store environment", () => {
     },
   );
 
-  it.each(["gateway", "sandbox", "node"] as const)(
-    "applies enabled secret egress correctly for %s exec",
-    async (host) => {
+  it.each(
+    (["gateway", "sandbox", "node"] as const).flatMap((host) =>
+      [undefined, "off", "0", "false"].map((sentinelMode) => ({ host, sentinelMode })),
+    ),
+  )(
+    "applies enabled secret egress for $host exec with provider sentinels $sentinelMode",
+    async ({ host, sentinelMode }) => {
+      vi.stubEnv("OPENCLAW_SECRET_SENTINELS", sentinelMode);
       await withTeamStoreEntries(
         [
           { name: "AWS_REGION", value: "us-west-2", kind: "env" },
@@ -427,6 +433,9 @@ describe("exec store environment", () => {
             expect(looksLikeSecretSentinel(env.SERVICE_API_KEY ?? "")).toBe(true);
             expect(resolveSecretSentinel(env.SERVICE_API_KEY ?? "")).toBe("enabled-secret");
             expect(env).toMatchObject(EGRESS_ENV);
+            const childEnv = mocks.spawnInputs.at(-1)?.env;
+            expect(childEnv?.SERVICE_API_KEY).toBe(env.SERVICE_API_KEY);
+            expect(JSON.stringify(childEnv)).not.toContain("enabled-secret");
             expect(JSON.stringify(env)).not.toContain("enabled-secret");
             expect(mocks.proxyBindings).toEqual([
               [

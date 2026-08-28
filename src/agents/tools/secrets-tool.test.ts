@@ -1,5 +1,9 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { SecretRefSchema } from "../../config/zod-schema.core.js";
+import { isBuiltInDefaultSecretProviderRef } from "../../secrets/ref-contract.js";
 import { claimPendingAgentQuestionAnswer } from "../harness/gateway-question.js";
 import { reserveAskUserPromptDelivery, settleAskUserPromptDelivery } from "./ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-support.js";
@@ -53,7 +57,7 @@ describe("secrets request normalization", () => {
         {
           questionId: "secret_value",
           header: "API key",
-          question: "Provide the secret for SERVICE_API_KEY. Deploy the service",
+          question: "Provide the secret for SERVICE_API_KEY.",
           options: [],
           isSecret: true,
           secretStore: {
@@ -106,14 +110,23 @@ describe("secrets request normalization", () => {
 });
 
 describe("secrets tool", () => {
-  it("stores through a human-only question and returns metadata without claiming chat text", async () => {
+  it.each<{ label: string; config: OpenClawConfig }>([
+    { label: "built-in store", config: {} },
+    { label: "renamed store default", config: { secrets: { defaults: { store: "teamstore" } } } },
+    {
+      label: "store default shared with another source",
+      config: {
+        secrets: {
+          defaults: { store: "teamstore" },
+          providers: { teamstore: { source: "env" } },
+        },
+      },
+    },
+  ])("returns a valid $label ref without claiming chat text", async ({ config }) => {
     let finishWait: ((value: unknown) => void) | undefined;
     const gateway = gatewayStub(async (method, _options, params) => {
       if (method === "question.request") {
         return { id: params.id };
-      }
-      if (method === "question.get") {
-        return { question: { questions: [{ secretStoreExisting: { updatedAtMs: 123 } }] } };
       }
       if (method === "question.waitAnswer") {
         return await new Promise((resolve) => {
@@ -123,6 +136,7 @@ describe("secrets tool", () => {
       throw new Error(`unexpected method ${method}`);
     });
     const tool = createSecretsTool({
+      config,
       agentId: "main",
       sessionKey: "agent:main:secrets",
       runId: "run-secrets",
@@ -149,18 +163,24 @@ describe("secrets tool", () => {
     });
     const result = await pending;
 
+    const ref = SecretRefSchema.parse(asNullableRecord(result.details)?.ref);
+    expect(ref.source).toBe("store");
+    expect(ref.id).toBe("SERVICE_API_KEY");
+    expect(isBuiltInDefaultSecretProviderRef(config, ref)).toBe(true);
     expect(result.details).toEqual({
       status: "stored",
       name: "SERVICE_API_KEY",
       kind: "secret",
-      allowedHosts: ["api.example.test"],
-      replacedExisting: true,
-      ref: { source: "store", id: "SERVICE_API_KEY" },
+      ref,
     });
     expect(JSON.stringify(result)).not.toContain("test-secret-value-123");
     expect(result.content[0]).toMatchObject({
-      text: expect.stringContaining('{source:"store", id:"SERVICE_API_KEY"}'),
+      text: expect.stringContaining("Use the returned ref"),
     });
+    expect(result.content[0]).toMatchObject({
+      text: expect.stringContaining("Human may edit allowed hosts; list current metadata"),
+    });
+    expect(JSON.stringify(result)).not.toContain("api.example.test");
     expect(gateway.mock).toHaveBeenCalledWith(
       "question.request",
       {},
@@ -186,33 +206,8 @@ describe("secrets tool", () => {
       }),
       // Store-bound minting is admin-gated server-side; the tool must declare
       // the scope explicitly instead of the questions-scope default.
-      { scopes: ["operator.admin"] },
+      { scopes: ["operator.admin"], requireAgentRuntimeIdentity: true },
     );
-  });
-
-  it("continues a registered credential request when optional replacement metadata is unavailable", async () => {
-    const gateway = gatewayStub(async (method, _options, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.get") {
-        throw new Error("metadata temporarily unavailable");
-      }
-      return { status: "answered", answers: { answers: { secret_value: ["stored"] } } };
-    });
-
-    const result = await createSecretsTool({ gatewayCall: gateway.call }).execute("call-metadata", {
-      action: "request",
-      name: "SERVICE_SETTING",
-      kind: "secret",
-    });
-
-    expect(result.details).toMatchObject({
-      status: "stored",
-      kind: "secret",
-      replacedExisting: false,
-    });
-    expect(gateway.mock.mock.calls.some(([method]) => method === "question.resolve")).toBe(false);
   });
 
   it.each(["pending", "expired", "cancelled"] as const)(
@@ -221,9 +216,6 @@ describe("secrets tool", () => {
       const gateway = gatewayStub(async (method, _options, params) => {
         if (method === "question.request") {
           return { id: params.id };
-        }
-        if (method === "question.get") {
-          return { question: { questions: [{}] } };
         }
         return { status };
       });
@@ -260,9 +252,6 @@ describe("secrets tool", () => {
       if (method === "question.request") {
         return { id: params.id };
       }
-      if (method === "question.get") {
-        return { question: { questions: [{}] } };
-      }
       if (method === "question.resolve") {
         throw terminal;
       }
@@ -289,9 +278,6 @@ describe("secrets tool", () => {
     const gateway = gatewayStub(async (method, _options, params, extra) => {
       if (method === "question.request") {
         return { id: params.id };
-      }
-      if (method === "question.get") {
-        return { question: { questions: [{}] } };
       }
       if (method === "question.resolve") {
         return { status: "cancelled" };
@@ -343,9 +329,6 @@ describe("secrets tool", () => {
     const gateway = gatewayStub(async (method, _options, params) => {
       if (method === "question.request") {
         return { id: params.id };
-      }
-      if (method === "question.get") {
-        return { question: { questions: [{}] } };
       }
       if (method === "question.waitAnswer") {
         return await new Promise((resolve) => {

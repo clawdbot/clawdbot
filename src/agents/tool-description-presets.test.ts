@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   describeAskUserTool,
+  describeSecretsTool,
   describeSessionsHistoryTool,
   describeSessionsListTool,
   describeSessionsSearchTool,
@@ -16,6 +17,19 @@ describe("ask_user tool guidance", () => {
     expect(description).toContain("native controls");
     expect(description).toContain("Put every selectable choice in `options`");
     expect(description).toContain("Use `multiSelect` only");
+  });
+});
+
+describe("secrets tool guidance", () => {
+  it("distinguishes config references from egress permission without offering plaintext", () => {
+    const description = describeSecretsTool();
+    expect(description).toContain("`list` metadata first");
+    expect(description).toContain("human masked entry");
+    expect(description).toContain("store SecretRef for supported config fields");
+    expect(description).toContain("enabled proxy + exact allowedHosts required");
+    expect(description).toContain("no hosts blocks egress, not config refs");
+    expect(description).toContain("No plaintext fallback");
+    expect(description).toContain("no_answer: report blocker or use best judgment");
   });
 });
 

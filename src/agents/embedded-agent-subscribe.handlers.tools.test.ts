@@ -447,52 +447,84 @@ describe("handleToolExecutionStart read path checks", () => {
     await activation.finish();
   });
 
-  it("delivers credential requests as absolute Control UI links without answer affordances", async () => {
-    const { ctx } = createTestContext();
-    const onToolResult = vi.fn();
-    ctx.params.onToolResult = onToolResult;
-    ctx.params.config = {
-      gateway: {
-        publicOrigin: "https://console.example.test",
-        controlUi: { basePath: "/control" },
-      },
-    };
-    const args = { action: "request", name: "TEST_API_KEY", kind: "secret" };
-    let questionId = "";
-    let resolveAnswer: ((value: { status: "cancelled" }) => void) | undefined;
-    const tool = createSecretsTool({
-      agentId: "agent-test-id",
-      sessionKey: "agent:unit-session",
-      runId: "run-test",
-      gatewayCall: async (method, _options, params) => {
-        if (method === "question.request") {
-          questionId = String(requireRecord(params, "question request").id);
-          return { id: questionId };
-        }
-        if (method === "question.get") {
-          return { question: { questions: [] } };
-        }
-        if (method === "question.waitAnswer") {
-          return await new Promise((resolve) => {
-            resolveAnswer = resolve;
-          });
-        }
-        throw new Error(`unexpected method ${method}`);
-      },
-    });
+  it.each([
+    {
+      name: "public Control UI",
+      publicOrigin: "https://console.example.test",
+      enabled: true,
+      available: true,
+    },
+    { name: "missing public origin", publicOrigin: undefined, enabled: true, available: false },
+    {
+      name: "disabled Control UI",
+      publicOrigin: "https://console.example.test",
+      enabled: false,
+      available: false,
+    },
+  ])(
+    "delivers a credential link or visible blocker for $name",
+    async ({ publicOrigin, enabled, available }) => {
+      const { ctx } = createTestContext();
+      const onToolResult = vi.fn();
+      ctx.params.onToolResult = onToolResult;
+      ctx.params.config = {
+        gateway: {
+          publicOrigin,
+          controlUi: { basePath: "/control", enabled },
+        },
+      };
+      const args = { action: "request", name: "TEST_API_KEY", kind: "secret" };
+      let questionId = "";
+      let resolveAnswer: ((value: { status: "cancelled" }) => void) | undefined;
+      const tool = createSecretsTool({
+        agentId: "agent-test-id",
+        sessionKey: "agent:unit-session",
+        runId: "run-test",
+        gatewayCall: async (method, _options, params) => {
+          if (method === "question.request") {
+            questionId = String(requireRecord(params, "question request").id);
+            return { id: questionId };
+          }
+          if (method === "question.waitAnswer") {
+            return await new Promise((resolve) => {
+              resolveAnswer = resolve;
+            });
+          }
+          if (method === "question.resolve") {
+            resolveAnswer?.({ status: "cancelled" });
+            return { ok: true };
+          }
+          throw new Error(`unexpected method ${method}`);
+        },
+      });
 
-    await startTool(ctx, { toolName: "secrets", toolCallId: "secret-call-1", args });
-    const pending = tool.execute("secret-call-1", args);
-    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+      await startTool(ctx, { toolName: "secrets", toolCallId: "secret-call-1", args });
+      const pending = tool.execute("secret-call-1", args);
+      const outcome = available
+        ? pending
+        : expect(pending).rejects.toThrow("credential-request prompt delivery failed");
+      await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
 
-    expect(onToolResult).toHaveBeenCalledWith({
-      text: `🔑 Agent requests credential TEST_API_KEY (secret). Reply is disabled for secrets — open to provide it: https://console.example.test/control/ask/${questionId}`,
-    });
-    expect(onToolResult.mock.calls[0]?.[0]).not.toHaveProperty("channelData");
-    expect(onToolResult.mock.calls[0]?.[0]).not.toHaveProperty("presentation");
-    resolveAnswer?.({ status: "cancelled" });
-    await pending;
-  });
+      if (available) {
+        expect(onToolResult).toHaveBeenCalledWith({
+          text: `🔑 Agent requests credential TEST_API_KEY (secret). Reply is disabled for secrets — open to provide it: https://console.example.test/control/ask/${questionId}`,
+        });
+      } else {
+        const text = onToolResult.mock.calls[0]?.[0]?.text;
+        expect(text).toContain("Credential request unavailable here");
+        expect(text).toContain("Control UI or native app");
+        expect(text).toContain("retry");
+        expect(text).toContain("Never send credentials in chat");
+        expect(text).not.toMatch(/https?:/);
+      }
+      expect(onToolResult.mock.calls[0]?.[0]).not.toHaveProperty("channelData");
+      expect(onToolResult.mock.calls[0]?.[0]).not.toHaveProperty("presentation");
+      if (available) {
+        resolveAnswer?.({ status: "cancelled" });
+      }
+      await outcome;
+    },
+  );
 
   it("keeps multi-question ask_user prompts text-only", async () => {
     const questions = [

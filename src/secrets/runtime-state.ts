@@ -94,13 +94,14 @@ function listLocatedSecretRefs(
   return refs;
 }
 
-/** Canonical store SecretRef keys in config that resolve one team entry name. */
-export function collectSecretStoreRefKeysInConfig(
-  config: OpenClawConfig,
+/** Canonical store refs across config and auth profiles for one mutated team entry. */
+export function collectSecretStoreRefKeysInSnapshot(
+  snapshot: Pick<PreparedSecretsRuntimeSnapshot, "sourceConfig" | "authStores">,
   name: string,
 ): Set<string> {
+  const sources = [snapshot.sourceConfig, ...snapshot.authStores.map(({ store }) => store)];
   return new Set(
-    listLocatedSecretRefs(config, config.secrets?.defaults).flatMap(({ ref }) =>
+    listLocatedSecretRefs(sources, snapshot.sourceConfig.secrets?.defaults).flatMap(({ ref }) =>
       ref.source === "store" && ref.id === name ? [secretRefKey(ref)] : [],
     ),
   );
