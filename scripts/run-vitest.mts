@@ -5,7 +5,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import { constants as osConstants, tmpdir } from "node:os";
 import path from "node:path";
-import { createTempDirTracker } from "../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../test/helpers/temp-dir.ts";
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
