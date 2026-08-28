@@ -977,6 +977,7 @@ describe("install-cli.sh", () => {
     const result = runInstallCliShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
+      run_pnpm() { printf 'undefined\n'; }
       unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline
       if should_prefer_offline_pnpm_install; then printf 'default=true\\n'; fi
       PNPM_CONFIG_PREFER_OFFLINE=false
@@ -995,70 +996,26 @@ describe("install-cli.sh", () => {
     );
   });
 
-  it("preserves explicit pnpm prefer-offline settings from npmrc files", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-prefer-offline-npmrc-"));
-    const project = join(tmp, "project");
-    const underscoreProject = join(tmp, "underscore-project");
-    const userNpmrc = join(tmp, "user.npmrc");
-    mkdirSync(project, { recursive: true });
-    mkdirSync(underscoreProject, { recursive: true });
-    writeFileSync(join(project, ".npmrc"), "prefer-offline=false\n");
-    writeFileSync(join(underscoreProject, ".npmrc"), "prefer_offline=false\n");
-    writeFileSync(userNpmrc, "prefer-offline=false\n");
+  it.each([
+    ["undefined", "true"],
+    ["null", "true"],
+    ["false", "false"],
+    ["true", "false"],
+    ["failure", "false"],
+  ])("uses pnpm's effective prefer-offline config when it returns %s", (configured, expected) => {
+    const result = runInstallCliShell(
+      [
+        "set -euo pipefail",
+        `source "${SCRIPT_PATH}"`,
+        'run_pnpm() { [[ "$*" == "-C $PWD config get prefer-offline" ]]; [[ "$CONFIGURED" != "failure" ]] || return 1; printf "%s\\n" "$CONFIGURED"; }',
+        "unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline",
+        'if should_prefer_offline_pnpm_install "$PWD"; then printf "result=true\\n"; else printf "result=false\\n"; fi',
+      ].join("\n"),
+      { CONFIGURED: configured },
+    );
 
-    try {
-      const projectResult = runInstallCliShell(
-        [
-          "set -euo pipefail",
-          `source "${SCRIPT_PATH}"`,
-          "unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline",
-          "unset PNPM_CONFIG_NPMRC_AUTH_FILE pnpm_config_npmrc_auth_file PNPM_CONFIG_USERCONFIG pnpm_config_userconfig NPM_CONFIG_USERCONFIG npm_config_userconfig",
-          'if should_prefer_offline_pnpm_install "$PROJECT"; then printf "project=true\\n"; else printf "project=false\\n"; fi',
-        ].join("\n"),
-        { PROJECT: project },
-      );
-      const userResult = runInstallCliShell(
-        [
-          "set -euo pipefail",
-          `source "${SCRIPT_PATH}"`,
-          "unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline",
-          "unset PNPM_CONFIG_NPMRC_AUTH_FILE pnpm_config_npmrc_auth_file PNPM_CONFIG_USERCONFIG pnpm_config_userconfig NPM_CONFIG_USERCONFIG npm_config_userconfig",
-          "for env_key in NPM_CONFIG_USERCONFIG PNPM_CONFIG_USERCONFIG pnpm_config_userconfig PNPM_CONFIG_NPMRC_AUTH_FILE pnpm_config_npmrc_auth_file; do",
-          '  export "$env_key=$USER_NPMRC"',
-          '  if should_prefer_offline_pnpm_install "$PROJECT"; then printf "%s=true\\n" "$env_key"; else printf "%s=false\\n" "$env_key"; fi',
-          '  unset "$env_key"',
-          "done",
-        ].join("\n"),
-        { PROJECT: tmp, USER_NPMRC: userNpmrc },
-      );
-      const underscoreResult = runInstallCliShell(
-        [
-          "set -euo pipefail",
-          `source "${SCRIPT_PATH}"`,
-          "unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline",
-          "unset PNPM_CONFIG_NPMRC_AUTH_FILE pnpm_config_npmrc_auth_file PNPM_CONFIG_USERCONFIG pnpm_config_userconfig NPM_CONFIG_USERCONFIG npm_config_userconfig",
-          'if should_prefer_offline_pnpm_install "$PROJECT"; then printf "underscore=true\\n"; else printf "underscore=false\\n"; fi',
-        ].join("\n"),
-        { PROJECT: underscoreProject },
-      );
-
-      expect(projectResult.status).toBe(0);
-      expect(projectResult.stdout).toContain("project=false");
-      expect(userResult.status).toBe(0);
-      for (const envKey of [
-        "NPM_CONFIG_USERCONFIG",
-        "PNPM_CONFIG_USERCONFIG",
-        "pnpm_config_userconfig",
-        "PNPM_CONFIG_NPMRC_AUTH_FILE",
-        "pnpm_config_npmrc_auth_file",
-      ]) {
-        expect(userResult.stdout).toContain(`${envKey}=false`);
-      }
-      expect(underscoreResult.status).toBe(0);
-      expect(underscoreResult.stdout).toContain("underscore=true");
-    } finally {
-      rmSync(tmp, { force: true, recursive: true });
-    }
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`result=${expected}`);
   });
 
   it("uses the repo Corepack pnpm when a global pnpm version is already present", () => {

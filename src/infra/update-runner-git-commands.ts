@@ -1,6 +1,5 @@
-import { hasRawPnpmConfigKey } from "./npm-install-env.js";
 import { DEV_BRANCH } from "./update-channels.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { CommandRunner, UpdateStepResult } from "./update-runner-types.js";
 
 const BUILD_MAX_OLD_SPACE_MB = 8192;
 const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
@@ -43,11 +42,37 @@ export function resolveBuildEnv(
   };
 }
 
-export function resolveInstallEnv(
+async function hasExplicitPnpmPreferOfflineConfig(params: {
+  runCommand: CommandRunner;
+  cwd: string;
+  timeoutMs: number;
+  env: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  try {
+    const result = await params.runCommand(["pnpm", "config", "get", "prefer-offline"], {
+      cwd: params.cwd,
+      timeoutMs: params.timeoutMs,
+      env: params.env,
+    });
+    if (result.code !== 0) {
+      return true;
+    }
+    // pnpm reports only explicitly configured typed values; these sentinels mean absent.
+    const value = result.stdout.trim();
+    return value !== "" && value !== "undefined" && value !== "null";
+  } catch {
+    // A failed provenance check must not override an operator's possible explicit policy.
+    return true;
+  }
+}
+
+export async function resolveInstallEnv(
   manager: "pnpm" | "bun" | "npm",
-  env?: NodeJS.ProcessEnv,
-  cwd?: string,
-): NodeJS.ProcessEnv | undefined {
+  env: NodeJS.ProcessEnv | undefined,
+  cwd: string,
+  runCommand: CommandRunner,
+  timeoutMs: number,
+): Promise<NodeJS.ProcessEnv | undefined> {
   if (manager !== "pnpm") {
     return env;
   }
@@ -55,9 +80,10 @@ export function resolveInstallEnv(
   const hasExplicitPreferOffline =
     effectiveEnv.pnpm_config_prefer_offline !== undefined ||
     effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE !== undefined;
-  const hasConfigPreferOffline = hasRawPnpmConfigKey(effectiveEnv, "prefer-offline", {
-    npmConfigCwd: cwd,
-  });
+  const hasConfigPreferOffline =
+    hasExplicitPreferOffline
+      ? false
+      : await hasExplicitPnpmPreferOfflineConfig({ runCommand, cwd, timeoutMs, env: effectiveEnv });
   const installEnv: NodeJS.ProcessEnv = {
     ...env,
     PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",

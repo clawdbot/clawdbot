@@ -413,10 +413,12 @@ export async function updateGitCheckout(params: {
     return await rollbackError(manager.reason);
   }
   try {
-    const installEnv = resolveInstallEnv(
+    const installEnv = await resolveInstallEnv(
       manager.manager,
       manager.env ?? defaultCommandEnv,
       gitRoot,
+      runCommand,
+      timeoutMs,
     );
     let installStep = await runStep(
       step(

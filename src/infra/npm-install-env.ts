@@ -68,16 +68,6 @@ function resolveEnvPath(
   return raw ? resolveNpmConfigPath(raw, env) : null;
 }
 
-function resolvePnpmUserNpmrc(env: NodeJS.ProcessEnv): string {
-  // pnpm resolves these before loading .npmrc; order matches its config reader.
-  return (
-    resolveEnvPath(env, "pnpm_config_npmrc_auth_file", "PNPM_CONFIG_NPMRC_AUTH_FILE") ??
-    resolveEnvPath(env, "pnpm_config_userconfig", "PNPM_CONFIG_USERCONFIG") ??
-    resolveEnvPath(env, "npm_config_userconfig", "NPM_CONFIG_USERCONFIG") ??
-    resolveHomeNpmrc(env)
-  );
-}
-
 function resolveHomeNpmrc(env: NodeJS.ProcessEnv): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
   return path.join(home, ".npmrc");
@@ -250,16 +240,6 @@ function hasRawNpmConfigKey(
   scope: NpmConfigScope = {},
 ): boolean {
   return resolveNpmConfigFiles(env, scope).some((file) => hasNpmrcConfigKey(file, key));
-}
-
-export function hasRawPnpmConfigKey(
-  env: NodeJS.ProcessEnv,
-  key: string,
-  scope: NpmConfigScope = {},
-): boolean {
-  return resolveNpmConfigFiles(env, scope, resolvePnpmUserNpmrc(env)).some((file) =>
-    hasNpmrcConfigKey(file, key),
-  );
 }
 
 function resolveNpmFreshnessBypassMode(
