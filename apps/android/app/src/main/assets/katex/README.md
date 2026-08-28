@@ -1,9 +1,9 @@
 # KaTeX Android assets
 
-- Version: KaTeX 0.17.0 (`v0.17.0`, released 2026-05-22)
-- Source: https://github.com/KaTeX/KaTeX/releases/tag/v0.17.0
-- Release archive: https://github.com/KaTeX/KaTeX/releases/download/v0.17.0/katex.tar.gz
-- Published and verified archive SHA-256: `f77cf2555a40e879a4784e43e229d41867f106125bc05b15161de3e761b64b88`
+- Version: KaTeX 0.18.4 (`v0.18.4`, released 2026-08-10)
+- Source: https://github.com/KaTeX/KaTeX/releases/tag/v0.18.4
+- Release archive: https://github.com/KaTeX/KaTeX/releases/download/v0.18.4/katex.tar.gz
+- Published and verified archive SHA-256: `a3602aeaca15779474b34babd75481c5251a7f78e68241a1b68d8fe2cec043eb`
 
 Only the minified runtime, its stylesheet, and the WOFF2 fonts referenced by that stylesheet are copied from the release archive. `index.html` and `renderer.js` are OpenClaw's local rendering shell. No auto-render extension, mhchem extension, source map, WOFF, or TTF file is bundled.
 
@@ -31,7 +31,7 @@ d04c54219f9eaec6d4d4fd42dfb28785975a4794d6b2fc71e566b9cd6db842dd  fonts/KaTeX_Si
 a4af7d414440a1c1790825cfb700cf9cf43b0f2c4b04f0ebc523011ad9853ec0  fonts/KaTeX_Size4-Regular.woff2
 71d517d67827787cfabdf186914cc3358eda539e37931941f2b2fd4a21f68c0b  fonts/KaTeX_Typewriter-Regular.woff2
 e73bea6d899a3f89595d37f5713cb5ddabc4084fc428a5931782628ee14799e2  index.html
-a34ad8fc188e8f5a3af7ceaa2a58d7210c6c9171335a15bff2b48ebcd6a6f5b0  katex.min.css
-45fbe318fea878fdc0a111913dc1f87894b2c439360d0228c086ef313f213efc  katex.min.js
-3cefe6fba565e189311b29265eb842484a637e1a80b0b5e766ab05bfc9ad452f  renderer.js
+180c2d77d434d7da51d6625c50a964d4fd6fdbdb9bc8796a0a016c30c49931fb  katex.min.css
+2ec5916941ef4383e0314eaabcc712301b06001d9fb68e08d751d2bae5a27a1a  katex.min.js
+7a96da76b57e269ba38aa12a8a1203040d4a12f43a152a93f556bff1254c2440  renderer.js
 ```

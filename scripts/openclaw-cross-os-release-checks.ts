@@ -14,14 +14,18 @@ import {
   resolveProviderConfig,
   resolveRunnerMatrix,
 } from "./lib/cross-os-release-checks/config.ts";
-import { prepareCandidate, readProvidedCandidate } from "./lib/cross-os-release-checks/install.ts";
+import {
+  npmCommand,
+  prepareCandidate,
+  readProvidedCandidate,
+} from "./lib/cross-os-release-checks/install.ts";
 import {
   runDevUpdateSuite,
   runFreshLane,
   runInstallerFreshSuite,
   runUpgradeLane,
 } from "./lib/cross-os-release-checks/lanes.ts";
-import { startStaticFileServer } from "./lib/cross-os-release-checks/process.ts";
+import { runCommand, startStaticFileServer } from "./lib/cross-os-release-checks/process.ts";
 import {
   requireArg,
   writeCandidateManifest,
@@ -149,6 +153,8 @@ async function main(argv: string[]) {
     platform: process.platform,
     runnerOs: process.env.OPENCLAW_RELEASE_CHECK_OS ?? "",
     runnerLabel: process.env.OPENCLAW_RELEASE_CHECK_RUNNER ?? "",
+    nodeVersion: process.version,
+    npmVersion: await readNpmVersion(logsDir),
     provider,
     mode,
     suite,
@@ -255,5 +261,18 @@ async function main(argv: string[]) {
 
   if (summary.result.status !== "pass") {
     process.exit(1);
+  }
+}
+
+async function readNpmVersion(logsDir: string) {
+  try {
+    const result = await runCommand(npmCommand(), ["--version"], {
+      logPath: join(logsDir, "npm-version.log"),
+      timeoutMs: 30_000,
+      check: false,
+    });
+    return result.exitCode === 0 ? result.stdout.trim() || "unknown" : "unknown";
+  } catch {
+    return "unknown";
   }
 }

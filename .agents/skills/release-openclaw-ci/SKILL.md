@@ -55,18 +55,44 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   access. With
   `fail_fast=true`, Release Decision may cancel only the exact still-active
   child that owns a blocking failure.
+- Same-parent continuation requires the original root to have been dispatched
+  with `fail_fast=false`. The controller verifies that exact logged input
+  before any rerun mutation.
 - After dispatch, one immutable execution-plan artifact records the original
   parent attempt, exact child tuples and titles, selected coverage, gates, and
-  reuse identity. Decision, Drain, manifest writing, evidence validation, and
-  final verification consume that plan. A collector retry restores it and
-  adopts the same children; missing plan state is an orchestration failure, not
-  permission to redispatch.
+  reuse identity. The same bytes are saved under an exact run-ID cache key.
+  Decision, Drain, manifest writing, evidence validation, and final verification
+  consume the artifact for their current attempt. A collector retry restores
+  the cached plan, validates it, re-uploads its artifact, and adopts the same
+  children; missing plan state is an orchestration failure, not permission to
+  reconstruct the plan or redispatch.
 - Reused evidence is not trusted merely because plan sealing found it. Release
   Decision repeats the sealed target SHA, evidence SHA, policy, changed paths,
   selected run, root run, source manifest, trusted tooling identity, and
   exact-child checks before returning `passed`.
 - Parent retries select the newest Decision and Drain artifacts independently;
   both must bind the same immutable plan even when their source attempts differ.
+- Child retries are part of the same immutable plan only when the child run ID,
+  workflow path, ref, Tooling SHA, dispatch title, event, target, candidate, and
+  validation inputs remain exact. Newer child attempts replace matching jobs;
+  jobs absent from a newer attempt carry forward. A duplicate job identity,
+  missing attempt, regressed attempt, or changed tuple fails closed.
+- Use `pnpm frv status|continue --failed|verify` for attempt-aware recovery.
+  The controller is stateless: the immutable execution plan, exact GitHub run
+  attempts, Diagnostic Drain, and final manifest are the only authorities. It
+  never writes a tag, package, registry entry, release candidate, or
+  publication.
+- Post-merge controller proof must use the reviewed landed SHA on protected
+  `main` through the non-release `FRV Proof Broker` and `FRV Proof Fixture`.
+  Require the exact fixed no-op fixture run to advance from its intentional
+  attempt-one failure to an attempt-two pass. The broker must emit its receipt
+  without creating a release candidate, release artifact, publication,
+  repository ref, replacement parent, or other workflow mutation. This is the
+  hosted GitHub failed-job rerun proof; focused controller tests own immutable
+  plan eligibility, green-attempt preservation, same-parent collection, and
+  strict-verifier invocation. Never use a real Full Release Validation run for
+  this proof. See
+  [Full Release Validation](/reference/full-release-validation#post-merge-continuation-proof).
 - Use one release operator, one transition-only watcher, and at most one
   investigator for the current failed surface. Do not build audit-review-plan
   trees around a single workflow transition.
@@ -129,6 +155,22 @@ until their dependent enforcement changes land.
 - Recover one failed surface with one diagnosis, one fix when needed, and one
   narrow retry. Then reassess the release decision. Do not automatically
   dispatch `rerun_group=all`.
+- For a supported parent, `pnpm frv continue --failed --run <parent-run-id>`
+  adopts any active newer child attempt, reruns failed child jobs in parallel,
+  leaves green children untouched, then reruns the parent once to restore the
+  immutable plan and seal a trusted all-group manifest. It does not start a
+  second child retry while an attempt is active.
+- Inspect without mutation:
+
+  ```bash
+  pnpm frv status --run <parent-run-id>
+  pnpm frv verify --run <successful-parent-run-id>
+  ```
+
+- Parents whose immutable plan predates attempt-aware evidence cannot be
+  continued. Start a fresh all-group Full Release Validation; never reconstruct
+  old state or dispatch a replacement parent.
+
 - Controller retries are `ci`, `plugin-prerelease`, `install-smoke`,
   `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`, `npm-telegram`,
   or `performance`. Never use the removed `release-checks` handle. `qa` is
@@ -321,7 +363,8 @@ The `full-release-diagnostics-<run-id>-<attempt>` artifact is the terminal
 failure and timing manifest. Use it after an early blocker instead of
 restarting `all` merely to discover what the still-running children found.
 The stable `full-release-execution-plan-<run-id>` artifact is the identity
-source for every collector attempt.
+source within each collector attempt; retry attempts restore its immutable
+run-ID-cached bytes first.
 
 ## Failure Triage
 

@@ -25,6 +25,7 @@ extension OpenClawChatViewModel {
             guard next != preferredThinkingLevel || self.thinkingOverrideIsInherited else { return }
         }
 
+        self.errorText = nil
         let sessionKey = self.sessionKey
         let acceptedBaseline = Self.normalizedThinkingLevel(currentSessionEntry()?.thinkingLevel)
             ?? Self.normalizedThinkingLevel(thinkingLevel)
@@ -159,6 +160,7 @@ extension OpenClawChatViewModel {
                 self.updateCurrentSessionThinkingLevel(
                     self.acceptedThinkingOverrideClearedByTarget[target] == true ? nil : rollbackLevel,
                     sessionKey: sessionKey)
+                self.errorText = error.localizedDescription
             }
         }
     }

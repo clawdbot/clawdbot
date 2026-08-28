@@ -120,49 +120,48 @@ function resolveSkillReferenceInvocations(params: {
 export function resolveSkillCommandInvocation(params: {
   commandBodyNormalized: string;
   skillCommands: SkillCommandSpec[];
-}): { command: SkillCommandSpec; args?: string } | null {
+}): { command: SkillCommandSpec; args?: string; inline?: boolean } | null {
   const trimmed = params.commandBodyNormalized.trim();
-  if (!trimmed.startsWith("/")) {
-    return null;
-  }
-  const match = trimmed.match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
-  if (!match) {
-    return null;
-  }
-  const commandName = normalizeOptionalLowercaseString(match[1]);
-  if (!commandName) {
-    return null;
-  }
-  if (commandName === "skill") {
-    const remainder = match[2]?.trim();
-    if (!remainder) {
+  if (trimmed.startsWith("/")) {
+    const match = trimmed.match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
+    if (!match) {
       return null;
     }
-    const skillMatch = remainder.match(/^([^\s]+)(?:\s+([\s\S]+))?$/);
-    if (!skillMatch) {
+    const commandName = normalizeOptionalLowercaseString(match[1]);
+    if (!commandName) {
       return null;
     }
-    const skillCommand = findSkillCommand(params.skillCommands, skillMatch[1] ?? "");
-    if (!skillCommand) {
-      return null;
+    if (commandName === "skill") {
+      const remainder = match[2]?.trim();
+      if (!remainder) {
+        return null;
+      }
+      const skillMatch = remainder.match(/^([^\s]+)(?:\s+([\s\S]+))?$/);
+      if (!skillMatch) {
+        return null;
+      }
+      const skillCommand = findSkillCommand(params.skillCommands, skillMatch[1] ?? "");
+      if (!skillCommand) {
+        return null;
+      }
+      const args = skillMatch[2]?.trim();
+      return { command: skillCommand, args: args || undefined };
     }
-    const args = skillMatch[2]?.trim();
-    return { command: skillCommand, args: args || undefined };
+    const command = params.skillCommands.find(
+      (entry) => normalizeOptionalLowercaseString(entry.name) === commandName,
+    );
+    if (command) {
+      const args = match[2]?.trim();
+      return { command, args: args || undefined };
+    }
   }
-  const command = params.skillCommands.find(
-    (entry) => normalizeOptionalLowercaseString(entry.name) === commandName,
-  );
-  if (!command) {
-    return null;
-  }
-  const args = match[2]?.trim();
-  return { command, args: args || undefined };
+  return null;
 }
 
 export function expandBundleCommandPromptTemplate(template: string, args?: string): string {
   const normalizedArgs = args?.trim() ?? "";
   const rendered = template.includes("$ARGUMENTS")
-    ? template.replaceAll("$ARGUMENTS", normalizedArgs)
+    ? template.replaceAll("$ARGUMENTS", () => normalizedArgs)
     : template;
   if (!normalizedArgs || template.includes("$ARGUMENTS")) {
     return rendered.trim();
@@ -240,13 +239,26 @@ export function expandExplicitSkillReferences(params: {
     : available.length > MAX_EXPLICIT_SKILL_REFERENCES
       ? `Too many skill references. Use at most ${MAX_EXPLICIT_SKILL_REFERENCES} skills in one message.`
       : undefined;
+  return expandResolvedSkillReferences({ text: params.text, skills: available, error });
+}
+
+function expandResolvedSkillReferences(params: {
+  text: string;
+  skills: SkillCommandSpec[];
+  error?: string;
+}): { body: string; error?: string; skills: SkillCommandSpec[] } {
+  const error =
+    params.error ??
+    (params.skills.length > MAX_EXPLICIT_SKILL_REFERENCES
+      ? `Too many skill references. Use at most ${MAX_EXPLICIT_SKILL_REFERENCES} skills in one message.`
+      : undefined);
   if (error) {
     return { body: params.text, error, skills: [] };
   }
-  if (available.length === 0) {
+  if (params.skills.length === 0) {
     return { body: params.text, skills: [] };
   }
-  const referenceLines = available.map((skill) =>
+  const referenceLines = params.skills.map((skill) =>
     skill.modelVisible === false && skill.skillFile
       ? `- ${skill.skillName} (SKILL.md: ${skill.skillFile})`
       : `- ${skill.skillName}`,
@@ -277,6 +289,6 @@ export function expandExplicitSkillReferences(params: {
   }
   return {
     body: `${instructionPrefix}${params.text}`,
-    skills: available,
+    skills: params.skills,
   };
 }

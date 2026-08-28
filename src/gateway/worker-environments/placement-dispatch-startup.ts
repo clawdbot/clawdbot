@@ -1,4 +1,9 @@
+import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { resolveDevicePlacementEligibility } from "./device-placement-eligibility.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type {
   PlacementFailureActions,
   WorkerActivationBarrier,
@@ -24,6 +29,18 @@ export type WorkerPlacementRecoveryBarrier = (params: {
   run: (localPath: string) => Promise<void>;
 }) => Promise<void>;
 
+export type WorkerDevicePlacementRequirementResolver = (
+  identity: Pick<
+    WorkerPlacementDispatchRequest,
+    "sessionId" | "sessionKey" | "agentId" | "executionMode"
+  >,
+) => Promise<DevicePlacementRequirement>;
+
+export type WorkerNodePlacementAuthority = (
+  node: NodeWorkerSupervisorNodeProof,
+  requirement: DevicePlacementRequirement,
+) => boolean;
+
 function isPendingProvisioningEnvironment(
   environment: ReturnType<WorkerEnvironmentService["get"]>,
   environmentId: string | null,
@@ -40,6 +57,8 @@ function isPendingProvisioningEnvironment(
 function requireProvisionedEnvironment(
   environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
   expectedEnvironmentId: string,
+  executionMode: WorkerPlacementDispatchRequest["executionMode"],
+  environments: Pick<WorkerDispatchEnvironmentService, "supportsProviderExecutionMode">,
 ): { environmentId: string; ownerEpoch: number; bundleHash: string } {
   if (
     (environment.state !== "ready" && environment.state !== "idle") ||
@@ -51,6 +70,16 @@ function requireProvisionedEnvironment(
     throw new Error(
       `Worker environment is not dispatchable with the current execution-context contract: ${environment.state}`,
     );
+  }
+  if (
+    (environment.profileSnapshot.executionMode !== undefined &&
+      environment.profileSnapshot.executionMode !== executionMode) ||
+    (executionMode === "worker-turn" &&
+      environment.profileSnapshot.executionMode !== undefined &&
+      !environment.nodeDeviceId) ||
+    !environments.supportsProviderExecutionMode(environment.providerId, executionMode)
+  ) {
+    throw new Error("Worker environment does not support the placement's exact execution mode");
   }
   return {
     environmentId: environment.environmentId,
@@ -67,12 +96,51 @@ export function createWorkerPlacementDispatchStartup(options: {
   runActivationBarrier: WorkerActivationBarrier;
   onActivated?: (request: WorkerPlacementDispatchRequest) => void;
   resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
+  resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
+  isCurrentNodePlacement?: WorkerNodePlacementAuthority;
   reportTransition: (
     observer: ((placement: WorkerDispatchPlacement) => void) | undefined,
     placement: WorkerDispatchPlacement,
   ) => void;
 }) {
   const { environments, failure, placements } = options;
+
+  const requireNodePlacementEligibility = async (
+    request: WorkerPlacementDispatchRequest,
+    environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
+    admittedNode?: NodeWorkerSupervisorNodeProof,
+  ): Promise<
+    { node: NodeWorkerSupervisorNodeProof; requirement: DevicePlacementRequirement } | undefined
+  > => {
+    const deviceId = environment.nodeDeviceId;
+    if (!deviceId) {
+      return undefined;
+    }
+    const requirement =
+      request.devicePlacement ??
+      (options.resolveDevicePlacementRequirement
+        ? await options.resolveDevicePlacementRequirement({
+            sessionId: request.sessionId,
+            sessionKey: request.sessionKey,
+            agentId: request.agentId,
+            executionMode: request.executionMode,
+          })
+        : undefined);
+    if (!requirement) {
+      throw new Error("Node-backed cloud placement has no authoritative runtime requirement");
+    }
+    const eligibility = await resolveDevicePlacementEligibility({
+      environmentService: environments,
+      deviceId,
+      requirement,
+      config: getRuntimeConfig(),
+      ...(admittedNode ? { currentNode: admittedNode } : {}),
+    });
+    if (!eligibility.ok) {
+      throw new Error(eligibility.error);
+    }
+    return { node: eligibility.node, requirement };
+  };
 
   const continueProvisionedDispatch = async (params: {
     request: WorkerPlacementDispatchRequest;
@@ -91,7 +159,10 @@ export function createWorkerPlacementDispatchStartup(options: {
     const provisioned = requireProvisionedEnvironment(
       params.environment,
       params.expectedEnvironmentId,
+      request.executionMode,
+      environments,
     );
+    const admittedNode = await requireNodePlacementEligibility(request, params.environment);
     let placement = placements.transition({
       sessionId: request.sessionId,
       from: "provisioning",
@@ -132,18 +203,38 @@ export function createWorkerPlacementDispatchStartup(options: {
     });
     options.reportTransition(params.onTransition, placement);
     const startingPlacement = placement;
-    const attachedEnvironment = environments.get(provisioned.environmentId);
-    if (
-      !attachedEnvironment ||
-      attachedEnvironment.state !== "attached" ||
-      attachedEnvironment.ownerEpoch !== ownerEpoch ||
-      attachedEnvironment.attachedSessionIds.length !== 1 ||
-      attachedEnvironment.attachedSessionIds[0] !== request.sessionId ||
-      attachedEnvironment.bootstrapReceipt?.bundleHash !== provisioned.bundleHash
-    ) {
-      throw new Error("Worker dispatch lost its exact environment owner before activation");
-    }
+    const requireAttachedEnvironment = () => {
+      const attachedEnvironment = environments.get(provisioned.environmentId);
+      if (
+        !attachedEnvironment ||
+        attachedEnvironment.state !== "attached" ||
+        attachedEnvironment.ownerEpoch !== ownerEpoch ||
+        attachedEnvironment.attachedSessionIds.length !== 1 ||
+        attachedEnvironment.attachedSessionIds[0] !== request.sessionId ||
+        attachedEnvironment.nodeDeviceId !== params.environment.nodeDeviceId ||
+        attachedEnvironment.leaseId !== params.environment.leaseId ||
+        attachedEnvironment.bootstrapReceipt?.bundleHash !== provisioned.bundleHash
+      ) {
+        throw new Error("Worker dispatch lost its exact environment owner before activation");
+      }
+      return attachedEnvironment;
+    };
+    await requireNodePlacementEligibility(
+      request,
+      requireAttachedEnvironment(),
+      admittedNode?.node,
+    );
+    requireAttachedEnvironment();
     const activate = (): WorkerActiveDispatchPlacement => {
+      requireAttachedEnvironment();
+      if (
+        admittedNode &&
+        !options.isCurrentNodePlacement?.(admittedNode.node, admittedNode.requirement)
+      ) {
+        throw new Error(
+          "Worker dispatch lost its current node connection, pairing generation, command authorization, or capacity before activation",
+        );
+      }
       const activated = placements.transition({
         sessionId: request.sessionId,
         from: "starting",
@@ -253,6 +344,18 @@ export function createWorkerPlacementDispatchStartup(options: {
             if (isPendingProvisioningEnvironment(environment, environmentId)) {
               return;
             }
+            let devicePlacement: DevicePlacementRequirement | undefined;
+            if (environment.nodeDeviceId) {
+              if (!options.resolveDevicePlacementRequirement) {
+                throw new Error("Node-backed recovery has no authoritative runtime requirement");
+              }
+              devicePlacement = await options.resolveDevicePlacementRequirement({
+                sessionId: placement.sessionId,
+                sessionKey: placement.sessionKey,
+                agentId: placement.agentId,
+                executionMode: placement.executionMode,
+              });
+            }
             await continueProvisionedDispatch({
               request: {
                 sessionId: placement.sessionId,
@@ -260,7 +363,10 @@ export function createWorkerPlacementDispatchStartup(options: {
                 agentId: placement.agentId,
                 profileId: environment.profileId,
                 executionMode: placement.executionMode,
-                ...(environment.nodeDeviceId ? { deviceId: environment.nodeDeviceId } : {}),
+                ...(devicePlacement ? { devicePlacement } : {}),
+                ...(environment.providerId === DEVICE_WORKER_PROVIDER_ID && environment.nodeDeviceId
+                  ? { deviceId: environment.nodeDeviceId }
+                  : {}),
               },
               placement: current,
               environment,

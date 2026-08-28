@@ -60,10 +60,12 @@ actor PortGuardian {
     }
 
     func sweep(mode: AppState.ConnectionMode) async {
+        guard !Task.isCancelled else { return }
         self.logger.info("port sweep starting (mode=\(mode.rawValue, privacy: .public))")
         // Reap before the port scan and in every mode: orphans come from earlier
         // remote sessions and must die even after the user switched modes.
         await self.reapOrphanedTunnels()
+        guard !Task.isCancelled else { return }
         guard mode != .unconfigured else {
             self.logger.info("port sweep skipped (mode=unconfigured)")
             return
@@ -72,9 +74,11 @@ actor PortGuardian {
         // Capture the listener before launchd status. If its process exits and the
         // PID is reused, the newer status snapshot cannot bless the replacement.
         let listeners = await self.listeners(on: port)
+        guard !Task.isCancelled else { return }
         let managedGatewayPID = mode == .local
             ? await GatewayLaunchAgentManager.runningGatewayPID()
             : nil
+        guard !Task.isCancelled else { return }
         for listener in listeners {
             if Self.isExpected(
                 listener,
@@ -103,6 +107,7 @@ actor PortGuardian {
                         "(pid \(listener.pid, privacy: .public)); preserving conflict")
                 continue
             }
+            guard !Task.isCancelled else { return }
             if await Self.terminateProcess(listener.pid) {
                 let message = """
                 port \(port) was held by \(listener.command)
@@ -330,9 +335,10 @@ actor PortGuardian {
     /// forget a still-running tunnel (the record is its only retry path).
     private static func terminateProcess(_ pid: Int32) async -> Bool {
         #if canImport(Darwin)
-        guard pid > 0 else { return false }
+        guard !Task.isCancelled, pid > 0 else { return false }
         _ = Darwin.kill(pid, SIGTERM)
         if await self.waitForProcessExit(pid: pid) { return true }
+        guard !Task.isCancelled else { return false }
         _ = Darwin.kill(pid, SIGKILL)
         return await self.waitForProcessExit(pid: pid)
         #else
@@ -343,7 +349,7 @@ actor PortGuardian {
     private static func waitForProcessExit(pid: Int32, timeout: TimeInterval = 1.0) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while self.tunnelProcessInfo(pid: pid) != nil {
-            guard Date() < deadline else { return false }
+            guard !Task.isCancelled, Date() < deadline else { return false }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         return true

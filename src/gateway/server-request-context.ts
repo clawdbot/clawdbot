@@ -7,15 +7,16 @@ import {
   type GatewayClientId,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { upsertPresence } from "../infra/system-presence.js";
 import { resolveUserProfileId } from "../state/user-profiles.js";
-import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
 import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
 import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
+import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
+import { recordClientPresenceActivity, refreshClientPresence } from "./server/client-presence.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import type { SessionCompanionService } from "./session-companion.js";
 import type { SessionObserverService } from "./session-observer-contract.js";
 
@@ -44,6 +45,7 @@ type GatewayRequestContextParams = {
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
+  questionManager?: GatewayRequestContext["questionManager"];
   cancelRunBoundApprovals?: (runId: string, context: GatewayRequestContext) => number;
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
   pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
@@ -69,7 +71,7 @@ type GatewayRequestContextParams = {
   nodeUnsubscribe: GatewayRequestContext["nodeUnsubscribe"];
   nodeUnsubscribeAll: GatewayRequestContext["nodeUnsubscribeAll"];
   hasConnectedTalkNode: GatewayRequestContext["hasConnectedTalkNode"];
-  clients: Set<GatewayRequestContextClient>;
+  clients: Set<GatewayWsClient>;
   isConnectionActive: NonNullable<GatewayRequestContext["isConnectionActive"]>;
   invalidateDeviceTransports?: (
     deviceId: string,
@@ -196,6 +198,7 @@ export function createGatewayRequestContext(
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
+    questionManager: params.questionManager,
     scopeUpgradeCoordinator,
     cancelRunBoundApprovals: params.cancelRunBoundApprovals
       ? (runId) => params.cancelRunBoundApprovals!(runId, context)
@@ -229,6 +232,11 @@ export function createGatewayRequestContext(
     nodeUnsubscribeAll: params.nodeUnsubscribeAll,
     hasConnectedTalkNode: params.hasConnectedTalkNode,
     isConnectionActive: params.isConnectionActive,
+    recordClientActivity: (client) => {
+      if (recordClientPresenceActivity(params.clients, client)) {
+        broadcastPresenceSnapshot(params);
+      }
+    },
     hasExecApprovalClients: (excludeConnId?: string) => {
       for (const gatewayClient of params.clients) {
         if (excludeConnId && gatewayClient.connId === excludeConnId) {
@@ -283,6 +291,12 @@ export function createGatewayRequestContext(
     refreshConnectedUserProfile: (profile) => {
       let presenceChanged = false;
       for (const gatewayClient of params.clients) {
+        if (
+          gatewayClient.invalidated ||
+          gatewayClient.socket.readyState !== WEBSOCKET_OPEN_READY_STATE
+        ) {
+          continue;
+        }
         const authenticatedUserProfile = gatewayClient.authenticatedUserProfile;
         if (!authenticatedUserProfile) {
           continue;
@@ -301,22 +315,7 @@ export function createGatewayRequestContext(
           hasAvatar: profile.hasAvatar,
           updatedAt: profile.updatedAt,
         });
-        if (!gatewayClient.presenceKey || !gatewayClient.authenticatedUserId) {
-          continue;
-        }
-        upsertPresence(gatewayClient.presenceKey, {
-          user: buildAuthenticatedPresenceUser({
-            authenticatedUserId: gatewayClient.authenticatedUserId,
-            authenticatedUserIsTailscaleProvider:
-              gatewayClient.authenticatedUserIsTailscaleProvider,
-            authenticatedUserProfile: {
-              profileId: profile.id,
-              displayName: profile.displayName,
-              avatarRevision: profile.avatarRevision,
-            },
-          }),
-        });
-        presenceChanged = true;
+        presenceChanged = refreshClientPresence(params.clients, gatewayClient) || presenceChanged;
       }
       if (presenceChanged) {
         broadcastPresenceSnapshot({
@@ -365,6 +364,21 @@ export function createGatewayRequestContext(
         }
       }
       params.disconnectDeviceTransports?.(deviceId, opts);
+    },
+    disconnectClientsForUserProfile: (profileId: string) => {
+      for (const gatewayClient of params.clients) {
+        if (gatewayClient.authenticatedUserProfile?.profileId !== profileId) {
+          continue;
+        }
+        // Invalidate before closing so buffered requests cannot retain revoked role scopes.
+        gatewayClient.invalidated = true;
+        gatewayClient.invalidatedReason = "operator-role-changed";
+        try {
+          gatewayClient.socket.close(4001, "operator role changed");
+        } catch {
+          /* ignore */
+        }
+      }
     },
     disconnectClientsUsingSharedGatewayAuth: () => {
       disconnectAllSharedGatewayAuthClients(params.clients);

@@ -10,6 +10,10 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  readSessionProgressCard,
+  writeSessionProgressCard,
+} from "../session-cards/progress-card-store.js";
+import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -20,6 +24,14 @@ import {
 } from "../utils/delivery-context.shared.js";
 import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
 import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
+
+function openSessionDatabase(agentId: string, env: NodeJS.ProcessEnv, storePath: string) {
+  return openOpenClawAgentDatabase({
+    agentId,
+    env,
+    path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId, env }).path,
+  });
+}
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
@@ -182,11 +194,7 @@ describe("doctor canonical session-key repair", () => {
         foundGroups: 0,
         repairedGroups: 0,
       });
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
-      });
+      const database = openSessionDatabase("main", env, storePath);
       database.db
         .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
         .run(
@@ -349,11 +357,7 @@ describe("doctor canonical session-key repair", () => {
         sessionKey: "",
         storePath,
       });
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
-      });
+      const database = openSessionDatabase("main", env, storePath);
       database.db
         .prepare(
           "INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at) VALUES ('empty-key-conversation', 'webchat', 'default', 'direct', 'empty', 'empty', '{}', 10, 10)",
@@ -425,11 +429,7 @@ describe("doctor canonical session-key repair", () => {
         sessionKey: "agent:main:main",
         storePath,
       });
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
-      });
+      const database = openSessionDatabase("main", env, storePath);
       database.db
         .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
         .run(JSON.stringify({ sessionId: "older", subject: "preserved" }), "agent:main:main");
@@ -474,16 +474,15 @@ describe("doctor canonical session-key repair", () => {
         sessionKey: "agent:main:main",
         storePath,
       });
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
-      });
+      const database = openSessionDatabase("main", env, storePath);
       const insertMember = database.db.prepare(
         "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, 'owner', 10)",
       );
       insertMember.run("agent:main:work", "canonical-member");
       insertMember.run("agent:main:main", "winner-member");
+      writeSessionProgressCard(database.db, "agent:main:work", { markdown: "Already completed" });
+      writeSessionProgressCard(database.db, "agent:main:work", {});
+      writeSessionProgressCard(database.db, "agent:main:main", { markdown: "Do not resurrect" });
       database.db
         .prepare(
           "INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at) VALUES ('same-store-conversation', 'webchat', 'default', 'direct', 'peer', 'peer', '{}', 10, 10)",
@@ -503,6 +502,11 @@ describe("doctor canonical session-key repair", () => {
       expect(database.db.prepare("SELECT identity_id FROM session_members").all()).toEqual([
         { identity_id: "winner-member" },
       ]);
+      expect(
+        database.db
+          .prepare("SELECT markdown, revision, session_key FROM session_progress_cards")
+          .all(),
+      ).toEqual([{ markdown: null, revision: 2, session_key: "agent:main:work" }]);
       expect(
         database.db
           .prepare(
@@ -533,16 +537,17 @@ describe("doctor canonical session-key repair", () => {
         sessionKey: "agent:main:main",
         storePath,
       });
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
-      });
+      const database = openSessionDatabase("main", env, storePath);
       database.db
         .prepare(
           "INSERT INTO session_suggestions (id, session_key, author_id, text, created_at, state) VALUES ('alias-suggestion', 'agent:main:main', 'operator', 'keep me', 10, 'pending')",
         )
         .run();
+      const insertMember = database.db.prepare(
+        "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, 'owner', 10)",
+      );
+      insertMember.run("agent:main:work", "canonical-member");
+      insertMember.run("agent:main:main", "stale-alias-member");
 
       expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
         foundGroups: 1,
@@ -554,6 +559,9 @@ describe("doctor canonical session-key repair", () => {
           .prepare("SELECT session_key FROM session_suggestions WHERE id = 'alias-suggestion'")
           .get(),
       ).toEqual({ session_key: "agent:main:work" });
+      expect(database.db.prepare("SELECT identity_id FROM session_members").all()).toEqual([
+        { identity_id: "canonical-member" },
+      ]);
     });
   });
 
@@ -668,11 +676,7 @@ describe("doctor canonical session-key repair", () => {
         foundGroups: 0,
         repairedGroups: 0,
       });
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
-      });
+      const database = openSessionDatabase("main", env, storePath);
       database.db
         .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
         .run("Agent:Main:Parent ", "agent:main:child");
@@ -729,11 +733,7 @@ describe("doctor canonical session-key repair", () => {
         sessionKey: "agent:main:main ",
         storePath,
       });
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
-      });
+      const database = openSessionDatabase("main", env, storePath);
       database.db
         .prepare(
           `UPDATE session_nodes
@@ -887,6 +887,18 @@ describe("doctor canonical session-key repair", () => {
         sessionKey: "agent:main:misplaced",
         storePath: opsStore,
       });
+      const sourceDatabase = openSessionDatabase("ops", env, opsStore);
+      const destinationDatabase = openSessionDatabase("main", env, mainStore);
+      writeSessionProgressCard(sourceDatabase.db, "agent:main:misplaced", {
+        markdown: "Preserve this cross-store task",
+        steps: [{ step: "Finish the migration", status: "in_progress" }],
+      });
+      destinationDatabase.db.exec("DROP TABLE session_progress_cards");
+      expect(
+        destinationDatabase.db
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'session_progress_cards'")
+          .get(),
+      ).toBeUndefined();
 
       expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
         foundGroups: 1,
@@ -905,6 +917,14 @@ describe("doctor canonical session-key repair", () => {
         sessionId: "misplaced",
         spawnedBy: "agent:main:controller",
       });
+      expect(readSessionProgressCard(destinationDatabase.db, "agent:main:misplaced")).toMatchObject(
+        {
+          markdown: "Preserve this cross-store task",
+          revision: 1,
+          sessionKey: "agent:main:misplaced",
+          steps: [{ step: "Finish the migration", status: "in_progress" }],
+        },
+      );
       expect(
         loadExactSessionEntryReadOnly({
           agentId: "ops",
@@ -961,12 +981,20 @@ describe("doctor canonical session-key repair", () => {
         sessionKey: "agent:main:main ",
         storePath: opsStore,
       });
+      const destinationDatabase = openSessionDatabase("main", env, mainStore);
+      const progressCardTable = () =>
+        destinationDatabase.db
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'session_progress_cards'")
+          .get();
+      destinationDatabase.db.exec("DROP TABLE session_progress_cards");
+      expect(progressCardTable()).toBeUndefined();
 
       expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
         foundGroups: 1,
         removedRows: 1,
         repairedGroups: 1,
       });
+      expect(progressCardTable()).toBeUndefined();
       expect(
         loadExactSessionEntryReadOnly({
           agentId: "main",

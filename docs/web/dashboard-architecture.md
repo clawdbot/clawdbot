@@ -156,8 +156,9 @@ Shared infrastructure underneath (this is where the simplification lands):
   the natural case.
 - **One authorization model.** A widget's reach is a granted allowlist,
   whatever its kind: for `html` widgets, host tools; for `mcp-app` widgets,
-  the server's app-visible tools (via the existing `allowedAppToolNames`
-  mechanism, made durable per widget instead of per-minting-run).
+  the server's app-visible tools and same-server resources (via the existing
+  live App-interaction authority, made durable per widget instead of
+  per-minting-run).
 - **Host tools for `html` widgets** (exposed over the widget bridge, checked
   against the grant):
   - `openclaw.prompt.send` — tier 2; routed through the visible composer,
@@ -165,22 +166,30 @@ Shared infrastructure underneath (this is where the simplification lands):
   - `openclaw.state.emit` — tier 1 session notices (coalesced, size-capped)
   - `openclaw.data.read` — parameterized read-only bindings (existing
     allowlisted read RPC set), resolved gateway-side
+  - `openclaw.action.run` — tier 3 plugin-owned automation
   - `openclaw.cron.trigger` — tier 3 automation
 - **`net` = CSP.** Network reach uses the already-shipped per-widget CSP
   declaration (`connect-src` origins) — the self-updating weather widget
   fetches its API directly from the sandbox, no gateway involvement.
-- **Grants.** A widget declaring nothing renders immediately (sandboxed,
-  `default-src 'none'`, prompt sends individually confirmed) — same trust as
-  today's inline chat widgets. Declared tools/origins put the widget in
-  `pending` on the board: a placeholder card lists them human-readably with
-  one-tap **Allow**/**Reject**. Grants are per widget name; for `html` widgets
-  they are byte-frozen (sha256), and changed bytes keep the grant only if the
-  declaration shrank.
+- **Grants.** HTML and registered widgets declaring nothing render immediately
+  (sandboxed, `default-src 'none'`, prompt sends individually confirmed).
+  Declared capabilities and interactive MCP Apps follow an explicit
+  [session permission mode](/gateway/permission-modes): **Full access** grants;
+  **Workspace** uses an AI reviewer and rejects anything it does not allow;
+  **Guarded** shows **Allow**/**Reject**; **Read only** rejects. Without an
+  explicit session mode, the equivalent configured exec approval policy applies.
+  Grants are per widget name; for `html` widgets they are byte-frozen (sha256),
+  and changed bytes keep the grant only if the declaration shrank. Wrapper-authored board
+  widgets forward user-clicked
+  `http`/`https` new-tab links to the Control UI host; this ordinary navigation
+  needs no grant and never grants iframe popup permissions.
 - **Authoring shim.** The document wrapper injects `window.openclaw.prompt`,
-  `window.openclaw.state`, `window.openclaw.data`, and `window.openclaw.cron`
-  as the stable author API. Dashboard calls share one view-ticket-bound
-  request channel; size reporting and theme tokens remain separate host
-  notifications.
+  `window.openclaw.state`, `window.openclaw.data`, `window.openclaw.action`,
+  `window.openclaw.cron`, and the host-provided
+  `window.openclaw.host.controlUiBaseUrl` as the stable author API. Dashboard
+  calls and trusted new-tab link clicks share one view-ticket-bound request
+  channel. The host opens links with `noopener,noreferrer`; size reporting and
+  theme tokens remain separate host notifications.
 
 ### Plugin capability declarations
 
@@ -243,10 +252,11 @@ on staleness). Chat inline MCP app views get the same **Pin to dashboard**
 affordance as agent widgets. Re-opened views are read-only today by design;
 pinned apps that should stay interactive get a durable grant over the server's
 app-visible tools (explicit allowlist shown to the operator on pin), decoupled
-from the minting run. Ungranted pins stay read-only — still useful for display
-dashboards. v1 pins to the originating session's board; cross-session pinning
-needs a lease broker and waits. Coordinate with open PR #109807 (`ui/message`
-composer routing, theme/size propagation).
+from the minting run. Ungranted pins can render their fetched App HTML but
+cannot call tools or access the same-server resource bridge. v1 pins to the
+originating session's board; cross-session pinning needs a lease broker and
+waits. Coordinate with open PR #109807 (`ui/message` composer routing,
+theme/size propagation).
 
 ### WorkBoard integration
 

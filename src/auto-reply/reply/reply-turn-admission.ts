@@ -7,7 +7,12 @@ import {
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 // Decides whether an inbound turn may start, queue, or abort a reply run.
-import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
+import {
+  isRestartRecoveryTombstone,
+  resolveSessionWorkStartError,
+  SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
+  SessionRestartRecoveryTombstoneError,
+} from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -82,9 +87,20 @@ export async function runWithReplyOperationLifecycleAdmission<T>(
   return admission ? await admission.run(run) : await run();
 }
 
-function rejectLifecycleInvalidatedWork(params: { kind: ReplyTurnKind; message: string }): never {
+function rejectLifecycleInvalidatedWork(params: {
+  kind: ReplyTurnKind;
+  message: string;
+  restartRecoveryTombstone?: boolean;
+}): never {
   if (params.kind === "queued_followup") {
-    throw new QueuedFollowupLifecycleInvalidatedError(params.message);
+    const error = new QueuedFollowupLifecycleInvalidatedError(params.message);
+    if (params.restartRecoveryTombstone === true) {
+      Object.assign(error, { code: SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE });
+    }
+    throw error;
+  }
+  if (params.restartRecoveryTombstone === true) {
+    throw new SessionRestartRecoveryTombstoneError(params.message);
   }
   throw new Error(params.message);
 }
@@ -130,6 +146,8 @@ type ReplyTurnAdmissionParams = {
   storePath?: string;
   kind: ReplyTurnKind;
   resetTriggered: boolean;
+  allowRestartTombstoneParentFork?: boolean;
+  allowRestartTombstoneReset?: boolean;
   routeThreadId?: string | number;
   originatingLeafEntryId?: string | null;
   /**
@@ -247,11 +265,17 @@ export async function admitReplyTurn(
               const archivedSessionError = resolveSessionWorkStartError(
                 params.sessionKey || sessionId,
                 currentEntry,
+                {
+                  allowRestartTombstoneReplacement:
+                    (params.resetTriggered && params.allowRestartTombstoneReset === true) ||
+                    params.allowRestartTombstoneParentFork === true,
+                },
               );
               if (archivedSessionError) {
                 rejectLifecycleInvalidatedWork({
                   kind: params.kind,
                   message: archivedSessionError,
+                  restartRecoveryTombstone: isRestartRecoveryTombstone(currentEntry),
                 });
               }
               sessionId = currentEntry?.sessionId ?? sessionId;
@@ -265,6 +289,7 @@ export async function admitReplyTurn(
         if (
           storePath &&
           !params.resetTriggered &&
+          params.allowRestartTombstoneParentFork !== true &&
           admittedSessionEntry &&
           ((admittedSessionEntry.status === "running" &&
             (admittedSessionEntry.abortedLastRun === true ||

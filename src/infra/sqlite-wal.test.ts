@@ -76,6 +76,7 @@ describe("sqlite WAL maintenance", () => {
     ["SMB", 0x517b],
     ["CIFS", 0xff534d42],
     ["SMB2", 0xfe534d42],
+    ["9p (V9FS)", 0x01021997],
   ])("uses rollback journaling for databases on Linux %s volumes", (_label, fsType) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-network-"));
     try {
@@ -266,6 +267,58 @@ describe("sqlite WAL maintenance", () => {
         databaseLabel: "file-backed-test-db",
       }),
     ).toThrow("file-backed-test-db could not enable WAL; SQLite kept journal_mode=memory");
+  });
+
+  it.each([
+    ["fuse.virtiofs", "Docker Desktop / OrbStack"],
+    ["virtiofs", "Docker Desktop (alternate)"],
+    ["9p", "VirtFS cross-VM"],
+    ["9p2000.L", "VirtFS 2000.L"],
+  ])("uses rollback journaling for %s mounts (%s)", (fsType, _label) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-virtiofs-"));
+    try {
+      const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        `42 12 0:41 / ${tempDir} rw,relatime - ${fsType} host0 rw\n`,
+      );
+
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databasePath: path.join(tempDir, "openclaw.sqlite"),
+      });
+
+      expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
+      expect(db["exec"]).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses rollback journaling for virtiofs reported by macOS mount command", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-virtiofs-mac-"));
+    try {
+      const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+        throw new Error("no proc mountinfo");
+      });
+      vi.spyOn(childProcess, "execFileSync").mockReturnValue(
+        Buffer.from(`hostdir on ${tempDir} (virtiofs, nodev, nosuid)\n`),
+      );
+
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databasePath: path.join(tempDir, "openclaw.sqlite"),
+      });
+
+      expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
+      expect(db["exec"]).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("uses mountinfo filesystem names when statfs magic is not enough", () => {
@@ -564,6 +617,112 @@ describe("sqlite WAL maintenance", () => {
     expect(db["exec"]).toHaveBeenCalledTimes(4);
   });
 
+  it.runIf(process.platform === "linux")(
+    "invalidates an unlinked WAL family and permits a clean reopen",
+    () => {
+      vi.useFakeTimers();
+      const tempDir = tempDirs.make("openclaw-sqlite-wal-split-brain-");
+      const databasePath = path.join(tempDir, "state.sqlite");
+      const { DatabaseSync } = requireNodeSqlite();
+      const writer = new DatabaseSync(databasePath);
+      const events: unknown[] = [];
+      let reopened: InstanceType<typeof DatabaseSync> | undefined;
+      let reopenedMaintenance: ReturnType<typeof configureSqliteWalMaintenance> | undefined;
+      const maintenance = configureSqliteWalMaintenance(writer, {
+        checkpointIntervalMs: 100,
+        databaseLabel: "split-brain-test",
+        databasePath,
+        onWalSplitBrain: (event) => events.push(event),
+      });
+      try {
+        writer.exec("CREATE TABLE events (id INTEGER PRIMARY KEY, value TEXT NOT NULL);");
+        writer.prepare("INSERT INTO events (value) VALUES (?)").run("before-unlink");
+        expect(maintenance.checkpoint()).toBe(true);
+        fs.unlinkSync(`${databasePath}-wal`);
+        fs.unlinkSync(`${databasePath}-shm`);
+
+        vi.advanceTimersByTime(100);
+
+        expect(events).toEqual([
+          expect.objectContaining({
+            event: "sqlite_wal_sidecar_identity_mismatch",
+            databasePath,
+            sidecarPath: expect.stringMatching(/-wal$|-shm$/u),
+          }),
+        ]);
+        expect(writer.isOpen).toBe(false);
+        expect(() => writer.prepare("INSERT INTO events (value) VALUES ('stale')").run()).toThrow();
+
+        const fresh = new DatabaseSync(databasePath);
+        reopened = fresh;
+        reopenedMaintenance = configureSqliteWalMaintenance(fresh, {
+          checkpointIntervalMs: 0,
+          databasePath,
+        });
+        expect(() =>
+          fresh.prepare("INSERT INTO events (value) VALUES (?)").run("after-reopen"),
+        ).not.toThrow();
+      } finally {
+        maintenance.close();
+        reopenedMaintenance?.close();
+        if (reopened?.isOpen) {
+          reopened.close();
+        }
+        if (writer.isOpen) {
+          writer.close();
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform === "linux").each(["EACCES", "EPERM"] as const)(
+    "disables split-brain detection after a %s scan error",
+    (code) => {
+      vi.useFakeTimers();
+      const tempDir = tempDirs.make("openclaw-sqlite-wal-tripwire-error-");
+      const databasePath = path.join(tempDir, "state.sqlite");
+      const { DatabaseSync } = requireNodeSqlite();
+      const writer = new DatabaseSync(databasePath);
+      const events: unknown[] = [];
+      const maintenance = configureSqliteWalMaintenance(writer, {
+        checkpointIntervalMs: 100,
+        databasePath,
+        onWalSplitBrain: (event) => events.push(event),
+      });
+      const prepare = vi.spyOn(writer, "prepare");
+      const readdir = vi.spyOn(fs, "readdirSync").mockImplementationOnce(() => {
+        const error = new Error("restricted procfs");
+        (error as NodeJS.ErrnoException).code = code;
+        throw error;
+      });
+      try {
+        writer.exec("CREATE TABLE events (value TEXT NOT NULL);");
+
+        expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+        expect(readdir).toHaveBeenCalledTimes(1);
+        expect(() =>
+          writer.prepare("INSERT INTO events VALUES (?)").run("still-open"),
+        ).not.toThrow();
+
+        fs.unlinkSync(`${databasePath}-wal`);
+        fs.unlinkSync(`${databasePath}-shm`);
+        expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+
+        expect(readdir).toHaveBeenCalledTimes(1);
+        expect(events).toEqual([]);
+        expect(
+          prepare.mock.calls.filter(([sql]) => sql === "PRAGMA wal_checkpoint(PASSIVE);"),
+        ).toHaveLength(2);
+        expect(writer.isOpen).toBe(true);
+      } finally {
+        maintenance.close();
+        if (writer.isOpen) {
+          writer.close();
+        }
+      }
+    },
+  );
+
   it("clamps oversized checkpoint intervals before arming timers", () => {
     vi.useFakeTimers();
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
@@ -592,8 +751,8 @@ describe("sqlite WAL maintenance", () => {
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(FULL);");
     expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA incremental_vacuum(512);");
 
-    expect(maintenance.close()).toBe(true);
-    expect(db["prepare"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(FULL);");
+    expect(maintenance.close({ checkpointMode: "PASSIVE" })).toBe(true);
+    expect(db["prepare"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
   });
 
   it("reports a busy checkpoint result as incomplete", () => {

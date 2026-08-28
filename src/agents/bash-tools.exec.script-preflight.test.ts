@@ -13,12 +13,14 @@ import { prepareSystemRunMutableFileApproval } from "../infra/system-run-approva
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 const processGatewayAllowlistMock = vi.hoisted(() =>
   vi.fn(
-    async (): Promise<{
+    async (_params?: {
+      onApprovalReview?: (review: ExecToolApprovalReview) => void;
+    }): Promise<{
       allowWithoutEnforcedCommand: boolean;
       revalidateBeforeExecution?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
     }> => ({ allowWithoutEnforcedCommand: true }),
@@ -154,25 +156,33 @@ describeNonWin("exec script preflight", () => {
       if (!prepared.ok) {
         throw new Error(prepared.message);
       }
-      processGatewayAllowlistMock.mockResolvedValueOnce({
-        allowWithoutEnforcedCommand: true,
-        revalidateBeforeExecution: async () => {
-          const current = await prepared.revalidate();
-          if (current.ok) {
-            return undefined;
-          }
-          return {
-            content: [{ type: "text", text: current.message }],
-            details: {
-              status: "failed",
-              exitCode: null,
-              durationMs: 0,
-              aggregated: current.message,
-              timedOut: false,
-              cwd: tmp,
-            },
-          };
-        },
+      const approvalReview: ExecToolApprovalReview = {
+        id: "guardian:call-script-preflight",
+        label: "Guardian",
+        status: "approved",
+      };
+      processGatewayAllowlistMock.mockImplementationOnce(async (params) => {
+        params?.onApprovalReview?.(approvalReview);
+        return {
+          allowWithoutEnforcedCommand: true,
+          revalidateBeforeExecution: async () => {
+            const current = await prepared.revalidate();
+            if (current.ok) {
+              return undefined;
+            }
+            return {
+              content: [{ type: "text", text: current.message }],
+              details: {
+                status: "failed",
+                exitCode: null,
+                durationMs: 0,
+                aggregated: current.message,
+                timedOut: false,
+                cwd: tmp,
+              },
+            };
+          },
+        };
       });
       if (mutate) {
         await fs.writeFile(script, "#!/bin/sh\necho mutated\n");
@@ -194,6 +204,10 @@ describeNonWin("exec script preflight", () => {
         }
         expect(result.details.aggregated).toBe("approved");
       }
+      expect(result.details).toMatchObject({
+        approvalReviewOutcome: "approved",
+        approvalReviews: [approvalReview],
+      });
     });
   });
 

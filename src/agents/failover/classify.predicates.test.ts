@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   classifyFailoverReason,
   isAuthErrorMessage,
-  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isContextOverflowError,
@@ -11,6 +10,7 @@ import {
   isTimeoutErrorMessage,
   isTransientHttpError,
 } from "./classify.js";
+import { isAuthPermanentErrorMessage } from "./message-patterns.js";
 
 const PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = "Proxy notice: Status: Internal Server Error";
 const MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; upstream connect error`;

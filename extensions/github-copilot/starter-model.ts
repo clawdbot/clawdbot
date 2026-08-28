@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_COPILOT_MODEL } from "./model-metadata.js";
 import { fetchCopilotModelCatalog, PROVIDER_ID, selectCopilotStarterModel } from "./models.js";
 import { resolveCopilotRuntimeAuth } from "./runtime-auth.js";
+import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
 function preferredCopilotStarterModelId(): string {
   const prefix = `${PROVIDER_ID}/`;
@@ -26,6 +27,7 @@ export async function resolveCopilotStarterModel(params: {
   const models = await fetchCopilotModelCatalog({
     copilotApiToken: auth.apiKey,
     baseUrl: auth.baseUrl,
+    headers: buildCopilotRuntimeHeaders({ config: params.config }),
   });
   const selected = selectCopilotStarterModel(models, preferredCopilotStarterModelId());
   if (!selected) {

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { type Mock, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import * as webMedia from "../../media/web-media.js";
 import * as modelAuth from "../model-auth.js";
 import * as modelsConfig from "../models-config.js";
@@ -12,6 +13,25 @@ import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
 } from "../sessions/model-registry-runtime.js";
+import { createEmptyPluginMetadataSnapshot } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
+
+type StubPreparedRuntimeSnapshot = {
+  agentDir: string;
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  createStores: () => { authStorage: unknown; modelRegistry: unknown };
+};
+
+// The canonical resolver reads prepared facts before the registry; stub snapshots
+// carry empty facts so registry-driven fixtures keep deciding resolution.
+export function withPreparedRuntimeFacts(snapshot: StubPreparedRuntimeSnapshot) {
+  return {
+    ...snapshot,
+    metadataSnapshot: createEmptyPluginMetadataSnapshot(snapshot.workspaceDir),
+    configuredRuntimeModels: [],
+    inlineProviderModels: [],
+  };
+}
 
 export async function withTempPdfAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-"));
@@ -95,12 +115,12 @@ export function createPdfToolInfraStub(completeMock: Mock) {
     vi.spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
       async (input) =>
         ({
-          snapshot: {
+          snapshot: withPreparedRuntimeFacts({
             agentDir: input.agentDir,
             config: input.config,
             workspaceDir: input.workspaceDir,
             createStores: () => ({ authStorage, modelRegistry }),
-          },
+          }),
           release,
         }) as never,
     );

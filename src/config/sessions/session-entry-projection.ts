@@ -8,15 +8,21 @@ type RetiredThinkingSelectionQuarantine = {
 
 export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   activeWriterRunId: undefined,
+  lastRunId: undefined,
   lifecycleRunId: undefined,
   mainRestartRecovery: undefined,
+  pendingProjectGitUrl: undefined,
+  pendingWorktree: undefined,
   sessionDiffBaselineCapture: undefined,
 } satisfies Partial<InternalSessionEntry>;
 
 const PRIVATE_SESSION_ENTRY_KEYS = [
   "activeWriterRunId",
+  "lastRunId",
   "lifecycleRunId",
   "mainRestartRecovery",
+  "pendingProjectGitUrl",
+  "pendingWorktree",
   "sessionDiffBaselineCapture",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];
 

@@ -29,11 +29,24 @@ export type MemorySearchResult = {
   triggers?: string;
   /** Semicolon-separated stable repository identities lifted from inline annotations. */
   projectKey?: string;
-  /** Future provenance column supplied by the promoted-memory workstream. */
+  /** @deprecated Use provenance.originClass. This field is not authoritative for automatic injection. */
   originClass?: string;
   citation?: string;
   provenance?: MemoryEntryProvenance;
 };
+
+/** Automatic prompt injection is reserved for content with authoritative trusted provenance. */
+export function isMemoryOriginEligibleForAutomaticInjection(
+  originClass: unknown,
+): originClass is "owner" | "agent" {
+  return originClass === "owner" || originClass === "agent";
+}
+
+export function isAutomaticMemoryEntryEligible(
+  entry: Pick<MemorySearchResult, "provenance">,
+): boolean {
+  return isMemoryOriginEligibleForAutomaticInjection(entry.provenance?.originClass);
+}
 
 /** Cached/probed embedding availability status. */
 export type MemoryEmbeddingProbeResult = {
@@ -134,6 +147,8 @@ export type MemoryProviderStatus = {
   files?: number;
   chunks?: number;
   dirty?: boolean;
+  /** Sources currently being refreshed by an admitted sync. */
+  pendingSyncSources?: MemorySource[];
   workspaceDir?: string;
   dbPath?: string;
   extraPaths?: MemoryExtraPath[];
@@ -173,7 +188,7 @@ export type MemoryProviderStatus = {
 };
 
 export function resolveMemorySearchStaleness(
-  status: Pick<MemoryProviderStatus, "dirty" | "custom">,
+  status: Pick<MemoryProviderStatus, "dirty" | "pendingSyncSources" | "custom">,
   agentId?: string,
 ): { stale: true; warning: string; action: string } | null {
   const identity = status.custom?.indexIdentity as Record<string, unknown> | undefined;
@@ -182,7 +197,11 @@ export function resolveMemorySearchStaleness(
     typeof identity.reason === "string"
       ? identity.reason.trim()
       : undefined;
-  if (!status.dirty && !identityReason) {
+  const refreshingSessionsOnly =
+    status.dirty === true &&
+    status.pendingSyncSources?.length === 1 &&
+    status.pendingSyncSources[0] === "sessions";
+  if ((!status.dirty || refreshingSessionsOnly) && !identityReason) {
     return null;
   }
   return {

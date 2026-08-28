@@ -128,6 +128,23 @@ describe("node-host startup state migrations", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it("reports a recreated divergent identity as a notice while preserving the canonical identity", async () => {
+    const { env, stateDir } = useStateDir();
+    const { deviceId } = await writeDeviceIdentity(stateDir);
+    await runStartupMigrations({ env, log });
+    vi.clearAllMocks();
+
+    const { sourcePath } = await writeDeviceIdentity(stateDir);
+    await runStartupMigrations({ env, log });
+
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(loadDeviceIdentityIfPresent({ env })?.deviceId).toBe(deviceId);
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("canonical SQLite identity remains authoritative"),
+    );
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
   it("preserves a pending native device identity claim and continues", async () => {
     const { env, stateDir } = useStateDir();
     const { sourcePath } = await writeDeviceIdentity(stateDir);

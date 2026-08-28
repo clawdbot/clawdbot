@@ -60,7 +60,7 @@ function createResponseStream(model: Model, content?: AssistantMessage["content"
   return stream;
 }
 
-function createCapturingStream(model: Model) {
+function createCapturingStream(model: Model, responseContent?: AssistantMessage["content"]) {
   let prompt = "";
   let systemPrompt = "";
   let maxOutputTokens: number | undefined;
@@ -75,7 +75,7 @@ function createCapturingStream(model: Model) {
         : userMessage.content.map((block) => (block.type === "text" ? block.text : "")).join("");
     systemPrompt = context.systemPrompt ?? "";
     maxOutputTokens = options?.maxTokens;
-    return createResponseStream(model);
+    return createResponseStream(model, responseContent);
   });
   return {
     streamFn,
@@ -158,16 +158,16 @@ describe("branch summarization", () => {
   it("preserves valid summary whitespace, preamble, and file metadata", async () => {
     const model = createModel(128_000);
     const summaryText = "  Branch summary body  \ncontinues ";
-    const streamFn = vi.fn<StreamFn>(() =>
-      createResponseStream(model, [
-        { type: "text", text: "  Branch summary body  " },
-        { type: "text", text: "continues " },
-      ]),
-    );
+    const capture = createCapturingStream(model, [
+      { type: "text", text: "  Branch summary body  " },
+      { type: "text", text: "continues " },
+    ]);
     const entries: SessionTreeEntry[] = [
       createMessageEntry({ role: "user", content: "inspect files", timestamp: 1 }, 0),
       createMessageEntry(
         createResponse(model, [
+          { type: "thinking", thinking: "PRIVATE_BRANCH_REASONING" },
+          { type: "text", text: "Visible branch answer" },
           { type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/read.ts" } },
           {
             type: "toolCall",
@@ -184,7 +184,7 @@ describe("branch summarization", () => {
       model,
       apiKey: "test-key",
       signal: new AbortController().signal,
-      streamFn,
+      streamFn: capture.streamFn,
     });
 
     expect(result.ok).toBe(true);
@@ -207,6 +207,11 @@ src/write.ts
       readFiles: ["src/read.ts"],
       modifiedFiles: ["src/write.ts"],
     });
+    expect(capture.readCapture().prompt).toContain("[Assistant]: Visible branch answer");
+    expect(capture.readCapture().prompt).toContain(
+      '[Assistant tool calls]: read(path="src/read.ts"); write(path="src/write.ts")',
+    );
+    expect(capture.readCapture().prompt).not.toContain("PRIVATE_BRANCH_REASONING");
   });
 
   it("retains failed tool results when preparing a branch", () => {
@@ -231,55 +236,71 @@ src/write.ts
     expect(preparation.messages.map((message) => message.role)).toEqual(["user", "toolResult"]);
   });
 
-  it("preserves earlier branch context while excluding private shell output", async () => {
-    const model = createModel(8192);
-    const capture = createCapturingStream(model);
-    const shellMessage: AgentMessage = {
-      role: "bashExecution",
-      command: "private command",
-      output: `private output marker ${"x".repeat(80_000)}`,
-      exitCode: 0,
-      cancelled: false,
-      truncated: false,
-      timestamp: 2,
-      excludeFromContext: true,
-    };
-    const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "important original request", timestamp: 1 }, 0),
-      createMessageEntry(shellMessage, 1),
-      createMessageEntry({ role: "user", content: "continue branch", timestamp: 3 }, 2),
-    ];
+  it.each(["shell", "custom"] as const)(
+    "preserves earlier branch context while excluding private %s activity",
+    async (kind) => {
+      const model = createModel(8192);
+      const capture = createCapturingStream(model);
+      const excludedMessage: AgentMessage =
+        kind === "shell"
+          ? {
+              role: "bashExecution",
+              command: "private command",
+              output: `private output marker ${"x".repeat(80_000)}`,
+              exitCode: 0,
+              cancelled: false,
+              truncated: false,
+              timestamp: 2,
+              excludeFromContext: true,
+            }
+          : {
+              role: "custom",
+              customType: "openclaw.operator-activity",
+              content: `private output marker ${"x".repeat(80_000)}`,
+              display: true,
+              timestamp: 2,
+              excludeFromContext: true,
+            };
+      const entries: SessionTreeEntry[] = [
+        createMessageEntry(
+          { role: "user", content: "important original request", timestamp: 1 },
+          0,
+        ),
+        createMessageEntry(excludedMessage, 1),
+        createMessageEntry({ role: "user", content: "continue branch", timestamp: 3 }, 2),
+      ];
 
-    const preparation = prepareBranchEntries(entries, 100);
-    expect(preparation.messages).toMatchObject([
-      { role: "user", content: "important original request" },
-      { role: "user", content: "continue branch" },
-    ]);
-    expect(preparation.totalTokens).toBeLessThan(100);
+      const preparation = prepareBranchEntries(entries, 100);
+      expect(preparation.messages).toMatchObject([
+        { role: "user", content: "important original request" },
+        { role: "user", content: "continue branch" },
+      ]);
+      expect(preparation.totalTokens).toBeLessThan(100);
 
-    const visibleEntries = entries.map((entry, index) =>
-      index === 1
-        ? createMessageEntry({ ...shellMessage, excludeFromContext: false }, index)
-        : entry,
-    );
-    expect(prepareBranchEntries(visibleEntries, 100).messages).toMatchObject([
-      { role: "user", content: "continue branch" },
-    ]);
+      const visibleEntries = entries.map((entry, index) =>
+        index === 1
+          ? createMessageEntry({ ...excludedMessage, excludeFromContext: false }, index)
+          : entry,
+      );
+      expect(prepareBranchEntries(visibleEntries, 100).messages).toMatchObject([
+        { role: "user", content: "continue branch" },
+      ]);
 
-    const result = await generateBranchSummary(entries, {
-      model,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      streamFn: capture.streamFn,
-    });
+      const result = await generateBranchSummary(entries, {
+        model,
+        apiKey: "test-key",
+        signal: new AbortController().signal,
+        streamFn: capture.streamFn,
+      });
 
-    expect(result.ok).toBe(true);
-    expect(capture.readCapture().prompt).toContain("important original request");
-    expect(capture.readCapture().prompt).toContain("continue branch");
-    expect(capture.readCapture().prompt).not.toContain("private command");
-    expect(capture.readCapture().prompt).not.toContain("private output marker");
-    expect(JSON.stringify(entries)).toContain("private output marker");
-  });
+      expect(result.ok).toBe(true);
+      expect(capture.readCapture().prompt).toContain("important original request");
+      expect(capture.readCapture().prompt).toContain("continue branch");
+      expect(capture.readCapture().prompt).not.toContain("private command");
+      expect(capture.readCapture().prompt).not.toContain("private output marker");
+      expect(JSON.stringify(entries)).toContain("private output marker");
+    },
+  );
 
   it("summarizes tool failures without exposing private result details", async () => {
     const model = createModel(128_000);

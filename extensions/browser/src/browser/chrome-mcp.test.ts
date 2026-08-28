@@ -1317,6 +1317,34 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it.each(["linux", "darwin", "win32"] as const)(
+    "stops %s cleanup immediately once every owned process is absent",
+    async (platform) => {
+      const session = createFakeSession();
+      Object.assign(session, { processCleanup: { status: "open" } });
+      let alive = true;
+      session.client.close = vi.fn(async () => {
+        alive = false;
+      }) as typeof session.client.close;
+      const listProcesses = vi.fn(async () => (alive ? [processSnapshot(123, 1)] : []));
+      const sleep = vi.fn().mockResolvedValue(undefined);
+      setChromeMcpProcessCleanupDepsForTest({
+        platform,
+        listProcesses,
+        sleep,
+        taskkillProcessTree: async () => {
+          alive = false;
+        },
+      });
+      setChromeMcpSessionFactoryForTest(async () => session);
+
+      await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
+
+      expect(listProcesses).toHaveBeenCalledTimes(platform === "win32" ? 3 : 2);
+      expect(sleep).toHaveBeenCalledTimes(platform === "win32" ? 1 : 0);
+    },
+  );
+
   it("retains the proven root while skipping exited and reparented descendants", async () => {
     const session = createFakeSession();
     Object.assign(session, { processCleanup: { status: "open" } });
@@ -1505,6 +1533,47 @@ describe("chrome MCP page parsing", () => {
 
     expect(taskkillProcessTree).toHaveBeenCalledExactlyOnceWith(124);
     expect(taskkillProcessTree).not.toHaveBeenCalledWith(123);
+  });
+
+  it("never taskkills a descendant pid recycled while another Windows cleanup is awaited", async () => {
+    const session = createFakeSession();
+    Object.assign(session, {
+      processCleanup: {
+        status: "tracked",
+        target: {
+          root: { pid: 123, identity: "start-123" },
+          descendants: [
+            { pid: 124, identity: "start-124" },
+            { pid: 125, identity: "start-125" },
+          ],
+        },
+      },
+    });
+    let firstDescendantAlive = true;
+    let secondDescendantIdentity = "start-124";
+    const taskkillProcessTree = vi.fn(async (pid: number) => {
+      if (pid !== 125) {
+        throw new Error("attempted to terminate a recycled pid");
+      }
+      firstDescendantAlive = false;
+      secondDescendantIdentity = "start-reused";
+    });
+    setChromeMcpProcessCleanupDepsForTest({
+      platform: "win32",
+      listProcesses: async () => [
+        processSnapshot(124, 1, secondDescendantIdentity),
+        ...(firstDescendantAlive ? [processSnapshot(125, 1)] : []),
+      ],
+      taskkillProcessTree,
+      sleep: vi.fn().mockResolvedValue(undefined),
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
+
+    expect(secondDescendantIdentity).toBe("start-reused");
+    expect(taskkillProcessTree).toHaveBeenCalledExactlyOnceWith(125);
+    expect(taskkillProcessTree).not.toHaveBeenCalledWith(124);
   });
 
   it("surfaces a surviving Chrome MCP process and retries its exact retained handle", async () => {

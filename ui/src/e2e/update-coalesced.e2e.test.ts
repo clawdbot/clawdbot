@@ -10,7 +10,8 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT = "openclaw:native-update-availability-changed";
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 const MANAGED_UPDATE_HANDOFF_RESPONSE = {
   ok: true,
   handoff: { status: "started" },
@@ -18,22 +19,93 @@ const MANAGED_UPDATE_HANDOFF_RESPONSE = {
 } as const;
 
 async function openUpdateConfirmation(page: Page): Promise<void> {
-  await page
-    .locator('[data-attention-kind="updateAvailable"] .sidebar-attention__open:visible')
-    .click();
-  await page
-    .locator(".custodian__alert-card")
-    .getByRole("button", { name: "Update and restart", exact: true })
-    .click();
+  await page.locator(".sidebar-issues-button").click();
+  const updateIssue = page.locator(
+    'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+  );
+  await updateIssue.locator("summary").click();
+  await updateIssue.locator(".sidebar-update-card__action").click();
+}
+
+async function captureUpdateProof(
+  page: Page,
+  artifactDir: string,
+  fileName: string,
+): Promise<void> {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await page.screenshot({ path: path.join(artifactDir, fileName) });
 }
 
 suite.define(() => {
+  it("explains a disabled update to a read-only mobile operator", async () => {
+    const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-read-only-mobile");
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        hasTouch: true,
+        isMobile: true,
+        locale: "en-US",
+        recordVideo: captureUiProofEnabled
+          ? { dir: artifactDir, size: { height: 1200, width: 555 } }
+          : undefined,
+        serviceWorkers: "block",
+        viewport: { height: 1200, width: 555 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          operatorScopes: ["operator.read"],
+        });
+
+        expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+        await gateway.waitForRequest("chat.startup");
+        await page.getByRole("button", { name: "Expand sidebar" }).click();
+        await gateway.emitGatewayEvent("update.available", {
+          updateAvailable: {
+            channel: "stable",
+            currentVersion: "1.0.0",
+            latestVersion: "2.0.0",
+          },
+        });
+
+        await page.locator(".sidebar-issues-button").click();
+        const updateIssue = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await updateIssue.locator("summary").click();
+        const action = updateIssue.locator(".sidebar-update-card__action");
+        await expect.poll(() => action.getAttribute("aria-disabled")).toBe("true");
+        expect(await action.evaluate((element) => (element as HTMLButtonElement).disabled)).toBe(
+          false,
+        );
+        await captureUpdateProof(page, artifactDir, "disabled-update.png");
+
+        const tooltip = updateIssue.locator("openclaw-tooltip wa-tooltip");
+        await tooltip.evaluate((element) => {
+          element.addEventListener(
+            "wa-after-show",
+            () => element.setAttribute("data-e2e-after-show", ""),
+            { once: true },
+          );
+        });
+        await updateIssue.locator(".sidebar-update-card__actions").tap();
+        await expect.poll(() => tooltip.getAttribute("data-e2e-after-show")).not.toBeNull();
+        expect(await tooltip.textContent()).toContain("Administrator access is required");
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+        await captureUpdateProof(page, artifactDir, "disabled-update-tooltip.png");
+      },
+    );
+  });
+
   it("shows package update failure status after the Update click", async () => {
     const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-package-status");
     await suite.withPage(
       {
         locale: "en-US",
-        recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
+        recordVideo: captureUiProofEnabled
+          ? { dir: artifactDir, size: { height: 720, width: 1280 } }
+          : undefined,
         serviceWorkers: "block",
         viewport: { height: 720, width: 1280 },
       },
@@ -74,10 +146,15 @@ suite.define(() => {
 
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
         await dialog.getByRole("button", { name: "Close", exact: true }).click();
-        await page.locator(".sidebar-update-card__status:visible").waitFor();
-        expect(await page.locator(".sidebar-update-card__action").isEnabled()).toBe(true);
+        await page.locator(".sidebar-issues-button").click();
+        const updateIssue = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await updateIssue.locator("summary").click();
+        await updateIssue.locator(".sidebar-update-card__compact-reason").waitFor();
+        expect(await page.locator(".sidebar-issues-button__count").count()).toBe(1);
         expect(pageErrors).toEqual([]);
-        await page.screenshot({ path: path.join(artifactDir, "package-update-failure.png") });
+        await captureUpdateProof(page, artifactDir, "package-update-failure.png");
       },
     );
   });
@@ -87,7 +164,9 @@ suite.define(() => {
     await suite.withPage(
       {
         locale: "en-US",
-        recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
+        recordVideo: captureUiProofEnabled
+          ? { dir: artifactDir, size: { height: 720, width: 1280 } }
+          : undefined,
         serviceWorkers: "block",
         viewport: { height: 720, width: 1280 },
       },
@@ -122,17 +201,20 @@ suite.define(() => {
         await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
         await page.getByRole("button", { name: "Close", exact: true }).click();
-        await page
+        await page.locator(".sidebar-issues-button").click();
+        const updateIssue = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await updateIssue.locator("summary").click();
+        await updateIssue
           .getByText(
             "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
             { exact: true },
           )
           .waitFor();
-        const updating = page.getByRole("button", { name: /Updating Gateway/ });
-        await updating.waitFor();
-        expect(await updating.isEnabled()).toBe(false);
+        expect(await page.locator(".sidebar-issues-button__count").count()).toBe(1);
         expect(pageErrors).toEqual([]);
-        await page.screenshot({ path: path.join(artifactDir, "coalesced-restart-banner.png") });
+        await captureUpdateProof(page, artifactDir, "coalesced-restart-banner.png");
       },
     );
   });
@@ -161,7 +243,9 @@ suite.define(() => {
       await suite.withPage(
         {
           locale: "en-US",
-          recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
+          recordVideo: captureUiProofEnabled
+            ? { dir: artifactDir, size: { height: 720, width: 1280 } }
+            : undefined,
           serviceWorkers: "block",
           viewport: { height: 720, width: 1280 },
         },
@@ -222,9 +306,7 @@ suite.define(() => {
           expect(await gateway.getRequests("update.run")).toHaveLength(1);
           expect(await gateway.getRequests("update.status")).toHaveLength(expectedStatusRequests);
           expect(pageErrors).toEqual([]);
-          await page.screenshot({
-            path: path.join(artifactDir, `managed-handoff-${artifactName}.png`),
-          });
+          await captureUpdateProof(page, artifactDir, `managed-handoff-${artifactName}.png`);
         },
       );
     },
@@ -286,22 +368,17 @@ suite.define(() => {
       ).toEqual([{ type: "start-update" }]);
       expect(await gateway.getRequests("update.run")).toHaveLength(0);
 
-      await page.evaluate((eventName) => {
-        Reflect.deleteProperty(window, "webkit");
-        window.dispatchEvent(new CustomEvent(eventName));
-      }, NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT);
-      await page
-        .locator(".custodian__alert-card")
-        .getByRole("button", { name: "Update and restart", exact: true })
-        .click();
-      await page
-        .locator("openclaw-modal-dialog")
-        .getByRole("button", { name: "Update and restart", exact: true })
-        .click();
-
-      expect(await gateway.getRequests("update.run")).toHaveLength(1);
+      // The confirmation closes the lazy Inbox. Recovery belongs to the
+      // persistent attention owner, not the now-disconnected update card.
+      await page.keyboard.press("Escape");
+      await expect.poll(() => page.locator(".sidebar-issues-panel").count()).toBe(0);
+      await page.evaluate(
+        (eventName) => window.dispatchEvent(new CustomEvent(eventName)),
+        NATIVE_UPDATE_DECLINED_EVENT,
+      );
+      await expect.poll(async () => (await gateway.getRequests("update.run")).length).toBe(1);
       expect(pageErrors).toEqual([]);
-      await page.screenshot({ path: path.join(artifactDir, "gateway-update-target.png") });
+      await captureUpdateProof(page, artifactDir, "gateway-update-target.png");
     } finally {
       await context.close();
     }

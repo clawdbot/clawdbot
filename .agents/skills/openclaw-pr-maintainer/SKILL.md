@@ -93,8 +93,8 @@ gh api -X POST "repos/openclaw/openclaw/issues/<number>/assignees" -f 'assignees
 - For every reviewed, triaged, closed, or landed issue/PR, show the opener's human name when available, GitHub login, and account age.
 - Get the login from `gh issue view` / `gh pr view` (`author.login`), then fetch profile metadata once with `gh api users/<login> --jq '{login,name,created_at,type}'`.
 - Report opener identity as one compact line:
-  `By: Jane Doe (@jane, acct 2021-04-03) | OpenClaw: 4 PRs, 2 issues, 11 commits/12mo | GitHub: 9 repos, 86 commits, 9 PRs, 3 issues, 12 reviews`
-- Always show recent activity in two lanes: OpenClaw-local PRs, issues, and commits in the last 12 months; and general public GitHub activity over the same window. For linked issue-fixing PRs, include both the PR author and issue opener when they differ.
+  `By: Jane Doe (@jane, acct 2021-04-03) | OpenClaw: 4 PRs, 2 issues, 11 commits/12mo | GitHub contributions: 86 commits, 9 PRs, 3 issues, 12 reviews/12mo`
+- Show activity in two separate lanes: repo search totals for authored PRs/issues and commits, and GitHub contribution-graph totals. State each interval; neither lane is an exhaustive activity history. For linked issue-fixing PRs, include both the PR author and issue opener when they differ.
 - Prefer the bundled helper for activity lookups:
 
 ```bash
@@ -102,11 +102,11 @@ gh api -X POST "repos/openclaw/openclaw/issues/<number>/assignees" -f 'assignees
 .agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh --global <login>
 ```
 
-- The helper reports repo-local activity first and can fetch public GitHub contribution totals for the same window with `--global`; run the global form by default for review/triage identity summaries.
-- If the global contribution graph reports zero or looks inconsistent with visible public activity, sanity-check with `gh api users/<login>`, `gh api 'users/<login>/events/public?per_page=100'`, and recent public repo commits before calling the account inactive.
-- The helper is intentionally cache-friendly for gitcrawl-backed `gh`: it rounds repo-local windows to the UTC day, rounds global contribution windows to the UTC hour, and counts PRs/issues from one paginated issues response before fetching commits separately. Prefer reusing the helper instead of hand-rolling several `gh api` loops.
-- If the contribution graph is misleading or zero but public events/repos show activity, keep it one line, for example:
-  `By: pickaxe (@ProspectOre, acct 2019-08-24) | OpenClaw: 5 PRs, 0 issues, 5 commits/12mo | GitHub: 5 repos, 29 recent events, 100 public own-repo commits; graph=0`
+- Run `--global` by default for review/triage identity summaries. The helper prints canonical profile identity before requesting activity, then makes three single-page REST searches (`per_page=1`) for repo totals and one optional GraphQL contribution aggregate: at most five `gh` calls per resolved login, independent of activity volume. It uses `total_count`, never fetched row counts or pagination.
+- Keep bare PATH `gh` with native `--cache 1h` for profile, search, and GraphQL reads. Octopool delegates author/date-filtered searches and GraphQL, so bare `gh` alone does not guarantee fleet-cache coverage. Native caching keeps repeated lookups bounded without a custom store; do not source `plain-gh.sh`, force fresh reads, or query private cache databases.
+- Windows use completed UTC days with calendar-month subtraction clamped at month ends. Repo search uses PR/issue creation time and default-branch commit committer date. `--months` controls the repo interval; global contributions cap at 12 months because GitHub accepts at most one year. The helper prints both intervals and explicitly labels a global cap for longer requests.
+- Search totals reflect GitHub's index and may be cached or lag recent changes. Printed intervals are query bounds, not proof of live freshness. Incomplete search results, malformed/missing data, request failures, and unresolved identity are not zero. The helper labels those outcomes, continues later logins, and exits nonzero if identity or requested activity is unavailable or incomplete.
+- Contribution totals follow GitHub's contribution rules and token visibility; they may include private repositories. Do not call them public-only or infer inactivity from a zero graph. Do not automatically scan events or repositories as a fallback; report the limitation and inspect specific evidence separately only when needed.
 - If `name` is empty, use the login only. If profile lookup is rate-limited or unavailable, say `account age unknown` rather than omitting the opener.
 - Use identity and activity as triage signal, not proof by itself: new, low-activity, or bot-like accounts can raise review caution, but code, repro, and CI evidence still decide.
 
@@ -365,7 +365,9 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 - Stacked branches over a squash-merged parent: rebase with `git rebase --onto origin/main <landed-branch>`; a plain `git rebase origin/main` replays the parent's already-squashed commits and manufactures conflicts.
 - Non-main PRs: do not run `scripts/pr prepare-run` or `merge-run`; they diff against `main`. Use review artifacts, exact base-head CI, revalidate `headRefOid`, then `gh pr merge --match-head-commit <verified-sha>`.
 - PR-create merge-ref race recognition: the dropped/killed pull_request CI run appears as `startup_failure`/`BuildFailed` (`(Unknown event)`) and is not rerunnable — close/reopen or wait for the hourly `pr-ci-sweeper`; rerun attempts are wasted.
-- PR/issue media upload: 422 = unsupported type; 404 = bad repo id/no push. Video: `content_type` `video/mp4` or `video/webm`; embed the returned URL on its own bare line — GitHub renders a player, `![]()` does not; transcode Playwright webm via `ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p out.mp4` for broad playback. Non-media artifacts or endpoint failure: Crabbox artifact publishing plus the manifest URL.
+- Preferred PR/issue media upload: when the command help exposes `--attach`, use the repeatable flag on `gh issue create`, `gh issue edit`, `gh issue comment`, and the matching `gh pr` commands. Example: `gh pr comment <pr> --repo openclaw/openclaw --body-file <comment.md> --attach <proof.mp4>`.
+- `gh --attach` video rules: accepted extensions are `.mp4`, `.mov`, and `.webm`; the local maximum is 100 MB, while GitHub's account limit may be lower. Do not add `#alt` to a video path. `gh` inserts a bare URL so GitHub renders a player, and the uploaded asset cannot be deleted.
+- Compatibility fallback: if the installed `gh` lacks `--attach`, upload directly with `curl -s "https://uploads.github.com/user-attachments/assets?name=<file>&content_type=<mime>&repository_id=$(gh api repos/<owner>/<repo> --jq .id)" -X POST -H "Authorization: Bearer $(gh auth token)" -H "Accept: application/json" --data-binary @<file>`, then embed the returned `.url`: images as `![alt](url)`, video as a bare line so GitHub renders a player. For that endpoint, 422 = unsupported type and 404 = bad repo id/no push. Use `content_type` `video/mp4`, `video/quicktime`, or `video/webm`; `![]()` does not render the player. Transcode Playwright webm via `ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p out.mp4` for broad playback. Both paths use the same drag-drop CDN, inherit repository visibility, and need no browser/computer use. Non-media artifacts or endpoint failure: Crabbox artifact publishing plus the manifest URL.
 - Use standard Git commands and stage only the files intended for each commit.
 - Keep commit messages concise and action-oriented.
 - Group related changes; avoid bundling unrelated refactors.

@@ -35,7 +35,10 @@ export type DispatchTelegramMessageParams = {
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb" | "ownerAgentId">;
+  opts: Pick<
+    TelegramBotOptions,
+    "token" | "mediaMaxMb" | "ownerAgentId" | "dispatchReplyFromConfig"
+  >;
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
   /**
@@ -46,6 +49,7 @@ export type DispatchTelegramMessageParams = {
     admission?: "exclusive" | "cancel-only";
     onAdopted: () => void | Promise<void>;
     onDeferred?: () => void;
+    onDeferredHeartbeat?: () => void;
     onAbandoned?: () => void;
     abortSignal?: AbortSignal;
   };

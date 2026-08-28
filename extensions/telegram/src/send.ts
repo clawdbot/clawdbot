@@ -5,6 +5,7 @@ export {
 } from "./send-context.js";
 export {
   deleteMessageTelegram,
+  getTelegramAllowedReactions,
   pinMessageTelegram,
   reactMessageTelegram,
   sendTypingTelegram,

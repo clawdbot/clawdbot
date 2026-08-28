@@ -47,6 +47,9 @@ function resolveZaloAccountWithMode(params: {
     token: tokenResolution.token,
     tokenSource: tokenResolution.source,
     tokenStatus: tokenResolution.status,
+    ...(tokenResolution.credentialDiagnostics
+      ? { credentialDiagnostics: tokenResolution.credentialDiagnostics }
+      : {}),
     config: merged,
   };
 }

@@ -4,6 +4,7 @@ import type {
   ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { describe, expect, it, vi } from "vitest";
+import type { EmbeddingProvider } from "./embeddings.js";
 import {
   applyMemoryFallbackProviderState,
   resolveMemoryFallbackProviderRequest,
@@ -25,13 +26,6 @@ vi.mock("./embeddings.js", async (importOriginal) => ({
         : fallbackSourceModel,
 }));
 
-type EmbeddingProvider = {
-  id: string;
-  model: string;
-  embedQuery: (text: string) => Promise<number[]>;
-  embedBatch: (texts: string[]) => Promise<number[][]>;
-};
-
 type EmbeddingProviderRuntime = {
   id: string;
   cacheKeyData: { provider: string; model: string };
@@ -41,8 +35,8 @@ function createProvider(id: string): EmbeddingProvider {
   return {
     id,
     model: `${id}-model`,
-    embedQuery: async () => [0.1, 0.2, 0.3],
-    embedBatch: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3]),
+    embed: async () => [0.1, 0.2, 0.3],
+    embedBatch: async (inputs) => inputs.map(() => [0.1, 0.2, 0.3]),
   };
 }
 

@@ -2,14 +2,15 @@
  * Shared Browser CLI option parsing and gateway request helpers.
  */
 import {
+  addTimerTimeoutGraceMs,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPES,
 } from "../browser-gateway-contract.js";
+import { BROWSER_ACTION_TRANSPORT_SLACK_MS } from "../browser/act-policy.js";
 import { normalizeBrowserTimerDelayMs } from "../browser/timer-delay.js";
 import { danger, defaultRuntime, runCommandWithRuntime } from "../core-api.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./core-api.js";
@@ -30,6 +31,11 @@ type BrowserRequestParams = {
   query?: Record<string, string | number | boolean | undefined>;
   body?: unknown;
 };
+
+/** Adds gateway slack to a Browser action timeout so route work can finish cleanly. */
+export function withBrowserActionTimeoutSlack(timeoutMs: number | undefined): number {
+  return addTimerTimeoutGraceMs(timeoutMs ?? 20_000, BROWSER_ACTION_TRANSPORT_SLACK_MS) ?? 1;
+}
 
 /** Runs a Browser CLI command with the standard runtime error handling. */
 export function runBrowserCliCommand(action: () => Promise<void>) {
@@ -128,27 +134,4 @@ export async function callBrowserRequest<T>(
     throw new Error("Unexpected browser.request response");
   }
   return payload as T;
-}
-
-/** Sends a Browser resize action through the shared request helper. */
-export async function callBrowserResize(
-  opts: BrowserParentOpts,
-  params: { profile?: string; width: number; height: number; targetId?: string },
-  extra?: { timeoutMs?: number },
-): Promise<unknown> {
-  return callBrowserRequest(
-    opts,
-    {
-      method: "POST",
-      path: "/act",
-      query: params.profile ? { profile: params.profile } : undefined,
-      body: {
-        kind: "resize",
-        width: params.width,
-        height: params.height,
-        targetId: normalizeOptionalString(params.targetId),
-      },
-    },
-    extra,
-  );
 }

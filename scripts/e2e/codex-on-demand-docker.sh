@@ -6,11 +6,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-codex-on-demand-e2e" OPENCLAW_CODEX_ON_DEMAND_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_CODEX_ON_DEMAND_DOCKER_TARGET:-bare}"
 HOST_BUILD="${OPENCLAW_CODEX_ON_DEMAND_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
+OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS=()
+AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT=""
 run_log=""
 
 # This lane installs the package and then exercises a managed npm install of Codex.
@@ -18,9 +21,17 @@ run_log=""
 # the Codex assertions instead of failing as a silent package-install timeout.
 export OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-1200s}"
 
+if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+  openclaw_prepublish_plugin_registry_configure_docker_args \
+    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
+fi
+
 cleanup() {
   if [ -n "${PACKAGE_TGZ:-}" ]; then
     docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
+  fi
+  if [ -n "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT" ]; then
+    rm -rf "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT"
   fi
   if [ -n "${run_log:-}" ]; then
     rm -f "$run_log"
@@ -44,6 +55,20 @@ prepare_package_tgz() {
 
 prepare_package_tgz
 
+if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] &&
+  [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ] &&
+  [ "$HOST_BUILD" != "0" ]; then
+  AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT="$(
+    mktemp -d "${TMPDIR:-/tmp}/openclaw-codex-on-demand-plugin-registry.XXXXXX"
+  )"
+  OPENCLAW_DOCKER_ALL_LANES=codex-on-demand \
+    OPENCLAW_DOCKER_ALL_LOG_DIR="$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT" \
+    OPENCLAW_DOCKER_ALL_TIMINGS=0 \
+    node "$ROOT_DIR/scripts/test-docker-all.mjs" --prepare-plugin-registry >/dev/null
+  openclaw_prepublish_plugin_registry_configure_docker_args \
+    "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT/prepublish-plugin-registry"
+fi
+
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 run_log="$(docker_e2e_run_log codex-on-demand)"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 codex-on-demand empty)"
@@ -52,11 +77,13 @@ echo "Running Codex on-demand Docker E2E..."
 if ! docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
+  "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
 set -euo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/prepublish-plugin-registry.sh
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 export NPM_CONFIG_PREFIX="$HOME/.npm-global"
 export npm_config_prefix="$NPM_CONFIG_PREFIX"
@@ -71,11 +98,23 @@ dump_debug_logs() {
   echo "Codex on-demand scenario failed with exit code $status" >&2
   openclaw_e2e_dump_logs \
     /tmp/openclaw-install.log \
+    /tmp/openclaw-codex-registry/server.log \
     /tmp/openclaw-onboard.json \
     /tmp/openclaw-plugins-list.json \
     /tmp/openclaw-codex-inspect.json
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+
+plugin_registry_pid=""
+cleanup_inner() {
+  openclaw_e2e_stop_process "${plugin_registry_pid:-}"
+}
+trap cleanup_inner EXIT
+
+configure_plugin_registry() {
+  openclaw_prepublish_plugin_registry_start_mounted \
+    /tmp/openclaw-codex-registry plugin_registry_pid '["@openclaw/codex"]'
+}
 
 mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" || true
@@ -86,6 +125,8 @@ openclaw_e2e_enable_openclaw_cli_timeout
 
 openclaw_e2e_assert_dep_absent "@openclaw/codex" "$HOME/.openclaw" "$NPM_CONFIG_PREFIX"
 openclaw_e2e_assert_dep_absent "@openai/codex" "$HOME/.openclaw" "$NPM_CONFIG_PREFIX"
+
+configure_plugin_registry
 
 echo "Running non-interactive OpenAI onboarding; Codex should install on demand..."
 openclaw onboard --non-interactive --accept-risk \

@@ -134,6 +134,7 @@ export function makeChatHost(
     chatStreamStartedAt: null,
     lastError: null,
     sessionKey: "agent:main",
+    sidebarLayout: { columns: [] },
     basePath: "",
     resourceBasePath: "",
     hello: sessionMutationGatewayHello(),
@@ -158,7 +159,6 @@ export function makeChatHost(
     querySelector: () => null,
     chatScrollCommitCleanup: null,
     chatScrollFrame: null,
-    chatScrollGuardFrame: null,
     chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
@@ -166,8 +166,6 @@ export function makeChatHost(
     chatUserNearBottom: true,
     chatFollowLocked: false,
     chatNewMessagesBelow: false,
-    chatIsProgrammaticScroll: false,
-    chatProgrammaticScrollTarget: 0,
     applySettings: vi.fn((patch: Partial<UiSettings>) => {
       // Chat pages own display/layout settings; active-session persistence belongs to pane bindings.
       const next = { ...settings, ...patch };

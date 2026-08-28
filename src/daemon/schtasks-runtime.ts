@@ -1,6 +1,5 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
@@ -8,6 +7,7 @@ import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
+import { spawnWithFallback } from "../process/spawn-utils.js";
 import { sleep } from "../utils.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine } from "./output.js";
@@ -196,21 +196,56 @@ export async function launchFallbackTaskScript(
   const command =
     installedCommand === undefined ? await readScheduledTaskCommand(env) : installedCommand;
   if (command?.programArguments.length) {
-    const [executable, ...args] = command.programArguments;
-    const child = spawn(expectDefined(executable, "schtasks executable"), args, {
-      cwd: command.workingDirectory || undefined,
-      detached: true,
-      env: { ...process.env, ...command.environment },
-      stdio: "ignore",
-      windowsHide: true,
+    const { child } = await spawnWithFallback({
+      argv: command.programArguments,
+      options: {
+        cwd: command.workingDirectory || undefined,
+        detached: true,
+        env: { ...process.env, ...command.environment },
+        stdio: "ignore",
+        windowsHide: true,
+      },
     });
     child.unref();
     return;
   }
-  const child = spawn(getWindowsCmdExePath(), ["/d", "/c", scriptPath], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
+  // Preserve native missing-script errors before testing the actual cmd.exe access contract.
+  await (await fs.open(scriptPath, "r")).close();
+  const scriptEnv = { ...process.env, OPENCLAW_TASK_SCRIPT: scriptPath };
+  // libuv uses backup semantics, so privileged Node opens can bypass the DACL that cmd enforces.
+  const scriptProbe = spawnSync(
+    getWindowsPowerShellExePath(),
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from(
+        "$ErrorActionPreference='Stop'; [System.IO.File]::OpenRead($env:OPENCLAW_TASK_SCRIPT).Dispose()",
+        "utf16le",
+      ).toString("base64"),
+    ],
+    {
+      env: scriptEnv,
+      stdio: "ignore",
+      windowsHide: true,
+    },
+  );
+  if (scriptProbe.error) {
+    throw scriptProbe.error;
+  }
+  if (scriptProbe.status !== 0) {
+    throw Object.assign(new Error("Windows login item script is not readable"), { code: "EACCES" });
+  }
+  const { child } = await spawnWithFallback({
+    // Node's verbatim /s shell contract preserves inner quotes; percent expansion is nonrecursive.
+    argv: [getWindowsCmdExePath(), "/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""'],
+    options: {
+      detached: true,
+      env: scriptEnv,
+      stdio: "ignore",
+      windowsHide: true,
+      windowsVerbatimArguments: true,
+    },
   });
   child.unref();
 }

@@ -183,7 +183,7 @@ describe("resolveSandboxFsPathWithMounts", () => {
     expect(thrown).toBeInstanceOf(Error);
     const message = (thrown as Error).message;
     expect(message).toContain(
-      `Path escapes sandbox root (~${path.sep}workspace-coder; container root /workspace): /tmp/outside`,
+      "Path escapes sandbox root (~/workspace-coder; container root /workspace): /tmp/outside",
     );
     expect(message).toContain("Use a path under /workspace/ instead.");
     expect(message).not.toContain(os.homedir());
@@ -208,11 +208,28 @@ describe("resolveSandboxFsPathWithMounts", () => {
           defaultContainerRoot: sandbox.containerWorkdir,
           mounts: buildSandboxFsMounts(sandbox),
         }),
-      ).toThrow(
-        `Path escapes sandbox root (~${path.sep}workspace-coder; container root /workspace)`,
-      );
+      ).toThrow("Path escapes sandbox root (~/workspace-coder; container root /workspace)");
     },
   );
+
+  it("keeps non-home workspace roots in the native host format", () => {
+    const root = path.parse(os.homedir()).root;
+    const workspaceDir = path.join(root, "openclaw-non-home-workspace");
+    const sandbox = createSandbox({
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+    });
+
+    expect(() =>
+      resolveSandboxFsPathWithMounts({
+        filePath: path.join(root, "openclaw-outside", "secret.txt"),
+        cwd: sandbox.workspaceDir,
+        defaultWorkspaceRoot: sandbox.workspaceDir,
+        defaultContainerRoot: sandbox.containerWorkdir,
+        mounts: buildSandboxFsMounts(sandbox),
+      }),
+    ).toThrow(`Path escapes sandbox root (${workspaceDir}; container root /workspace)`);
+  });
 
   it("prefers custom bind mounts over default workspace mount at /workspace", () => {
     const sandbox = createSandbox({

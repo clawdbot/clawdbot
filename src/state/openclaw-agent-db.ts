@@ -11,6 +11,10 @@ import {
   isTerminalSqliteIntegrityError,
   type SqliteIntegrityConfirmation,
 } from "../infra/sqlite-integrity.js";
+import {
+  deferSqlitePostCommitPublication,
+  withSqlitePostCommitPublications,
+} from "../infra/sqlite-post-commit.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import {
   runSqliteImmediateTransactionSync,
@@ -31,8 +35,11 @@ import type {
   OpenClawAgentDatabaseOwnerInspection,
 } from "./openclaw-agent-db-contract.js";
 import {
+  AGENT_DATABASE_MAINTENANCE_LEASE,
+  assertNoOpenClawAgentDatabaseLeases,
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
+  runWithAgentDatabaseMaintenanceAuthority,
 } from "./openclaw-agent-db-lease.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import {
@@ -41,7 +48,7 @@ import {
   unregisterOpenClawAgentDatabase,
 } from "./openclaw-agent-db-registry.js";
 import {
-  assertCanonicalAgentMediaPersistenceVersion,
+  assertCanonicalAgentPersistenceVersion,
   assertExistingAgentSchemaOwner,
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
@@ -63,6 +70,7 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
 
 export {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -331,7 +339,7 @@ export function openOpenClawAgentDatabase(
         // Integrity is not process-stable: the file can be damaged while evicted.
         // This guard is read-only (no busy waits), so every physical open pays it.
         assertAgentDatabaseIntegrityBeforeMutation(db, agentId, pathname);
-        assertCanonicalAgentMediaPersistenceVersion(db, pathname);
+        assertCanonicalAgentPersistenceVersion(db, pathname);
         configureSqlitePreSchemaPragmas(db, {
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
         });
@@ -412,20 +420,12 @@ export function openOpenClawAgentDatabase(
   }
 }
 
-/** Run a synchronous immediate transaction against an agent database. */
-const postCommitPublications = new WeakMap<OpenClawAgentDatabase, Array<() => void>>();
-
 /** Queue a non-throwing runtime publication on the outer database commit edge. */
 export function deferOpenClawAgentPostCommitPublication(
   database: OpenClawAgentDatabase,
   publish: () => void,
 ): boolean {
-  const publications = postCommitPublications.get(database);
-  if (!publications) {
-    return false;
-  }
-  publications.push(publish);
-  return true;
+  return deferSqlitePostCommitPublication(database.db, publish);
 }
 
 export function runOpenClawAgentWriteTransaction<T>(
@@ -438,16 +438,8 @@ export function runOpenClawAgentWriteTransaction<T>(
 ): T {
   const database = openOpenClawAgentDatabase(options);
   const enteredNestedTransaction = database.db.isTransaction;
-  const publications: Array<() => void> | undefined = enteredNestedTransaction
-    ? postCommitPublications.get(database)
-    : [];
-  const publicationStart = publications?.length ?? 0;
-  if (!enteredNestedTransaction && publications) {
-    postCommitPublications.set(database, publications);
-  }
-  let result: T;
-  try {
-    result = runSqliteImmediateTransactionSync(
+  return withSqlitePostCommitPublications(database.db, () =>
+    runSqliteImmediateTransactionSync(
       database.db,
       () => {
         const operationResult = operation(database);
@@ -466,21 +458,8 @@ export function runOpenClawAgentWriteTransaction<T>(
         ...transactionOptions,
         operationLabel: transactionOptions.operationLabel ?? "agent.write",
       },
-    );
-  } catch (error) {
-    publications?.splice(publicationStart);
-    throw error;
-  } finally {
-    if (!enteredNestedTransaction && publications) {
-      postCommitPublications.delete(database);
-    }
-  }
-  if (!enteredNestedTransaction) {
-    for (const publish of publications ?? []) {
-      publish();
-    }
-  }
-  return result;
+    ),
+  );
 }
 
 let unregisterExitClose: (() => void) | null = null;
@@ -681,6 +660,30 @@ export function closeOpenClawAgentDatabases(): void {
   if (removedIncognito) {
     incognitoDatabaseGeneration += 1;
   }
+}
+
+/** Fence cross-process agent writers while Doctor reconciles shared plugin state. */
+export function withAgentDatabaseMaintenanceLease<T>(
+  options: Pick<OpenClawStateDatabaseOptions, "env">,
+  run: (maintenance: OpenClawStateLeaseContext) => Promise<T>,
+): Promise<T> {
+  return withOpenClawStateLease(
+    {
+      ...AGENT_DATABASE_MAINTENANCE_LEASE,
+      database: { scope: "shared", options },
+      leaseMs: 60_000,
+      waitMs: 5_000,
+      leaseLabel: "agent database maintenance lease",
+      operationLabel: "agent.database.maintenance.lease",
+    },
+    (maintenance) => {
+      // Claiming first closes the cross-process gap: every later writer claim
+      // observes this same lease inside its authoritative state transaction.
+      closeOpenClawAgentDatabases();
+      assertNoOpenClawAgentDatabaseLeases(maintenance, options);
+      return runWithAgentDatabaseMaintenanceAuthority(maintenance, () => run(maintenance));
+    },
+  );
 }
 
 /** Close cached agent handles and clear terminal failure latches for test isolation. */

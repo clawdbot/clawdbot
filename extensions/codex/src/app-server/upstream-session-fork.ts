@@ -108,6 +108,7 @@ export async function forkCodexUpstreamSession(
       const rawResponse = await control.forkThread({
         threadId: params.upstream.threadId,
         beforeTurnId: resolved.boundary.beforeTurnId,
+        ...(params.sandbox === "required" ? { sandbox: "workspace-write" as const } : {}),
         ...(incognito ? { ephemeral: true } : {}),
         excludeTurns: !incognito,
       });

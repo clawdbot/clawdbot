@@ -2,6 +2,10 @@ import path from "node:path";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -31,6 +35,7 @@ import {
 } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import { createSessionNodeInvocation } from "./node-execution-authority.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
   Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "runId">;
@@ -140,9 +145,10 @@ function gateBoundTool(tool: AnyAgentTool, assertActive: () => void): AnyAgentTo
   return gated;
 }
 
-function createBoundCallerIdentity(params: AgentHarnessHostAttempt) {
+function createBoundCallerIdentity(params: AgentHarnessHostAttempt, receiptAuthority: () => void) {
   return createAdmittedGatewayToolCallerIdentity({
     admittedRunContext: params.admittedRunContext,
+    receiptAuthority,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     turnSourceChannel: params.messageChannel ?? params.messageProvider,
@@ -156,8 +162,16 @@ function createBoundCallerIdentity(params: AgentHarnessHostAttempt) {
 export function createAgentHarnessHostCapabilities(params: {
   attempt: AgentHarnessHostAttempt;
   pluginId: string;
-}): { capabilities: AgentHarnessHostCapabilities; close: () => void } {
+  requiredNodeCommands?: readonly string[];
+}): {
+  capabilities: AgentHarnessHostCapabilities;
+  close: () => void;
+  runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
+} {
   const attempt = params.attempt;
+  // Capture the selected harness declaration before plugin code can mutate it.
+  // Full must not cover other commands merely because the same plugin owns them.
+  const requiredNodeCommands = new Set(params.requiredNodeCommands);
   const operationalRunInstance = attempt.admittedRunContext.operationalRunInstance;
   const delegatedAuthority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
   if (!delegatedAuthority) {
@@ -167,16 +181,18 @@ export function createAgentHarnessHostCapabilities(params: {
   // Lexical closure must also fence work already past its entry guard. The
   // result guards below cover exact authority loss that does not use close().
   const capabilityAbortController = new AbortController();
-  const assertActive = () => {
+  const callerIdentity = createBoundCallerIdentity(attempt, assertActive);
+  function assertActive() {
     if (
       !active ||
       attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance ||
-      getAdmittedRunDelegatedAuthority(attempt.admittedRunContext) !== delegatedAuthority
+      getAdmittedRunDelegatedAuthority(attempt.admittedRunContext) !== delegatedAuthority ||
+      (callerIdentity?.gatewayContextResolver !== undefined &&
+        callerIdentity.gatewayContextResolver() === undefined)
     ) {
       throw new Error("agent harness host capability is no longer active");
     }
-  };
-  const callerIdentity = createBoundCallerIdentity(attempt);
+  }
   const requester = {
     ...((attempt.messageChannel ?? attempt.messageProvider)
       ? { channel: attempt.messageChannel ?? attempt.messageProvider ?? undefined }
@@ -275,7 +291,9 @@ export function createAgentHarnessHostCapabilities(params: {
     const assertRecoveryActive = () => {
       if (
         attempt.abortSignal?.aborted ||
-        attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance
+        attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance ||
+        (callerIdentity?.gatewayContextResolver !== undefined &&
+          callerIdentity.gatewayContextResolver() === undefined)
       ) {
         throw new Error("agent harness retained host policy is no longer active");
       }
@@ -421,6 +439,23 @@ export function createAgentHarnessHostCapabilities(params: {
   });
   return {
     capabilities,
+    runWithScope: (run) =>
+      withPluginRuntimeGatewayRequestScope(
+        {
+          isWebchatConnect: () => false,
+          ...getPluginRuntimeGatewayRequestScope(),
+          invokeWithSessionNodeAuthority: createSessionNodeInvocation(
+            attempt,
+            params.pluginId,
+            requiredNodeCommands,
+            assertActive,
+            attempt.abortSignal
+              ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
+              : capabilityAbortController.signal,
+          ),
+        },
+        run,
+      ),
     close: () => {
       if (!active) {
         return;

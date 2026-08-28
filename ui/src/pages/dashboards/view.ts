@@ -4,6 +4,7 @@ import { repeat } from "lit/directives/repeat.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { icons } from "../../components/icons.ts";
+import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
@@ -20,10 +21,8 @@ export type DashboardsRouteData = {
 
 function renderDashboardList(data: DashboardsRouteData) {
   const rows = data.result?.sessions ?? [];
-  if (data.error) {
-    return html`<section class="card" role="alert">
-      ${t("dashboardsPage.loadError", { error: data.error })}
-    </section>`;
+  if (data.error && !data.result) {
+    return nothing;
   }
   if (rows.length === 0) {
     return html`<section class="card stack" data-dashboards-empty role="status">
@@ -71,9 +70,22 @@ function renderDashboardList(data: DashboardsRouteData) {
   </section>`;
 }
 
-export function renderDashboards(data: DashboardsRouteData | undefined) {
+export function renderDashboards(data: DashboardsRouteData | undefined, onRetry: () => void) {
   const body = data
-    ? renderDashboardList(data)
+    ? html`
+        ${renderPanelRefreshStatus({
+          status: {
+            error: data.error,
+            hasLoaded: data.result !== null,
+            stale: data.result !== null && data.error !== null,
+          },
+          errorMessage: data.error
+            ? t("dashboardsPage.loadError", { error: data.error })
+            : undefined,
+          onRetry,
+        })}
+        ${renderDashboardList(data)}
+      `
     : html`<section class="card" aria-busy="true">${t("common.loading")}</section>`;
   return html`
     <section class="content-header">

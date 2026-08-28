@@ -1,7 +1,6 @@
 import { loadLocalAssistantIdentity } from "../../app/assistant-identity.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -64,15 +63,6 @@ export function saveRouteSessionSettings(state: ChatPageHost, sessionKey: string
     return;
   }
   state.settings = patchSettings({ sessionKey, lastActiveSessionKey: sessionKey });
-}
-
-export function patchChatSessionLabel(
-  state: ChatPageHost,
-  sessions: Pick<SessionCapability, "patch">,
-  sessionKey: string,
-  label: string | null,
-) {
-  return sessions.patch(sessionKey, { label }, { agentId: resolveChatAgentId(state) });
 }
 
 export function resolveChatAvatarUrl(state: ChatPageHost): string | null {

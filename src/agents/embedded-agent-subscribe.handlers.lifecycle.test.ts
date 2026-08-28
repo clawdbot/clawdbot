@@ -10,6 +10,7 @@ import {
   handleAgentStart,
 } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 
 const { emitAgentEventMock } = vi.hoisted(() => ({
   emitAgentEventMock: vi.fn(),
@@ -937,6 +938,9 @@ describe("handleAgentEnd", () => {
     const ctx = createContext(undefined);
     ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
     ctx.state.pendingToolAudioAsVoice = true;
+    vi.mocked(ctx.emitBlockReply).mockImplementation(
+      createReplyDelivery({ params: ctx.params, state: ctx.state, log: ctx.log }).emitBlockReply,
+    );
 
     await handleAgentEnd(ctx);
 

@@ -50,6 +50,7 @@ describe("tool-catalog", () => {
       "exec",
       "process",
       "code_execution",
+      "secrets",
       "web_search",
       "web_fetch",
       "x_search",
@@ -94,6 +95,7 @@ describe("tool-catalog", () => {
   it("includes bundle MCP tools in coding and messaging profile policies", () => {
     expect(requirePolicyAllow("coding").at(-1)).toBe("bundle-mcp");
     expect(requirePolicyAllow("messaging")).toEqual([
+      "secrets",
       "sessions",
       "sessions_list",
       "sessions_history",

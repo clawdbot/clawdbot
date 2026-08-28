@@ -1,10 +1,13 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { ProgressCard } from "../../../../packages/gateway-protocol/src/schema/progress-card.js";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import { desktopFocusPath } from "../../components/desktop/desktop-focus-window.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../../lib/keyboard-shortcut-catalog.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -36,8 +39,6 @@ type SidebarPanelDefinitionParams = {
   startedAt: number | undefined;
   lastReadAt: number | undefined;
   pullRequests: ControlUiSessionPullRequest[];
-  progressCard: ProgressCard | null;
-  onDismissProgressCard?: (card: ProgressCard) => void;
   companion: ChatSessionCompanionThread;
   onCompanionSubmit: (question: string) => void;
   onCompanionDraftChange: (draft: string) => void;
@@ -46,6 +47,7 @@ type SidebarPanelDefinitionParams = {
   pendingQuestion: string | null;
   onClearCompanion: () => void;
   discussion: SessionDiscussionPanelConfig | null;
+  discussionAvailable: boolean;
   discussionOpenUrl: string | null;
   discussionSourceGeneration: number;
 };
@@ -121,8 +123,6 @@ export function sidebarPanelDefinitions(
         .activeRunId=${params.activeRunId}
         .startedAt=${params.startedAt}
         .lastReadAt=${params.lastReadAt}
-        .progressCard=${params.progressCard}
-        .onDismissProgressCard=${params.onDismissProgressCard}
         .pullRequests=${params.pullRequests}
         .companion=${params.companion}
         .connected=${state?.connected === true}
@@ -152,9 +152,14 @@ export function sidebarPanelDefinitions(
         .onStateChange=${params.discussion.onStateChange}
       ></openclaw-session-discussion>`
     : null;
+  const attachmentContent = state?.attachmentSidebarContent ?? null;
   const detailContent =
     state?.sidebarContent ??
     (state && params?.detailOpen ? resolveSessionDiffSidebarContent(state) : null);
+  const workspaceContent =
+    attachmentContent && params
+      ? params.renderDetail(attachmentContent)
+      : (params?.workspace ?? null);
   return [
     definePanel(
       "detail",
@@ -164,11 +169,11 @@ export function sidebarPanelDefinitions(
     ),
     definePanel("terminal", "terminal", icons.terminal, terminal, {
       available: terminalAvailable,
-      shortcut: "Ctrl+`",
+      shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.terminalPanel),
     }),
     definePanel("browser", "browser", icons.globe, browser, { available: browserAvailable }),
-    definePanel("workspace", "files", icons.fileText, params?.workspace ?? null, {
-      shortcut: "⇧⌘B",
+    definePanel("workspace", "files", icons.fileText, workspaceContent, {
+      shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
     }),
     definePanel(
       "companion",
@@ -224,7 +229,7 @@ export function sidebarPanelDefinitions(
         : {}),
     }),
     definePanel("discussion", "discussion", icons.messageSquare, discussion, {
-      available: discussion !== null,
+      available: discussion !== null && params?.discussionAvailable === true,
       ...(params?.discussionOpenUrl
         ? {
             headerAction: html`<a

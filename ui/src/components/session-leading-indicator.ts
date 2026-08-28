@@ -1,19 +1,14 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { t } from "../i18n/index.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { icons } from "./icons.ts";
 import {
   renderSessionAttentionIcon,
   renderSessionState,
-  renderSessionUnreadState,
+  sessionHasRunningWork,
 } from "./session-attention-presentation.ts";
-import {
-  renderSessionGlyph,
-  renderSessionUnreadBadge,
-  type SessionGlyphContent,
-} from "./session-glyph.ts";
+import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
 import { resolveSessionIconGlyph } from "./session-icon-glyph-registry.ts";
-import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import { renderSessionOwnerChip, type SessionCreatedActor } from "./session-owner-chip.ts";
 
 type SessionAvatarAuth = {
@@ -29,70 +24,6 @@ function ensureChannelAvatarElement(): void {
   channelAvatarElementLoad ??= import("./channel-avatar.ts");
 }
 
-function renderGlyphBadge(
-  session: SidebarRecentSession,
-  pullRequestState: SessionPullRequestIndicatorState,
-): SessionGlyphContent {
-  if (session.unread) {
-    return renderSessionUnreadBadge();
-  }
-  if (pullRequestState === "none") {
-    return nothing;
-  }
-  const label =
-    pullRequestState === "open" ? t("sessionsView.openPullRequest") : t("chat.pullRequests.merged");
-  return html`<span
-    class="session-glyph__badge sidebar-session-pr-indicator--${pullRequestState}"
-    data-session-pr-state=${pullRequestState}
-    role="img"
-    aria-label=${label}
-    title=${label}
-  ></span>`;
-}
-
-function pullRequestStateLabel(
-  pullRequestState: Exclude<SessionPullRequestIndicatorState, "none">,
-) {
-  return pullRequestState === "open"
-    ? t("sessionsView.openPullRequest")
-    : t("chat.pullRequests.merged");
-}
-
-function renderPullRequestIndicator(
-  pullRequestState: SessionPullRequestIndicatorState,
-  showTitle = true,
-) {
-  if (pullRequestState === "none") {
-    return nothing;
-  }
-  const label = pullRequestStateLabel(pullRequestState);
-  return html`<span
-    class="sidebar-session-pr-indicator sidebar-session-pr-indicator--${pullRequestState}"
-    data-session-pr-state=${pullRequestState}
-    role="img"
-    aria-label=${label}
-    title=${showTitle ? label : nothing}
-    >${pullRequestState === "open" ? icons.gitPullRequest : icons.gitMerge}</span
-  >`;
-}
-
-function renderSessionTrailingState(
-  session: SidebarRecentSession,
-  pullRequestState: SessionPullRequestIndicatorState,
-) {
-  const sessionState = renderSessionState(session, false);
-  const concurrentUnreadState = session.hasActiveRun ? renderSessionUnreadState(session) : nothing;
-  if (
-    pullRequestState === "none" &&
-    sessionState === nothing &&
-    concurrentUnreadState === nothing
-  ) {
-    return nothing;
-  }
-  return html`${renderPullRequestIndicator(pullRequestState, false)} ${sessionState}
-  ${concurrentUnreadState}`;
-}
-
 function renderPersistentSessionIcon(icon: string) {
   const glyph = resolveSessionIconGlyph(icon);
   return glyph
@@ -100,16 +31,14 @@ function renderPersistentSessionIcon(icon: string) {
     : html`<span class="session-glyph__emoji" aria-hidden="true">${icon}</span>`;
 }
 
-export function describeSessionTrailingState(
-  session: SidebarRecentSession,
-  pullRequestState: SessionPullRequestIndicatorState,
-) {
+export function describeSessionTrailingState(session: SidebarRecentSession) {
+  const runningLabel =
+    session.hasActiveRun && session.status === "queued"
+      ? t("sessionsView.statusQueued")
+      : t("sessionsView.activeRun");
   return [
     session.forkSource ? t("sessionsView.forkedSession") : "",
-    pullRequestState === "none" ? "" : pullRequestStateLabel(pullRequestState),
-    session.hasActiveRun
-      ? t(session.status === "queued" ? "sessionsView.statusQueued" : "sessionsView.activeRun")
-      : "",
+    sessionHasRunningWork(session) ? runningLabel : "",
     session.unread ? t("sessionsView.unread") : "",
   ]
     .filter(Boolean)
@@ -118,11 +47,10 @@ export function describeSessionTrailingState(
 
 export function renderSessionLeadingState(
   session: SidebarRecentSession,
-  pullRequestState: SessionPullRequestIndicatorState,
   ownerActor: SessionCreatedActor | null | undefined,
   attribution: "created" | "owned" | "archived",
   ownerViewing?: boolean,
-  participants?: readonly SessionCreatedActor[],
+  participants?: readonly SessionParticipant[],
   participantCount?: number,
   avatarAuth?: SessionAvatarAuth,
 ): {
@@ -131,10 +59,8 @@ export function renderSessionLeadingState(
   trailingIndicator: TemplateResult | typeof nothing;
   renderedOwnerId?: string;
 } {
-  const running = session.hasActiveRun;
-  const trailingIndicator = session.isChild
-    ? nothing
-    : renderSessionTrailingState(session, pullRequestState);
+  const running = sessionHasRunningWork(session);
+  const trailingIndicator = session.isChild ? nothing : renderSessionState(session, false);
   // Transient attention always outranks the persistent decorative icon.
   if (session.isChild) {
     if (session.attention.kind !== "none") {
@@ -143,7 +69,7 @@ export function renderSessionLeadingState(
         leadingIndicator: renderSessionGlyph({
           content: renderSessionAttentionIcon(session.attention),
           running,
-          badge: renderGlyphBadge(session, pullRequestState),
+          badge: session.unread && !session.hasActiveRun ? renderSessionUnreadBadge() : nothing,
         }),
         trailingIndicator,
       };
@@ -154,7 +80,7 @@ export function renderSessionLeadingState(
         leadingIndicator: renderSessionGlyph({
           content: renderPersistentSessionIcon(session.icon),
           running,
-          badge: renderGlyphBadge(session, pullRequestState),
+          badge: session.unread && !session.hasActiveRun ? renderSessionUnreadBadge() : nothing,
         }),
         trailingIndicator,
       };
@@ -171,29 +97,14 @@ export function renderSessionLeadingState(
           ></openclaw-channel-avatar>`,
           running,
           circular: true,
-          badge: renderGlyphBadge(session, pullRequestState),
+          badge: session.unread && !session.hasActiveRun ? renderSessionUnreadBadge() : nothing,
         }),
         trailingIndicator,
       };
     }
-    if (running) {
-      return {
-        running,
-        leadingIndicator: renderSessionState(session),
-        trailingIndicator,
-      };
-    }
-    if (pullRequestState !== "none") {
-      return {
-        running,
-        leadingIndicator: renderPullRequestIndicator(pullRequestState),
-        trailingIndicator,
-      };
-    }
-    const sessionState = renderSessionState(session);
     return {
       running,
-      leadingIndicator: sessionState,
+      leadingIndicator: renderSessionState(session),
       trailingIndicator,
     };
   }

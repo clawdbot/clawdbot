@@ -1,6 +1,7 @@
 // Register setup tests cover setup command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerOnboardCommand } from "./register.onboard.js";
 import { registerSetupCommand, resolveSetupCommandRoute } from "./register.setup.js";
 
 const mocks = vi.hoisted(() => ({
@@ -53,7 +54,8 @@ vi.mock("../../state/local-onboarding-state.js", () => ({
   readLocalOnboardingStateForConfig: mocks.readLocalOnboardingStateMock,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
@@ -97,6 +99,45 @@ describe("registerSetupCommand", () => {
       path: "/tmp/openclaw.json",
       sourceConfig: {},
     });
+  });
+
+  it("keeps shared onboarding flags aligned while preserving command-specific help", () => {
+    const program = new Command();
+    registerOnboardCommand(program);
+    registerSetupCommand(program);
+    const onboard = program.commands.find((command) => command.name() === "onboard")!;
+    const setup = program.commands.find((command) => command.name() === "setup")!;
+    const setupOptions = new Map(setup.options.map((option) => [option.flags, option]));
+    const distinctHelp = new Set([
+      "workspace",
+      "reset",
+      "nonInteractive",
+      "skipUi",
+      "skipHooks",
+      "json",
+    ]);
+
+    for (const option of onboard.options) {
+      const sibling = setupOptions.get(option.flags);
+      if (!sibling) {
+        continue;
+      }
+      expect([sibling.flags, sibling.defaultValue, sibling.hidden]).toEqual([
+        option.flags,
+        option.defaultValue,
+        option.hidden,
+      ]);
+      if (!distinctHelp.has(option.attributeName())) {
+        expect(sibling.description).toBe(option.description);
+      }
+    }
+
+    const optionIndex = (command: Command, name: string) =>
+      command.options.findIndex((option) => option.attributeName() === name);
+    expect(optionIndex(onboard, "remoteUrl")).toBeLessThan(optionIndex(onboard, "tailscale"));
+    expect(optionIndex(setup, "remoteUrl")).toBeGreaterThan(optionIndex(setup, "importSecrets"));
+    expect(setupOptions.get("--tailscale-reset-on-exit")?.hidden).toBe(true);
+    expect(setupOptions.get("--no-tailscale-reset-on-exit")?.hidden).toBe(true);
   });
 
   it("keeps routing precedence explicit", () => {
@@ -344,6 +385,7 @@ describe("registerSetupCommand", () => {
 
   it.each([
     ["onboarding mode", ["--mode", "remote"]],
+    ["JSON onboarding mode", ["--mode", "remote", "--json"]],
     ["remote Gateway", ["--remote-url", "wss://example.invalid"]],
     ["remote Gateway password", ["--remote-password", "fixture-password"]],
     ["reset", ["--reset"]],
@@ -354,6 +396,19 @@ describe("registerSetupCommand", () => {
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(args[0]!));
     expect(runtime.exit).toHaveBeenCalledWith(1);
+    if (args.includes("--json")) {
+      expect(runtime.log).toHaveBeenCalledWith(
+        JSON.stringify(
+          {
+            ok: false,
+            phase: "options",
+            message: "--baseline cannot be combined with: --mode.",
+          },
+          null,
+          2,
+        ),
+      );
+    }
     expect(setupCommandMock).not.toHaveBeenCalled();
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
@@ -395,16 +450,30 @@ describe("registerSetupCommand", () => {
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
-  it("rejects conflicting custom model input capabilities", async () => {
-    await runCli(["setup", "--custom-image-input", "--custom-text-input"]);
+  it.each([false, true])(
+    "rejects conflicting custom model input capabilities (json: %s)",
+    async (json) => {
+      await runCli([
+        "setup",
+        "--custom-image-input",
+        "--custom-text-input",
+        ...(json ? ["--json"] : []),
+      ]);
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Use either --custom-image-input or --custom-text-input, not both.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expect(setupCommandMock).not.toHaveBeenCalled();
-  });
+      const message = "Use either --custom-image-input or --custom-text-input, not both.";
+      expect(runtime.error).toHaveBeenCalledWith(message);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      if (json) {
+        expect(runtime.log).toHaveBeenCalledWith(
+          JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+        );
+      } else {
+        expect(runtime.log).not.toHaveBeenCalled();
+      }
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+      expect(setupCommandMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["not-a-port", "70000"])(
     "rejects invalid --gateway-port %s before onboarding dispatch",

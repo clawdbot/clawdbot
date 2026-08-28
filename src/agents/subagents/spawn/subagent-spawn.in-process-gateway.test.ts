@@ -390,6 +390,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       delegatedAuthority: authority,
       executionIdentityToken: parentToken,
       operationalRunInstance,
+      receiptAuthority: () => undefined,
       sessionKey: "agent:main:main",
       turnClaim,
     };

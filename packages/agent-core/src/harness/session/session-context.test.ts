@@ -137,13 +137,57 @@ describe("buildSessionContext", () => {
     const activity = {
       role: "custom" as const,
       customType: "openclaw.context-compaction",
-      content: "Context compacted",
+      content: `Context compacted ${"x".repeat(80_000)}`,
       display: true,
       excludeFromContext: true,
       timestamp: Date.parse(timestamp),
     };
+    const runtimeContext = {
+      role: "custom" as const,
+      customType: "openclaw.runtime-context",
+      content: "Model-visible runtime context",
+      display: false,
+      details: { runtimeContextCarrier: true },
+      timestamp: Date.parse(timestamp),
+    };
+    const activityEntry: SessionTreeEntry = {
+      type: "message",
+      id: "activity",
+      parentId: "initial",
+      timestamp,
+      message: activity,
+    };
+    const runtimeContextEntry: SessionTreeEntry = {
+      type: "message",
+      id: "runtime-context",
+      parentId: "activity",
+      timestamp,
+      message: runtimeContext,
+    };
+    const entries = [
+      userEntry("initial", null, "original request"),
+      activityEntry,
+      runtimeContextEntry,
+      userEntry("latest", "runtime-context", "continue"),
+    ];
+    const messages = buildSessionContext(entries).messages;
 
     expect(convertToLlm([activity])).toEqual([]);
+    expect(projectSessionEntryMessage(activityEntry)).toBeUndefined();
+    expect(projectSessionEntryMessage(runtimeContextEntry)).toBe(runtimeContext);
+    expect(messages.map((message) => message.role)).toEqual(["user", "custom", "user"]);
+    expect(JSON.stringify(messages)).toContain("Model-visible runtime context");
+    expect(JSON.stringify(messages)).not.toContain("Context compacted");
+    expect(convertToLlm(messages)).toMatchObject([
+      { role: "user", content: "original request" },
+      {
+        role: "user",
+        content: [{ type: "text", text: "Model-visible runtime context" }],
+        runtimeContextCarrier: true,
+      },
+      { role: "user", content: "continue" },
+    ]);
+    expect(JSON.stringify(entries)).toContain("Context compacted");
   });
 
   it("keeps private shell executions in history without projecting them into context", () => {

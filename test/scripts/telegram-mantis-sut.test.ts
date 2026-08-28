@@ -10,6 +10,16 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const linuxIt = process.platform === "linux" ? it : it.skip;
+
+function sutSupervisorCommand(): string {
+  const source = fs.readFileSync("scripts/mantis/mantis-sut-container.sh", "utf8");
+  const match = source.match(/readonly sut_command='([\s\S]*?)'\n\nrequire_active_sut\(\)/u);
+  if (!match?.[1]) {
+    throw new Error("Could not extract the SUT gateway supervisor.");
+  }
+  return match[1];
+}
 
 describe("Telegram Mantis SUT", () => {
   it("keeps stderr when a container action is terminated", () => {
@@ -40,7 +50,7 @@ describe("Telegram Mantis SUT", () => {
     );
   }, 40_000);
 
-  it("releases the runtime claim before deadline-exposed removal", () => {
+  linuxIt("releases the runtime claim before deadline-exposed removal", () => {
     const root = tempDirs.make("telegram-mantis-cleanup-");
     const binDir = path.join(root, "bin");
     const runtimeParent = path.join(root, "runtime");
@@ -115,7 +125,7 @@ describe("Telegram Mantis SUT", () => {
     }
   });
 
-  it("waits for the claimed runtime owner before returning from stop", () => {
+  linuxIt("waits for the claimed runtime owner before returning from stop", () => {
     const root = tempDirs.make("telegram-mantis-stop-sync-");
     const binDir = path.join(root, "bin");
     const runtimeParent = path.join(root, "runtime");
@@ -186,6 +196,59 @@ describe("Telegram Mantis SUT", () => {
     }
   });
 
+  it("relaunches the gateway only when a restart request exists", () => {
+    const root = tempDirs.make("telegram-mantis-supervisor-");
+    const binDir = path.join(root, "bin");
+    const countFile = path.join(root, "gateway-count");
+    const configPath = path.join(root, "openclaw.json");
+    const gatewayLog = path.join(root, "gateway.log");
+    fs.mkdirSync(binDir);
+    fs.writeFileSync(configPath, "{}\n");
+    fs.writeFileSync(
+      path.join(binDir, "node"),
+      `#!/bin/sh
+count=0
+if [ -f ${JSON.stringify(countFile)} ]; then count=$(cat ${JSON.stringify(countFile)}); fi
+count=$((count + 1))
+printf '%s\\n' "$count" > ${JSON.stringify(countFile)}
+printf '[gateway] ready\\n'
+if [ "\${RESTART_ON_FIRST:-0}" = 1 ] && [ "$count" -eq 1 ]; then
+  : > ${JSON.stringify(path.join(root, "gateway-restart.request"))}
+  exit 23
+fi
+exit "\${GATEWAY_EXIT_CODE:-0}"
+`,
+      { mode: 0o755 },
+    );
+    const run = (extraEnv: NodeJS.ProcessEnv) =>
+      spawnSync("/bin/sh", ["-c", sutSupervisorCommand()], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ...extraEnv,
+          GATEWAY_LOG: gatewayLog,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_GATEWAY_PORT: "19879",
+          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+      });
+
+    const restarted = run({ RESTART_ON_FIRST: "1" });
+    expect(restarted.status, restarted.stderr).toBe(0);
+    expect(fs.readFileSync(countFile, "utf8").trim()).toBe("2");
+    expect(fs.readFileSync(gatewayLog, "utf8")).toContain("[mantis] restarting gateway");
+    expect(fs.existsSync(path.join(root, "gateway.pid"))).toBe(false);
+
+    fs.rmSync(countFile);
+    fs.rmSync(gatewayLog);
+    const exited = run({ GATEWAY_EXIT_CODE: "23" });
+    expect(exited.status, exited.stderr).toBe(23);
+    expect(fs.readFileSync(countFile, "utf8").trim()).toBe("1");
+    expect(fs.readFileSync(gatewayLog, "utf8")).not.toContain("restarting gateway");
+    expect(fs.existsSync(path.join(root, "gateway.pid"))).toBe(false);
+  });
+
   it("lets the proof agent patch the complete ephemeral gateway config", () => {
     const outputDir = tempDirs.make("telegram-mantis-config-");
     const { configPath } = writeSutConfig({
@@ -201,6 +264,7 @@ describe("Telegram Mantis SUT", () => {
       },
       gatewayPort: 19_879,
       groupId: "-100123456789",
+      mockHost: "mock-openai",
       mockPort: 19_882,
       outputDir,
       testerId: "12345",
@@ -212,6 +276,32 @@ describe("Telegram Mantis SUT", () => {
     expect(config.channels.telegram.streaming).toEqual({ mode: "partial" });
     expect(config.channels.telegram).not.toHaveProperty("replyToMode");
     expect(config.commands.ownerAllowFrom).toEqual(["telegram:12345"]);
+    expect(config.models.providers.openai.baseUrl).toBe("http://mock-openai:19882/v1");
     expect(config.session.sendPolicy).toEqual({ default: "deny" });
+  });
+
+  it("routes Telegram through the proxy only for the container SUT", () => {
+    const shared = {
+      gatewayPort: 19_879,
+      groupId: "-100123456789",
+      mockPort: 19_882,
+      testerId: "12345",
+    };
+    const local = writeSutConfig({
+      ...shared,
+      mockHost: "127.0.0.1",
+      outputDir: tempDirs.make("telegram-local-sut-config-"),
+    });
+    const container = writeSutConfig({
+      ...shared,
+      mockHost: "mock-openai",
+      outputDir: tempDirs.make("telegram-container-sut-config-"),
+      telegramApiRoot: "http://telegram-api-proxy:8080",
+    });
+
+    const localConfig = JSON.parse(fs.readFileSync(local.configPath, "utf8"));
+    const containerConfig = JSON.parse(fs.readFileSync(container.configPath, "utf8"));
+    expect(localConfig.channels.telegram).not.toHaveProperty("apiRoot");
+    expect(containerConfig.channels.telegram.apiRoot).toBe("http://telegram-api-proxy:8080");
   });
 });

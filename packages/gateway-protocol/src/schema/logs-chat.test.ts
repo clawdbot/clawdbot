@@ -1,12 +1,19 @@
 // Gateway Protocol tests cover typed chat stream events.
+import type { Static } from "typebox";
 import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   ChatEventSchema,
   ChatHistoryCursorResultSchema,
+  ChatHistoryDeltaResultSchema,
   ChatHistoryParamsSchema,
+  ChatHistoryResetResultSchema,
   ChatSendParamsSchema,
   ChatStatusEventSchema,
+  type ChatHistoryCursorResult,
+  type ChatHistoryDeltaResult,
+  type ChatHistoryParams,
+  type ChatHistoryResetResult,
 } from "./logs-chat.js";
 
 const statusEvent = {
@@ -30,6 +37,19 @@ describe("ChatHistoryParamsSchema", () => {
 describe("ChatHistoryCursorResultSchema", () => {
   const sessionInfo = { key: "agent:main:main" };
 
+  it("derives the public request and cursor result types from their schemas", () => {
+    expectTypeOf<ChatHistoryParams>().toEqualTypeOf<Static<typeof ChatHistoryParamsSchema>>();
+    expectTypeOf<ChatHistoryDeltaResult>().toEqualTypeOf<
+      Static<typeof ChatHistoryDeltaResultSchema>
+    >();
+    expectTypeOf<ChatHistoryResetResult>().toEqualTypeOf<
+      Static<typeof ChatHistoryResetResultSchema>
+    >();
+    expectTypeOf<ChatHistoryCursorResult>().toEqualTypeOf<
+      Static<typeof ChatHistoryCursorResultSchema>
+    >();
+  });
+
   it("accepts only the closed delta and reset outcomes", () => {
     const delta = {
       kind: "delta",
@@ -38,6 +58,12 @@ describe("ChatHistoryCursorResultSchema", () => {
       sessionInfo,
     };
     expect(Value.Check(ChatHistoryCursorResultSchema, delta)).toBe(true);
+    expect(
+      Value.Check(ChatHistoryCursorResultSchema, {
+        ...delta,
+        inFlightRun: { runId: "run-live", text: "still working" },
+      }),
+    ).toBe(true);
     expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset" })).toBe(true);
     expect(Value.Check(ChatHistoryCursorResultSchema, { ...delta, extra: true })).toBe(false);
     expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset", messages: [] })).toBe(false);

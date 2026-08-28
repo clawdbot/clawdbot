@@ -109,7 +109,7 @@ describe("renderAgents", () => {
       renderAgents(
         createProps({
           agentIdentityById: {
-            beta: { agentId: "beta", name: "Fetched Beta", avatar: "" },
+            beta: { agentId: "beta", name: "Fetched Beta", avatar: "", emoji: "🦊" },
           },
         }),
       ),
@@ -119,6 +119,7 @@ describe("renderAgents", () => {
     expect(
       container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.value,
     ).toBe("Fetched Beta");
+    expect(container.querySelector(".agent-identity-editor__avatar-text")?.textContent).toBe("🦊");
   });
 
   it("shows a model-catalog failure and lets the operator retry", () => {

@@ -33,6 +33,7 @@ function readUiCss(): string {
     "ui/src/styles/chat/layout.css",
     "ui/src/styles/sidebar-markdown.css",
     "ui/src/styles/chat/sidebar.css",
+    "ui/src/styles/plugins.css",
   ];
   return files.map((file) => readStyleSheet(file)).join("\n");
 }
@@ -165,6 +166,43 @@ describeBrowserLayout("sensitive input visibility", () => {
         display: getComputedStyle(mask).display,
       }));
       expect(state).toEqual({ hidden: true, display: "none" });
+    } finally {
+      await page.close().catch(() => {});
+    }
+  });
+});
+
+describeBrowserLayout("settings icon buttons", () => {
+  it("keeps plugin and MCP remove glyphs proportionate to settings buttons", async () => {
+    const page = await desktopContext.newPage();
+    try {
+      await page.setContent(`
+        <!doctype html>
+        <html data-theme-mode="light">
+          <head><style>${readUiCss()}</style></head>
+          <body>
+            <div class="settings-row__control">
+              <button class="btn btn--sm btn--icon plugins-remove" type="button">
+                <svg viewBox="0 0 24 24"><path d="M3 6h18" /></svg>
+              </button>
+            </div>
+          </body>
+        </html>
+      `);
+
+      const metrics = await page.locator(".plugins-remove").evaluate((button) => {
+        const glyph = button.querySelector("svg");
+        if (!(glyph instanceof SVGElement)) {
+          throw new Error("Missing remove button glyph");
+        }
+        const buttonRect = button.getBoundingClientRect();
+        const glyphRect = glyph.getBoundingClientRect();
+        return {
+          button: [buttonRect.width, buttonRect.height],
+          glyph: [glyphRect.width, glyphRect.height],
+        };
+      });
+      expect(metrics).toEqual({ button: [32, 32], glyph: [18, 18] });
     } finally {
       await page.close().catch(() => {});
     }
@@ -482,7 +520,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
             <div class="shell shell--mobile-nav">
               <span class="nav-item">Mobile navigation</span>
               <div class="file-view__search"><input value="query" /></div>
-              <div class="sidebar-agent-menu__filter"><input value="agent" /></div>
               <input class="settings-sidebar__search-input" value="settings" />
               <div class="sidebar-recent-session sidebar-recent-session--child">
                 <span class="sidebar-recent-session__name">Child session</span>
@@ -506,7 +543,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
             childName: fontSize(".sidebar-recent-session--child .sidebar-recent-session__name"),
             childTrail: fontSize(".sidebar-recent-session--child .session-row-trail"),
             coarsePointer: matchMedia("(hover: none) and (pointer: coarse)").matches,
-            agentFilter: fontSize(".sidebar-agent-menu__filter input"),
             fileSearch: fontSize(".file-view__search input"),
             settingsSearch: fontSize(".settings-sidebar__search-input"),
             navItem: fontSize(".shell--mobile-nav .nav-item"),
@@ -518,7 +554,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
         childName: 12,
         childTrail: 10,
         coarsePointer: true,
-        agentFilter: 16,
         fileSearch: 16,
         settingsSearch: 16,
         navItem: 12,
@@ -528,7 +563,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
         document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
       });
       const scaled = await readSizes();
-      expect(scaled.agentFilter).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.childName).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.childTrail).toBeCloseTo(10 * 1.4, 1);
       expect(scaled.fileSearch).toBeCloseTo(12 * 1.4, 1);

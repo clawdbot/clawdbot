@@ -32,6 +32,26 @@ const SURFACE_TOKENS = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--pane
 const AA_NORMAL_TEXT_MIN = 4.5;
 
 /*
+ * Beacon is the accessibility theme: it advertises WCAG AAA rather than AA, and
+ * that promise is the reason to pick it. Holding it to the shared 4.5:1 floor
+ * would let a palette edit quietly demote it to an ordinary dark theme, so its
+ * own floor is asserted separately.
+ */
+const AAA_NORMAL_TEXT_MIN = 7;
+
+/*
+ * The chat confirmation button defaults to --danger under --media-foreground,
+ * which is a theme-invariant white, and every dark palette opts out of that
+ * pairing through a selector list in chat/grouped.css. A theme with a light
+ * --danger that is missing from the list therefore renders white on pale:
+ * Beacon shipped that way at 1.80:1 until review caught it. Membership is read
+ * back out of the stylesheet rather than restated here, so the list and the
+ * palettes cannot drift apart again.
+ */
+const CONFIRM_BUTTON_RULE = ".chat-confirm-popover__yes";
+const AAA_THEMES = new Set(["beacon", "beacon-light"]);
+
+/*
  * Separation guardrail for the markdown code chip.
  *
  * Text contrast was never the failure mode here: the chip surface itself
@@ -81,9 +101,25 @@ type TokenMap = Map<string, string>;
 type RGB = readonly [red: number, green: number, blue: number];
 type Color = { rgb: RGB; alpha: number };
 
+/*
+ * Built-in palettes other than the default live in public/themes so they stay
+ * out of the startup stylesheet. Contrast guarantees still cover every theme,
+ * so the palette sources are read back together here.
+ */
+function readPaletteSources(stylesRoot: string): string {
+  const themesDir = path.join(stylesRoot, "..", "..", "public", "themes");
+  const palettes = fs
+    .readdirSync(themesDir)
+    .filter((entry) => entry.endsWith(".css"))
+    .toSorted()
+    .map((entry) => fs.readFileSync(path.join(themesDir, entry), "utf8"));
+  return [fs.readFileSync(path.join(stylesRoot, "base.css"), "utf8"), ...palettes].join("\n");
+}
+
 function parseThemeBlocks(baseCss: string): Map<string, TokenMap> {
   const blocks = new Map<string, TokenMap>();
-  const blockPattern = /(:root(?:\[data-theme(?:-mode)?="[^"]+"\])?)\s*\{([^}]*)\}/g;
+  const blockPattern =
+    /(:root(?::where\(\[data-theme-mode="light"\]\)|\[data-theme(?:-mode)?="[^"]+"\])?)\s*\{([^}]*)\}/g;
   for (const match of baseCss.matchAll(blockPattern)) {
     const selector = match[1] ?? "";
     const body = match[2] ?? "";
@@ -107,7 +143,7 @@ function parseThemeBlocks(baseCss: string): Map<string, TokenMap> {
 /** Compose each selectable theme the way theme.ts layers blocks over :root. */
 function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
   const root = blocks.get(":root") ?? new Map();
-  const light = blocks.get(':root[data-theme-mode="light"]') ?? new Map();
+  const light = blocks.get(':root:where([data-theme-mode="light"])') ?? new Map();
   const layer = (...overrides: (TokenMap | undefined)[]): TokenMap => {
     const merged: TokenMap = new Map(root);
     for (const override of overrides) {
@@ -124,6 +160,14 @@ function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
     ["openknot-light", layer(light, blocks.get(':root[data-theme="openknot-light"]'))],
     ["dash", layer(blocks.get(':root[data-theme="dash"]'))],
     ["dash-light", layer(light, blocks.get(':root[data-theme="dash-light"]'))],
+    ["absolutely", layer(blocks.get(':root[data-theme="absolutely"]'))],
+    ["absolutely-light", layer(light, blocks.get(':root[data-theme="absolutely-light"]'))],
+    ["tide", layer(blocks.get(':root[data-theme="tide"]'))],
+    ["tide-light", layer(light, blocks.get(':root[data-theme="tide-light"]'))],
+    ["beacon", layer(blocks.get(':root[data-theme="beacon"]'))],
+    ["beacon-light", layer(light, blocks.get(':root[data-theme="beacon-light"]'))],
+    ["phosphor", layer(blocks.get(':root[data-theme="phosphor"]'))],
+    ["phosphor-light", layer(light, blocks.get(':root[data-theme="phosphor-light"]'))],
   ]);
 }
 
@@ -294,6 +338,41 @@ function readCodeChipTokens(chatTextCss: string): { surface: string; border: str
   return { surface, border };
 }
 
+type ConfirmButtonPaint = { background: string; color: string };
+
+function readConfirmButtonPaint(groupedCss: string): {
+  base: ConfirmButtonPaint;
+  overrides: Map<string, ConfirmButtonPaint>;
+} {
+  const pattern = /([^{}]*\.chat-confirm-popover__yes(?![\w-])[^{}]*)\{([^}]*)\}/gu;
+  let base: ConfirmButtonPaint | undefined;
+  const overrides = new Map<string, ConfirmButtonPaint>();
+  for (const match of groupedCss.matchAll(pattern)) {
+    const selector = (match[1] ?? "").trim();
+    const body = match[2] ?? "";
+    if (selector.includes(":hover")) {
+      continue;
+    }
+    const background = body.match(/background:\s*var\((--[\w-]+)\)/u)?.[1];
+    const color = body.match(/color:\s*var\((--[\w-]+)\)/u)?.[1];
+    if (!background || !color) {
+      continue;
+    }
+    const themes = [...selector.matchAll(/\[data-theme="([^"]+)"\]/gu)].map((m) => m[1] ?? "");
+    if (themes.length === 0) {
+      base = { background, color };
+      continue;
+    }
+    for (const theme of themes) {
+      overrides.set(theme, { background, color });
+    }
+  }
+  if (!base) {
+    throw new Error(`could not read the base "${CONFIRM_BUTTON_RULE}" paint`);
+  }
+  return { base, overrides };
+}
+
 function readRuleBody(css: string, selector: string): string {
   const body = css.split(`${selector} {`)[1]?.split("}")[0];
   if (body === undefined) {
@@ -339,10 +418,10 @@ function readBubbleBackgrounds(groupedCss: string): {
 }
 
 describe("Control UI theme contrast", () => {
-  const baseCss = fs.readFileSync(path.join(stylesDir, "base.css"), "utf8");
+  const baseCss = readPaletteSources(stylesDir);
   const themes = resolveThemes(parseThemeBlocks(baseCss));
 
-  it("keeps every text token at WCAG AA on every theme surface", () => {
+  it("keeps every text token at WCAG AA on every theme surface, AAA on themes that promise it", () => {
     const failures: string[] = [];
     for (const [themeName, tokens] of themes) {
       for (const textToken of TEXT_TOKENS) {
@@ -356,9 +435,10 @@ describe("Control UI theme contrast", () => {
             continue;
           }
           const ratio = contrastRatio(parseHex(foreground), parseHex(background));
-          if (ratio < AA_NORMAL_TEXT_MIN) {
+          const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
+          if (ratio < floor) {
             failures.push(
-              `${themeName}: ${textToken} ${foreground} on ${surfaceToken} ${background} = ${ratio.toFixed(2)}:1 (< ${AA_NORMAL_TEXT_MIN}:1)`,
+              `${themeName}: ${textToken} ${foreground} on ${surfaceToken} ${background} = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
             );
           }
         }
@@ -398,6 +478,28 @@ describe("Control UI theme contrast", () => {
     expect(failures).toEqual([]);
   });
 
+  it("keeps the chat confirmation button legible on every theme", () => {
+    const groupedCss = fs.readFileSync(path.join(stylesDir, "chat", "grouped.css"), "utf8");
+    const { base, overrides } = readConfirmButtonPaint(groupedCss);
+    const failures: string[] = [];
+    for (const [themeName, tokens] of themes) {
+      const paint = overrides.get(themeName) ?? base;
+      const background = tokens.get(paint.background);
+      const color = tokens.get(paint.color);
+      if (!background?.startsWith("#") || !color?.startsWith("#")) {
+        continue;
+      }
+      const ratio = contrastRatio(parseHex(color), parseHex(background));
+      const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
+      if (ratio < floor) {
+        failures.push(
+          `${themeName}: ${paint.color} ${color} on ${paint.background} ${background} = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
+        );
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
   it("keeps highlighted diff lines at WCAG AA on every code surface", () => {
     const componentsCss = fs.readFileSync(path.join(stylesDir, "components.css"), "utf8");
     const diffStyles = DIFF_SELECTORS.map((selector) => {
@@ -418,9 +520,10 @@ describe("Control UI theme contrast", () => {
           const host = resolveOpaqueColor(`var(${surfaceToken})`, tokens);
           const background = composite(resolvedTint, host);
           const ratio = contrastRatio(foreground, background);
-          if (ratio < AA_NORMAL_TEXT_MIN) {
+          const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
+          if (ratio < floor) {
             failures.push(
-              `${themeName}: ${foregroundToken} on ${tint} over ${surfaceToken} = ${ratio.toFixed(2)}:1 (< ${AA_NORMAL_TEXT_MIN}:1)`,
+              `${themeName}: ${foregroundToken} on ${tint} over ${surfaceToken} = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
             );
           }
         }

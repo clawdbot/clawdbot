@@ -1,7 +1,8 @@
 import { html, nothing } from "lit";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/ip-location.ts";
 import "../../components/viewer-facepile.ts";
 import "../../components/web-awesome-popover.ts";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
@@ -36,6 +37,10 @@ type SessionActivityViewProps = {
   presenceViewers: readonly PresenceViewer[];
   retainedIdentity: PresenceViewer | null;
   rows: readonly GatewaySessionRow[];
+  result?: SessionsListResult;
+  loading: boolean;
+  error?: string;
+  onRetry: () => void;
   onAutomationDayToggle: (dayKey: string) => void;
   onFiltersChange: (filters: SessionActivityFilters) => void;
 };
@@ -47,7 +52,7 @@ const TIME_LABELS: Record<ActivityTimeFilter, string> = {
   all: "activityFeed.timeAll",
 };
 
-type ActivityPerson = PresenceViewer & { count: number; lastActiveAt: number };
+type ActivityPerson = PresenceViewer & { count: number };
 
 function isUnresolvedPerson(person: PresenceViewer): boolean {
   return !person.name && !person.email && presenceViewerLabel(person) === person.id;
@@ -69,6 +74,7 @@ function renderPersonAvatar(person: PresenceViewer, showPresence = false) {
   }
   return html`<span class="activity-feed__person-avatar">
     <openclaw-viewer-avatar
+      .identity=${{ type: "profile", id: person.id }}
       .user=${person}
       .markAsViewer=${false}
       variant="footer"
@@ -98,7 +104,6 @@ function setPeopleExpanded(event: Event, expanded: boolean) {
 }
 
 function renderPersonRow(person: ActivityPerson, props: SessionActivityViewProps) {
-  const online = (person.entries?.length ?? 0) > 0;
   return html`<button
     type="button"
     class="session-menu__item activity-feed__people-row"
@@ -109,13 +114,6 @@ function renderPersonRow(person: ActivityPerson, props: SessionActivityViewProps
     ${renderPersonAvatar(person, true)}
     <span class="activity-feed__people-copy">
       <span class="activity-feed__people-name">${compactPersonLabel(person)}</span>
-      ${online
-        ? nothing
-        : html`<span class="activity-feed__last-active">
-            ${t("activityFeed.lastActive", {
-              time: formatRelativeTimestamp(person.lastActiveAt, { fallback: "" }),
-            })}
-          </span>`}
     </span>
     <span class="activity-feed__people-count">${person.count}</span>
   </button>`;
@@ -261,6 +259,7 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
     : row.agentId
       ? t("activityFeed.agentLabel", { value: row.agentId })
       : null;
+  const source = row.createdVia === "cron" ? t("activityFeed.automation") : null;
   return html`<div class="activity-feed__session-row">
     <a
       class="activity-feed__session"
@@ -276,6 +275,7 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
             ></span>`
           : nothing}
         <openclaw-viewer-avatar
+          .identity=${row.owner?.actor.identity ?? row.createdActor?.identity}
           .user=${owner}
           .markAsViewer=${false}
           variant="footer"
@@ -290,7 +290,11 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
                 data-health=${row.observerDigest?.health ?? nothing}
                 >${headline}</span
               >`
-            : html`<span>${ownerName}</span>`}${scope
+            : html`<span>${ownerName}</span>`}${source
+            ? html`<span class="activity-feed__session-source" data-activity-created-via="cron"
+                >· ${source}${scope ? " ·" : ""}</span
+              >`
+            : nothing}${scope
             ? html`<span class="activity-feed__session-scope">${scope}</span>`
             : nothing}
         </span>
@@ -365,6 +369,7 @@ function renderIdentityHeader(
     <section class="activity-feed__identity" data-activity-identity=${identity.id}>
       <div class="activity-feed__identity-main">
         <openclaw-viewer-avatar
+          .identity=${{ type: "profile", id: identity.id }}
           .user=${identity}
           .markAsViewer=${false}
           variant="profile"
@@ -378,12 +383,17 @@ function renderIdentityHeader(
       ${devices.length > 0
         ? html`<div class="activity-feed__devices">
             ${devices.map((entry) => {
-              const device = [entry.deviceFamily, entry.platform].filter(Boolean).join(" · ");
+              const device = [entry.deviceFamily, entry.platform, entry.ip, entry.timeZone]
+                .filter(Boolean)
+                .join(" · ");
               return html`<div class="activity-feed__device">
                 <span class="activity-feed__device-name"
                   >${entry.host ?? t("activityFeed.unknownDevice")}</span
                 >
                 ${device ? html`<span>${device}</span>` : nothing}
+                ${entry.ip
+                  ? html`<openclaw-ip-location .ip=${entry.ip}></openclaw-ip-location>`
+                  : nothing}
                 ${entry.lastInputSeconds !== undefined
                   ? html`<span
                       >${t("activityFeed.lastInput", {
@@ -408,14 +418,12 @@ function renderIdentityHeader(
 }
 
 export function renderSessionActivityView(props: SessionActivityViewProps) {
-  const projection = projectSessionActivity(props.rows, props.filters);
+  const projection = projectSessionActivity(props.result);
   const identity = props.retainedIdentity;
   const onlineById = new Map(props.presenceViewers.map((person) => [person.id, person]));
   const people = projection.people.map((person) => {
     const online = onlineById.get(person.id);
-    return online
-      ? { ...person, ...online, count: person.count, lastActiveAt: person.lastActiveAt }
-      : person;
+    return online ? { ...person, ...online, count: person.count } : person;
   });
   const selectedPerson = props.filters.personId
     ? (people.find((person) => person.id === props.filters.personId) ?? identity)
@@ -447,6 +455,8 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
               class="settings-segmented__btn ${props.filters.time === time
                 ? "settings-segmented__btn--active"
                 : ""}"
+              data-compact-label=${time === "all" ? t(TIME_LABELS[time]) : time}
+              aria-label=${t(TIME_LABELS[time])}
               aria-pressed=${String(props.filters.time === time)}
               @click=${() => props.onFiltersChange({ ...props.filters, time })}
             >
@@ -456,8 +466,18 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         </div>
         ${renderPeopleControl(props, people, selectedPerson, projection.timeCount)}
       </div>
-      <main class="activity-feed__main">
-        ${props.filters.personId
+      <div class="activity-feed__main">
+        ${props.loading ? html`<p role="status">${t("common.loading")}</p>` : nothing}
+        ${props.error
+          ? html`<p role="alert">
+              ${props.error}
+              <button class="btn" @click=${props.onRetry}>${t("common.retry")}</button>
+            </p>`
+          : nothing}
+        ${props.result?.peopleIncomplete
+          ? html`<p role="status">${t("activityFeed.partialHistory")}</p>`
+          : nothing}
+        ${props.result && props.filters.personId
           ? identity
             ? renderIdentityHeader(props.context, identity, props.rows)
             : html`<section class="activity-feed__not-found" role="status">
@@ -465,7 +485,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
                 <p>${t("activityFeed.notFoundDescription")}</p>
               </section>`
           : nothing}
-        ${!props.filters.personId || identity
+        ${props.result && (!props.filters.personId || identity)
           ? html`
               <div class="activity-feed__summary">
                 <h2>${t("activityFeed.sessions")}</h2>
@@ -488,7 +508,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
                   </section>`}
             `
           : nothing}
-      </main>
+      </div>
     </div>
   `;
 }

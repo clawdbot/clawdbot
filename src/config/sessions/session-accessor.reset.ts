@@ -4,6 +4,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import type { ConversationRouteContext } from "./conversation-route-context.js";
 import {
   cloneSessionEntries,
   mergeConcurrentReplySessionMetadata,
@@ -27,6 +28,7 @@ import type {
   ReplySessionInitializationCommitContext,
   ReplySessionInitializationCommitResult,
 } from "./session-accessor.types.js";
+import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type {
   ResolvedSessionMaintenanceConfig,
@@ -86,7 +88,7 @@ export async function persistSessionResetLifecycle(params: {
       {
         sessionKey: params.sessionKey,
         entry: params.nextEntry,
-        resetBoundaryReason: "reset",
+        resetBoundary: { context: "preserve-tail", reason: "reset" },
       },
     ],
     skipMaintenance: true,
@@ -155,7 +157,9 @@ export async function commitReplySessionInitialization(params: {
   prepareSessionEntry?: (
     context: ReplySessionInitializationCommitContext,
   ) => Promise<SessionEntry> | SessionEntry;
-  resetBoundaryReason?: import("./session-reset-boundary-event.js").SessionResetBoundaryReason;
+  /** Authoritative contextual route facts observed by the admitted inbound turn. */
+  routeContext?: ConversationRouteContext | null;
+  resetBoundary?: SessionResetBoundaryRequest;
   previousEntry?: SessionEntry;
   retiredEntry?: SessionEntryRetirement;
   sessionEntry: SessionEntry;
@@ -207,7 +211,8 @@ export async function commitReplySessionInitialization(params: {
   const upserts: SessionEntryLifecycleUpsert[] = [
     {
       sessionKey: resolved.normalizedKey,
-      ...(params.resetBoundaryReason ? { resetBoundaryReason: params.resetBoundaryReason } : {}),
+      ...(params.routeContext !== undefined ? { routeContext: params.routeContext } : {}),
+      ...(params.resetBoundary ? { resetBoundary: params.resetBoundary } : {}),
       buildEntry: async ({ store: currentStore }) => {
         const commitResolved = resolveSessionEntryFromStore({
           store: currentStore,

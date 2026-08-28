@@ -2,6 +2,7 @@ import Foundation
 
 public enum DashboardRouteMap {
     public static let channelsSettingsPath = "/settings/channels"
+    public static let talkSettingsPath = "/settings/talk"
     public static let skillsPagePath = "/skills"
     public static let cronJobsPagePath = "/cron"
     public static let sessionsPagePath = "/sessions"

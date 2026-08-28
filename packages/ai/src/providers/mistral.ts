@@ -23,7 +23,6 @@ import type {
   Message,
   Model,
   SimpleStreamOptions,
-  StopReason,
   StreamFunction,
   StreamOptions,
   TextContent,
@@ -33,12 +32,17 @@ import type {
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
+import {
+  createToolArgumentPreviewSchedule,
+  parseStreamingJson,
+  type ToolArgumentPreviewSchedule,
+} from "../utils/json-parse.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions, clampMaxTokensToModel } from "./simple-options.js";
 import {
   describeToolResultMediaPlaceholder,
@@ -202,7 +206,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       }
 
       if (output.stopReason === "aborted" || output.stopReason === "error") {
-        throw new Error("An unknown error occurred");
+        throw new Error(output.errorMessage ?? "An unknown error occurred");
       }
 
       stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -408,6 +412,11 @@ async function consumeChatStream(
   // Persist every identity fact across chunks. The SDK defaults omitted indexes
   // to zero, so only a unique compatible candidate may receive later arguments.
   const toolBlockIdentities = new Map<number, ToolBlockIdentity>();
+  // Preview schedules are per active tool call; WeakMap keys die with the block.
+  const toolArgumentPreviewSchedules = new WeakMap<
+    ToolCall & { partialArgs?: string },
+    ToolArgumentPreviewSchedule
+  >();
   const normalizeMissingToolCallId = createMistralToolCallIdNormalizer();
   // Some Mistral-compatible endpoints omit tool-call ids. Their streamed index
   // is only response-local, so namespace the fallback before strict-9 hashing.
@@ -584,6 +593,11 @@ async function consumeChatStream(
     // Mistral's streamed CompletionChunk carries an id field. Keep the first non-empty one,
     // mirroring how OpenAI-style streaming exposes a stable response identifier per stream.
     output.responseId ||= chunk.id;
+    // Retain the provider-returned model when it differs from the requested id so
+    // routed responses are not misattributed, matching the OpenAI sibling stream.
+    if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
+      output.responseModel ||= chunk.model;
+    }
 
     if (chunk.usage) {
       const promptTokens = chunk.usage.promptTokens || 0;
@@ -605,7 +619,13 @@ async function consumeChatStream(
 
     if (choice.finishReason) {
       terminalFinishReason = choice.finishReason;
-      output.stopReason = mapChatStopReason(choice.finishReason);
+      const { stopReason, errorMessage } = mapOpenAIStopReason(
+        choice.finishReason === "model_length" ? "length" : choice.finishReason,
+      );
+      output.stopReason = stopReason;
+      if (errorMessage) {
+        output.errorMessage = errorMessage;
+      }
     }
 
     const delta = choice.delta;
@@ -714,6 +734,7 @@ async function consumeChatStream(
           partialArgs: "",
         };
         output.content.push(block);
+        toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
         toolBlockIdentities.set(contentIndex, {
           explicitIds: new Set(providedCallId ? [providedCallId] : []),
           functionNames: new Set(functionName ? [functionName] : []),
@@ -753,7 +774,11 @@ async function consumeChatStream(
           ? toolCall.function.arguments
           : JSON.stringify(toolCall.function.arguments || {});
       block.partialArgs = (block.partialArgs || "") + argsDelta;
-      block.arguments = parseStreamingJson(block.partialArgs);
+      // Preview refresh is scheduled geometrically; the terminal strict parse
+      // below re-reads the full buffer authoritatively either way.
+      if (toolArgumentPreviewSchedules.get(block)?.(block.partialArgs.length)) {
+        block.arguments = parseStreamingJson(block.partialArgs);
+      }
       stream.push({
         type: "toolcall_delta",
         contentIndex,
@@ -999,22 +1024,4 @@ function mapToolChoice(
   };
 }
 
-function mapChatStopReason(reason: string | null): StopReason {
-  if (reason === null) {
-    return "stop";
-  }
-  switch (reason) {
-    case "stop":
-      return "stop";
-    case "length":
-    case "model_length":
-      return "length";
-    case "tool_calls":
-      return "toolUse";
-    case "error":
-      return "error";
-    default:
-      return "stop";
-  }
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

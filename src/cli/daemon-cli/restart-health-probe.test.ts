@@ -21,6 +21,10 @@ import {
   sleep,
 } from "./restart-health.test-helpers.js";
 
+// Load the real client's dependency graph before timing its socket/probe behavior.
+const actualProbe =
+  await vi.importActual<typeof import("../../gateway/probe.js")>("../../gateway/probe.js");
+
 describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
@@ -61,11 +65,7 @@ describe("restart health", () => {
           }
         });
       });
-      probeGateway.mockImplementation(async (...args: unknown[]) => {
-        const actual =
-          await vi.importActual<typeof import("../../gateway/probe.js")>("../../gateway/probe.js");
-        return actual.probeGateway(...(args as Parameters<typeof actual.probeGateway>));
-      });
+      probeGateway.mockImplementation(actualProbe.probeGateway);
       inspectPortUsage.mockResolvedValue({
         port,
         status: "busy",
@@ -220,6 +220,33 @@ describe("restart health", () => {
     expect(snapshot.elapsedMs).toBe(0);
     expect(snapshot.versionMismatch?.expected).toBe("2026.4.24");
     expect(snapshot.versionMismatch?.actual).toBe("2026.4.23");
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting once the restarted gateway reports the wrong build identity", async () => {
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.4.24", buildId: "old-build", connId: "old" },
+    });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      expectedBuildId: "new-build",
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.waitOutcome).toBe("build-id-mismatch");
+    expect(snapshot.elapsedMs).toBe(0);
+    expect(snapshot.buildIdMismatch).toEqual({ expected: "new-build", actual: "old-build" });
     expect(sleep).not.toHaveBeenCalled();
   });
 

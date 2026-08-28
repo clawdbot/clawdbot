@@ -545,8 +545,6 @@ export async function runReplyAgent(
       activeSessionEntry,
       activeSessionStore,
       storePath,
-      messageThreadId:
-        typeof sessionCtx.MessageThreadId === "string" ? sessionCtx.MessageThreadId : undefined,
       followupRun,
       onActiveSessionEntry: (nextEntry) => {
         activeSessionEntry = nextEntry;
@@ -621,7 +619,11 @@ export async function runReplyAgent(
   } catch (error) {
     recordReplyOperationAgentTurn(
       replyOperationRunState,
-      isReplyOperationSuperseded(replyOperation) ? "superseded" : "failed",
+      isReplyOperationSuperseded(replyOperation)
+        ? "superseded"
+        : replyOperation.result?.kind === "aborted"
+          ? "cancelled"
+          : "failed",
       replyOperation,
     );
     return await handleReplyAgentRunError(error, {

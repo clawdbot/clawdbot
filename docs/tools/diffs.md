@@ -8,11 +8,13 @@ read_when:
   - You need controlled, temporary diff artifacts with secure defaults
 ---
 
-`diffs` is an optional bundled plugin tool that turns before/after text or a unified patch into a read-only diff artifact. It also prepends short agent guidance into the system prompt and ships a companion skill for fuller instructions.
+`diffs` is an optional plugin tool that turns before/after text or a unified patch into a read-only diff artifact. It also prepends short agent guidance into the system prompt and ships a companion skill for fuller instructions.
 
 Input: `before` + `after` text, or a unified `patch` (mutually exclusive).
 
 Output: a gateway viewer URL for browser presentation, a rendered PNG/PDF file path for message delivery, or both.
+
+The [Control UI](/web/control-ui) already highlights inline tool diffs and session diffs without this plugin. Install `diffs` when agents need standalone viewer links or rendered attachments for other channels.
 
 ## Quick start
 

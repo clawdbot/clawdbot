@@ -74,8 +74,8 @@ function resolveDiscordMentions(text: string, message: Message): string {
   }
   let out = text;
   for (const user of mentions) {
-    const label = user.globalName || user.username;
-    out = out.replace(new RegExp(`<@!?${user.id}>`, "g"), `@${label}`);
+    const label = user.globalName || user.username || user.id;
+    out = out.replace(new RegExp(`<@!?${user.id}>`, "g"), () => `@${label}`);
   }
   return out;
 }

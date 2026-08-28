@@ -5,6 +5,7 @@ import {
 import {
   buildModelCatalogMergeKey,
   parseModelCatalogRef,
+  type ModelCatalogRef,
 } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { MODEL_APIS } from "../config/types.models.js";
@@ -67,8 +68,15 @@ export function toStaticCatalogEntry(model: ProviderRuntimeModel): ModelCatalogE
     ...(isCatalogModelApi(model.api) ? { api: model.api } : {}),
     ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
     ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+    ...(model.contextWindows
+      ? {
+          contextWindows: model.contextWindows.map((option) => ({ ...option })),
+        }
+      : {}),
+    ...(model.contextWindowDefault ? { contextWindowDefault: model.contextWindowDefault } : {}),
     ...(model.contextTokens ? { contextTokens: model.contextTokens } : {}),
     ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
+    ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
     ...(model.input ? { input: model.input } : {}),
     ...(model.params ? { params: model.params } : {}),
     ...(model.compat ? { compat: model.compat } : {}),
@@ -93,9 +101,6 @@ export function collectPreparedModelRuntimeProviderIds(
     for (const providerId of Object.keys(credentials)) {
       addProviderId(providerId);
     }
-  }
-  for (const providerId of Object.keys(config.models?.providers ?? {})) {
-    addProviderId(providerId);
   }
   for (const ref of configuredModelRefs) {
     const separator = ref.value.indexOf("/");
@@ -159,8 +164,7 @@ export function collectConfiguredProviderIdsNeedingStaticCatalog(params: {
 }
 
 export function prepareConfiguredRuntimeModels(params: {
-  config: OpenClawConfig;
-  configuredModelRefs?: readonly ConfiguredModelRef[];
+  configuredModelRefs: readonly ModelCatalogRef[];
   metadataSnapshot: PluginMetadataSnapshot;
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   providerStaticModels: readonly ProviderRuntimeModel[];
@@ -172,12 +176,7 @@ export function prepareConfiguredRuntimeModels(params: {
 }): PreparedConfiguredRuntimeModel[] {
   const prepared: PreparedConfiguredRuntimeModel[] = [];
   const seen = new Set<string>();
-  for (const { value } of params.configuredModelRefs ?? collectConfiguredModelRefs(params.config)) {
-    const parsed = parseModelCatalogRef(value);
-    if (!parsed) {
-      continue;
-    }
-    const { modelId, provider } = parsed;
+  for (const { modelId, provider } of params.configuredModelRefs) {
     const key = buildModelCatalogMergeKey(provider, modelId);
     if (seen.has(key)) {
       continue;

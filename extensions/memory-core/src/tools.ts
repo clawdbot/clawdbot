@@ -292,6 +292,19 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
         // The trusted runtime chooses the recall corpus; model-authored arguments cannot broaden it.
         const requestedCorpus =
           options.conversationRecall?.corpus === "sessions" ? "sessions" : modelRequestedCorpus;
+        if (
+          requestedCorpus === "sessions" &&
+          !options.conversationRecall &&
+          !resolveMemorySearchConfig(cfg, agentId)?.searchSources.includes("sessions")
+        ) {
+          return jsonResult(
+            buildMemorySearchUnavailableResult("Session transcript search is not enabled.", {
+              warning: "Session transcript search is unavailable for this agent.",
+              action:
+                'Enable memory.search.experimental.sessionMemory and add "sessions" to memory.search.sources, then retry memory_search.',
+            }),
+          );
+        }
         const cooldownKey = resolveMemorySearchToolCooldownKey({
           agentId,
           agentSessionKey: options.agentSessionKey,

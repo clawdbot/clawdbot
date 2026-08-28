@@ -15,7 +15,6 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { filterMutableSessionGroupRecords } from "../session-group-defaults-access.js";
-import { resolveSessionGroupMutationTargetsByName } from "../session-group-mutation-targets.js";
 import {
   deleteSessionGroup,
   listSessionGroupDefaults,
@@ -26,6 +25,7 @@ import {
   SessionGroupNotFoundError,
   updateSessionGroupDefaults,
 } from "../session-groups.js";
+import { resolveSessionGroupMutationTargetsByName } from "../session-sharing-target-input.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";

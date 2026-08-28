@@ -201,6 +201,7 @@ describe("brave web search provider", () => {
   it.each(["web", "llm-context"] as const)(
     "aborts an in-flight %s request with the caller's reason",
     async (mode) => {
+      const controller = new AbortController();
       const fetchMock = vi.fn(
         async (_url: string, init?: RequestInit) =>
           await new Promise<Response>((_resolve, reject) => {
@@ -210,21 +211,61 @@ describe("brave web search provider", () => {
               return;
             }
             signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
+            // First-use DNS/runtime preparation can outlast a polling deadline.
+            // Abort at transport entry so no unfinished request leaks into the next case.
+            controller.abort(new Error("Brave request canceled in flight"));
           }),
       );
       global.fetch = fetchMock as typeof global.fetch;
       const tool = createBraveTool({ webSearch: { apiKey: "brave-test-key", mode } });
-      const controller = new AbortController();
       const result = tool.execute(
         { query: `brave in-flight cancellation ${mode}` },
         { signal: controller.signal },
       );
 
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-      controller.abort(new Error("Brave request canceled in flight"));
-
       await expect(result).rejects.toThrow("Brave request canceled in flight");
+      expect(fetchMock).toHaveBeenCalledOnce();
       expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    },
+  );
+
+  it.each(["web", "llm-context"] as const)(
+    "does not cache a %s response completed after caller cancellation",
+    async (mode) => {
+      const controller = new AbortController();
+      const reason = new Error(`Brave ${mode} canceled after response`);
+      const payload =
+        mode === "web" ? { web: { results: [] } } : { grounding: { generic: [] }, sources: [] };
+      let firstRequest = true;
+      const fetchMock = vi.fn(async () => {
+        if (!firstRequest) {
+          return jsonResponse(payload);
+        }
+        firstRequest = false;
+        let emitted = false;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            pull(stream) {
+              if (!emitted) {
+                emitted = true;
+                stream.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
+                return;
+              }
+              stream.close();
+              controller.abort(reason);
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      });
+      global.fetch = fetchMock as typeof global.fetch;
+      const tool = createBraveTool({ webSearch: { apiKey: "brave-test-key", mode } });
+      const args = { query: `brave post-response cancellation ${mode}` };
+
+      await expect(tool.execute(args, { signal: controller.signal })).rejects.toBe(reason);
+      await tool.execute(args);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     },
   );
 

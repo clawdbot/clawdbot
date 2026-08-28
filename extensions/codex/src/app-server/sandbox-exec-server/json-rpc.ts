@@ -88,9 +88,9 @@ export function readHttpHeaders(value: unknown): HttpHeader[] {
 export function sendResult(
   send: CodexSandboxExecMessageTransport["send"],
   id: string | number,
-  result: JsonValue | undefined,
+  result: JsonValue,
 ): void {
-  send({ jsonrpc: "2.0", id, result: result === undefined ? {} : result });
+  send({ jsonrpc: "2.0", id, result });
 }
 
 /** Sends a JSON-RPC error response through the connection message sink. */

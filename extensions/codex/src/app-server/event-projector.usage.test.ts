@@ -56,7 +56,7 @@ describe("CodexAppServerEventProjector usage projection", () => {
     );
 
     expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "codex_app_server.usage",
+      stream: "usage",
       data: {
         activeContextTokens: 300_010,
         cachedInputTokens: 250_000,

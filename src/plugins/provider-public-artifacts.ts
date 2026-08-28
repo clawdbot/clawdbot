@@ -106,22 +106,42 @@ export function resolveProviderPolicySurface(
   if (!normalizedProviderId || !options.manifestRegistry) {
     return null;
   }
-  for (const plugin of options.manifestRegistry.plugins.toSorted((left, right) =>
-    left.id.localeCompare(right.id),
-  )) {
-    if (
-      pluginOwnsProviderPolicyRef(plugin, normalizedProviderId) &&
-      plugin.trustedOfficialInstall === true
-    ) {
-      const surface = resolveTrustedExternalProviderPolicySurface({
-        pluginId: plugin.id,
-        pluginRoot: plugin.rootDir,
-        trustedOfficialInstall: plugin.trustedOfficialInstall,
-      });
-      if (surface) {
-        return surface;
-      }
+  return (
+    loadTrustedExternalProviderPolicyArtifacts(
+      listTrustedExternalProviderPolicyOwners(providerId, options.manifestRegistry),
+    )?.surface ?? null
+  );
+}
+
+/** Loads the first usable policy surface from caller-selected trusted owners. */
+export function loadTrustedExternalProviderPolicyArtifacts(
+  owners: PluginManifestRegistry["plugins"],
+) {
+  for (const owner of owners) {
+    const surface = resolveTrustedExternalProviderPolicySurface({
+      pluginId: owner.id,
+      pluginRoot: owner.rootDir,
+      trustedOfficialInstall: owner.trustedOfficialInstall,
+    });
+    if (surface) {
+      return { owner, surface };
     }
   }
-  return null;
+  const owner = owners[0];
+  return owner ? { owner, surface: null } : null;
+}
+
+/** Lists trusted installed plugins that own a provider policy reference. */
+export function listTrustedExternalProviderPolicyOwners(
+  providerId: string,
+  manifestRegistry: Pick<PluginManifestRegistry, "plugins">,
+) {
+  const normalizedProviderId = normalizeProviderId(providerId);
+  return manifestRegistry.plugins
+    .toSorted((left, right) => left.id.localeCompare(right.id))
+    .filter(
+      (plugin) =>
+        plugin.trustedOfficialInstall === true &&
+        pluginOwnsProviderPolicyRef(plugin, normalizedProviderId),
+    );
 }

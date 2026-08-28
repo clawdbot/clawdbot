@@ -116,6 +116,7 @@ sync the current checkout on every run, and stop it before handoff.
   proportional to the touched contract. Untrusted repository tooling never runs
   locally. Remote proof requires a remote-environment or isolation reason.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
+- Standing up a local container Gateway for UI proof goes through `scripts/docker/setup.sh` (see `docs/install/docker.md`). It seeds `gateway.controlUi.allowedOrigins` for the published host port; a hand-rolled `docker run` skips that and the dashboard dead-ends on "Browser origin not allowed" with the Gateway logging `code=4008 reason=connect failed`. Never reuse the Compose defaults for a proof: they bind-mount the operator's real `~/.openclaw` and claim port 18789.
 - Use standard Git commands when committing; stage only your files.
 - If dependencies are missing on the selected host, run `pnpm install`, retry
   once, then report the first actionable error.
@@ -350,9 +351,10 @@ the failure to that exact active run.
 The child-dispatch jobs record run ID, run attempt, and URL, then finish. The
 parent seals those tuples, original dispatch titles, gate coverage, reuse
 policy, and original parent attempt in one immutable
-`full-release-execution-plan-<run-id>` artifact. Collector retries restore that
-artifact and adopt its children; they never reconstruct the plan or redispatch
-tests.
+`full-release-execution-plan-<run-id>` artifact and exact run-ID cache entry.
+Collector retries restore the cached bytes, validate them, and re-upload the
+artifact for their attempt before adopting its children; they never reconstruct
+the plan or redispatch tests.
 `Release Decision` polls those exact identities and can report
 `blocked_diagnostics_running` before unrelated children finish.
 For reused evidence, it also repeats the canonical target, policy, changed-path,

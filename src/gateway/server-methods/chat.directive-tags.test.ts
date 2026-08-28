@@ -22,7 +22,7 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
-import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { getTotalPendingReplies } from "../../auto-reply/reply/dispatcher-registry.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import {
@@ -67,7 +67,16 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 type ProjectedDispatchParams = Parameters<
   typeof import("../../auto-reply/dispatch.js").dispatchInboundMessageWithProjectedDispatcher
 >[0];
+type TestReplyDispatcher = ReturnType<
+  typeof import("../../auto-reply/reply/reply-dispatcher.js").createReplyDispatcher
+>;
+type TestDispatchParams = Omit<ProjectedDispatchParams, "dispatcherOptions"> & {
+  dispatcher: TestReplyDispatcher;
+};
 type RespondMock = ReturnType<typeof vi.fn<RespondFn>>;
+type TranscriptUpdate = Parameters<
+  typeof import("../../sessions/transcript-events.js").emitSessionTranscriptUpdate
+>[0];
 
 const TEST_TOOL_AUTHORITY_FINGERPRINT = "test-tool-authority";
 const TEST_TOOL_AUTHORITY_ROUTE = { provider: "openai", model: "gpt-5.6-sol" } as const;
@@ -81,122 +90,100 @@ const replyRunRegistry = {
   },
 };
 
-const mockState = vi.hoisted(() => ({
-  config: {} as Record<string, unknown>,
-  storePath: "",
-  transcriptPath: "",
-  sessionId: "sess-1",
-  mainSessionKey: "main",
-  finalText: "[[reply_to_current]]",
-  finalPayload: null as {
-    text?: string;
-    mediaUrl?: string;
-    mediaUrls?: string[];
-    channelData?: Record<string, unknown>;
-    spokenText?: string;
-    audioAsVoice?: boolean;
-    trustedLocalMedia?: boolean;
-    sensitiveMedia?: boolean;
-    replyToId?: string;
-    replyToCurrent?: boolean;
-    isReasoning?: boolean;
-    isError?: boolean;
-  } | null,
-  dispatchedReplies: [] as Array<{
-    kind: "tool" | "block" | "final";
-    payload: {
-      text?: string;
-      mediaUrl?: string;
-      mediaUrls?: string[];
-      channelData?: Record<string, unknown>;
-      spokenText?: string;
-      ttsSupplement?: { spokenText: string };
-      audioAsVoice?: boolean;
-      trustedLocalMedia?: boolean;
-      sensitiveMedia?: boolean;
-      replyToId?: string;
-      replyToCurrent?: boolean;
-      isReasoning?: boolean;
-      isStatusNotice?: boolean;
-      isError?: boolean;
-    };
-  }>,
-  dispatchError: null as Error | null,
-  dispatchWait: null as Promise<void> | null,
-  dispatchErrorAfterAgentRunStart: null as Error | null,
-  dispatchErrorAfterDelivery: null as Error | null,
-  sessionMetadataChanges: [] as Array<{
-    sessionKey: string;
-    agentId?: string;
-    reason: "command-metadata";
-  }>,
-  triggerAgentRunStart: false,
-  triggerUserMessagePersisted: false,
-  runtimeUserMessagePersistencePending: null as Promise<void> | null,
-  onAfterAgentRunStart: null as (() => void) | null,
-  agentRunId: "run-agent-1",
-  sessionEntry: {} as Record<string, unknown>,
-  sessionIdsByKey: new Map<string, string>(),
-  sessionMissing: false,
-  loadSessionEntryCalls: [] as Array<{ rawKey: string; opts?: { agentId?: string } }>,
-  lastDispatchCtx: undefined as MsgContext | undefined,
-  lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
-  lastDispatchImageOrder: undefined as string[] | undefined,
-  lastDispatchThinkingLevelOverride: undefined as string | undefined,
-  lastDispatchOriginatingLeafEntryId: undefined as string | null | undefined,
-  lastTaskSuggestionDeliveryMode: undefined as "gateway" | undefined,
-  lastMessageInjectionDisposition: undefined as "none" | "accepted" | "rejected" | undefined,
-  lastDispatchUserTurnInput: undefined as unknown,
-  modelCatalog: null as ModelCatalogEntry[] | null,
-  emittedTranscriptUpdates: [] as Array<{
-    sessionFile?: string;
-    target?: { agentId: string; sessionId: string; sessionKey: string };
-    agentId?: string;
-    sessionId?: string;
-    sessionKey?: string;
-    message?: unknown;
-    messageId?: string;
-  }>,
-  savedMediaResults: [] as Array<{ id?: string; path: string; contentType?: string }>,
-  saveMediaError: null as Error | null,
-  savedMediaCalls: [] as Array<{ contentType?: string; subdir?: string; size: number }>,
-  saveMediaWait: null as Promise<void> | null,
-  activeSaveMediaCalls: 0,
-  maxActiveSaveMediaCalls: 0,
-  replyContextCalls: 0,
-  replyContextResult: null as {
-    ReplyToId?: string;
-    ReplyToBody?: string;
-    ReplyToSender?: string;
-  } | null,
-  replyContextWait: null as Promise<void> | null,
-  sandboxWorkspace: null as { workspaceDir: string; containerWorkdir?: string } | null,
-  stageSandboxMediaError: null as Error | null,
-  stagedRelativePaths: null as string[] | null,
-  hasBeforeAgentRunHooks: false,
-  hasMessageReceivedHooks: false,
-  messageReceivedCalls: [] as Array<{ event: unknown; context: unknown }>,
-  beforeMessageWriteBlock: false,
-  beforeMessageWriteContent: null as string | null,
-  beforeMessageWriteCalls: [] as Array<{ message: unknown; ctx: unknown }>,
-  dispatchBlockedByBeforeAgentRun: false,
-  disposedTranscriptWriteContext: false,
-  disposedTranscriptWriteAttempts: 0,
-  runtimeAssistantContentBeforeDelivery: null as Array<Record<string, unknown>> | null,
-  runtimeAssistantTextsBeforeDelivery: [] as string[],
-  cronAuthorityProbe: undefined as
-    | ((
-        runId: string | undefined,
-        capability: CronCreatorAuthorityCapability | undefined,
-      ) => Promise<void> | void)
-    | undefined,
-  // `unstagedSources` lets tests simulate partial staging failure: absolute
-  // source paths listed here are excluded from the returned `staged` map even
-  // though ctx still carries their rewritten paths. This mirrors how the real
-  // stageSandboxMedia silently skips over-cap files.
-  unstagedSources: null as string[] | null,
-  deleteMediaBufferCalls: [] as Array<{ id: string; subdir?: string }>,
-}));
+const mockState = vi.hoisted(() => {
+  const createTestState = () => ({
+    config: {} as Record<string, unknown>,
+    mainSessionKey: "main",
+    finalText: "[[reply_to_current]]",
+    finalPayload: null as ReplyPayload | null,
+    dispatchedReplies: [] as Array<{
+      kind: "tool" | "block" | "final";
+      payload: ReplyPayload;
+    }>,
+    dispatchError: null as Error | null,
+    dispatchWait: null as Promise<void> | null,
+    dispatchErrorAfterAgentRunStart: null as Error | null,
+    dispatchErrorAfterDelivery: null as Error | null,
+    sessionMetadataChanges: [] as Array<{
+      sessionKey: string;
+      agentId?: string;
+      reason: "command-metadata";
+    }>,
+    triggerAgentRunStart: false,
+    triggerUserMessagePersisted: false,
+    runtimeUserMessagePersistencePending: null as Promise<void> | null,
+    onAfterAgentRunStart: null as (() => void) | null,
+    agentRunId: "run-agent-1",
+    sessionEntry: {} as Record<string, unknown>,
+    sessionIdsByKey: new Map<string, string>(),
+    sessionMissing: false,
+    loadSessionEntryCalls: [] as Array<{ rawKey: string; opts?: { agentId?: string } }>,
+    lastDispatchCtx: undefined as MsgContext | undefined,
+    lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
+    lastDispatchImageOrder: undefined as string[] | undefined,
+    lastDispatchThinkingLevelOverride: undefined as string | undefined,
+    lastDispatchOriginatingLeafEntryId: undefined as string | null | undefined,
+    lastTaskSuggestionDeliveryMode: undefined as "gateway" | undefined,
+    lastMessageInjectionDisposition: undefined as "none" | "accepted" | "rejected" | undefined,
+    lastDispatchUserTurnInput: undefined as unknown,
+    modelCatalog: null as ModelCatalogEntry[] | null,
+    emittedTranscriptUpdates: [] as TranscriptUpdate[],
+    savedMediaResults: [] as Array<{ id?: string; path: string; contentType?: string }>,
+    saveMediaError: null as Error | null,
+    savedMediaCalls: [] as Array<{ contentType?: string; subdir?: string; size: number }>,
+    saveMediaWait: null as Promise<void> | null,
+    activeSaveMediaCalls: 0,
+    maxActiveSaveMediaCalls: 0,
+    replyContextCalls: 0,
+    replyContextResult: null as {
+      ReplyToId?: string;
+      ReplyToBody?: string;
+      ReplyToSender?: string;
+    } | null,
+    replyContextWait: null as Promise<void> | null,
+    sandboxWorkspace: null as { workspaceDir: string; containerWorkdir?: string } | null,
+    stageSandboxMediaError: null as Error | null,
+    stagedRelativePaths: null as string[] | null,
+    hasBeforeAgentRunHooks: false,
+    hasMessageReceivedHooks: false,
+    messageReceivedCalls: [] as Array<{ event: unknown; context: unknown }>,
+    beforeMessageWriteBlock: false,
+    beforeMessageWriteContent: null as string | null,
+    beforeMessageWriteCalls: [] as Array<{ message: unknown; ctx: unknown }>,
+    dispatchBlockedByBeforeAgentRun: false,
+    disposedTranscriptWriteContext: false,
+    disposedTranscriptWriteAttempts: 0,
+    runtimeAssistantContentBeforeDelivery: null as Array<Record<string, unknown>> | null,
+    runtimeAssistantTextsBeforeDelivery: [] as string[],
+    cronAuthorityProbe: undefined as
+      | ((
+          runId: string | undefined,
+          capability: CronCreatorAuthorityCapability | undefined,
+        ) => Promise<void> | void)
+      | undefined,
+    // `unstagedSources` lets tests simulate partial staging failure: absolute
+    // source paths listed here are excluded from the returned `staged` map even
+    // though ctx still carries their rewritten paths. This mirrors how the real
+    // stageSandboxMedia silently skips over-cap files.
+    unstagedSources: null as string[] | null,
+    deleteMediaBufferCalls: [] as Array<{ id: string; subdir?: string }>,
+  });
+  const state = {
+    storePath: "",
+    transcriptPath: "",
+    sessionId: "sess-1",
+    ...createTestState(),
+  };
+  return Object.assign(state, {
+    reset: () => Object.assign(state, createTestState()),
+  });
+});
+
+type TestReply = (typeof mockState.dispatchedReplies)[number];
+type TestReplyPayload = TestReply["payload"];
+type SourceReplyTranscriptMirror = NonNullable<
+  Parameters<typeof setReplyPayloadMetadata>[1]["sourceReplyTranscriptMirror"]
+>;
 
 let suiteFixtureRoot = "";
 let suiteDatabasePath = "";
@@ -241,6 +228,12 @@ example
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+const INLINE_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYoYAAAAASUVORK5CYII=";
+const OFFLOAD_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+const TINY_JPEG_BASE64 =
+  "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRUVFRUVFRUVFRUVFRUVFRUXFhUVFRUYHSggGBolHRUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0fICUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBEQACEQEDEQH/xAAXAAADAQAAAAAAAAAAAAAAAAAAAQMC/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEAMQAAAB6AAAAP/EABQQAQAAAAAAAAAAAAAAAAAAACD/2gAIAQEAAT8Af//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQIBAT8Af//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQMBAT8Af//Z";
 
 vi.mock("../session-utils.js", async () => {
   const original =
@@ -307,189 +300,119 @@ vi.mock("../../auto-reply/dispatch.js", async () => {
 });
 
 dispatchInboundMessageMock.mockImplementation(
-  vi.fn(
-    async (params: {
-      ctx: MsgContext;
-      dispatcher: {
-        sendFinalReply: (payload: {
-          text?: string;
-          mediaUrl?: string;
-          mediaUrls?: string[];
-          spokenText?: string;
-          audioAsVoice?: boolean;
-          trustedLocalMedia?: boolean;
-          sensitiveMedia?: boolean;
-          replyToId?: string;
-          replyToCurrent?: boolean;
-          isReasoning?: boolean;
-          isError?: boolean;
-        }) => boolean;
-        sendBlockReply: (payload: {
-          text?: string;
-          mediaUrl?: string;
-          mediaUrls?: string[];
-          spokenText?: string;
-          audioAsVoice?: boolean;
-          trustedLocalMedia?: boolean;
-          replyToId?: string;
-          replyToCurrent?: boolean;
-          isReasoning?: boolean;
-          isError?: boolean;
-        }) => boolean;
-        sendToolResult: (payload: {
-          text?: string;
-          mediaUrl?: string;
-          mediaUrls?: string[];
-          spokenText?: string;
-          audioAsVoice?: boolean;
-          trustedLocalMedia?: boolean;
-          replyToId?: string;
-          replyToCurrent?: boolean;
-          isReasoning?: boolean;
-          isError?: boolean;
-        }) => boolean;
-        markComplete: () => void;
-        waitForIdle: () => Promise<void>;
-      };
-      onSessionMetadataChanges?: (
-        changes: Array<{
-          sessionKey: string;
-          agentId?: string;
-          reason: "command-metadata";
-        }>,
-      ) => void;
-      replyOptions?: {
-        runId?: string;
-        cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
-        onAgentRunStart?: (runId: string) => void;
-        userTurnTranscriptRecorder?: {
-          message?: unknown;
-          resolveMessage?: () => Promise<unknown>;
-          markRuntimePersisted: (message: { role: "user"; content: string }) => void;
-          markRuntimePersistencePending: (pending: Promise<void>) => void;
-        };
-        images?: Array<{ mimeType: string; data: string }>;
-        imageOrder?: string[];
-        thinkingLevelOverride?: string;
-        taskSuggestionDeliveryMode?: "gateway";
-        messageInjectionDisposition?: "none" | "accepted" | "rejected";
-        turnAdoptionLifecycle?: {
-          originatingLeafEntryId?: string | null;
-        };
-      };
-    }) => {
-      mockState.lastDispatchCtx = params.ctx;
-      mockState.lastDispatchImages = params.replyOptions?.images;
-      mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
-      mockState.lastDispatchThinkingLevelOverride = params.replyOptions?.thinkingLevelOverride;
-      mockState.lastDispatchOriginatingLeafEntryId =
-        params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId;
-      mockState.lastTaskSuggestionDeliveryMode = params.replyOptions?.taskSuggestionDeliveryMode;
-      mockState.lastMessageInjectionDisposition = params.replyOptions?.messageInjectionDisposition;
-      await mockState.cronAuthorityProbe?.(
-        params.replyOptions?.runId,
-        params.replyOptions?.cronCreatorAuthorityCapability,
+  vi.fn(async (params: TestDispatchParams) => {
+    mockState.lastDispatchCtx = params.ctx;
+    mockState.lastDispatchImages = params.replyOptions?.images;
+    mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
+    mockState.lastDispatchThinkingLevelOverride = params.replyOptions?.thinkingLevelOverride;
+    mockState.lastDispatchOriginatingLeafEntryId =
+      params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId;
+    mockState.lastTaskSuggestionDeliveryMode = params.replyOptions?.taskSuggestionDeliveryMode;
+    mockState.lastMessageInjectionDisposition = params.replyOptions?.messageInjectionDisposition;
+    await mockState.cronAuthorityProbe?.(
+      params.replyOptions?.runId,
+      params.replyOptions?.cronCreatorAuthorityCapability,
+    );
+    const recorder = params.replyOptions?.userTurnTranscriptRecorder;
+    mockState.lastDispatchUserTurnInput = recorder?.resolveMessage
+      ? await recorder.resolveMessage()
+      : recorder?.message;
+    if (mockState.dispatchError) {
+      throw mockState.dispatchError;
+    }
+    if (mockState.dispatchWait) {
+      await mockState.dispatchWait;
+    }
+    if (mockState.triggerAgentRunStart) {
+      params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
+      mockState.onAfterAgentRunStart?.();
+    }
+    if (mockState.triggerUserMessagePersisted) {
+      params.replyOptions?.userTurnTranscriptRecorder?.markRuntimePersisted({
+        role: "user",
+        content: "persisted by runtime",
+        timestamp: Date.now(),
+      });
+    }
+    if (mockState.runtimeUserMessagePersistencePending) {
+      params.replyOptions?.userTurnTranscriptRecorder?.markRuntimePersistencePending(
+        mockState.runtimeUserMessagePersistencePending,
       );
-      const recorder = params.replyOptions?.userTurnTranscriptRecorder;
-      mockState.lastDispatchUserTurnInput = recorder?.resolveMessage
-        ? await recorder.resolveMessage()
-        : recorder?.message;
-      if (mockState.dispatchError) {
-        throw mockState.dispatchError;
-      }
-      if (mockState.dispatchWait) {
-        await mockState.dispatchWait;
-      }
-      if (mockState.triggerAgentRunStart) {
-        params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
-        mockState.onAfterAgentRunStart?.();
-      }
-      if (mockState.triggerUserMessagePersisted) {
-        params.replyOptions?.userTurnTranscriptRecorder?.markRuntimePersisted({
-          role: "user",
-          content: "persisted by runtime",
-        });
-      }
-      if (mockState.runtimeUserMessagePersistencePending) {
-        params.replyOptions?.userTurnTranscriptRecorder?.markRuntimePersistencePending(
-          mockState.runtimeUserMessagePersistencePending,
-        );
-      }
-      if (mockState.dispatchErrorAfterAgentRunStart) {
-        throw mockState.dispatchErrorAfterAgentRunStart;
-      }
-      if (mockState.runtimeAssistantContentBeforeDelivery) {
-        await appendSourceReplyMirrorEntry({
-          content: mockState.runtimeAssistantContentBeforeDelivery,
-          text: "",
-          provider: "openai",
-          model: "gpt-5.6-luna",
-          now: Date.now(),
-        });
-      }
-      for (const text of mockState.runtimeAssistantTextsBeforeDelivery) {
-        await appendSourceReplyMirrorEntry({
-          text,
-          provider: "openai",
-          model: "gpt-5.6-luna",
-          now: Date.now(),
-        });
-      }
-      if (mockState.sessionMetadataChanges.length > 0) {
-        params.onSessionMetadataChanges?.(mockState.sessionMetadataChanges);
-      }
-      const deliverReplies = async () => {
-        if (mockState.dispatchedReplies.length > 0) {
-          for (const reply of mockState.dispatchedReplies) {
-            if (reply.kind === "tool") {
-              params.dispatcher.sendToolResult(reply.payload);
-              continue;
-            }
-            if (reply.kind === "block") {
-              params.dispatcher.sendBlockReply(reply.payload);
-              continue;
-            }
-            params.dispatcher.sendFinalReply(reply.payload);
+    }
+    if (mockState.dispatchErrorAfterAgentRunStart) {
+      throw mockState.dispatchErrorAfterAgentRunStart;
+    }
+    if (mockState.runtimeAssistantContentBeforeDelivery) {
+      await appendSourceReplyMirrorEntry({
+        content: mockState.runtimeAssistantContentBeforeDelivery,
+        text: "",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        now: Date.now(),
+      });
+    }
+    for (const text of mockState.runtimeAssistantTextsBeforeDelivery) {
+      await appendSourceReplyMirrorEntry({
+        text,
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        now: Date.now(),
+      });
+    }
+    if (mockState.sessionMetadataChanges.length > 0) {
+      params.onSessionMetadataChanges?.(mockState.sessionMetadataChanges);
+    }
+    const deliverReplies = async () => {
+      if (mockState.dispatchedReplies.length > 0) {
+        for (const reply of mockState.dispatchedReplies) {
+          if (reply.kind === "tool") {
+            params.dispatcher.sendToolResult(reply.payload);
+            continue;
           }
-        } else {
-          params.dispatcher.sendFinalReply(mockState.finalPayload ?? { text: mockState.finalText });
+          if (reply.kind === "block") {
+            params.dispatcher.sendBlockReply(reply.payload);
+            continue;
+          }
+          params.dispatcher.sendFinalReply(reply.payload);
         }
-        params.dispatcher.markComplete();
-        await params.dispatcher.waitForIdle();
-      };
-      if (mockState.disposedTranscriptWriteContext) {
-        const sessionKey = mockState.mainSessionKey;
-        const storePath = mockState.storePath;
-        await withOwnedSessionTranscriptWrites(
-          {
-            sessionKey,
-            sessionTarget: {
-              agentId: "main",
-              sessionId: mockState.sessionId,
-              sessionKey,
-              storePath,
-            },
-            withTranscriptWrite: async () => {
-              mockState.disposedTranscriptWriteAttempts += 1;
-              throw new Error("attempt disposed before transcript write");
-            },
-          },
-          deliverReplies,
-        );
       } else {
-        await deliverReplies();
+        params.dispatcher.sendFinalReply(mockState.finalPayload ?? { text: mockState.finalText });
       }
-      if (mockState.dispatchErrorAfterDelivery) {
-        throw mockState.dispatchErrorAfterDelivery;
-      }
-      return {
-        ok: true,
-        queuedFinal: true,
-        counts: { tool: 0, block: 0, final: 1 },
-        ...(mockState.dispatchBlockedByBeforeAgentRun ? { beforeAgentRunBlocked: true } : {}),
-      };
-    },
-  ),
+      params.dispatcher.markComplete();
+      await params.dispatcher.waitForIdle();
+    };
+    if (mockState.disposedTranscriptWriteContext) {
+      const sessionKey = mockState.mainSessionKey;
+      const storePath = mockState.storePath;
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionKey,
+          sessionTarget: {
+            agentId: "main",
+            sessionId: mockState.sessionId,
+            sessionKey,
+            storePath,
+          },
+          withTranscriptWrite: async () => {
+            mockState.disposedTranscriptWriteAttempts += 1;
+            throw new Error("attempt disposed before transcript write");
+          },
+        },
+        deliverReplies,
+      );
+    } else {
+      await deliverReplies();
+    }
+    if (mockState.dispatchErrorAfterDelivery) {
+      throw mockState.dispatchErrorAfterDelivery;
+    }
+    return {
+      ok: true,
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+      ...(mockState.dispatchBlockedByBeforeAgentRun ? { beforeAgentRunBlocked: true } : {}),
+    };
+  }),
 );
 
 vi.mock("../../infra/outbound/session-binding-service.js", async () => {
@@ -555,23 +478,14 @@ vi.mock("../../plugins/hook-runner-global.js", () => {
 });
 
 vi.mock("../../sessions/transcript-events.js", async (importOriginal) => {
-  const { resolveTerminalAssistantTranscriptRunId } =
+  const { attachSessionTranscriptRunId, resolveTerminalAssistantTranscriptRunId } =
     await importOriginal<typeof import("../../sessions/transcript-events.js")>();
   return {
+    attachSessionTranscriptRunId,
     resolveTerminalAssistantTranscriptRunId,
-    emitSessionTranscriptUpdate: vi.fn(
-      (update: {
-        sessionFile?: string;
-        target?: { agentId: string; sessionId: string; sessionKey: string };
-        agentId?: string;
-        sessionId?: string;
-        sessionKey?: string;
-        message?: unknown;
-        messageId?: string;
-      }) => {
-        mockState.emittedTranscriptUpdates.push(update);
-      },
-    ),
+    emitSessionTranscriptUpdate: vi.fn((update: TranscriptUpdate) => {
+      mockState.emittedTranscriptUpdates.push(update);
+    }),
   };
 });
 
@@ -1056,8 +970,12 @@ function createChatContext() {
 
 type ChatContext = ReturnType<typeof createChatContext>;
 
-function useChatTestModel(model: "vision-model" | "text-only") {
-  mockState.sessionEntry = { modelProvider: "test-provider", model };
+function useChatTestModel(model: "vision-model" | "text-only", configured = false) {
+  mockState.sessionEntry = {
+    modelProvider: "test-provider",
+    model,
+    ...(configured ? { providerOverride: "test-provider", modelOverride: model } : {}),
+  };
   mockState.modelCatalog = [
     {
       provider: "test-provider",
@@ -1066,6 +984,13 @@ function useChatTestModel(model: "vision-model" | "text-only") {
       input: model === "vision-model" ? ["text", "image"] : ["text"],
     },
   ];
+}
+
+function useGlobalSessionScope() {
+  mockState.config = {
+    agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+    session: { scope: "global" },
+  };
 }
 
 async function createReadyChatTranscript(prefix: string) {
@@ -1094,6 +1019,19 @@ function createChatRequestFixture() {
         context,
       }),
   };
+}
+
+async function sendNewChatRequest(
+  params: Omit<Parameters<typeof runNonStreamingChatSend>[0], "context" | "respond">,
+) {
+  const fixture = createChatRequestFixture();
+  const payload = await fixture.send(params);
+  return { ...fixture, payload };
+}
+
+async function createSqliteChatRequest(prefix: string) {
+  await createGatewayUserTurnSqliteFixture(prefix);
+  return createChatRequestFixture();
 }
 
 type NonStreamingChatSendWaitFor = "broadcast" | "dedupe" | "none";
@@ -1134,6 +1072,177 @@ function managedAudioBlocks(content: Array<Record<string, unknown>>) {
 function bindTestToolAuthority(operation: ReplyOperation) {
   operation.bindToolAuthorityProjector(() => TEST_TOOL_AUTHORITY_FINGERPRINT);
   operation.bindToolAuthorityRoute({ provider: "anthropic", model: "test-model" });
+}
+
+function beginActiveReplyOperation(params: {
+  backend?: Parameters<ReplyOperation["attachBackend"]>[0];
+  bindToolAuthority?: boolean;
+  originatingLeafEntryId?: string | null;
+  sessionId?: string;
+  sessionKey?: string;
+}) {
+  const operation = replyRunRegistry.begin({
+    sessionKey: params.sessionKey ?? "agent:main:main",
+    sessionId: params.sessionId ?? mockState.sessionId,
+    resetTriggered: false,
+    ...(params.originatingLeafEntryId !== undefined
+      ? { originatingLeafEntryId: params.originatingLeafEntryId }
+      : {}),
+  });
+  if (params.bindToolAuthority) {
+    bindTestToolAuthority(operation);
+  }
+  operation.setPhase("running");
+  if (params.backend) {
+    operation.attachBackend(params.backend);
+  }
+  return operation;
+}
+
+type TestReplyBackend = Parameters<ReplyOperation["attachBackend"]>[0];
+type TestQueueMessage = NonNullable<TestReplyBackend["queueMessage"]>;
+
+function beginMessageInjectionOperation(params: {
+  bindToolAuthority?: boolean;
+  cancel?: TestReplyBackend["cancel"];
+  isStopped?: TestReplyBackend["isStopped"];
+  isStreaming?: TestReplyBackend["isStreaming"];
+  legacy?: boolean;
+  originatingLeafEntryId?: string | null;
+  queueMessage: TestQueueMessage;
+  runId?: string;
+  supportsQueueMessageImages?: boolean;
+  taskSuggestionDeliveryMode?: "gateway";
+}) {
+  const backend = {
+    kind: "embedded" as const,
+    cancel: params.cancel ?? (() => {}),
+    runId: params.runId,
+    supportsQueueMessageImages: params.supportsQueueMessageImages,
+    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+    ...(params.legacy
+      ? {
+          queueMessage: params.queueMessage,
+          isStopped: params.isStopped,
+          isStreaming: params.isStreaming,
+        }
+      : {
+          messageInjection: { isAvailable: () => true, queueMessage: params.queueMessage },
+        }),
+  } satisfies TestReplyBackend;
+  return beginActiveReplyOperation({
+    bindToolAuthority: params.bindToolAuthority ?? true,
+    originatingLeafEntryId: params.originatingLeafEntryId,
+    backend,
+  });
+}
+
+async function appendTestTranscriptMessage(params: {
+  content: string;
+  display?: boolean;
+  eventId: string;
+  now: number;
+  parentId: string | null;
+  role: "assistant" | "user";
+}) {
+  await appendTranscriptMessage(transcriptScope(), {
+    eventId: params.eventId,
+    message: {
+      role: params.role,
+      content: params.content,
+      ...(params.display === undefined ? {} : { display: params.display }),
+    },
+    now: params.now,
+    parentId: params.parentId,
+  });
+}
+
+function createImageAttachment(
+  params: {
+    content?: string;
+    fileName?: string;
+    mimeType?: string;
+    type?: string;
+  } = {},
+) {
+  return {
+    ...(params.type ? { type: params.type } : {}),
+    mimeType: params.mimeType ?? "image/png",
+    ...(params.fileName ? { fileName: params.fileName } : {}),
+    content: params.content ?? TINY_PNG_BASE64,
+  };
+}
+
+function createFileAttachment(fileName: string, mimeType: string, content: string, type = "file") {
+  return {
+    type,
+    mimeType,
+    fileName,
+    content,
+  };
+}
+
+function createPngBuffer(size: number): Buffer {
+  const buffer = Buffer.alloc(size);
+  buffer.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  return buffer;
+}
+
+function writeSavedPng(fixtureDir: string, fileName: string): string {
+  const savedImagePath = path.join(fixtureDir, fileName);
+  fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+  mockState.savedMediaResults.push({ path: savedImagePath, contentType: "image/png" });
+  return savedImagePath;
+}
+
+function setSavedMediaResults(...results: Array<[path: string, contentType: string, id?: string]>) {
+  mockState.savedMediaResults = results.map(([pathValue, contentType, id]) => {
+    const result = { path: pathValue, contentType, id: undefined as string | undefined };
+    if (id) {
+      result.id = id;
+    }
+    return result;
+  });
+}
+
+async function createAudioTranscriptFixture(prefix: string, fileName = "tts.mp3") {
+  const transcriptDir = await createTranscriptFixture(prefix);
+  const audioPath = path.join(transcriptDir, fileName);
+  fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+  mockState.config = { agents: { defaults: { workspace: transcriptDir } } };
+  return { audioPath, transcriptDir };
+}
+
+function createSourceReply(
+  payload: TestReplyPayload,
+  sourceReplyTranscriptMirror: SourceReplyTranscriptMirror,
+): TestReply {
+  return {
+    kind: "final",
+    payload: setReplyPayloadMetadata(payload, { sourceReplyTranscriptMirror }),
+  };
+}
+
+function createMainSourceReply(params: {
+  idempotencyKey: string;
+  mediaUrls?: string[];
+  text?: string;
+}): TestReply {
+  const { idempotencyKey, mediaUrls, text } = params;
+  return createSourceReply(
+    { ...(text ? { text } : {}), ...(mediaUrls ? { mediaUrls } : {}) },
+    {
+      sessionKey: "main",
+      ...(text ? { text } : {}),
+      ...(mediaUrls ? { mediaUrls } : {}),
+      idempotencyKey,
+    },
+  );
+}
+
+function setAgentRunReplies(replies: TestReply[]) {
+  mockState.triggerAgentRunStart = true;
+  mockState.dispatchedReplies = replies;
 }
 
 function expectManagedAudioBlock(
@@ -1312,68 +1421,13 @@ afterAll(async () => {
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   afterEach(() => {
     replyRunRegistryTesting.resetReplyRunRegistry();
-    mockState.config = {};
-    mockState.finalText = "[[reply_to_current]]";
-    mockState.finalPayload = null;
-    mockState.dispatchedReplies = [];
-    mockState.dispatchError = null;
-    mockState.dispatchWait = null;
-    mockState.dispatchErrorAfterAgentRunStart = null;
-    mockState.dispatchErrorAfterDelivery = null;
-    mockState.sessionMetadataChanges = [];
-    mockState.mainSessionKey = "main";
-    mockState.triggerAgentRunStart = false;
-    mockState.triggerUserMessagePersisted = false;
-    mockState.runtimeUserMessagePersistencePending = null;
-    mockState.onAfterAgentRunStart = null;
-    mockState.agentRunId = "run-agent-1";
-    mockState.sessionEntry = {};
-    mockState.sessionIdsByKey.clear();
-    mockState.sessionMissing = false;
-    mockState.loadSessionEntryCalls = [];
-    mockState.lastDispatchCtx = undefined;
-    mockState.lastDispatchImages = undefined;
-    mockState.lastDispatchImageOrder = undefined;
-    mockState.lastDispatchThinkingLevelOverride = undefined;
-    mockState.lastDispatchOriginatingLeafEntryId = undefined;
-    mockState.lastTaskSuggestionDeliveryMode = undefined;
-    mockState.lastMessageInjectionDisposition = undefined;
-    mockState.lastDispatchUserTurnInput = undefined;
-    mockState.modelCatalog = null;
-    mockState.emittedTranscriptUpdates = [];
-    mockState.savedMediaResults = [];
-    mockState.saveMediaError = null;
-    mockState.savedMediaCalls = [];
-    mockState.saveMediaWait = null;
-    mockState.activeSaveMediaCalls = 0;
-    mockState.maxActiveSaveMediaCalls = 0;
-    mockState.replyContextCalls = 0;
-    mockState.replyContextResult = null;
-    mockState.replyContextWait = null;
+    mockState.reset();
     bindingMocks.resolveByConversation.mockReset();
     bindingMocks.resolveByConversation.mockReturnValue(null);
-    mockState.sandboxWorkspace = null;
-    mockState.stageSandboxMediaError = null;
-    mockState.stagedRelativePaths = null;
-    mockState.unstagedSources = null;
-    mockState.deleteMediaBufferCalls = [];
-    mockState.hasBeforeAgentRunHooks = false;
-    mockState.hasMessageReceivedHooks = false;
-    mockState.messageReceivedCalls = [];
-    mockState.beforeMessageWriteBlock = false;
-    mockState.beforeMessageWriteContent = null;
-    mockState.beforeMessageWriteCalls = [];
-    mockState.dispatchBlockedByBeforeAgentRun = false;
-    mockState.disposedTranscriptWriteContext = false;
-    mockState.disposedTranscriptWriteAttempts = 0;
-    mockState.runtimeAssistantContentBeforeDelivery = null;
-    mockState.runtimeAssistantTextsBeforeDelivery = [];
-    mockState.cronAuthorityProbe = undefined;
   });
 
   it("carries an internal runtime tool cap into agent dispatch", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-runtime-tools-");
-    const { send } = createChatRequestFixture();
+    const { send } = await createSqliteChatRequest("openclaw-chat-send-runtime-tools-");
 
     await send({
       idempotencyKey: "idem-runtime-tools",
@@ -1391,15 +1445,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ["stale", "previous-leaf"],
     ["empty", null],
   ])("rejects a %s expected active leaf before starting or writing", async (name, expectedLeaf) => {
-    await createGatewayUserTurnSqliteFixture(`openclaw-chat-send-${name}-leaf-`);
-    await appendTranscriptMessage(transcriptScope(), {
+    const { context, respond, send } = await createSqliteChatRequest(
+      `openclaw-chat-send-${name}-leaf-`,
+    );
+    await appendTestTranscriptMessage({
       eventId: "current-leaf",
-      message: { role: "user", content: "existing" },
+      role: "user",
+      content: "existing",
       now: 1,
       parentId: null,
     });
     const before = loadTranscriptEventsSync(transcriptScope());
-    const { context, respond, send } = createChatRequestFixture();
 
     await send({
       idempotencyKey: `idem-${name}-leaf`,
@@ -1429,16 +1485,21 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       accepted: false,
     },
   ])("$name", async ({ sessionId, accepted }) => {
-    await createGatewayUserTurnSqliteFixture(`openclaw-chat-send-active-ancestor-${sessionId}-`);
-    await appendTranscriptMessage(transcriptScope(), {
+    const { context, respond, send } = await createSqliteChatRequest(
+      `openclaw-chat-send-active-ancestor-${sessionId}-`,
+    );
+    await appendTestTranscriptMessage({
       eventId: "rendered-leaf",
-      message: { role: "assistant", content: "rendered" },
+      role: "assistant",
+      content: "rendered",
       now: 1,
       parentId: null,
     });
-    await appendTranscriptMessage(transcriptScope(), {
+    await appendTestTranscriptMessage({
       eventId: "memory-flush-user",
-      message: { role: "user", content: "maintenance prompt", display: false },
+      role: "user",
+      content: "maintenance prompt",
+      display: false,
       now: 2,
       parentId: "rendered-leaf",
     });
@@ -1451,14 +1512,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       firstKeptEntryId: "rendered-leaf",
       tokensBefore: 10,
     });
-    await appendTranscriptMessage(transcriptScope(), {
+    await appendTestTranscriptMessage({
       eventId: "background-leaf",
-      message: { role: "assistant", content: "background append", display: false },
+      role: "assistant",
+      content: "background append",
+      display: false,
       now: 3,
       parentId: "background-compaction",
     });
     const before = loadTranscriptEventsSync(transcriptScope());
-    const { context, respond, send } = createChatRequestFixture();
 
     await send({
       idempotencyKey: `idem-active-ancestor-${sessionId}`,
@@ -1486,22 +1548,27 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("rejects a copied exact leaf from the session before a branch switch", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-rotated-exact-leaf-");
-    await appendTranscriptMessage(transcriptScope(), {
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-rotated-exact-leaf-",
+    );
+    await appendTestTranscriptMessage({
       eventId: "branch-root",
-      message: { role: "user", content: "root" },
+      role: "user",
+      content: "root",
       now: 1,
       parentId: null,
     });
-    await appendTranscriptMessage(transcriptScope(), {
+    await appendTestTranscriptMessage({
       eventId: "copied-leaf",
-      message: { role: "assistant", content: "selected branch" },
+      role: "assistant",
+      content: "selected branch",
       now: 2,
       parentId: "branch-root",
     });
-    await appendTranscriptMessage(transcriptScope(), {
+    await appendTestTranscriptMessage({
       eventId: "active-sibling",
-      message: { role: "assistant", content: "active branch" },
+      role: "assistant",
+      content: "active branch",
       now: 3,
       parentId: "branch-root",
     });
@@ -1526,7 +1593,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.sessionId = switched.entry.sessionId;
     const before = loadTranscriptEventsSync(transcriptScope());
     expect(resolveSessionTranscriptActiveLeafEntryId(before)).toBe("copied-leaf");
-    const { context, respond, send } = createChatRequestFixture();
 
     await send({
       idempotencyKey: "idem-rotated-exact-leaf",
@@ -1548,22 +1614,27 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("rejects an expected sibling that is off the active path", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-off-path-sibling-");
-    await appendTranscriptMessage(transcriptScope(), {
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-off-path-sibling-",
+    );
+    await appendTestTranscriptMessage({
       eventId: "branch-root",
-      message: { role: "user", content: "root" },
+      role: "user",
+      content: "root",
       now: 1,
       parentId: null,
     });
-    await appendTranscriptMessage(transcriptScope(), {
+    await appendTestTranscriptMessage({
       eventId: "off-path-sibling",
-      message: { role: "assistant", content: "abandoned" },
+      role: "assistant",
+      content: "abandoned",
       now: 2,
       parentId: "branch-root",
     });
-    await appendTranscriptMessage(transcriptScope(), {
+    await appendTestTranscriptMessage({
       eventId: "active-sibling",
-      message: { role: "assistant", content: "active" },
+      role: "assistant",
+      content: "active",
       now: 3,
       parentId: "branch-root",
     });
@@ -1573,7 +1644,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       path: suiteDatabasePath,
     });
     const before = loadTranscriptEventsSync(transcriptScope());
-    const { context, respond, send } = createChatRequestFixture();
 
     await send({
       idempotencyKey: "idem-off-path-sibling",
@@ -1594,8 +1664,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("allows an expected empty leaf when the transcript is still empty", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-matching-empty-leaf-");
-    const { context, respond, send } = createChatRequestFixture();
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-matching-empty-leaf-",
+    );
 
     await send({
       idempotencyKey: "idem-matching-empty-leaf",
@@ -1616,14 +1687,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ["matching", { expectedLeafEntryId: "current-leaf" }],
     ["absent", {}],
   ])("allows a %s expected active leaf", async (_name, requestParams) => {
-    await createGatewayUserTurnSqliteFixture(`openclaw-chat-send-${_name}-leaf-`);
-    await appendTranscriptMessage(transcriptScope(), {
+    const { context, respond, send } = await createSqliteChatRequest(
+      `openclaw-chat-send-${_name}-leaf-`,
+    );
+    await appendTestTranscriptMessage({
       eventId: "current-leaf",
-      message: { role: "user", content: "existing" },
+      role: "user",
+      content: "existing",
       now: 1,
       parentId: null,
     });
-    const { context, respond, send } = createChatRequestFixture();
 
     await send({
       idempotencyKey: `idem-${_name}-leaf`,
@@ -1640,14 +1713,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("starts one normal turn when steer admission finds no direct owner", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-stale-steer-no-owner-");
-    await appendTranscriptMessage(transcriptScope(), {
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-stale-steer-no-owner-",
+    );
+    await appendTestTranscriptMessage({
       eventId: "current-leaf",
-      message: { role: "assistant", content: "finished" },
+      role: "assistant",
+      content: "finished",
       now: 1,
       parentId: null,
     });
-    const { context, respond, send } = createChatRequestFixture();
 
     await send({
       idempotencyKey: "idem-stale-steer-no-owner",
@@ -1669,21 +1744,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("injects targetless steer into the exact direct owner without a client run id", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-no-leaf-");
-    const { context, respond, send } = createChatRequestFixture();
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-targetless-no-leaf-",
+    );
     const queueMessage = vi.fn(async () => {});
-    const operation = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
-    });
-    bindTestToolAuthority(operation);
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: () => {},
-      messageInjection: { isAvailable: () => true, queueMessage },
-    });
+    const operation = beginMessageInjectionOperation({ queueMessage });
 
     try {
       await send({
@@ -1712,14 +1777,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   ])(
     "starts the selected idle session despite %s activity",
     async (_name, activeSessionKey, slug) => {
-      await createGatewayUserTurnSqliteFixture(`openclaw-chat-send-idle-${slug}-`);
-      const { context, respond, send } = createChatRequestFixture();
-      const unrelated = replyRunRegistry.begin({
+      const { context, respond, send } = await createSqliteChatRequest(
+        `openclaw-chat-send-idle-${slug}-`,
+      );
+      const unrelated = beginActiveReplyOperation({
         sessionKey: activeSessionKey,
         sessionId: `${mockState.sessionId}-${slug}`,
-        resetTriggered: false,
       });
-      unrelated.setPhase("running");
 
       try {
         await send({
@@ -1743,15 +1807,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   );
 
   it("falls back visibly when the direct owner has a non-injectable CLI backend", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-cli-steer-fallback-");
-    const { context, respond, send } = createChatRequestFixture();
-    const operation = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-cli-steer-fallback-",
+    );
+    const operation = beginActiveReplyOperation({
+      backend: { kind: "cli", runId: "cli-run", cancel: vi.fn() },
     });
-    operation.setPhase("running");
-    operation.attachBackend({ kind: "cli", runId: "cli-run", cancel: vi.fn() });
 
     try {
       await send({
@@ -1774,21 +1835,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("deduplicates a retried targetless steer before a second injection", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-idempotent-");
-    const { context, send } = createChatRequestFixture();
+    const { context, send } = await createSqliteChatRequest("openclaw-chat-send-steer-idempotent-");
     const queueMessage = vi.fn(async () => {});
-    const operation = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
-    });
-    bindTestToolAuthority(operation);
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: vi.fn(),
-      messageInjection: { isAvailable: () => true, queueMessage },
-    });
+    const operation = beginMessageInjectionOperation({ cancel: vi.fn(), queueMessage });
 
     try {
       await send({
@@ -1808,26 +1857,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("injects a matching leaf-bound targetless steer through the legacy backend seam", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-steer-");
-    await appendTranscriptMessage(transcriptScope(), {
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-targetless-steer-",
+    );
+    await appendTestTranscriptMessage({
       eventId: "current-leaf",
-      message: { role: "assistant", content: "working" },
+      role: "assistant",
+      content: "working",
       now: 1,
       parentId: null,
     });
-    const { context, respond, send } = createChatRequestFixture();
     const queueMessage = vi.fn(async () => {});
-    const operation = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
+    const operation = beginMessageInjectionOperation({
       originatingLeafEntryId: "current-leaf",
-    });
-    bindTestToolAuthority(operation);
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: () => {},
+      legacy: true,
       isStopped: () => false,
       queueMessage,
     });
@@ -1853,26 +1896,21 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("dispatches tool-bound input instead of injecting it into the active run", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-tool-bound-dispatch-");
-    await appendTranscriptMessage(transcriptScope(), {
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-tool-bound-dispatch-",
+    );
+    await appendTestTranscriptMessage({
       eventId: "current-leaf",
-      message: { role: "assistant", content: "working" },
+      role: "assistant",
+      content: "working",
       now: 1,
       parentId: null,
     });
-    const { context, respond, send } = createChatRequestFixture();
     const queueMessage = vi.fn(async () => {});
-    const operation = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
+    const operation = beginMessageInjectionOperation({
+      bindToolAuthority: false,
       originatingLeafEntryId: "current-leaf",
-    });
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: () => {},
-      messageInjection: { isAvailable: () => true, queueMessage },
+      queueMessage,
     });
     const toolBindings = { browser: { kind: "tab", tabId: 1, targetId: "target-1" } };
 
@@ -1919,30 +1957,23 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("falls back once without touching a successor when the captured owner ends", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-operation-aba-");
-    await appendTranscriptMessage(transcriptScope(), {
+    const { context, respond } = await createSqliteChatRequest(
+      "openclaw-chat-send-targetless-operation-aba-",
+    );
+    await appendTestTranscriptMessage({
       eventId: "current-leaf",
-      message: { role: "assistant", content: "working" },
+      role: "assistant",
+      content: "working",
       now: 1,
       parentId: null,
     });
-    const { context, respond } = createChatRequestFixture();
     const originalQueue = vi.fn(async () => {});
     const successorQueue = vi.fn(async () => {});
     const successorCancel = vi.fn();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
-    const original = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
+    const original = beginMessageInjectionOperation({
       originatingLeafEntryId: "current-leaf",
-    });
-    bindTestToolAuthority(original);
-    original.setPhase("running");
-    original.attachBackend({
-      kind: "embedded",
-      cancel: () => {},
-      messageInjection: { isAvailable: () => true, queueMessage: originalQueue },
+      queueMessage: originalQueue,
     });
     let successor: ReturnType<typeof replyRunRegistry.begin> | undefined;
 
@@ -1974,18 +2005,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
         async () => {
           original.complete();
-          successor = replyRunRegistry.begin({
-            sessionKey: "agent:main:main",
-            sessionId: mockState.sessionId,
-            resetTriggered: false,
+          successor = beginMessageInjectionOperation({
             originatingLeafEntryId: "current-leaf",
-          });
-          bindTestToolAuthority(successor);
-          successor.setPhase("running");
-          successor.attachBackend({
-            kind: "embedded",
             cancel: successorCancel,
-            messageInjection: { isAvailable: () => true, queueMessage: successorQueue },
+            queueMessage: successorQueue,
           });
           return true;
         },
@@ -2012,28 +2035,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("starts captured-operation injection before ACK and does not dispatch after owner clear", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-before-ack-");
-    const { context, respond, send } = createChatRequestFixture();
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-steer-before-ack-",
+    );
     const delivery = createDeferred();
-    const operation = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
-      originatingLeafEntryId: null,
-    });
-    bindTestToolAuthority(operation);
-    operation.setPhase("running");
     let reportAcceptance: ((accepted: boolean) => void) | undefined;
     const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
       expect(respond).not.toHaveBeenCalled();
       reportAcceptance = options?.onQueueAccepted;
       return delivery.promise;
     });
-    operation.attachBackend({
-      kind: "embedded",
+    const operation = beginMessageInjectionOperation({
+      originatingLeafEntryId: null,
       runId: "active-run",
-      cancel: () => {},
-      messageInjection: { isAvailable: () => true, queueMessage },
+      queueMessage,
     });
 
     const pendingSend = send({
@@ -2065,32 +2080,22 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("records accepted steering once across transcript, hooks, audit, and finalization", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-accounting-");
+    const { context, send } = await createSqliteChatRequest("openclaw-chat-send-steer-accounting-");
     mockState.hasMessageReceivedHooks = true;
-    mockState.savedMediaResults = [{ path: "/tmp/steer.png", contentType: "image/png" }];
+    setSavedMediaResults(["/tmp/steer.png", "image/png"]);
     const auditEvents: Array<{ reasonCode?: unknown; runId?: unknown }> = [];
     const disposeAudit = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
-    const { context, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
-    const operation = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
-      originatingLeafEntryId: null,
-    });
-    bindTestToolAuthority(operation);
-    operation.setPhase("running");
     const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore);
       await options?.userTurnTranscriptRecorder?.persistApproved();
     });
-    operation.attachBackend({
-      kind: "embedded",
+    const operation = beginMessageInjectionOperation({
+      originatingLeafEntryId: null,
       runId: "active-run",
       supportsQueueMessageImages: true,
       taskSuggestionDeliveryMode: "gateway",
-      cancel: () => {},
-      messageInjection: { isAvailable: () => true, queueMessage },
+      queueMessage,
     });
 
     try {
@@ -2098,7 +2103,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         idempotencyKey: "idem-steer-accounting",
         requestParams: {
           queueMode: "steer",
-          attachments: [{ mimeType: "image/png", content: TINY_PNG_BASE64 }],
+          attachments: [createImageAttachment()],
         },
         client: {
           connect: {
@@ -2153,24 +2158,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("records the resolved run for accepted leaf-only steering", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-leaf-steer-provenance-");
-    const { send } = createChatRequestFixture();
-    const operation = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
-      originatingLeafEntryId: null,
-    });
-    bindTestToolAuthority(operation);
-    operation.setPhase("running");
+    const { send } = await createSqliteChatRequest("openclaw-chat-send-leaf-steer-provenance-");
     const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
       await options?.userTurnTranscriptRecorder?.persistApproved();
     });
-    operation.attachBackend({
-      kind: "embedded",
+    const operation = beginMessageInjectionOperation({
+      originatingLeafEntryId: null,
       runId: "active-run",
-      cancel: () => {},
-      messageInjection: { isAvailable: () => true, queueMessage },
+      queueMessage,
     });
 
     try {
@@ -2190,7 +2185,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("hydrates and accepts reply injection before ACK without waiting for delivery", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-reply-steer-");
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-reply-steer-",
+    );
     mockState.hasMessageReceivedHooks = true;
     const hydration = createDeferred();
     mockState.replyContextWait = hydration.promise;
@@ -2201,26 +2198,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     };
     const auditEvents: Array<{ reasonCode?: unknown }> = [];
     const disposeAudit = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
-    const { context, respond, send } = createChatRequestFixture();
     const delivery = createDeferred();
     let reportAcceptance: ((accepted: boolean) => void) | undefined;
     const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
       reportAcceptance = options?.onQueueAccepted;
       return delivery.promise;
     });
-    const operation = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
+    const operation = beginMessageInjectionOperation({
       originatingLeafEntryId: "current-leaf",
-    });
-    bindTestToolAuthority(operation);
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
       runId: "run-a",
-      cancel: () => {},
-      messageInjection: { isAvailable: () => true, queueMessage },
+      queueMessage,
     });
 
     try {
@@ -2282,7 +2269,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("falls back once when reply hydration outlives its captured run", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-reply-steer-race-");
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-reply-steer-race-",
+    );
     const hydration = createDeferred();
     mockState.replyContextWait = hydration.promise;
     mockState.replyContextResult = {
@@ -2290,24 +2279,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       ReplyToBody: "quoted deployment status",
       ReplyToSender: "Alice",
     };
-    const { context, respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     const originalQueue = vi.fn(async () => {});
     const successorQueue = vi.fn(async () => {});
     const successorCancel = vi.fn();
-    const original = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
+    const original = beginMessageInjectionOperation({
       originatingLeafEntryId: "current-leaf",
-    });
-    bindTestToolAuthority(original);
-    original.setPhase("running");
-    original.attachBackend({
-      kind: "embedded",
       runId: "run-a",
-      cancel: () => {},
-      messageInjection: { isAvailable: () => true, queueMessage: originalQueue },
+      queueMessage: originalQueue,
     });
     let successor: ReturnType<typeof replyRunRegistry.begin> | undefined;
 
@@ -2324,19 +2303,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(respond).not.toHaveBeenCalled();
       expect(originalQueue).not.toHaveBeenCalled();
       original.complete();
-      successor = replyRunRegistry.begin({
-        sessionKey: "agent:main:main",
-        sessionId: mockState.sessionId,
-        resetTriggered: false,
+      successor = beginMessageInjectionOperation({
         originatingLeafEntryId: "current-leaf",
-      });
-      bindTestToolAuthority(successor);
-      successor.setPhase("running");
-      successor.attachBackend({
-        kind: "embedded",
         runId: "run-b",
         cancel: successorCancel,
-        messageInjection: { isAvailable: () => true, queueMessage: successorQueue },
+        queueMessage: successorQueue,
       });
       hydration.resolve();
       await pendingSend;
@@ -2375,7 +2346,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("keeps ordinary reply hydration after ACK when no injection target was captured", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-reply-no-steer-");
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-reply-no-steer-",
+    );
     const hydration = createDeferred();
     mockState.replyContextWait = hydration.promise;
     mockState.replyContextResult = {
@@ -2383,7 +2356,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       ReplyToBody: "quoted deployment status",
       ReplyToSender: "Alice",
     };
-    const { context, respond, send } = createChatRequestFixture();
 
     const pendingSend = send({
       idempotencyKey: "idem-reply-no-steer",
@@ -2420,28 +2392,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("falls back once when captured injection rejects acceptance", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-reject-");
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-steer-reject-",
+    );
     mockState.finalText = "fallback reply";
-    const { context, respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     const delivery = createDeferred();
-    const operation = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
-      originatingLeafEntryId: null,
-    });
-    bindTestToolAuthority(operation);
-    operation.setPhase("running");
     const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
       options?.onQueueAccepted?.(false);
       return delivery.promise;
     });
-    operation.attachBackend({
-      kind: "embedded",
+    const operation = beginMessageInjectionOperation({
+      originatingLeafEntryId: null,
       runId: "active-run",
-      cancel: () => {},
-      messageInjection: { isAvailable: () => true, queueMessage },
+      queueMessage,
     });
 
     await send({
@@ -2470,30 +2434,23 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("never aborts or replays onto a successor after unconfirmed acceptance", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-unconfirmed-");
-    const { context, send } = createChatRequestFixture();
+    const { context, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-steer-unconfirmed-",
+    );
     const delivery = createDeferred<{
       transcriptCommit: "unconfirmed";
       errorMessage: string;
     }>();
-    const first = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
-      originatingLeafEntryId: null,
-    });
-    bindTestToolAuthority(first);
-    first.setPhase("running");
     const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
       options?.onQueueAccepted?.(true);
       await options?.userTurnTranscriptRecorder?.persistApproved();
       return await delivery.promise;
     });
-    first.attachBackend({
-      kind: "embedded",
+    const first = beginMessageInjectionOperation({
+      originatingLeafEntryId: null,
       runId: "active-run",
       cancel: vi.fn(),
-      messageInjection: { isAvailable: () => true, queueMessage },
+      queueMessage,
     });
 
     await send({
@@ -2505,19 +2462,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(readPersistedUserMessages()[0]).not.toHaveProperty("__openclaw.steerTargetRunId");
     first.complete();
     const successorCancel = vi.fn();
-    const successor = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
+    const successor = beginMessageInjectionOperation({
       originatingLeafEntryId: null,
-    });
-    bindTestToolAuthority(successor);
-    successor.setPhase("running");
-    successor.attachBackend({
-      kind: "embedded",
       runId: "successor-run",
       cancel: successorCancel,
-      messageInjection: { isAvailable: () => true, queueMessage: vi.fn(async () => {}) },
+      queueMessage: vi.fn(async () => {}),
     });
     delivery.resolve({
       transcriptCommit: "unconfirmed",
@@ -2542,26 +2491,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("ACKs and dispatches once when captured injection throws synchronously", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-sync-reject-");
-    const { respond, send } = createChatRequestFixture();
+    const { respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-steer-sync-reject-",
+    );
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
-    const operation = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
-      originatingLeafEntryId: null,
-    });
-    bindTestToolAuthority(operation);
-    operation.setPhase("running");
     const queueMessage = vi.fn((): Promise<void> => {
       expect(respond).not.toHaveBeenCalled();
       throw new Error("synchronous rejection");
     });
-    operation.attachBackend({
-      kind: "embedded",
+    const operation = beginMessageInjectionOperation({
+      originatingLeafEntryId: null,
       runId: "active-run",
-      cancel: () => {},
-      messageInjection: { isAvailable: () => true, queueMessage },
+      queueMessage,
     });
 
     try {
@@ -2584,32 +2525,27 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("falls back once when captured owner evidence is stale", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-stale-owner-");
-    await appendTranscriptMessage(transcriptScope(), {
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-steer-stale-owner-",
+    );
+    await appendTestTranscriptMessage({
       eventId: "current-leaf",
-      message: { role: "assistant", content: "stale tool work" },
+      role: "assistant",
+      content: "stale tool work",
       now: 1,
       parentId: null,
     });
-    const { context, respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     vi.useFakeTimers({ toFake: ["Date"] });
-    const operation = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
-      originatingLeafEntryId: "leaf-before-stale-run-output",
-    });
-    bindTestToolAuthority(operation);
-    operation.setPhase("running");
     const staleQueue = vi.fn(async () => {});
     const staleCancel = vi.fn();
-    operation.attachBackend({
-      kind: "embedded",
+    const operation = beginMessageInjectionOperation({
+      originatingLeafEntryId: "leaf-before-stale-run-output",
       runId: "active-run",
       cancel: staleCancel,
       isStreaming: () => false,
       isStopped: () => false,
+      legacy: true,
       queueMessage: staleQueue,
     });
 
@@ -2666,16 +2602,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         reason: "command-metadata",
       },
     ];
-    const { context, send } = createChatRequestFixture();
-
-    await send({
+    const { context } = await sendNewChatRequest({
       idempotencyKey: "idem-command-session-metadata",
       message: "/goal pause waiting",
       waitFor: "none",
     });
 
     await waitForAssertion(() => {
-      expect(context.broadcastToConnIds.mock.calls.length).toBe(1);
+      expect(
+        context.broadcastToConnIds.mock.calls.map(
+          ([, payload]) => (payload as { reason?: unknown }).reason,
+        ),
+      ).toEqual(["command-metadata", "chat.run.settled"]);
     });
     const call = mockCallAt(context.broadcastToConnIds, 0);
     const payload = call?.[1] as { ts?: unknown } | undefined;
@@ -2687,6 +2625,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       reason: "command-metadata",
     });
     expect(typeof payload?.ts).toBe("number");
+    expect(mockCallAt(context.broadcastToConnIds, 1)).toEqual([
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        reason: "chat.run.settled",
+        ts: expect.any(Number),
+      }),
+      new Set(["conn-1"]),
+      { agentId: "main", dropIfSlow: true },
+    ]);
     await waitForAssertion(() => {
       expect(context.dedupe.has("chat:idem-command-session-metadata")).toBe(true);
     });
@@ -2701,9 +2650,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
     ];
     mockState.dispatchErrorAfterDelivery = new Error("delivery failed after metadata");
-    const { context, send } = createChatRequestFixture();
-
-    await send({
+    const { context } = await sendNewChatRequest({
       idempotencyKey: "idem-command-session-metadata-error",
       message: "/goal pause waiting",
       expectBroadcast: false,
@@ -2723,9 +2670,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("persists non-agent delivery mirrors with the chat send idempotency key", async () => {
     await createTranscriptFixture("openclaw-chat-send-final-idem-");
     mockState.finalText = "mirror text";
-    const { send } = createChatRequestFixture();
-
-    await send({
+    await sendNewChatRequest({
       idempotencyKey: "idem-final-mirror",
       expectBroadcast: false,
     });
@@ -2784,9 +2729,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
       },
     );
-    const { send } = createChatRequestFixture();
-
-    await send({
+    await sendNewChatRequest({
       idempotencyKey: "idem-plugin-binding-history",
       expectBroadcast: false,
     });
@@ -2814,9 +2757,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-managed-media-failure-");
     const source = "data:audio/mpeg;base64,not-valid!";
     mockState.finalPayload = { mediaUrl: source };
-    const { send } = createChatRequestFixture();
-
-    const payload = await send({ idempotencyKey: "idem-managed-media-failure" });
+    const { payload } = await sendNewChatRequest({
+      idempotencyKey: "idem-managed-media-failure",
+    });
 
     const serialized = JSON.stringify(payload?.message);
     expect(serialized).toContain(
@@ -2826,6 +2769,35 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(Buffer.byteLength(serialized)).toBeLessThan(1_024);
     const assistantEntries = await readActiveAssistantTranscriptMessages();
     expect(JSON.stringify(assistantEntries)).not.toContain(source);
+  });
+
+  it("keeps managed media failures visible when rewriting an existing assistant row", async () => {
+    await createTranscriptFixture("openclaw-chat-send-managed-media-partial-failure-");
+    const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+    const mirrorKey = "idem-managed-media-partial-failure:internal-source-reply:0";
+    await appendSourceReplyMirrorEntry({
+      idempotencyKey: mirrorKey,
+      text: `Artifacts ready\nMEDIA:${mediaUrl}`,
+    });
+    setAgentRunReplies([
+      createMainSourceReply({
+        idempotencyKey: mirrorKey,
+        text: "Artifacts ready\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
+        mediaUrls: [mediaUrl],
+      }),
+    ]);
+    const { send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-managed-media-partial-failure",
+      message: "hello from codex",
+    });
+
+    const assistantEntries = await readActiveAssistantTranscriptMessages();
+    expect(JSON.stringify(assistantEntries[0])).toContain(
+      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+    );
+    expect(JSON.stringify(assistantEntries[0])).not.toContain("MEDIA:");
   });
 
   it("does not cross a plugin-bound session rotation during finalization", async () => {
@@ -2841,9 +2813,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
       },
     );
-    const { context, send } = createChatRequestFixture();
-
-    await send({
+    const { context } = await sendNewChatRequest({
       idempotencyKey: "idem-plugin-binding-rotation",
       expectBroadcast: false,
     });
@@ -2870,9 +2840,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
       },
     );
-    const { context, send } = createChatRequestFixture();
-
-    await send({
+    const { context } = await sendNewChatRequest({
       idempotencyKey: "idem-plugin-binding-blocked",
       expectBroadcast: false,
     });
@@ -2902,9 +2870,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
       { kind: "final", payload: { text: "derived reply without owner" } },
     ];
-    const { context, send } = createChatRequestFixture();
-
-    await send({
+    const { context } = await sendNewChatRequest({
       idempotencyKey: "idem-plugin-binding-partial",
       expectBroadcast: false,
     });
@@ -2931,9 +2897,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
       },
     );
-    const { context, send } = createChatRequestFixture();
-
-    await send({
+    const { context } = await sendNewChatRequest({
       idempotencyKey: "idem-source-mirror-legacy",
       expectBroadcast: false,
     });
@@ -2987,10 +2951,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("registers default global tool-event recipients for unscoped global sends", async () => {
     await createTranscriptFixture("openclaw-chat-send-global-tool-events-");
-    mockState.config = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-      session: { scope: "global" },
-    };
+    useGlobalSessionScope();
     mockState.finalText = "ok";
     mockState.triggerAgentRunStart = true;
     mockState.agentRunId = "run-current-global";
@@ -3029,10 +2990,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("registers selected global alias tool-event recipients against the canonical run key", async () => {
     await createTranscriptFixture("openclaw-chat-send-global-alias-tool-events-");
-    mockState.config = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-      session: { scope: "global" },
-    };
+    useGlobalSessionScope();
     mockState.sessionEntry = { canonicalKey: "global" };
     mockState.finalText = "ok";
     mockState.triggerAgentRunStart = true;
@@ -3072,10 +3030,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("scopes selected-agent global aliases before loading chat session state", async () => {
     await createTranscriptFixture("openclaw-chat-send-global-alias-load-");
-    mockState.config = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-      session: { scope: "global" },
-    };
+    useGlobalSessionScope();
     mockState.sessionEntry = { canonicalKey: "global" };
     const { send } = createChatRequestFixture();
 
@@ -3093,14 +3048,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("accepts selected-agent global main aliases before loading chat session state", async () => {
     await createTranscriptFixture("openclaw-chat-send-global-main-alias-load-");
-    mockState.config = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-      session: { scope: "global" },
-    };
+    useGlobalSessionScope();
     mockState.sessionEntry = { canonicalKey: "global" };
-    const { respond, send } = createChatRequestFixture();
-
-    await send({
+    const { respond } = await sendNewChatRequest({
       sessionKey: "main",
       requestParams: { agentId: "work" },
       idempotencyKey: "idem-global-main-alias-load",
@@ -3125,9 +3075,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       agents: { list: [{ id: "main", default: true }] },
       session: { scope: "per-sender" },
     };
-    const { respond, send } = createChatRequestFixture();
-
-    await send({
+    const { respond } = await sendNewChatRequest({
       sessionKey: "global",
       requestParams: { agentId: "main" },
       idempotencyKey: "idem-per-sender-global-alias",
@@ -3161,10 +3109,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("registers selected-agent global aliases under the canonical abort key", async () => {
     await createTranscriptFixture("openclaw-chat-send-global-alias-abort-key-");
-    mockState.config = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-      session: { scope: "global" },
-    };
+    useGlobalSessionScope();
     mockState.sessionEntry = { canonicalKey: "global" };
     let releaseDispatch: (() => void) | undefined;
     mockState.dispatchWait = new Promise((resolve) => {
@@ -3190,10 +3135,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("scopes chat history global aliases before loading session state", async () => {
     await createTranscriptFixture("openclaw-chat-history-global-alias-load-");
-    mockState.config = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-      session: { scope: "global" },
-    };
+    useGlobalSessionScope();
     mockState.sessionEntry = { canonicalKey: "global" };
     const { context, respond } = createChatRequestFixture();
     mockState.loadSessionEntryCalls = [];
@@ -3263,19 +3205,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("persists agent-run audio replies emitted as media-bearing block payloads", async () => {
-    await createTranscriptFixture("openclaw-chat-send-agent-audio-");
-    const transcriptDir = path.dirname(mockState.transcriptPath);
-    const audioPath = path.join(transcriptDir, "reply.mp3");
-    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
-    mockState.config = {
-      agents: {
-        defaults: {
-          workspace: transcriptDir,
-        },
-      },
-    };
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
+    const { audioPath } = await createAudioTranscriptFixture(
+      "openclaw-chat-send-agent-audio-",
+      "reply.mp3",
+    );
+    setAgentRunReplies([
       {
         kind: "block",
         payload: {
@@ -3284,7 +3218,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           trustedLocalMedia: true,
         },
       },
-    ];
+    ]);
     const { send } = createChatRequestFixture();
 
     await send({
@@ -3317,9 +3251,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("replaces a runtime-owned media reply instead of appending a duplicate assistant", async () => {
     await withTranscriptFixtureState("openclaw-chat-send-owned-media-", async (fixtureDir) => {
       const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-      const savedImagePath = path.join(fixtureDir, "reply.png");
-      fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-      mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+      writeSavedPng(fixtureDir, "reply.png");
       await appendSourceReplyMirrorEntry({
         idempotencyKey: "older-distinct-assistant",
         text: "A distinct earlier reply.",
@@ -3332,8 +3264,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         provider: "openai",
         model: "codex",
       });
-      mockState.triggerAgentRunStart = true;
-      mockState.dispatchedReplies = [
+      setAgentRunReplies([
         {
           kind: "final",
           payload: setReplyPayloadMetadata(
@@ -3348,7 +3279,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             },
           ),
         },
-      ];
+      ]);
       const { send } = createChatRequestFixture();
 
       await send({
@@ -3376,10 +3307,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await withTranscriptFixtureState(
       "openclaw-chat-send-disposed-media-owner-",
       async (fixtureDir) => {
-        const savedImagePath = path.join(fixtureDir, "reply.png");
-        const mediaUrl = savedImagePath;
-        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        const mediaUrl = writeSavedPng(fixtureDir, "reply.png");
         await appendSourceReplyMirrorEntry({
           text: `Stale reply\nMEDIA:${mediaUrl}`,
           provider: "openai",
@@ -3454,20 +3382,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await withTranscriptFixtureState(
       "openclaw-chat-send-multiple-assistant-media-",
       async (fixtureDir) => {
-        const firstMediaUrl = path.join(fixtureDir, "first.png");
-        const secondMediaUrl = path.join(fixtureDir, "second.png");
-        fs.writeFileSync(firstMediaUrl, Buffer.from(TINY_PNG_BASE64, "base64"));
-        fs.writeFileSync(secondMediaUrl, Buffer.from(TINY_PNG_BASE64, "base64"));
+        const firstMediaUrl = writeSavedPng(fixtureDir, "first.png");
+        const secondMediaUrl = writeSavedPng(fixtureDir, "second.png");
         await appendSourceReplyMirrorEntry({
           text: "Older assistant reply",
           provider: "openai",
           model: "gpt-5.6-luna",
           now: Date.now(),
         });
-        mockState.savedMediaResults = [
-          { path: firstMediaUrl, contentType: "image/png" },
-          { path: secondMediaUrl, contentType: "image/png" },
-        ];
         mockState.triggerAgentRunStart = true;
         mockState.runtimeAssistantTextsBeforeDelivery = [
           `First image\nMEDIA:${firstMediaUrl}`,
@@ -3523,18 +3445,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("persists auto-TTS final media as audio-only so webchat does not duplicate assistant text", async () => {
-    const transcriptDir = await createTranscriptFixture("openclaw-chat-send-agent-tts-final-");
-    const audioPath = path.join(transcriptDir, "tts.mp3");
-    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
-    mockState.config = {
-      agents: {
-        defaults: {
-          workspace: transcriptDir,
-        },
-      },
-    };
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
+    const { audioPath } = await createAudioTranscriptFixture("openclaw-chat-send-agent-tts-final-");
+    setAgentRunReplies([
       {
         kind: "final",
         payload: {
@@ -3547,7 +3459,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           ttsSupplement: { spokenText: "This text is already in the model transcript." },
         },
       },
-    ];
+    ]);
     const { send } = createChatRequestFixture();
 
     await send({
@@ -3605,28 +3517,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: mirrorIdempotencyKey,
       text: "Codex source reply",
     });
-    mockState.triggerAgentRunStart = true;
-    const sourceReply = setReplyPayloadMetadata(
-      {
-        text: "Codex source reply",
-      },
-      {
-        sourceReplyTranscriptMirror: {
-          sessionKey: "main",
-          text: "Codex source reply",
-          idempotencyKey: mirrorIdempotencyKey,
-        },
-      },
-    );
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: sourceReply,
-      },
-    ];
-    const { context, send } = createChatRequestFixture();
-
-    const broadcast = await send({
+    const sourceReply = createMainSourceReply({
+      idempotencyKey: mirrorIdempotencyKey,
+      text: "Codex source reply",
+    });
+    setAgentRunReplies([sourceReply]);
+    const { context, payload: broadcast } = await sendNewChatRequest({
       idempotencyKey: "idem-agent-source-reply",
       message: "hello from codex",
     });
@@ -3651,8 +3547,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("broadcasts agent-run status notices without source reply mirrors", async () => {
     await createTranscriptFixture("openclaw-chat-send-agent-status-notice-");
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
+    setAgentRunReplies([
       {
         kind: "final",
         payload: {
@@ -3660,10 +3555,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           isStatusNotice: true,
         },
       },
-    ];
-    const { send } = createChatRequestFixture();
-
-    const broadcast = await send({
+    ]);
+    const { payload: broadcast } = await sendNewChatRequest({
       idempotencyKey: "idem-agent-status-notice",
       message: "/compact",
     });
@@ -3680,8 +3573,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("broadcasts a block status once while ignoring an ordinary agent final", async () => {
     await createTranscriptFixture("openclaw-chat-send-agent-block-status-notice-");
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
+    setAgentRunReplies([
       {
         kind: "block",
         payload: {
@@ -3695,10 +3587,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           text: "ordinary provider final",
         },
       },
-    ];
-    const { context, send } = createChatRequestFixture();
-
-    const broadcast = await send({
+    ]);
+    const { context, payload: broadcast } = await sendNewChatRequest({
       idempotencyKey: "idem-agent-block-status-notice",
       message: "/model openai/gpt-5.5 keep going",
     });
@@ -3716,8 +3606,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("ignores non-status block and final payloads during source finalization", async () => {
     await createTranscriptFixture("openclaw-chat-send-agent-non-status-replies-");
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
+    setAgentRunReplies([
       {
         kind: "block",
         payload: {
@@ -3730,10 +3619,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           text: "ordinary final",
         },
       },
-    ];
-    const { context, send } = createChatRequestFixture();
-
-    await send({
+    ]);
+    const { context } = await sendNewChatRequest({
       idempotencyKey: "idem-agent-non-status-replies",
       expectBroadcast: false,
       waitFor: "dedupe",
@@ -3749,9 +3636,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "openclaw-chat-send-agent-source-reply-media-",
       async (fixtureDir) => {
         const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-        const savedImagePath = path.join(fixtureDir, "source-reply.png");
-        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        writeSavedPng(fixtureDir, "source-reply.png");
         const mirrorIdempotencyKey = "idem-agent-source-reply-media:internal-source-reply:0";
         const updatedAt = Date.parse("2026-05-18T11:00:00.000Z");
         const rewrittenAt = Date.parse("2026-05-18T11:05:00.000Z");
@@ -3764,27 +3649,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           idempotencyKey: mirrorIdempotencyKey,
           text: "Codex source reply with media",
         });
-        mockState.triggerAgentRunStart = true;
-        const sourceReply = setReplyPayloadMetadata(
-          {
-            text: "Codex source reply with media",
-            mediaUrls: [mediaUrl],
-          },
-          {
-            sourceReplyTranscriptMirror: {
-              sessionKey: "main",
-              text: "Codex source reply with media",
-              mediaUrls: [mediaUrl],
-              idempotencyKey: mirrorIdempotencyKey,
-            },
-          },
-        );
-        mockState.dispatchedReplies = [
-          {
-            kind: "final",
-            payload: sourceReply,
-          },
-        ];
+        const sourceReply = createMainSourceReply({
+          idempotencyKey: mirrorIdempotencyKey,
+          text: "Codex source reply with media",
+          mediaUrls: [mediaUrl],
+        });
+        setAgentRunReplies([sourceReply]);
         const { send } = createChatRequestFixture();
 
         vi.useFakeTimers({ toFake: ["Date"] });
@@ -3827,34 +3697,19 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "openclaw-chat-send-agent-source-reply-sqlite-",
       async (fixtureDir) => {
         const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-        const savedImagePath = path.join(fixtureDir, "source-reply-sqlite.png");
-        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        writeSavedPng(fixtureDir, "source-reply-sqlite.png");
         const mirrorIdempotencyKey = "idem-source-reply-sqlite:internal-source-reply:0";
         await appendSourceReplyMirrorEntry({
           idempotencyKey: mirrorIdempotencyKey,
           text: "SQLite source reply with media",
         });
-        mockState.triggerAgentRunStart = true;
-        mockState.dispatchedReplies = [
-          {
-            kind: "final",
-            payload: setReplyPayloadMetadata(
-              {
-                text: "SQLite source reply with media",
-                mediaUrls: [mediaUrl],
-              },
-              {
-                sourceReplyTranscriptMirror: {
-                  sessionKey: "main",
-                  text: "SQLite source reply with media",
-                  mediaUrls: [mediaUrl],
-                  idempotencyKey: mirrorIdempotencyKey,
-                },
-              },
-            ),
-          },
-        ];
+        setAgentRunReplies([
+          createMainSourceReply({
+            idempotencyKey: mirrorIdempotencyKey,
+            text: "SQLite source reply with media",
+            mediaUrls: [mediaUrl],
+          }),
+        ]);
         const { send } = createChatRequestFixture();
 
         await send({
@@ -3878,34 +3733,19 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       async (fixtureDir) => {
         const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
         const replyText = "Source reply with media";
-        const savedImagePath = path.join(fixtureDir, "source-reply-deduped.png");
-        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        writeSavedPng(fixtureDir, "source-reply-deduped.png");
         const mirrorIdempotencyKey = "idem-agent-source-reply-deduped:internal-source-reply:0";
         await appendSourceReplyMirrorEntry({
           text:
             resolveMirroredTranscriptText({ text: replyText, mediaUrls: [mediaUrl] }) ?? "media",
         });
-        mockState.triggerAgentRunStart = true;
-        mockState.dispatchedReplies = [
-          {
-            kind: "final",
-            payload: setReplyPayloadMetadata(
-              {
-                text: replyText,
-                mediaUrls: [mediaUrl],
-              },
-              {
-                sourceReplyTranscriptMirror: {
-                  sessionKey: "main",
-                  text: replyText,
-                  mediaUrls: [mediaUrl],
-                  idempotencyKey: mirrorIdempotencyKey,
-                },
-              },
-            ),
-          },
-        ];
+        setAgentRunReplies([
+          createMainSourceReply({
+            idempotencyKey: mirrorIdempotencyKey,
+            text: replyText,
+            mediaUrls: [mediaUrl],
+          }),
+        ]);
         const { send } = createChatRequestFixture();
 
         const broadcast = await send({
@@ -3932,14 +3772,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       async (fixtureDir) => {
         const firstMediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
         const secondMediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-        const firstSavedImagePath = path.join(fixtureDir, "source-reply-1.png");
-        const secondSavedImagePath = path.join(fixtureDir, "source-reply-2.png");
-        fs.writeFileSync(firstSavedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-        fs.writeFileSync(secondSavedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-        mockState.savedMediaResults = [
-          { path: firstSavedImagePath, contentType: "image/png" },
-          { path: secondSavedImagePath, contentType: "image/png" },
-        ];
+        writeSavedPng(fixtureDir, "source-reply-1.png");
+        writeSavedPng(fixtureDir, "source-reply-2.png");
         const firstMirrorKey = "idem-agent-source-reply-multi:internal-source-reply:0";
         const secondMirrorKey = "idem-agent-source-reply-multi:internal-source-reply:1";
         await appendSourceReplyMirrorEntry({
@@ -3950,43 +3784,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           idempotencyKey: secondMirrorKey,
           text: "Second source reply",
         });
-        mockState.triggerAgentRunStart = true;
-        mockState.dispatchedReplies = [
-          {
-            kind: "final",
-            payload: setReplyPayloadMetadata(
-              {
-                text: "First source reply",
-                mediaUrls: [firstMediaUrl],
-              },
-              {
-                sourceReplyTranscriptMirror: {
-                  sessionKey: "main",
-                  text: "First source reply",
-                  mediaUrls: [firstMediaUrl],
-                  idempotencyKey: firstMirrorKey,
-                },
-              },
-            ),
-          },
-          {
-            kind: "final",
-            payload: setReplyPayloadMetadata(
-              {
-                text: "Second source reply",
-                mediaUrls: [secondMediaUrl],
-              },
-              {
-                sourceReplyTranscriptMirror: {
-                  sessionKey: "main",
-                  text: "Second source reply",
-                  mediaUrls: [secondMediaUrl],
-                  idempotencyKey: secondMirrorKey,
-                },
-              },
-            ),
-          },
-        ];
+        setAgentRunReplies([
+          createMainSourceReply({
+            idempotencyKey: firstMirrorKey,
+            text: "First source reply",
+            mediaUrls: [firstMediaUrl],
+          }),
+          createMainSourceReply({
+            idempotencyKey: secondMirrorKey,
+            text: "Second source reply",
+            mediaUrls: [secondMediaUrl],
+          }),
+        ]);
         const { send } = createChatRequestFixture();
 
         const broadcast = await send({
@@ -4016,57 +3825,26 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       async (fixtureDir) => {
         const firstMediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
         const secondMediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-        const firstSavedImagePath = path.join(fixtureDir, "source-reply-backed.png");
-        const secondSavedImagePath = path.join(fixtureDir, "source-reply-missing.png");
-        fs.writeFileSync(firstSavedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-        fs.writeFileSync(secondSavedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-        mockState.savedMediaResults = [
-          { path: firstSavedImagePath, contentType: "image/png" },
-          { path: secondSavedImagePath, contentType: "image/png" },
-        ];
+        writeSavedPng(fixtureDir, "source-reply-backed.png");
+        writeSavedPng(fixtureDir, "source-reply-missing.png");
         const backedMirrorKey = "idem-agent-source-reply-partial:internal-source-reply:0";
         const missingMirrorKey = "idem-agent-source-reply-partial:internal-source-reply:1";
         await appendSourceReplyMirrorEntry({
           idempotencyKey: backedMirrorKey,
           text: "Backed source reply",
         });
-        mockState.triggerAgentRunStart = true;
-        mockState.dispatchedReplies = [
-          {
-            kind: "final",
-            payload: setReplyPayloadMetadata(
-              {
-                text: "Backed source reply",
-                mediaUrls: [firstMediaUrl],
-              },
-              {
-                sourceReplyTranscriptMirror: {
-                  sessionKey: "main",
-                  text: "Backed source reply",
-                  mediaUrls: [firstMediaUrl],
-                  idempotencyKey: backedMirrorKey,
-                },
-              },
-            ),
-          },
-          {
-            kind: "final",
-            payload: setReplyPayloadMetadata(
-              {
-                text: "Missing mirror source reply",
-                mediaUrls: [secondMediaUrl],
-              },
-              {
-                sourceReplyTranscriptMirror: {
-                  sessionKey: "main",
-                  text: "Missing mirror source reply",
-                  mediaUrls: [secondMediaUrl],
-                  idempotencyKey: missingMirrorKey,
-                },
-              },
-            ),
-          },
-        ];
+        setAgentRunReplies([
+          createMainSourceReply({
+            idempotencyKey: backedMirrorKey,
+            text: "Backed source reply",
+            mediaUrls: [firstMediaUrl],
+          }),
+          createMainSourceReply({
+            idempotencyKey: missingMirrorKey,
+            text: "Missing mirror source reply",
+            mediaUrls: [secondMediaUrl],
+          }),
+        ]);
         const { send } = createChatRequestFixture();
 
         const broadcast = await send({
@@ -4093,9 +3871,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "openclaw-chat-send-agent-source-reply-text-tail-",
       async (fixtureDir) => {
         const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-        const savedImagePath = path.join(fixtureDir, "source-reply-text-tail.png");
-        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        writeSavedPng(fixtureDir, "source-reply-text-tail.png");
         const mediaMirrorKey = "idem-agent-source-reply-text-tail:internal-source-reply:0";
         const textMirrorKey = "idem-agent-source-reply-text-tail:internal-source-reply:1";
         await appendSourceReplyMirrorEntry({
@@ -4106,41 +3882,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           idempotencyKey: textMirrorKey,
           text: "Text-only source reply",
         });
-        mockState.triggerAgentRunStart = true;
-        mockState.dispatchedReplies = [
-          {
-            kind: "final",
-            payload: setReplyPayloadMetadata(
-              {
-                text: "Media source reply",
-                mediaUrls: [mediaUrl],
-              },
-              {
-                sourceReplyTranscriptMirror: {
-                  sessionKey: "main",
-                  text: "Media source reply",
-                  mediaUrls: [mediaUrl],
-                  idempotencyKey: mediaMirrorKey,
-                },
-              },
-            ),
-          },
-          {
-            kind: "final",
-            payload: setReplyPayloadMetadata(
-              {
-                text: "Text-only source reply",
-              },
-              {
-                sourceReplyTranscriptMirror: {
-                  sessionKey: "main",
-                  text: "Text-only source reply",
-                  idempotencyKey: textMirrorKey,
-                },
-              },
-            ),
-          },
-        ];
+        setAgentRunReplies([
+          createMainSourceReply({
+            idempotencyKey: mediaMirrorKey,
+            text: "Media source reply",
+            mediaUrls: [mediaUrl],
+          }),
+          createMainSourceReply({
+            idempotencyKey: textMirrorKey,
+            text: "Text-only source reply",
+          }),
+        ]);
         const { send } = createChatRequestFixture();
 
         const broadcast = await send({
@@ -4167,35 +3919,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "openclaw-chat-send-agent-source-reply-collision-",
       async (fixtureDir) => {
         const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-        const savedImagePath = path.join(fixtureDir, "source-reply-collision.png");
-        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        writeSavedPng(fixtureDir, "source-reply-collision.png");
         const collidingMirrorKey = "idem-agent-source-reply-collision:internal-source-reply:0";
         await appendSourceReplyMirrorEntry({
           idempotencyKey: collidingMirrorKey,
           text: "Existing assistant content",
           model: "gateway-injected",
         });
-        mockState.triggerAgentRunStart = true;
-        mockState.dispatchedReplies = [
-          {
-            kind: "final",
-            payload: setReplyPayloadMetadata(
-              {
-                text: "Source reply with media",
-                mediaUrls: [mediaUrl],
-              },
-              {
-                sourceReplyTranscriptMirror: {
-                  sessionKey: "main",
-                  text: "Source reply with media",
-                  mediaUrls: [mediaUrl],
-                  idempotencyKey: collidingMirrorKey,
-                },
-              },
-            ),
-          },
-        ];
+        setAgentRunReplies([
+          createMainSourceReply({
+            idempotencyKey: collidingMirrorKey,
+            text: "Source reply with media",
+            mediaUrls: [mediaUrl],
+          }),
+        ]);
         const { send } = createChatRequestFixture();
 
         const broadcast = await send({
@@ -4221,28 +3958,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "openclaw-chat-send-agent-source-reply-media-only-",
       async (fixtureDir) => {
         const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-        const savedImagePath = path.join(fixtureDir, "source-reply-media-only.png");
-        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        writeSavedPng(fixtureDir, "source-reply-media-only.png");
         const missingMirrorKey = "idem-agent-source-reply-media-only:internal-source-reply:0";
-        mockState.triggerAgentRunStart = true;
-        mockState.dispatchedReplies = [
-          {
-            kind: "final",
-            payload: setReplyPayloadMetadata(
-              {
-                mediaUrls: [mediaUrl],
-              },
-              {
-                sourceReplyTranscriptMirror: {
-                  sessionKey: "main",
-                  mediaUrls: [mediaUrl],
-                  idempotencyKey: missingMirrorKey,
-                },
-              },
-            ),
-          },
-        ];
+        setAgentRunReplies([
+          createMainSourceReply({ idempotencyKey: missingMirrorKey, mediaUrls: [mediaUrl] }),
+        ]);
         const { send } = createChatRequestFixture();
 
         const broadcast = await send({
@@ -4265,9 +3985,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "openclaw-chat-send-agent-source-reply-media-only-sibling-",
       async (fixtureDir) => {
         const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-        const savedImagePath = path.join(fixtureDir, "source-reply-media-only-sibling.png");
-        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        writeSavedPng(fixtureDir, "source-reply-media-only-sibling.png");
         const textMirrorKey = "idem-agent-source-reply-media-only-sibling:internal-source-reply:0";
         const missingMirrorKey =
           "idem-agent-source-reply-media-only-sibling:internal-source-reply:1";
@@ -4275,39 +3993,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           idempotencyKey: textMirrorKey,
           text: "Text source reply",
         });
-        mockState.triggerAgentRunStart = true;
-        mockState.dispatchedReplies = [
-          {
-            kind: "final",
-            payload: setReplyPayloadMetadata(
-              {
-                text: "Text source reply",
-              },
-              {
-                sourceReplyTranscriptMirror: {
-                  sessionKey: "main",
-                  text: "Text source reply",
-                  idempotencyKey: textMirrorKey,
-                },
-              },
-            ),
-          },
-          {
-            kind: "final",
-            payload: setReplyPayloadMetadata(
-              {
-                mediaUrls: [mediaUrl],
-              },
-              {
-                sourceReplyTranscriptMirror: {
-                  sessionKey: "main",
-                  mediaUrls: [mediaUrl],
-                  idempotencyKey: missingMirrorKey,
-                },
-              },
-            ),
-          },
-        ];
+        setAgentRunReplies([
+          createMainSourceReply({ idempotencyKey: textMirrorKey, text: "Text source reply" }),
+          createMainSourceReply({ idempotencyKey: missingMirrorKey, mediaUrls: [mediaUrl] }),
+        ]);
         const { send } = createChatRequestFixture();
 
         const broadcast = await send({
@@ -4334,9 +4023,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "openclaw-chat-send-agent-source-reply-later-",
       async (fixtureDir) => {
         const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-        const savedImagePath = path.join(fixtureDir, "source-reply-later.png");
-        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        writeSavedPng(fixtureDir, "source-reply-later.png");
         const mirrorKey = "idem-agent-source-reply-later:internal-source-reply:0";
         await appendSourceReplyMirrorEntry({
           idempotencyKey: mirrorKey,
@@ -4347,26 +4034,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           text: "Later assistant content",
           model: "gateway-injected",
         });
-        mockState.triggerAgentRunStart = true;
-        mockState.dispatchedReplies = [
-          {
-            kind: "final",
-            payload: setReplyPayloadMetadata(
-              {
-                text: "Source reply with media",
-                mediaUrls: [mediaUrl],
-              },
-              {
-                sourceReplyTranscriptMirror: {
-                  sessionKey: "main",
-                  text: "Source reply with media",
-                  mediaUrls: [mediaUrl],
-                  idempotencyKey: mirrorKey,
-                },
-              },
-            ),
-          },
-        ];
+        setAgentRunReplies([
+          createMainSourceReply({
+            idempotencyKey: mirrorKey,
+            text: "Source reply with media",
+            mediaUrls: [mediaUrl],
+          }),
+        ]);
         const { send } = createChatRequestFixture();
 
         const broadcast = await send({
@@ -4394,24 +4068,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("does not broadcast an error terminal after an internal-ui source reply final", async () => {
     await createTranscriptFixture("openclaw-chat-send-agent-source-reply-error-");
-    mockState.triggerAgentRunStart = true;
-    const sourceReply = setReplyPayloadMetadata(
-      {
-        text: "Codex source reply",
-      },
-      {
-        sourceReplyTranscriptMirror: {
-          sessionKey: "main",
-          text: "Codex source reply",
-          idempotencyKey: "idem-agent-source-reply-error:internal-source-reply:0",
-        },
-      },
-    );
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: sourceReply,
-      },
+    const sourceReply = createMainSourceReply({
+      idempotencyKey: "idem-agent-source-reply-error:internal-source-reply:0",
+      text: "Codex source reply",
+    });
+    setAgentRunReplies([
+      sourceReply,
       {
         kind: "final",
         payload: {
@@ -4419,7 +4081,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           isError: true,
         },
       },
-    ];
+    ]);
     const { context, send } = createChatRequestFixture();
 
     const broadcast = await send({
@@ -5397,10 +5059,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       agentId: "work",
       sessionKey: "agent:work:global",
     });
-    mockState.config = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-      session: { scope: "global" },
-    };
+    useGlobalSessionScope();
     mockState.sessionEntry = { canonicalKey: "global" };
     const { context, respond, inject } = createChatRequestFixture();
 
@@ -6053,18 +5712,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("prepares managed image claims for Pi user-turn persistence", async () => {
     await createReadyChatTranscript("openclaw-chat-send-user-transcript-images-");
     mockState.triggerAgentRunStart = true;
-    mockState.savedMediaResults = [
-      {
-        id: "chat-send-image-a.png",
-        path: "/tmp/chat-send-image-a.png",
-        contentType: "image/png",
-      },
-      {
-        id: "chat-send-image-b.jpg",
-        path: "/tmp/chat-send-image-b.jpg",
-        contentType: "image/jpeg",
-      },
-    ];
+    setSavedMediaResults(
+      ["/tmp/chat-send-image-a.png", "image/png", "chat-send-image-a.png"],
+      ["/tmp/chat-send-image-b.jpg", "image/jpeg", "chat-send-image-b.jpg"],
+    );
     const { send } = createChatRequestFixture();
 
     await send({
@@ -6072,16 +5723,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       message: "edit these",
       requestParams: {
         attachments: [
-          {
-            mimeType: "image/png",
-            content:
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYoYAAAAASUVORK5CYII=",
-          },
-          {
-            mimeType: "image/jpeg",
-            content:
-              "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRUVFRUVFRUVFRUVFRUVFRUXFhUVFRUYHSggGBolHRUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0fICUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBEQACEQEDEQH/xAAXAAADAQAAAAAAAAAAAAAAAAAAAQMC/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEAMQAAAB6AAAAP/EABQQAQAAAAAAAAAAAAAAAAAAACD/2gAIAQEAAT8Af//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQIBAT8Af//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQMBAT8Af//Z",
-          },
+          createImageAttachment({ content: INLINE_PNG_BASE64 }),
+          createImageAttachment({ content: TINY_JPEG_BASE64, mimeType: "image/jpeg" }),
         ],
       },
       expectBroadcast: false,
@@ -6135,9 +5778,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("prepares non-image chat.send attachments as claim-only media refs without dispatch images", async () => {
     await createReadyChatTranscript("openclaw-chat-send-user-transcript-file-");
     mockState.triggerAgentRunStart = true;
-    mockState.savedMediaResults = [
-      { path: "/tmp/chat-send-brief.pdf", contentType: "application/pdf" },
-    ];
+    setSavedMediaResults(["/tmp/chat-send-brief.pdf", "application/pdf"]);
     const { send } = createChatRequestFixture();
 
     await send({
@@ -6145,12 +5786,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       message: "summarize this",
       requestParams: {
         attachments: [
-          {
-            type: "file",
-            mimeType: "application/pdf",
-            fileName: "brief.pdf",
-            content: Buffer.from("%PDF-1.4\n").toString("base64"),
-          },
+          createFileAttachment(
+            "brief.pdf",
+            "application/pdf",
+            Buffer.from("%PDF-1.4\n").toString("base64"),
+          ),
         ],
       },
       expectBroadcast: false,
@@ -6191,50 +5831,21 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("preserves managed attachment claims in transcript order", async () => {
     await createReadyChatTranscript("openclaw-chat-send-user-transcript-offloaded-");
     mockState.triggerAgentRunStart = true;
-    mockState.sessionEntry = {
-      modelProvider: "test-provider",
-      model: "vision-model",
-      providerOverride: "test-provider",
-      modelOverride: "vision-model",
-    };
-    mockState.modelCatalog = [
-      {
-        provider: "test-provider",
-        id: "vision-model",
-        name: "Vision model",
-        input: ["text", "image"],
-      },
-    ];
-    mockState.savedMediaResults = [
-      {
-        id: "offloaded-big.png",
-        path: "/tmp/offloaded-big.png",
-        contentType: "image/png",
-      },
-      {
-        id: "chat-send-inline.png",
-        path: "/tmp/chat-send-inline.png",
-        contentType: "image/png",
-      },
-    ];
+    useChatTestModel("vision-model", true);
+    setSavedMediaResults(
+      ["/tmp/offloaded-big.png", "image/png", "offloaded-big.png"],
+      ["/tmp/chat-send-inline.png", "image/png", "chat-send-inline.png"],
+    );
     const { send } = createChatRequestFixture();
-    const bigPng = Buffer.alloc(2_100_000);
-    bigPng.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    const bigPng = createPngBuffer(2_100_000);
 
     await send({
       idempotencyKey: "idem-user-transcript-offloaded",
       message: "edit both",
       requestParams: {
         attachments: [
-          {
-            mimeType: "image/png",
-            content:
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYoYAAAAASUVORK5CYII=",
-          },
-          {
-            mimeType: "image/png",
-            content: bigPng.toString("base64"),
-          },
+          createImageAttachment({ content: INLINE_PNG_BASE64 }),
+          createImageAttachment({ content: bigPng.toString("base64") }),
         ],
       },
       expectBroadcast: false,
@@ -6270,9 +5881,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("leaves ACP bridge user persistence to the agent runtime", async () => {
     await createReadyChatTranscript("openclaw-chat-send-user-transcript-acp-images-");
     mockState.triggerAgentRunStart = true;
-    mockState.savedMediaResults = [
-      { path: "/tmp/should-not-be-used.png", contentType: "image/png" },
-    ];
+    setSavedMediaResults(["/tmp/should-not-be-used.png", "image/png"]);
     const { send } = createChatRequestFixture();
 
     await send({
@@ -6289,13 +5898,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
       },
       requestParams: {
-        attachments: [
-          {
-            mimeType: "image/png",
-            content:
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYoYAAAAASUVORK5CYII=",
-          },
-        ],
+        attachments: [createImageAttachment({ content: INLINE_PNG_BASE64 })],
       },
       expectBroadcast: false,
     });
@@ -6315,9 +5918,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("waits for the user transcript update before final broadcast on non-agent attachment sends", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-no-agent-images-order-");
     mockState.finalText = "ok";
-    mockState.savedMediaResults = [
-      { path: "/tmp/chat-send-image-a.png", contentType: "image/png" },
-    ];
+    setSavedMediaResults(["/tmp/chat-send-image-a.png", "image/png"]);
     let releaseSave = () => {};
     mockState.saveMediaWait = new Promise<void>((resolve) => {
       releaseSave = resolve;
@@ -6328,13 +5929,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-no-agent-images-order",
       message: "quick command",
       requestParams: {
-        attachments: [
-          {
-            mimeType: "image/png",
-            content:
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYoYAAAAASUVORK5CYII=",
-          },
-        ],
+        attachments: [createImageAttachment({ content: INLINE_PNG_BASE64 })],
       },
       expectBroadcast: false,
       waitForCompletion: false,
@@ -6491,13 +6086,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-text-only-attachments",
       message: "describe image",
       requestParams: {
-        attachments: [
-          {
-            mimeType: "image/png",
-            content:
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-          },
-        ],
+        attachments: [createImageAttachment({ content: OFFLOAD_PNG_BASE64 })],
       },
       expectBroadcast: false,
       waitFor: "none",
@@ -6548,13 +6137,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-configured-custom-vision",
       message: "describe image",
       requestParams: {
-        attachments: [
-          {
-            mimeType: "image/png",
-            content:
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-          },
-        ],
+        attachments: [createImageAttachment({ content: OFFLOAD_PNG_BASE64 })],
       },
       expectBroadcast: false,
     });
@@ -6588,13 +6171,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         originatingChannel: "slack",
         originatingTo: "user:U123",
         originatingAccountId: "default",
-        attachments: [
-          {
-            mimeType: "image/png",
-            content:
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-          },
-        ],
+        attachments: [createImageAttachment({ content: OFFLOAD_PNG_BASE64 })],
       },
       expectBroadcast: false,
     });
@@ -6646,13 +6223,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-agent-scoped-text-only-attachments",
       message: "describe image",
       requestParams: {
-        attachments: [
-          {
-            mimeType: "image/png",
-            content:
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-          },
-        ],
+        attachments: [createImageAttachment({ content: OFFLOAD_PNG_BASE64 })],
       },
       expectBroadcast: false,
       waitFor: "none",
@@ -6684,9 +6255,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("routes non-image offloaded refs into media facts for chat.send", async () => {
     await createReadyChatTranscript("openclaw-chat-send-non-image-ctx-media-paths-");
     useChatTestModel("vision-model");
-    mockState.savedMediaResults = [
-      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
-    ];
+    setSavedMediaResults(["/home/user/.openclaw/media/inbound/report.pdf", "application/pdf"]);
     const { send } = createChatRequestFixture();
     const pdf = Buffer.from("%PDF-1.4\n%µ¶\n1 0 obj\n<<>>\nendobj\n").toString("base64");
 
@@ -6694,14 +6263,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-non-image-ctx-media",
       message: "read this",
       requestParams: {
-        attachments: [
-          {
-            type: "file",
-            mimeType: "application/pdf",
-            fileName: "report.pdf",
-            content: pdf,
-          },
-        ],
+        attachments: [createFileAttachment("report.pdf", "application/pdf", pdf)],
       },
       expectBroadcast: false,
     });
@@ -6728,9 +6290,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("routes image-named generic container bytes as non-image media paths for chat.send", async () => {
     await createReadyChatTranscript("openclaw-chat-send-spoofed-image-container-");
     useChatTestModel("vision-model");
-    mockState.savedMediaResults = [
-      { path: "/home/user/.openclaw/media/inbound/fake.zip", contentType: "application/zip" },
-    ];
+    setSavedMediaResults(["/home/user/.openclaw/media/inbound/fake.zip", "application/zip"]);
     const { send } = createChatRequestFixture();
     const zip = Buffer.from("PK\u0003\u0004zip-archive-bytes").toString("base64");
 
@@ -6738,14 +6298,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-spoofed-image-container",
       message: "inspect this",
       requestParams: {
-        attachments: [
-          {
-            type: "image",
-            mimeType: "image/png",
-            fileName: "fake.png",
-            content: zip,
-          },
-        ],
+        attachments: [createFileAttachment("fake.png", "image/png", zip, "image")],
       },
       expectBroadcast: false,
     });
@@ -6773,9 +6326,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("preserves sandbox-relative fact paths and workspace context for media-understanding", async () => {
     await createReadyChatTranscript("openclaw-chat-send-non-image-absolutize-");
     useChatTestModel("vision-model");
-    mockState.savedMediaResults = [
-      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
-    ];
+    setSavedMediaResults(["/home/user/.openclaw/media/inbound/report.pdf", "application/pdf"]);
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
     mockState.stagedRelativePaths = ["media/inbound/report.pdf"];
     const { send } = createChatRequestFixture();
@@ -6785,14 +6336,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-non-image-absolutize",
       message: "read this",
       requestParams: {
-        attachments: [
-          {
-            type: "file",
-            mimeType: "application/pdf",
-            fileName: "report.pdf",
-            content: pdf,
-          },
-        ],
+        attachments: [createFileAttachment("report.pdf", "application/pdf", pdf)],
       },
       expectBroadcast: false,
     });
@@ -6816,10 +6360,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         pluginRoot: "/plugins/demo-plugin",
       },
     });
-    mockState.savedMediaResults = [
-      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
-      { path: "/home/user/.openclaw/media/inbound/screenshot.png", contentType: "image/png" },
-    ];
+    setSavedMediaResults(
+      ["/home/user/.openclaw/media/inbound/report.pdf", "application/pdf"],
+      ["/home/user/.openclaw/media/inbound/screenshot.png", "image/png"],
+    );
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
     mockState.stagedRelativePaths = ["media/inbound/report.pdf"];
     const { send } = createChatRequestFixture();
@@ -6834,18 +6378,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         originatingTo: "user:U123",
         originatingAccountId: "default",
         attachments: [
-          {
-            type: "image",
-            mimeType: "image/png",
-            fileName: "screenshot.png",
-            content: TINY_PNG_BASE64,
-          },
-          {
-            type: "file",
-            mimeType: "application/pdf",
-            fileName: "report.pdf",
-            content: pdf,
-          },
+          createFileAttachment("screenshot.png", "image/png", TINY_PNG_BASE64, "image"),
+          createFileAttachment("report.pdf", "application/pdf", pdf),
         ],
       },
       expectBroadcast: false,
@@ -6873,12 +6407,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // the staging-throw fallback test below.) #90097
     await createReadyChatTranscript("openclaw-chat-send-stage-unavailable-");
     useChatTestModel("vision-model");
-    mockState.savedMediaResults = [
-      {
-        path: "/home/user/.openclaw/media/inbound/report.bin",
-        contentType: "application/octet-stream",
-      },
-    ];
+    setSavedMediaResults([
+      "/home/user/.openclaw/media/inbound/report.bin",
+      "application/octet-stream",
+    ]);
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
     const stageError = Object.assign(new Error("ENOSPC: no space left on device"), {
       code: "ENOSPC",
@@ -6893,14 +6425,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-stage-unavailable",
       message: "read this",
       requestParams: {
-        attachments: [
-          {
-            type: "file",
-            mimeType: "application/octet-stream",
-            fileName: "report.bin",
-            content: binPayload,
-          },
-        ],
+        attachments: [createFileAttachment("report.bin", "application/octet-stream", binPayload)],
       },
       expectBroadcast: false,
       waitFor: "none",
@@ -6938,14 +6463,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-chat-send-attachment-parse-stack",
       message: "inspect this",
       requestParams: {
-        attachments: [
-          {
-            type: "file",
-            mimeType: "image/png",
-            fileName: "broken.png",
-            content: "not-base64",
-          },
-        ],
+        attachments: [createFileAttachment("broken.png", "image/png", "not-base64")],
       },
       expectBroadcast: false,
       waitFor: "none",
@@ -6982,16 +6500,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // fall back instead — see the staging-skip fallback test below.) #90097
     await createReadyChatTranscript("openclaw-chat-send-partial-stage-");
     useChatTestModel("vision-model");
-    mockState.savedMediaResults = [
-      {
-        path: "/home/user/.openclaw/media/inbound/report.bin",
-        contentType: "application/octet-stream",
-      },
-      {
-        path: "/home/user/.openclaw/media/inbound/data.bin",
-        contentType: "application/octet-stream",
-      },
-    ];
+    setSavedMediaResults(
+      ["/home/user/.openclaw/media/inbound/report.bin", "application/octet-stream"],
+      ["/home/user/.openclaw/media/inbound/data.bin", "application/octet-stream"],
+    );
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
     mockState.stagedRelativePaths = ["media/inbound/report.bin", "media/inbound/data.bin"];
     mockState.unstagedSources = ["/home/user/.openclaw/media/inbound/data.bin"];
@@ -7003,18 +6515,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       message: "read these",
       requestParams: {
         attachments: [
-          {
-            type: "file",
-            mimeType: "application/octet-stream",
-            fileName: "report.bin",
-            content: binPayload,
-          },
-          {
-            type: "file",
-            mimeType: "application/octet-stream",
-            fileName: "data.bin",
-            content: binPayload,
-          },
+          createFileAttachment("report.bin", "application/octet-stream", binPayload),
+          createFileAttachment("data.bin", "application/octet-stream", binPayload),
         ],
       },
       expectBroadcast: false,
@@ -7041,9 +6543,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // it must reach dispatch with its managed media path instead of a 4xx.
     await createReadyChatTranscript("openclaw-chat-send-managed-pdf-pass-through-");
     useChatTestModel("vision-model");
-    mockState.savedMediaResults = [
-      { path: "/home/user/.openclaw/media/inbound/huge.pdf", contentType: "application/pdf" },
-    ];
+    setSavedMediaResults(["/home/user/.openclaw/media/inbound/huge.pdf", "application/pdf"]);
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
     const { send } = createChatRequestFixture();
     // 6MB PDF — above STAGED_MEDIA_MAX_BYTES (5MB) but below the 20MB parse cap.
@@ -7055,12 +6555,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       message: "read this",
       requestParams: {
         attachments: [
-          {
-            type: "file",
-            mimeType: "application/pdf",
-            fileName: "huge.pdf",
-            content: oversized.toString("base64"),
-          },
+          createFileAttachment("huge.pdf", "application/pdf", oversized.toString("base64")),
         ],
       },
       expectBroadcast: false,
@@ -7086,9 +6581,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // the media-store root.
     await createReadyChatTranscript("openclaw-chat-send-managed-pdf-stage-throw-");
     useChatTestModel("vision-model");
-    mockState.savedMediaResults = [
-      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
-    ];
+    setSavedMediaResults(["/home/user/.openclaw/media/inbound/report.pdf", "application/pdf"]);
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
     mockState.stageSandboxMediaError = Object.assign(new Error("ENOSPC: no space left on device"), {
       code: "ENOSPC",
@@ -7102,9 +6595,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-managed-pdf-stage-throw",
       message: "read this",
       requestParams: {
-        attachments: [
-          { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
-        ],
+        attachments: [createFileAttachment("report.pdf", "application/pdf", pdf)],
       },
       expectBroadcast: false,
     });
@@ -7128,9 +6619,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // send; the staged workspace dir is still carried for any files that landed.
     await createReadyChatTranscript("openclaw-chat-send-managed-pdf-stage-skip-");
     useChatTestModel("vision-model");
-    mockState.savedMediaResults = [
-      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
-    ];
+    setSavedMediaResults(["/home/user/.openclaw/media/inbound/report.pdf", "application/pdf"]);
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
     // No stagedRelativePaths → staged map is empty and the fact keeps the
     // absolute path, mirroring stageSandboxMedia silently skipping the file.
@@ -7141,9 +6630,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-managed-pdf-stage-skip",
       message: "read this",
       requestParams: {
-        attachments: [
-          { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
-        ],
+        attachments: [createFileAttachment("report.pdf", "application/pdf", pdf)],
       },
       expectBroadcast: false,
     });
@@ -7164,13 +6651,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // still surface a retryable 5xx and clean up every offloaded entry.
     await createReadyChatTranscript("openclaw-chat-send-mixed-stage-skip-");
     useChatTestModel("vision-model");
-    mockState.savedMediaResults = [
-      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
-      {
-        path: "/home/user/.openclaw/media/inbound/data.bin",
-        contentType: "application/octet-stream",
-      },
-    ];
+    setSavedMediaResults(
+      ["/home/user/.openclaw/media/inbound/report.pdf", "application/pdf"],
+      ["/home/user/.openclaw/media/inbound/data.bin", "application/octet-stream"],
+    );
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
     mockState.stagedRelativePaths = ["media/inbound/report.pdf", "media/inbound/data.bin"];
     mockState.unstagedSources = ["/home/user/.openclaw/media/inbound/data.bin"];
@@ -7183,13 +6667,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       message: "read these",
       requestParams: {
         attachments: [
-          { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
-          {
-            type: "file",
-            mimeType: "application/octet-stream",
-            fileName: "data.bin",
-            content: bin,
-          },
+          createFileAttachment("report.pdf", "application/pdf", pdf),
+          createFileAttachment("data.bin", "application/octet-stream", bin),
         ],
       },
       expectBroadcast: false,
@@ -7221,12 +6700,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // other oversized non-image files must still be rejected.
     await createReadyChatTranscript("openclaw-chat-send-sandbox-oversize-");
     useChatTestModel("vision-model");
-    mockState.savedMediaResults = [
-      {
-        path: "/home/user/.openclaw/media/inbound/huge.bin",
-        contentType: "application/octet-stream",
-      },
-    ];
+    setSavedMediaResults([
+      "/home/user/.openclaw/media/inbound/huge.bin",
+      "application/octet-stream",
+    ]);
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
     const { respond, send } = createChatRequestFixture();
     // 6MB buffer — above STAGED_MEDIA_MAX_BYTES (5MB) but below the 20MB parse cap.
@@ -7239,12 +6716,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       message: "read this",
       requestParams: {
         attachments: [
-          {
-            type: "file",
-            mimeType: "application/octet-stream",
-            fileName: "huge.bin",
-            content: oversizedPayload,
-          },
+          createFileAttachment("huge.bin", "application/octet-stream", oversizedPayload),
         ],
       },
       expectBroadcast: false,
@@ -7266,39 +6738,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("passes imageOrder for mixed inline and offloaded chat.send attachments", async () => {
     await createReadyChatTranscript("openclaw-chat-send-image-order-");
-    mockState.sessionEntry = {
-      modelProvider: "test-provider",
-      model: "vision-model",
-      providerOverride: "test-provider",
-      modelOverride: "vision-model",
-    };
-    mockState.modelCatalog = [
-      {
-        provider: "test-provider",
-        id: "vision-model",
-        name: "Vision model",
-        input: ["text", "image"],
-      },
-    ];
-    mockState.savedMediaResults = [{ path: "/tmp/offloaded-big.png", contentType: "image/png" }];
+    useChatTestModel("vision-model", true);
+    setSavedMediaResults(["/tmp/offloaded-big.png", "image/png"]);
     const { send } = createChatRequestFixture();
-    const bigPng = Buffer.alloc(2_100_000);
-    bigPng.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    const bigPng = createPngBuffer(2_100_000);
 
     await send({
       idempotencyKey: "idem-image-order",
       message: "describe both",
       requestParams: {
         attachments: [
-          {
-            mimeType: "image/png",
-            content:
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-          },
-          {
-            mimeType: "image/png",
-            content: bigPng.toString("base64"),
-          },
+          createImageAttachment({ content: OFFLOAD_PNG_BASE64 }),
+          createImageAttachment({ content: bigPng.toString("base64") }),
         ],
       },
       expectBroadcast: false,
@@ -7313,19 +6764,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     useChatTestModel("vision-model");
     mockState.saveMediaError = new Error("disk full");
     const { respond, send } = createChatRequestFixture();
-    const bigPng = Buffer.alloc(2_100_000);
-    bigPng.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    const bigPng = createPngBuffer(2_100_000);
 
     await send({
       idempotencyKey: "idem-media-offload-error",
       message: "describe image",
       requestParams: {
-        attachments: [
-          {
-            mimeType: "image/png",
-            content: bigPng.toString("base64"),
-          },
-        ],
+        attachments: [createImageAttachment({ content: bigPng.toString("base64") })],
       },
       waitFor: "none",
     });
@@ -7338,10 +6783,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("persists chat.send attachments one at a time", async () => {
     await createReadyChatTranscript("openclaw-chat-send-image-serial-save-");
-    mockState.savedMediaResults = [
-      { path: "/tmp/chat-send-image-a.png", contentType: "image/png" },
-      { path: "/tmp/chat-send-image-b.jpg", contentType: "image/jpeg" },
-    ];
+    setSavedMediaResults(
+      ["/tmp/chat-send-image-a.png", "image/png"],
+      ["/tmp/chat-send-image-b.jpg", "image/jpeg"],
+    );
     let releaseSave = () => {};
     mockState.saveMediaWait = new Promise<void>((resolve) => {
       releaseSave = resolve;
@@ -7353,16 +6798,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       message: "serial please",
       requestParams: {
         attachments: [
-          {
-            mimeType: "image/png",
-            content:
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYoYAAAAASUVORK5CYII=",
-          },
-          {
-            mimeType: "image/jpeg",
-            content:
-              "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRUVFRUVFRUVFRUVFRUVFRUXFhUVFRUYHSggGBolHRUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0fICUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBEQACEQEDEQH/xAAXAAADAQAAAAAAAAAAAAAAAAAAAQMC/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEAMQAAAB6AAAAP/EABQQAQAAAAAAAAAAAAAAAAAAACD/2gAIAQEAAT8Af//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQIBAT8Af//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQMBAT8Af//Z",
-          },
+          createImageAttachment({ content: INLINE_PNG_BASE64 }),
+          createImageAttachment({ content: TINY_JPEG_BASE64, mimeType: "image/jpeg" }),
         ],
       },
       expectBroadcast: false,
@@ -7383,7 +6820,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("does not parse or offload attachments for stop commands", async () => {
     await createTranscriptFixture("openclaw-chat-send-stop-command-attachments-");
-    mockState.savedMediaResults = [{ path: "/tmp/should-not-exist.png", contentType: "image/png" }];
+    setSavedMediaResults(["/tmp/should-not-exist.png", "image/png"]);
     const { context, respond, send } = createChatRequestFixture();
     context.chatAbortControllers.set("run-same-session", {
       controller: new AbortController(),
@@ -7397,13 +6834,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-stop-command-attachments",
       message: "/stop",
       requestParams: {
-        attachments: [
-          {
-            mimeType: "image/png",
-            content:
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-          },
-        ],
+        attachments: [createImageAttachment({ content: OFFLOAD_PNG_BASE64 })],
       },
       expectBroadcast: false,
       waitFor: "none",

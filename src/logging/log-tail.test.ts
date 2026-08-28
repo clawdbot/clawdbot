@@ -95,6 +95,30 @@ describe("readConfiguredLogTail", () => {
     expect(result.lines).toEqual(["old line", "recent one", "recent two"]);
   });
 
+  it("holds an unterminated record until a later read completes it", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const completePrefix = "complete-before ✅\n";
+
+    await fs.writeFile(file, `${completePrefix}partial`);
+    setLoggerOverride({ file });
+
+    const initial = await readConfiguredLogTail();
+    expect(initial).toMatchObject({
+      lines: ["complete-before ✅"],
+      cursor: Buffer.byteLength(completePrefix),
+    });
+
+    await fs.appendFile(file, "-completed\n");
+    const continuation = await readConfiguredLogTail({ cursor: initial.cursor });
+
+    expect(continuation).toMatchObject({
+      lines: ["partial-completed"],
+      cursor: Buffer.byteLength(`${completePrefix}partial-completed\n`),
+    });
+  });
+
   it("reports truncation when the line limit omits complete records", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");

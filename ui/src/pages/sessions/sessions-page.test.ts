@@ -181,6 +181,7 @@ describe("sessions page lifecycle", () => {
       count: 1,
       sessions: [{ key: "agent:main:launch" }],
     } as SessionsListResult;
+    vi.mocked(page.context.sessions.list).mockResolvedValue(page.result);
 
     page.updateTranscriptSearchQuery("  launch code  ");
     const pending = page.runTranscriptSearch();
@@ -245,6 +246,7 @@ describe("sessions page lifecycle", () => {
       count: 2,
       sessions: [{ key: "agent:main:one" }, { key: "agent:writer:one" }],
     } as SessionsListResult;
+    vi.mocked(context.sessions.list).mockResolvedValue(page.result);
 
     page.updateTranscriptSearchQuery("needle");
     await page.runTranscriptSearch();
@@ -300,6 +302,25 @@ describe("sessions page lifecycle", () => {
     expect(page.error).toBe("Connect to the Gateway to change sessions.");
   });
 
+  it("uses the legacy-compatible Mark as read payload", async () => {
+    const patch = vi.fn(async () => ({
+      ok: true as const,
+      path: "",
+      key: "agent:main:main",
+      entry: { sessionId: "session-main" },
+    }));
+    const sessions = createSessions({ patch });
+    const page = await createPage(
+      createContext(createGateway({} as GatewayBrowserClient).gateway, sessions),
+    );
+
+    await expect(page.patchSession("agent:main:main", { unread: false })).resolves.toBe(
+      "completed",
+    );
+
+    expect(patch).toHaveBeenCalledWith("agent:main:main", { unread: false }, { agentId: "main" });
+  });
+
   it("shows a connection error in the checkpoints drawer while disconnected", async () => {
     const mutableGateway = createGateway({} as GatewayBrowserClient);
     const page = await createPage(createContext(mutableGateway.gateway, createSessions()));
@@ -326,6 +347,7 @@ describe("sessions page lifecycle", () => {
       count: 1,
       sessions: [{ key: "agent:main:stale" }],
     } as SessionsListResult;
+    vi.mocked(page.context.sessions.list).mockResolvedValue(page.result);
 
     page.updateTranscriptSearchQuery("old query");
     const pending = page.runTranscriptSearch();
@@ -369,6 +391,7 @@ describe("sessions page lifecycle", () => {
       count: 1,
       sessions: [{ key: "agent:main:stale" }],
     } as SessionsListResult;
+    vi.mocked(context.sessions.list).mockResolvedValue(page.result);
 
     page.updateTranscriptSearchQuery("needle");
     const pending = page.runTranscriptSearch();
@@ -580,6 +603,60 @@ describe("sessions page lifecycle", () => {
     expect(page.result?.sessions).toEqual([]);
     expect(page.selectedKeys).toEqual(new Set());
   });
+
+  it.each([
+    {
+      scenario: "the selected row is replaced by an archived generation",
+      originalArchived: false,
+      replacement: { sessionId: "replacement-session", archived: true },
+    },
+    {
+      scenario: "the selected row disappears from the roster",
+      originalArchived: false,
+      replacement: null,
+    },
+    {
+      scenario: "an archived selection is replaced by an active generation",
+      originalArchived: true,
+      replacement: { sessionId: "replacement-session", archived: false },
+    },
+  ])(
+    "preserves confirmed deletion identity when $scenario",
+    async ({ originalArchived, replacement }) => {
+      const key = "agent:main:confirmed";
+      const confirmation = deferred<boolean>();
+      vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+      const sessions = createSessions({
+        deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
+      });
+      const page = await createPage(
+        createContext(createGateway({} as GatewayBrowserClient).gateway, sessions),
+      );
+      page.result = {
+        count: 1,
+        sessions: [{ key, sessionId: "confirmed-session", archived: originalArchived }],
+      } as SessionsListResult;
+      page.selectedKeys = new Set([key]);
+
+      const deleting = page.deleteSelected();
+      expect(showConfirmDialog).toHaveBeenCalledOnce();
+      page.result = {
+        count: replacement ? 1 : 0,
+        sessions: replacement ? [{ key, ...replacement }] : [],
+      } as SessionsListResult;
+      confirmation.resolve(true);
+      await deleting;
+
+      expect(sessions.deleteMany).toHaveBeenCalledWith([
+        {
+          key,
+          agentId: undefined,
+          expectedSessionId: "confirmed-session",
+          ...(originalArchived ? { archivedOnly: true } : {}),
+        },
+      ]);
+    },
+  );
 
   it("adopts a managed snapshot that arrives under the bulk-delete lock after its tail refresh", async () => {
     const deleted = deferred<{

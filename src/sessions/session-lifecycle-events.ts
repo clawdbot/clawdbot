@@ -41,6 +41,14 @@ const SESSION_IDENTITY_MUTATION_STATE = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionIdentityMutationState"),
   () => ({ version: 0 }),
 );
+const SESSION_LIFECYCLE_STATE = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionLifecycleState"),
+  () => ({ version: 0 }),
+);
+
+export function readSessionLifecycleVersion(): number {
+  return SESSION_LIFECYCLE_STATE.version;
+}
 
 /** Registers a session lifecycle listener. */
 export function onSessionLifecycleEvent(listener: SessionLifecycleListener): () => void {
@@ -52,6 +60,7 @@ export function onSessionLifecycleEvent(listener: SessionLifecycleListener): () 
 
 /** Emits a best-effort session lifecycle event to all listeners. */
 export function emitSessionLifecycleEvent(event: SessionLifecycleEvent): void {
+  SESSION_LIFECYCLE_STATE.version += 1;
   for (const listener of SESSION_LIFECYCLE_LISTENERS) {
     try {
       listener(event);

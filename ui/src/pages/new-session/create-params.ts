@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -29,10 +30,14 @@ export function buildDraftSessionCreateParams(draft: {
   agentId: string;
   message: string;
   model?: string;
+  contextWindow?: string;
   thinkingLevel?: string;
+  toolOverrides?: SessionCreateParams["toolOverrides"] | null;
+  permissionMode?: SessionCreateParams["permissionMode"];
   visibility?: NewSessionVisibility;
-  attachments?: unknown[];
+  attachments?: SessionCreateParams["attachments"];
   projectId?: string;
+  projectGitUrl?: string;
   worktree: boolean;
   baseRef?: string;
   worktreeName?: string;
@@ -40,15 +45,20 @@ export function buildDraftSessionCreateParams(draft: {
   workspace?: string;
   catalogId?: string;
   category?: string;
-}): Record<string, unknown> {
+}): SessionCreateParams {
   const cwd = normalizeOptionalString(draft.cwd);
   const workspace = normalizeOptionalString(draft.workspace);
   const catalogId = normalizeOptionalString(draft.catalogId);
   const category = normalizeOptionalString(draft.category);
   const model = normalizeOptionalString(draft.model);
+  const contextWindow = normalizeOptionalString(draft.contextWindow);
   const thinkingLevel = normalizeOptionalString(draft.thinkingLevel);
   const projectId = normalizeOptionalString(draft.projectId);
-  const customFolder = !projectId && cwd && cwd !== workspace ? cwd : undefined;
+  const projectGitUrl =
+    !projectId && (draft.message.trim() || draft.attachments?.length)
+      ? normalizeOptionalString(draft.projectGitUrl)
+      : undefined;
+  const customFolder = !projectId && !projectGitUrl && cwd && cwd !== workspace ? cwd : undefined;
   return {
     ...(normalizeOptionalString(draft.key) ? { key: normalizeOptionalString(draft.key) } : {}),
     agentId: normalizeAgentId(draft.agentId),
@@ -59,8 +69,12 @@ export function buildDraftSessionCreateParams(draft: {
     ...(catalogId ? { catalogId } : {}),
     ...(category ? { category } : {}),
     ...(!catalogId && model ? { model } : {}),
+    ...(!catalogId && contextWindow ? { contextWindow } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
+    ...(draft.toolOverrides ? { toolOverrides: draft.toolOverrides } : {}),
+    ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
     ...(projectId ? { projectId } : {}),
+    ...(projectGitUrl ? { projectGitUrl } : {}),
     ...(customFolder ? { cwd: customFolder } : {}),
     ...(draft.worktree
       ? {

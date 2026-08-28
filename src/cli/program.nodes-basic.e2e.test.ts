@@ -593,12 +593,13 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("runs nodes describe and calls node.describe", async () => {
+    const unsafeEffectiveCommand = "camera.snap\u001b[2J\neffective-spoof";
     mockGatewayWithIosNodeListAnd("node.describe", {
       ts: Date.now(),
       nodeId: "ios-node",
       displayName: "iOS Node",
       caps: ["camera"],
-      commands: ["camera.snap"],
+      commands: [unsafeEffectiveCommand],
       approvalState: "pending-reapproval",
       pendingRequestId: "request-approval",
       pendingDeclaredCaps: ["camera", "canvas"],
@@ -620,7 +621,8 @@ describe("cli program (nodes basics)", () => {
 
     const out = getRuntimeOutput();
     expect(out).toContain("Commands");
-    expect(out).toContain("camera.snap");
+    expect(out).toContain("camera.snap\\neffective-spoof");
+    expect(out).not.toContain("\neffective-spoof");
     expect(out).toContain("Approval");
     expect(out).toContain("reapproval pending");
     expect(out).toContain("Pending request");
@@ -632,6 +634,12 @@ describe("cli program (nodes basics)", () => {
     expect(out).toContain("openclaw nodes approve request-approval");
     expect(out).not.toContain("\u001b");
     expect(out).not.toContain("[2K");
+    expect(out).not.toContain("[2J");
+
+    await runProgram(["nodes", "describe", "--node", "ios-node", "--json"]);
+
+    const json = writeJsonArgAt(-1) as { commands?: string[] };
+    expect(json.commands).toEqual([unsafeEffectiveCommand]);
   });
 
   it("keeps explicit gateway options in node reapproval guidance without leaking auth", async () => {

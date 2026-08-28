@@ -5,15 +5,15 @@
  */
 import {
   allowlistFailureReason,
-  applyMutableIdentifierPolicy,
+  applyIdentifierAuthenticationPolicy,
   effectiveGroupSenderAllowlist,
   redactedAllowlistDiagnostics,
 } from "./allowlist.js";
 import type {
   AccessGraphGate,
   ChannelIngressPolicyInput,
-  ChannelIngressState,
-  ResolvedIngressAllowlist,
+  NormalizedIngressState,
+  NormalizedIngressAllowlist,
 } from "./types.js";
 
 function senderGate(params: {
@@ -24,7 +24,7 @@ function senderGate(params: {
   reasonCode: AccessGraphGate["reasonCode"];
   match: AccessGraphGate["match"];
   policy: ChannelIngressPolicyInput["dmPolicy"] | ChannelIngressPolicyInput["groupPolicy"];
-  allowlistSource: ResolvedIngressAllowlist;
+  allowlistSource: NormalizedIngressAllowlist;
 }): AccessGraphGate {
   // Sender gates always include redacted allowlist facts so diagnostics can explain an
   // allow/block result without exposing raw sender ids.
@@ -38,6 +38,14 @@ function senderGate(params: {
     match: params.match,
     sender: { policy: params.policy },
     allowlist: redactedAllowlistDiagnostics(params.allowlistSource, params.reasonCode),
+    ...(params.allowlistSource.authentication
+      ? {
+          identifierAuthentication: {
+            evaluated: params.allowlistSource.authentication.evaluated,
+            affectedMatch: params.allowlistSource.authentication.affectedMatch,
+          },
+        }
+      : {}),
   };
 }
 
@@ -45,11 +53,11 @@ function senderGate(params: {
  * Evaluates direct-message sender policy against DM and pairing-store allowlists.
  */
 export function senderGateForDirect(params: {
-  state: ChannelIngressState;
+  state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;
 }): AccessGraphGate {
-  const dm = applyMutableIdentifierPolicy(params.state.allowlists.dm, params.policy);
-  const pairingStore = applyMutableIdentifierPolicy(
+  const dm = applyIdentifierAuthenticationPolicy(params.state.allowlists.dm, params.policy);
+  const pairingStore = applyIdentifierAuthenticationPolicy(
     params.state.allowlists.pairingStore,
     params.policy,
   );
@@ -120,7 +128,7 @@ export function senderGateForDirect(params: {
  * Evaluates group/channel sender policy after route sender allowlist overrides are applied.
  */
 export function senderGateForGroup(params: {
-  state: ChannelIngressState;
+  state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;
 }): AccessGraphGate {
   const group = effectiveGroupSenderAllowlist(params);
@@ -166,7 +174,7 @@ export function senderGateForGroup(params: {
  * Applies event auth mode to sender gates for non-message callbacks.
  */
 export function applyEventAuthModeToSenderGate(params: {
-  state: ChannelIngressState;
+  state: NormalizedIngressState;
   senderGate: AccessGraphGate;
 }): AccessGraphGate {
   if (params.state.event.authMode === "inbound" || params.senderGate.allowed) {

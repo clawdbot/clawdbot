@@ -11,6 +11,7 @@ DOCKER_TARGET="${OPENCLAW_NPM_TELEGRAM_DOCKER_TARGET:-build}"
 PACKAGE_SPEC="${OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC:-openclaw@beta}"
 PACKAGE_TGZ="${OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
 PACKAGE_DIR="${OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR:-}"
+PREPUBLISH_PLUGIN_REGISTRY_DIR="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}"
 PACKAGE_LABEL="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-}"
 RUN_ID="${OPENCLAW_NPM_TELEGRAM_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live/$RUN_ID}"
@@ -91,6 +92,18 @@ resolve_package_dir() {
   (cd "$candidate" && pwd)
 }
 
+resolve_prepublish_plugin_registry_dir() {
+  local candidate="$1"
+  if [ -z "$candidate" ]; then
+    return 0
+  fi
+  if [ ! -d "$candidate" ]; then
+    echo "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR must point to an existing directory; got: $candidate" >&2
+    exit 1
+  fi
+  (cd "$candidate" && pwd)
+}
+
 read_package_version() {
   tar -xOf "$1" package/package.json |
     node -e '
@@ -108,10 +121,14 @@ process.stdin.on("end", () => {
 
 package_mount_args=()
 registry_helper_mount_args=()
+prepublish_registry_mount_args=()
 package_install_source="$PACKAGE_SPEC"
 package_source_kind="npm-package"
 resolved_package_tgz="$(resolve_package_tgz "$PACKAGE_TGZ")"
 resolved_package_dir="$(resolve_package_dir "$PACKAGE_DIR")"
+resolved_prepublish_plugin_registry_dir="$(
+  resolve_prepublish_plugin_registry_dir "$PREPUBLISH_PLUGIN_REGISTRY_DIR"
+)"
 if [ -n "$resolved_package_dir" ]; then
   if [ -z "$resolved_package_tgz" ]; then
     echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR requires OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ" >&2
@@ -137,6 +154,11 @@ elif [ -n "$resolved_package_tgz" ]; then
   package_mount_args=(-v "$resolved_package_tgz:$package_install_source:ro")
 else
   validate_openclaw_package_spec "$PACKAGE_SPEC"
+fi
+if [ -n "$resolved_prepublish_plugin_registry_dir" ]; then
+  prepublish_registry_mount_args=(
+    -v "$resolved_prepublish_plugin_registry_dir:/tmp/openclaw-prepublish-plugin-registry:ro"
+  )
 fi
 if [ -z "$PACKAGE_LABEL" ]; then
   if [ -n "$resolved_package_tgz" ]; then
@@ -253,6 +275,14 @@ fi
 if [ -n "$credential_role" ]; then
   docker_env+=(-e OPENCLAW_QA_CREDENTIAL_ROLE="$credential_role")
 fi
+if [ -n "$resolved_prepublish_plugin_registry_dir" ]; then
+  docker_env+=(
+    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry
+    -e OPENCLAW_DOCKER_E2E_SELECTED_SHA="${OPENCLAW_DOCKER_E2E_SELECTED_SHA:?missing selected SHA}"
+    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}"
+    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:?missing manifest SHA-256}"
+  )
+fi
 
 for key in \
   OPENAI_API_KEY \
@@ -290,7 +320,8 @@ for key in \
   OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES \
   OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH \
   OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT \
-  OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES; do
+  OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES \
+  OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS; do
   forward_env_if_set "$key"
 done
 
@@ -427,10 +458,12 @@ run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harn
   -v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro" \
   -v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro" \
   -v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro" \
+  ${prepublish_registry_mount_args[@]+"${prepublish_registry_mount_args[@]}"} \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
 source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/prepublish-plugin-registry.sh
 
 runtime_home="$(mktemp -d "/tmp/openclaw-npm-telegram-runtime.XXXXXX")"
 export HOME="$runtime_home"
@@ -439,6 +472,12 @@ export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENCLAW_NPM_TELEGRAM_REPO_ROOT="/app"
 export OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION="$(node -e 'const pkg = require("/npm-global/lib/node_modules/openclaw/package.json"); process.stdout.write(pkg.version)')"
 sut_command="/npm-global/bin/openclaw"
+plugin_registry_pid=""
+
+cleanup_recovery() {
+  openclaw_e2e_stop_process "${plugin_registry_pid:-}"
+}
+trap cleanup_recovery EXIT
 
 dump_hotpath_logs() {
   local status="$1"
@@ -447,7 +486,8 @@ dump_hotpath_logs() {
     /tmp/openclaw-npm-telegram-onboard.json \
     /tmp/openclaw-npm-telegram-channel-add.log \
     /tmp/openclaw-npm-telegram-doctor-fix.log \
-    /tmp/openclaw-npm-telegram-doctor-check.log; do
+    /tmp/openclaw-npm-telegram-doctor-check.log \
+    /tmp/openclaw-npm-telegram-plugin-registry/server.log; do
     if [ -f "$file" ]; then
       echo "--- $file ---" >&2
       openclaw_e2e_print_log "$file" >&2
@@ -502,6 +542,17 @@ for workspace_dir in /app/packages/* /app/extensions/*; do
   link_harness_dependency "$workspace_dir" "$workspace_name"
 done
 link_harness_dependency /app openclaw
+
+if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+  OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_REQUIRED_PACKAGES_JSON='["@openclaw/codex"]' \
+    openclaw_prepublish_plugin_registry_start \
+    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR" \
+    "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:?missing selected SHA}" \
+    "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}" \
+    "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:?missing manifest SHA-256}" \
+    /tmp/openclaw-npm-telegram-plugin-registry \
+    plugin_registry_pid
+fi
 
 if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
   hotpath_home="$(mktemp -d "/tmp/openclaw-npm-telegram-hotpath.XXXXXX")"

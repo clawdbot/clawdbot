@@ -5,6 +5,7 @@ import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { serializeConfigForm } from "../config-form-utils.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
+import { showToast } from "../toast.ts";
 import {
   adoptConfigSetAck,
   applyConfigSnapshot,
@@ -223,7 +224,7 @@ export async function executeConfigExternalMutation<T>(
 
 export async function loadConfig(
   state: RuntimeConfigState,
-  options: LoadConfigOptions = {},
+  options: LoadConfigOptions & { background?: boolean; beforeApplySnapshot?: () => void } = {},
   isCurrentLoad: () => boolean = () => true,
 ): Promise<boolean> {
   const client = state.client;
@@ -232,7 +233,9 @@ export async function loadConfig(
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
   const version = nextRequestVersion(state, "config");
-  state.configLoading = true;
+  if (!options.background) {
+    state.configLoading = true;
+  }
   state.lastError = null;
   state.chatError = null;
   try {
@@ -240,6 +243,8 @@ export async function loadConfig(
     if (!isCurrentRequest(state, "config", version, client, connectionEpoch) || !isCurrentLoad()) {
       return false;
     }
+    // Recovery captures the latest intent before a clean draft is replaced.
+    options.beforeApplySnapshot?.();
     applyConfigSnapshot(state, res, options);
     return true;
   } catch (err) {
@@ -248,7 +253,10 @@ export async function loadConfig(
     }
     return false;
   } finally {
-    if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
+    if (
+      !options.background &&
+      isCurrentRequest(state, "config", version, client, connectionEpoch)
+    ) {
       state.configLoading = false;
     }
   }
@@ -639,6 +647,21 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
   const isCurrent = () => isCurrentConfigConnection(state, client, connectionEpoch);
   state.lastError = null;
   state.chatError = null;
+  const publishFailure = async (error: string, path?: string | null) => {
+    if (!isCurrent()) {
+      return;
+    }
+    let message = error;
+    if (path) {
+      message += (await copyToClipboard(path))
+        ? `\n\nFile path copied to clipboard: ${path}`
+        : `\n\nFile path: ${path}`;
+    }
+    if (isCurrent()) {
+      state.lastError = formatUiExternalText(message);
+      showToast({ message: state.lastError });
+    }
+  };
   try {
     const res = await client.request<{ ok: boolean; path?: string; error?: string }>(
       "config.openFile",
@@ -648,30 +671,12 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
       return;
     }
     if (!res.ok) {
-      let errorMessage = formatUiExternalText(res.error, "Failed to open config file");
-      const path = res.path || state.configSnapshot?.path;
-      if (path) {
-        if (await copyToClipboard(path)) {
-          errorMessage += `\n\nFile path copied to clipboard: ${path}`;
-        } else {
-          errorMessage += `\n\nFile path: ${path}`;
-        }
-      }
-      if (isCurrent()) {
-        state.lastError = formatUiExternalText(errorMessage);
-      }
+      await publishFailure(
+        formatUiExternalText(res.error, "Failed to open config file"),
+        res.path || state.configSnapshot?.path,
+      );
     }
   } catch (err) {
-    if (!isCurrent()) {
-      return;
-    }
-    const errorMessage = formatUiError(err);
-    const path = state.configSnapshot?.path;
-    if (path) {
-      await copyToClipboard(path);
-    }
-    if (isCurrent()) {
-      state.lastError = errorMessage;
-    }
+    await publishFailure(formatUiError(err), state.configSnapshot?.path);
   }
 }

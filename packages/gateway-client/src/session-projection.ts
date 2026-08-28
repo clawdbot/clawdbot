@@ -1,25 +1,24 @@
 /** Browser-safe identity and replay rules shared by Gateway conversation clients. */
 
 import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeSessionProjectionRunId,
+  readSessionMessageIdentity,
+  readSessionProjectionString as readNonemptyString,
+  type SessionMessageEnvelope,
+  type SessionMessageIdentity,
+} from "./session-projection-message-identity.js";
 import { reduceSessionProjectionRunEventImpl } from "./session-projection-run-event.js";
 
-export type SessionMessageEnvelope = {
-  messageId?: unknown;
-  messageSeq?: unknown;
-  clientRunId?: unknown;
-  runId?: unknown;
-  idempotencyKey?: unknown;
-};
-
-export type SessionMessageIdentity = {
-  role: string;
-  id: string | null;
-  sequence: number | null;
-  idempotencyKey: string | null;
-  runId: string | null;
-  isImported: boolean;
-  externalSource: string | null;
-};
+export {
+  normalizeSessionProjectionRunId,
+  readSessionMessageIdentity,
+  readSessionMessageSequence,
+} from "./session-projection-message-identity.js";
+export type {
+  SessionMessageEnvelope,
+  SessionMessageIdentity,
+} from "./session-projection-message-identity.js";
 
 export type SessionProjectionScope = {
   sessionKey?: string;
@@ -120,66 +119,6 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
     | { type: "transportGap" }
     | { type: "reconnected" }
   );
-
-function readNonemptyString(value: unknown): string | null {
-  return typeof value === "string" ? value.trim() || null : null;
-}
-
-function readPositiveSafeInteger(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
-}
-
-/** History and status markers carry transcript order even when they have no chat role. */
-export function readSessionMessageSequence(
-  message: unknown,
-  envelope?: SessionMessageEnvelope,
-): number | null {
-  const metadata = readRecord(readRecord(message)?.["__openclaw"]);
-  return readPositiveSafeInteger(metadata?.seq) ?? readPositiveSafeInteger(envelope?.messageSeq);
-}
-
-/** Run ownership normalizes a user-turn suffix without changing its persisted send key. */
-export function normalizeSessionProjectionRunId(value: unknown): string | null {
-  const runId = readNonemptyString(value);
-  return runId?.endsWith(":user") ? runId.slice(0, -":user".length) || null : runId;
-}
-
-/** Persisted row facts win; assistant run ownership comes from its authoritative producer. */
-export function readSessionMessageIdentity(
-  message: unknown,
-  envelope?: SessionMessageEnvelope,
-): SessionMessageIdentity | null {
-  const record = readRecord(message);
-  const role = readNonemptyString(record?.role)?.toLowerCase();
-  if (!record || !role) {
-    return null;
-  }
-  const metadata = readRecord(record["__openclaw"]);
-  const importedFrom = readNonemptyString(metadata?.importedFrom);
-  const cliSessionId = readNonemptyString(metadata?.cliSessionId);
-  const externalId = readNonemptyString(metadata?.externalId);
-  const idempotencyKey =
-    readNonemptyString(metadata?.idempotencyKey) ??
-    readNonemptyString(record.idempotencyKey) ??
-    readNonemptyString(envelope?.idempotencyKey) ??
-    readNonemptyString(envelope?.clientRunId);
-  return {
-    role,
-    id: readNonemptyString(metadata?.id) ?? readNonemptyString(envelope?.messageId),
-    sequence: readSessionMessageSequence(message, envelope),
-    idempotencyKey,
-    runId:
-      (role === "assistant" ? normalizeSessionProjectionRunId(envelope?.runId) : null) ??
-      normalizeSessionProjectionRunId(idempotencyKey) ??
-      normalizeSessionProjectionRunId(envelope?.runId),
-    isImported: Boolean(importedFrom || cliSessionId || externalId),
-    // Imported IDs belong to their provider and CLI session, never the native ID namespace.
-    externalSource:
-      importedFrom && cliSessionId && externalId
-        ? JSON.stringify([importedFrom, cliSessionId, externalId])
-        : null,
-  };
-}
 
 /** Local turns have no durable transcript metadata beyond their own optional send key. */
 export function isLocallyOptimisticSessionMessage(message: unknown): boolean {
@@ -298,6 +237,7 @@ function entryMatches(
   }
   const durableEntry = left.identity?.id ? left : right.identity?.id ? right : null;
   const provisionalEntry = durableEntry === left ? right : durableEntry === right ? left : null;
+  const durableMetadata = readRecord(readRecord(durableEntry?.message)?.["__openclaw"]);
   if (
     durableEntry?.live &&
     provisionalEntry?.live &&
@@ -307,12 +247,15 @@ function entryMatches(
     !provisionalEntry.identity.isImported &&
     !provisionalEntry.identity.id &&
     durableEntry.identity.runId &&
-    durableEntry.identity.runId === provisionalEntry.identity.runId
+    durableEntry.identity.runId === provisionalEntry.identity.runId &&
+    (readNonemptyString(durableMetadata?.mirrorOrigin) === null ||
+      durableMetadata?.runTerminal === true)
   ) {
     return true;
   }
   const persisted = left.identity;
   const observed = right.identity;
+  const persistedMetadata = readRecord(readRecord(left.message)?.["__openclaw"]);
   if (
     allowSnapshotPromotion &&
     right.live &&
@@ -327,7 +270,9 @@ function entryMatches(
       (persisted.role === "assistant" &&
         observed.sequence === null &&
         persisted.runId !== null &&
-        persisted.runId === observed.runId))
+        persisted.runId === observed.runId &&
+        (readNonemptyString(persistedMetadata?.mirrorOrigin) === null ||
+          persistedMetadata?.runTerminal === true)))
   ) {
     // Only current-scope history can promote an observed native sequence or assistant run.
     return true;
@@ -377,14 +322,29 @@ function insertEntry(
           const candidate = entry.identity?.sequence;
           return candidate !== undefined && candidate !== null && candidate > sequence;
         });
-  if (nextIndex < 0 && incoming.identity?.role === "user" && incoming.identity.runId) {
+  if (sequence !== undefined && sequence !== null && nextIndex < 0) {
+    nextIndex = entries.length;
+  }
+  if (incoming.identity?.role === "user" && incoming.identity.runId) {
     const runId = incoming.identity.runId;
     const terminalMessage = runs?.[runId]?.message;
-    nextIndex = entries.findIndex(
-      (entry) =>
-        entry.identity?.role === "assistant" &&
-        (entry.identity.runId === runId || entry.message === terminalMessage),
-    );
+    const belongsToRun = (entry: SessionProjectionEntry) =>
+      entry.identity?.role === "assistant" &&
+      (entry.identity.runId === runId || entry.message === terminalMessage);
+    if (sequence !== undefined && sequence !== null) {
+      // A run can deliver several replies before its prompt. Move every early
+      // unsequenced reply together; durable sequence always wins over run ownership.
+      const before: SessionProjectionEntry[] = [];
+      const replies: SessionProjectionEntry[] = [];
+      for (const entry of entries.slice(0, nextIndex)) {
+        (entry.identity?.sequence === null && belongsToRun(entry) ? replies : before).push(entry);
+      }
+      return [...before, incoming, ...replies, ...entries.slice(nextIndex)];
+    }
+    const terminalIndex = entries.findIndex(belongsToRun);
+    if (terminalIndex >= 0 && (nextIndex < 0 || terminalIndex < nextIndex)) {
+      nextIndex = terminalIndex;
+    }
   }
   return nextIndex < 0
     ? [...entries, incoming]
@@ -417,7 +377,11 @@ export function projectLiveSessionMessage(
     // durable row would lose the ID every later snapshot reconciles against.
     return state;
   }
-  if (existing?.pending && incoming.identity.sequence !== null) {
+  if (
+    existing &&
+    incoming.identity.sequence !== null &&
+    (existing.pending || existing.identity?.sequence === null)
+  ) {
     const sequence = incoming.identity.sequence;
     const violatesOrder = state.entries.some(
       ({ identity }, index) =>

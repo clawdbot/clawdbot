@@ -106,6 +106,20 @@ describe("installScheduledTask", () => {
     expect(schtasksCalls[index]).toEqual(["/Run", "/TN", taskName]);
   }
 
+  it("redirects stdin from NUL so a hidden service console is never interactive (#112173)", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      const { scriptPath } = await installDefaultGatewayTask(env);
+      const script = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
+      expect(script).toContain("node gateway.js < NUL");
+
+      const parsed = await readScheduledTaskCommand(env);
+      expect(parsed).toStrictEqual({
+        programArguments: ["node", "gateway.js"],
+        sourcePath: scriptPath,
+      });
+    });
+  });
+
   it("writes version-free gateway and node descriptions", async () => {
     await withUserProfileDir(async (_tmpDir, env) => {
       const gateway = await installDefaultGatewayTask(env);
@@ -161,8 +175,10 @@ describe("installScheduledTask", () => {
           OC_CARET: "a^b",
           OC_PERCENT: "%TEMP%",
           OC_BANG: "!token!",
+          OC_SOURCE_PATH: "C:\\OpenClaw source & ^ %USERPROFILE%!",
           OC_QUOTE: 'he said "hi"',
           OC_EMPTY: "",
+          NODE_OPTIONS: "",
         },
       });
 
@@ -175,8 +191,10 @@ describe("installScheduledTask", () => {
       expect(script).toContain('set "OC_CARET=a^^b"');
       expect(script).toContain('set "OC_PERCENT=%%TEMP%%"');
       expect(script).toContain('set "OC_BANG=^!token^!"');
+      expect(script).toContain('set "OC_SOURCE_PATH=C:\\OpenClaw source & ^^ %%USERPROFILE%%^!"');
       expect(script).toContain('set "OC_QUOTE=he said ^"hi^""');
       expect(script).not.toContain('set "OC_EMPTY=');
+      expect(script).toContain('set "NODE_OPTIONS="');
       expect(script).not.toContain("set OC_INJECT=");
 
       const parsed = await readScheduledTaskCommand(env);
@@ -197,14 +215,18 @@ describe("installScheduledTask", () => {
           OC_CARET: "a^b",
           OC_PERCENT: "%TEMP%",
           OC_BANG: "!token!",
+          OC_SOURCE_PATH: "C:\\OpenClaw source & ^ %USERPROFILE%!",
           OC_QUOTE: 'he said "hi"',
+          NODE_OPTIONS: "",
         },
         environmentValueSources: {
           OC_INJECT: "inline",
           OC_CARET: "inline",
           OC_PERCENT: "inline",
           OC_BANG: "inline",
+          OC_SOURCE_PATH: "inline",
           OC_QUOTE: "inline",
+          NODE_OPTIONS: "inline",
         },
         sourcePath: scriptPath,
       });

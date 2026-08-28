@@ -56,7 +56,9 @@ export function sessionPlacementDispatchParams(params: {
           profileId: params.target.profileId,
           ...(params.target.machineClass ? { machineClass: params.target.machineClass } : {}),
         }
-      : { deviceId: params.target.deviceId }),
+      : params.target.kind === "device"
+        ? { deviceId: params.target.deviceId }
+        : { autoDevice: true }),
   };
 }
 

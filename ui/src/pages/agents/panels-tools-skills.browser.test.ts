@@ -55,6 +55,30 @@ function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>
   };
 }
 
+function createSkill(
+  name: string,
+  options: { source?: string; bundled?: boolean; blockedByAgentFilter?: boolean } = {},
+): SkillStatusEntry {
+  return {
+    name,
+    description: `${name} skill`,
+    source: options.source ?? "openclaw-managed",
+    bundled: options.bundled ?? false,
+    filePath: `/tmp/skills/${name}/SKILL.md`,
+    baseDir: `/tmp/skills/${name}`,
+    skillKey: name,
+    always: false,
+    disabled: false,
+    blockedByAllowlist: false,
+    blockedByAgentFilter: options.blockedByAgentFilter ?? false,
+    eligible: true,
+    requirements: { bins: [], anyBins: [], env: [], config: [], os: [] },
+    missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+    configChecks: [],
+    install: [],
+  };
+}
+
 describe("agents tools panel (browser)", () => {
   it("renders catalog provenance and effective runtime tools", async () => {
     const container = document.createElement("div");
@@ -540,7 +564,10 @@ describe("agents tools panel (browser)", () => {
     ]);
   });
 
-  it("opens the collapsed group and tool row from a live tool chip", async () => {
+  it.each([
+    { reduced: true, behavior: "auto" },
+    { reduced: false, behavior: "smooth" },
+  ] as const)("opens a live tool chip with $behavior scrolling", async ({ reduced, behavior }) => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
@@ -612,9 +639,16 @@ describe("agents tools panel (browser)", () => {
     expect(group.open).toBe(false);
     expect(tool.open).toBe(false);
 
+    const summary = tool.querySelector<HTMLElement>("summary");
+    if (!summary) {
+      container.remove();
+      throw new Error("expected agent tool summary");
+    }
+    const scrollIntoView = vi.fn();
+    tool.scrollIntoView = scrollIntoView;
+    const focus = vi.spyOn(summary, "focus");
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: reduced }));
     const previousUrl = window.location.href;
-    // Shared jsdom workers can observe URL changes before finally/afterEach,
-    // so inspect the intended deep link without mutating browser history.
     const replaceState = vi.spyOn(window.history, "replaceState").mockImplementation(() => {});
     try {
       chip.click();
@@ -629,7 +663,11 @@ describe("agents tools panel (browser)", () => {
       expect(requestedUrl).toBeInstanceOf(URL);
       expect((requestedUrl as URL).hash).toBe("#agent-tool-read");
       expect(window.location.href).toBe(previousUrl);
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", behavior });
+      expect(focus).toHaveBeenCalledOnce();
     } finally {
+      vi.unstubAllGlobals();
+      focus.mockRestore();
       replaceState.mockRestore();
       container.remove();
     }
@@ -637,26 +675,58 @@ describe("agents tools panel (browser)", () => {
 });
 
 describe("agents skills panel (browser)", () => {
+  it("shows matches from default-collapsed groups while filtering", async () => {
+    const container = document.createElement("div");
+    const params: Parameters<typeof renderAgentSkills>[0] = {
+      agentId: "main",
+      canPatchConfig: true,
+      canUpdateConfig: true,
+      report: {
+        workspaceDir: "/tmp/workspace",
+        managedSkillsDir: "/tmp/skills",
+        agentId: "main",
+        skills: [
+          createSkill("Unique Built In Match", {
+            source: "openclaw-bundled",
+            bundled: true,
+          }),
+          createSkill("Installed Distractor"),
+        ],
+      },
+      loading: false,
+      error: null,
+      activeAgentId: "main",
+      configForm: { agents: { entries: { main: { default: true } } } },
+      configLoading: false,
+      configSaving: false,
+      configDirty: false,
+      filter: "",
+      onFilterChange: () => undefined,
+      onRefresh: () => undefined,
+      onToggle: () => undefined,
+      onClear: () => undefined,
+      onDisableAll: () => undefined,
+      onConfigReload: () => undefined,
+      onConfigSave: () => undefined,
+    };
+
+    render(renderAgentSkills(params), container);
+    await Promise.resolve();
+    const builtInGroup = container.querySelector<HTMLDetailsElement>(".agent-skills-group");
+    expect(builtInGroup?.open).toBe(false);
+
+    render(renderAgentSkills({ ...params, filter: "Unique Built In Match" }), container);
+    await Promise.resolve();
+    const filteredGroup = container.querySelector<HTMLDetailsElement>(".agent-skills-group");
+    expect(container.textContent).toContain("1 shown");
+    expect(filteredGroup?.open).toBe(true);
+    expect(filteredGroup?.querySelector(".agent-skill-row")?.textContent).toContain(
+      "Unique Built In Match",
+    );
+  });
+
   it("reflects an inherited default skill allowlist", async () => {
     const container = document.createElement("div");
-    const skill = (name: string, blockedByAgentFilter: boolean): SkillStatusEntry => ({
-      name,
-      description: `${name} skill`,
-      source: "openclaw-managed",
-      bundled: false,
-      filePath: `/tmp/skills/${name}/SKILL.md`,
-      baseDir: `/tmp/skills/${name}`,
-      skillKey: name,
-      always: false,
-      disabled: false,
-      blockedByAllowlist: false,
-      blockedByAgentFilter,
-      eligible: true,
-      requirements: { bins: [], anyBins: [], env: [], config: [], os: [] },
-      missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
-      configChecks: [],
-      install: [],
-    });
 
     render(
       renderAgentSkills({
@@ -668,7 +738,7 @@ describe("agents skills panel (browser)", () => {
           managedSkillsDir: "/tmp/skills",
           agentId: "main",
           agentSkillFilter: ["github"],
-          skills: [skill("github", false), skill("weather", true)],
+          skills: [createSkill("github"), createSkill("weather", { blockedByAgentFilter: true })],
         },
         loading: false,
         error: null,

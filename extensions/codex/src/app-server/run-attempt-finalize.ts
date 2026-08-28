@@ -1,4 +1,5 @@
 import {
+  buildEmbeddedForegroundPromptContext,
   embeddedAgentLog,
   formatErrorMessage,
   runAgentHarnessLlmOutputHook,
@@ -67,6 +68,7 @@ export async function finalizeCodexAttempt(
     sessionAgentId,
     contextSessionKey,
     effectiveCwd,
+    agentDir,
     attemptStartedAt,
     startupAuthProfileId,
   } = connection;
@@ -137,15 +139,21 @@ export async function finalizeCodexAttempt(
   const effectiveTimedOut = state.timedOut && !recoveredTurnWatchTimeout;
   const effectiveTurnCompletionIdleTimedOut =
     state.turnCompletionIdleTimedOut && !recoveredTurnWatchTimeout;
+  // Transport loss aborts in-flight work mechanically, but its terminal outcome
+  // must remain a failure unless the operator explicitly canceled the attempt.
   const isFinalAborted = () =>
-    projectedTerminal.aborted ||
     terminalState.explicitCancellationObserved ||
-    (runAbortController.signal.aborted && !state.clientClosedAbort && !recoveredTurnWatchTimeout);
+    (!resourceState.executionDisconnectError &&
+      (projectedTerminal.aborted ||
+        (runAbortController.signal.aborted &&
+          !state.clientClosedAbort &&
+          !recoveredTurnWatchTimeout)));
   const clientClosedPromptErrorForFinal =
     state.clientClosedPromptError && hasRecoverableCompletedAssistant
       ? undefined
       : state.clientClosedPromptError;
   let finalPromptError =
+    resourceState.executionDisconnectError ??
     clientClosedPromptErrorForFinal ??
     (effectiveTurnCompletionIdleTimedOut
       ? state.turnCompletionIdleTimeoutMessage
@@ -213,6 +221,9 @@ export async function finalizeCodexAttempt(
       rateLimits: readRecentCodexRateLimits(resourceState.client),
     });
   }
+  // Device loss can arrive during asynchronous failure enrichment. Re-read its
+  // owner before freezing derived success, cancellation, and terminal state.
+  finalPromptError = resourceState.executionDisconnectError ?? finalPromptError;
   const finalPromptErrorSource =
     effectiveTimedOut || clientClosedPromptErrorForFinal
       ? "prompt"
@@ -384,20 +395,11 @@ export async function finalizeCodexAttempt(
         attemptTools.toolBridge.availableSpecs,
       ).some((tool) => tool.name === "skill_workshop"),
       compacted: (result.compactionCount ?? 0) > 0,
-      messageChannel: params.messageChannel,
-      messageProvider: params.messageProvider,
-      chatType: params.chatType,
-      agentAccountId: params.agentAccountId,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      memberRoleIds: params.memberRoleIds,
-      spawnedBy: params.spawnedBy,
       senderId: params.senderId ?? undefined,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
+      foregroundPromptContext: buildEmbeddedForegroundPromptContext(
+        { ...params, agentId: sessionAgentId },
+        agentDir,
+      ),
     },
     hookRunner,
   });

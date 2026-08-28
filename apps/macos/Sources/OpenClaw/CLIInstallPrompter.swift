@@ -60,14 +60,17 @@ final class CLIInstallPrompter {
         guard lastPrompt != version else { return }
         AppDefaults.standard.set(version, forKey: cliInstallPromptedVersionKey)
 
-        if let target = self.installTargetForCurrentBuild(confirmStable: true) {
+        if let target = await self.installTargetForCurrentBuild(confirmStable: true, presentingSheetOn: nil) {
             Task { _ = await self.installCLI(target: target) }
         }
 
         self.logger.debug("cli install prompt handled reason=\(reason, privacy: .public)")
     }
 
-    func installTargetForCurrentBuild(confirmStable: Bool = false) -> CLIInstaller.InstallTarget? {
+    func installTargetForCurrentBuild(
+        confirmStable: Bool = false,
+        presentingSheetOn window: NSWindow?) async -> CLIInstaller.InstallTarget?
+    {
         let appVersion = Self.appVersion()
         if let target = CLIInstaller.automaticInstallTarget(
             appVersion: appVersion,
@@ -80,7 +83,7 @@ final class CLIInstallPrompter {
             alert.addButton(withTitle: "Install CLI")
             alert.addButton(withTitle: "Not Now")
             alert.addButton(withTitle: "Open Settings")
-            switch alert.runModal() {
+            switch await self.present(alert, presentingSheetOn: window) {
             case .alertFirstButtonReturn:
                 return target
             case .alertThirdButtonReturn:
@@ -91,14 +94,18 @@ final class CLIInstallPrompter {
             }
         }
 
-        return self.chooseChannel(
+        return await self.chooseChannel(
             suggested: CLIInstaller.suggestedChannel(
                 appVersion: appVersion,
-                isDebug: CLIInstallBuild.isDebug))
+                isDebug: CLIInstallBuild.isDebug),
+            presentingSheetOn: window)
             .map(CLIInstaller.InstallTarget.channel)
     }
 
-    private func chooseChannel(suggested: CLIInstaller.Channel) -> CLIInstaller.Channel? {
+    private func chooseChannel(
+        suggested: CLIInstaller.Channel,
+        presentingSheetOn window: NSWindow?) async -> CLIInstaller.Channel?
+    {
         let channels = [suggested] + CLIInstaller.Channel.allCases.filter { $0 != suggested }
         let alert = NSAlert()
         alert.messageText = "Choose OpenClaw CLI channel"
@@ -111,10 +118,16 @@ final class CLIInstallPrompter {
             alert.addButton(withTitle: channel.label)
         }
         alert.addButton(withTitle: "Not Now")
-        let response = alert.runModal()
+        let response = await self.present(alert, presentingSheetOn: window)
         let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
         guard channels.indices.contains(index) else { return nil }
         return channels[index]
+    }
+
+    private func present(_ alert: NSAlert, presentingSheetOn window: NSWindow?) async -> NSApplication.ModalResponse {
+        // Attaching onboarding alerts preserves their AX visibility and window-relative z-order.
+        guard let window else { return alert.runModal() }
+        return await alert.beginSheetModal(for: window)
     }
 
     private func installCLI(
@@ -375,13 +388,20 @@ final class CLIInstallPrompter {
             .deletingLastPathComponent()
             .standardizedFileURL.path + "/"
         guard let executable = command.first else { return false }
-        let executablePath = URL(fileURLWithPath: executable).standardizedFileURL.path
+        let executableURL = URL(fileURLWithPath: executable).standardizedFileURL
         let managedRuntimeRoot = managedRoot + "tools/node/"
-        if executablePath.hasPrefix(managedRoot), !executablePath.hasPrefix(managedRuntimeRoot) {
+        if executableURL.path.hasPrefix(managedRoot), !executableURL.path.hasPrefix(managedRuntimeRoot) {
             return true
         }
-        guard command.count >= 2 else { return false }
-        let entrypoint = command[command.index(after: command.startIndex)]
+        guard ["node", "bun"].contains(executableURL.lastPathComponent) else { return false }
+        // Skip only the joined heap controls emitted by the service installer.
+        // Other native options may consume paths; those values never prove CLI ownership.
+        let entrypoint = command.dropFirst().drop(while: {
+            $0.hasPrefix("--max-old-space-size=") ||
+                $0.hasPrefix("--max-old-space-size-percentage=") ||
+                $0.hasPrefix("--max-heap-size=")
+        }).first
+        guard let entrypoint, !entrypoint.hasPrefix("-") else { return false }
         return URL(fileURLWithPath: entrypoint).standardizedFileURL.path.hasPrefix(managedRoot)
     }
 

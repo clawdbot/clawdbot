@@ -6,6 +6,7 @@ import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.j
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import type { NormalizedUsage, UsageLike } from "../../usage.js";
+import { hasMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
 import { resolveEmbeddedRunFailureSignal } from "../failure-signal.js";
 import { resolveEmbeddedRunTerminalToolFailure } from "../terminal-tool-failure.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
@@ -114,6 +115,7 @@ export function prepareEmbeddedRunTerminal(input: {
         }
       : {}),
     agentHarnessId: attempt.agentHarnessId,
+    credentialSource: attempt.modelAttempt?.credentialSource,
     usage: usageMeta.usage,
     lastCallUsage: usageMeta.lastCallUsage,
     promptTokens: usageMeta.promptTokens,
@@ -215,6 +217,10 @@ export function prepareEmbeddedRunTerminal(input: {
     agentId: runParams.agentId,
     runId: runParams.runId,
     runAborted: isEmbeddedRunTerminalInterrupted(input.terminalState.outcome),
+    deferAssistantTimeoutError:
+      timedOutDuringPrompt &&
+      (!hasMessagingToolDeliveryEvidence(attempt) ||
+        attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout"),
     didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
     heartbeatToolResponse: attempt.heartbeatToolResponse,
   });

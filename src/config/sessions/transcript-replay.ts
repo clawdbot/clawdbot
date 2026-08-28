@@ -1,7 +1,7 @@
 // Selects safe user/assistant tails for in-log lifecycle boundaries.
 
 /** Tail kept so DM continuity survives silent session rotations. */
-export const DEFAULT_REPLAY_MAX_MESSAGES = 6;
+const DEFAULT_REPLAY_MAX_MESSAGES = 6;
 
 type SessionRecord = {
   type?: unknown;
@@ -19,9 +19,7 @@ function isValidReplayTimestamp(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-export function replayableTranscriptRole(
-  record: SessionRecord | null,
-): "user" | "assistant" | undefined {
+function replayableTranscriptRole(record: SessionRecord | null): "user" | "assistant" | undefined {
   if (
     !record ||
     record.type !== "message" ||

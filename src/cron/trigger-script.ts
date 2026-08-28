@@ -26,6 +26,7 @@ import {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import type { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { resolveSandboxContext } from "../agents/sandbox.js";
 import {
@@ -98,6 +99,7 @@ type CronTriggerEvaluatorDeps = {
   config: OpenClawConfig;
   runHeadless?: typeof runCodeModeScriptHeadless;
   prepareRuntime?: PrepareTriggerRuntime;
+  loadPluginRegistry?: typeof loadPreparedInboundPluginRegistry;
 };
 
 type TriggerRuntimeCacheEntry = {
@@ -111,14 +113,10 @@ function resolveTriggerAgentId(config: OpenClawConfig, agentId?: string): string
   return agentId?.trim() ? normalizeAgentId(agentId) : resolveDefaultAgentId(config);
 }
 
-async function prepareTriggerRuntime(params: {
-  runtimeConfig: OpenClawConfig;
-  jobId: string;
-  agentId?: string;
-  toolsAllow?: string[];
-  scheduledToolPolicy?: ScheduledToolPolicyContext;
-  signal?: AbortSignal;
-}): Promise<PreparedTriggerRuntime> {
+async function prepareTriggerRuntime(
+  params: Parameters<PrepareTriggerRuntime>[0],
+  loadPluginRegistry: typeof loadPreparedInboundPluginRegistry = loadAgentRuntimePluginRegistryHandle,
+): Promise<PreparedTriggerRuntime> {
   params.signal?.throwIfAborted();
   const agentId = resolveTriggerAgentId(params.runtimeConfig, params.agentId);
   const selectedAgentConfig = resolveAgentConfig(params.runtimeConfig, agentId);
@@ -129,14 +127,22 @@ async function prepareTriggerRuntime(params: {
   });
   const workspaceDirRaw = resolveAgentWorkspaceDir(config, agentId);
   const agentDir = resolveAgentDir(config, agentId);
+  const { resolveAcpAgentWorkspaceProvisioningForTurn } =
+    await import("../agents/acp-workspace-provisioning.js");
+  const workspaceProvisioning = await resolveAcpAgentWorkspaceProvisioningForTurn({
+    cfg: config,
+    agentId,
+    workspaceDir: workspaceDirRaw,
+  });
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentDefaults.skipBootstrap,
     skipOptionalBootstrapFiles: agentDefaults.skipOptionalBootstrapFiles,
+    provisioning: workspaceProvisioning,
   });
   params.signal?.throwIfAborted();
   const workspaceDir = workspace.dir;
-  const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
+  const pluginRegistry = loadPluginRegistry({
     config,
     workspaceDir,
     allowGatewaySubagentBinding: true,
@@ -306,7 +312,7 @@ function createHeadlessDeadlineScope(params: {
     params.wallClockMs,
   );
   return {
-    deadline: Date.now() + params.wallClockMs,
+    deadline: performance.now() + params.wallClockMs,
     signal: controller.signal,
     cleanup: () => {
       clearTimeout(timer);
@@ -336,7 +342,8 @@ async function awaitTriggerSignal<T>(promise: Promise<T>, signal: AbortSignal): 
 
 function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
   const runHeadless = deps.runHeadless ?? runCodeModeScriptHeadless;
-  const prepareRuntime = deps.prepareRuntime ?? prepareTriggerRuntime;
+  const prepareRuntime =
+    deps.prepareRuntime ?? ((params) => prepareTriggerRuntime(params, deps.loadPluginRegistry));
   // Config identity is the reload epoch; caching the preparation promise makes
   // concurrent cold evaluations for one job single-flight.
   const runtimeCache = new Map<string, TriggerRuntimeCacheEntry>();
@@ -452,7 +459,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           tools: runtime.tools,
           hookContext: { ...runtime.hookContext, runId },
         });
-        const remainingWallClockMs = evaluationScope.deadline - Date.now();
+        const remainingWallClockMs = Math.ceil(evaluationScope.deadline - performance.now());
         if (remainingWallClockMs <= 0) {
           throw new CodeModeHeadlessTimeoutError(`${params.label} timed out`);
         }

@@ -73,10 +73,18 @@ describe("shared toast", () => {
   it("auto-dismisses after the configured duration", async () => {
     vi.useFakeTimers();
     const host = await mountHost();
+    const anchor = document.createElement("div");
+    document.body.append(anchor);
+    vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
 
-    showToast({ message: "Temporary", durationMs: 50 });
+    showToast({ anchor, message: "Temporary", durationMs: 50 });
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(50);
+    await host.updateComplete;
+
+    expect(host.querySelector('.app-toast[data-active="false"]')).not.toBeNull();
+
+    await vi.runAllTimersAsync();
     await host.updateComplete;
 
     expect(host.querySelector(".app-toast")).toBeNull();
@@ -93,6 +101,23 @@ describe("shared toast", () => {
 
     expect(onAction).toHaveBeenCalledOnce();
     expect(host.querySelector(".app-toast")).toBeNull();
+  });
+
+  it("preserves the dismissal reason when an exiting toast is replaced", async () => {
+    vi.useFakeTimers();
+    const host = await mountHost();
+    const anchor = document.createElement("div");
+    document.body.append(anchor);
+    vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
+    const reasons: string[] = [];
+
+    showToast({ anchor, message: "First", onDismiss: (reason) => reasons.push(reason) });
+    await host.updateComplete;
+    host.querySelector<HTMLButtonElement>(".app-toast__dismiss")?.click();
+    await host.updateComplete;
+    showToast({ message: "Second" });
+
+    expect(reasons).toEqual(["dismiss"]);
   });
 
   it("reports why a toast is replaced, dismissed, acted on, or disconnected", async () => {
@@ -114,6 +139,7 @@ describe("shared toast", () => {
     await host.updateComplete;
     host.querySelector<HTMLButtonElement>(".app-toast__dismiss")?.click();
     await host.updateComplete;
+    expect(host.querySelector(".app-toast")).toBeNull();
 
     showToast({ message: "Fourth", onDismiss: (reason) => reasons.push(reason) });
     host.remove();

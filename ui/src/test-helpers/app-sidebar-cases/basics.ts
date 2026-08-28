@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
-import { sessionRefFromPath } from "../../app-session-route-paths.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
+import {
+  SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
+  sessionRefFromPath,
+} from "../../app-session-route-paths.ts";
 import {
   clearSessionBoardAvailability,
   recordSessionBoardAvailability,
@@ -22,6 +23,8 @@ import {
 } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
+await import("../../components/viewer-facepile.ts");
+
 describe("AppSidebar update card wiring", () => {
   it("keeps OpenClaw out of the workspace sidebar", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -30,44 +33,10 @@ describe("AppSidebar update card wiring", () => {
     expect(sidebar.querySelector('.nav-item[href="/custodian"]')).toBeNull();
     expect(sidebar.querySelector('.nav-item[href="/settings/secrets"]')).toBeNull();
   });
-
-  it("keeps the update card after attention for loud states", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const onUpdate = vi.fn();
-    const onRefresh = vi.fn();
-    sidebar.updateAvailable = {
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    };
-    sidebar.canUpdate = true;
-    sidebar.onUpdate = onUpdate;
-    sidebar.onRefresh = onRefresh;
-    await sidebar.updateComplete;
-
-    const footer = sidebar.querySelector(".sidebar-shell__footer");
-    // Attention chips (when present) stack above the update card.
-    expect(footer?.firstElementChild?.localName).toBe("openclaw-sidebar-attention");
-    const card = footer?.querySelector("openclaw-sidebar-update-card");
-    expect(card).not.toBeNull();
-    expect(card?.querySelector(".sidebar-update-card")).toBeNull();
-
-    sidebar.refreshRequired = true;
-    await sidebar.updateComplete;
-    const refreshCard = footer?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-sidebar-update-card",
-    );
-    await refreshCard?.updateComplete;
-    expect(refreshCard?.textContent).toContain("Server updated");
-    refreshCard?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    expect(onRefresh).toHaveBeenCalledOnce();
-    expect(onUpdate).not.toHaveBeenCalled();
-  });
 });
 
-describe("AppSidebar brand actions", () => {
-  it("starts a thread for the expanded agent from the brand action", async () => {
+describe("AppSidebar new session navigation", () => {
+  it("opens new-session links for the expanded agent without intercepting browser gestures", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const agentsList = {
       defaultId: "main",
@@ -82,74 +51,95 @@ describe("AppSidebar brand actions", () => {
       agentsList,
     );
     const onOpenNewSession = vi.fn();
+    sidebar.basePath = "/control";
     sidebar.connected = false;
     sidebar.onOpenNewSession = onOpenNewSession;
     await sidebar.updateComplete;
 
     const actions = sidebar.querySelector(".sidebar-brand__actions");
-    const brandButton = sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__new-thread");
-    expect(actions?.firstElementChild?.querySelector(".sidebar-brand__new-thread")).toBe(
-      brandButton,
-    );
-    expect(brandButton?.getAttribute("aria-label")).toBe("New session");
-    expect(brandButton?.disabled).toBe(true);
-    expect(actions?.querySelectorAll("button")).toHaveLength(1);
+    const brandLink = sidebar.querySelector<HTMLAnchorElement>(".sidebar-brand__new-thread");
+    expect(actions?.firstElementChild?.querySelector(".sidebar-brand__new-thread")).toBe(brandLink);
+    expect(brandLink?.getAttribute("aria-label")).toBe("New session");
+    expect(brandLink).toBeInstanceOf(HTMLAnchorElement);
+    expect(brandLink?.getAttribute("aria-disabled")).toBe("true");
+    expect(brandLink?.hasAttribute("href")).toBe(false);
+    expect(brandLink?.tabIndex).toBe(-1);
+    brandLink?.click();
+    expect(onOpenNewSession).not.toHaveBeenCalled();
     expect(sidebar.querySelector(".sidebar-search")).toBeNull();
     expect(sidebar.querySelector(".sidebar-brand__collapse")).toBeNull();
 
     sidebar.connected = true;
     await sidebar.updateComplete;
-    expect(brandButton?.disabled).toBe(false);
-    brandButton?.click();
-    expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
-
-    const toolbarButton = sidebar.querySelector<HTMLButtonElement>(
+    for (const selector of [
+      ".sidebar-brand__new-thread",
       ".sidebar-session-toolbar .sidebar-new-session",
-    );
-    expect(toolbarButton?.getAttribute("aria-label")).toBe("New session");
+    ]) {
+      const link = sidebar.querySelector<HTMLAnchorElement>(selector)!;
+      expect(link.getAttribute("aria-label")).toBe("New session");
+      expect(link.getAttribute("href")).toBe("/control/new?agent=research");
+      expect(link.hasAttribute("aria-disabled")).toBe(false);
+      for (const modifiers of [
+        { metaKey: true },
+        { ctrlKey: true },
+        { shiftKey: true },
+        { button: 1 },
+      ]) {
+        const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifiers });
+        link.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(false);
+        expect(onOpenNewSession).not.toHaveBeenCalled();
+      }
+      link.click();
+      expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
+      onOpenNewSession.mockClear();
+    }
   });
-});
 
-describe("AppSidebar footer actions", () => {
-  it("gates Ask OpenClaw on the advertised method and admin scope", async () => {
-    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+  it("opens a catalog-targeted draft from its new-session action", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
-      gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main"]),
+      gateway,
+      createSessions("research", ["agent:research:main"]),
+      "panel",
+      {
+        defaultId: "main",
+        mainKey: "agent:main:main",
+        scope: "global",
+        agents: [
+          { id: "main", name: "Main" },
+          { id: "research", name: "Research" },
+        ],
+      },
     );
-
-    gatewayHarness.publish({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: ["openclaw.chat"] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
+    const onOpenNewSession = vi.fn();
+    sidebar.connected = true;
+    sidebar.onOpenNewSession = onOpenNewSession;
+    sidebar.sessionData.sessionCatalogs = [
+      {
+        id: "claude",
+        label: "Claude Code",
+        capabilities: {
+          continueSession: true,
+          archive: false,
+          createSession: { model: "anthropic/claude-opus-4-8" },
+        },
+        hosts: [],
+      },
+    ];
+    sidebar.sessionData.requestSessionDataUpdate();
     await sidebar.updateComplete;
-    const toggle = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__custodian");
-    expect(toggle?.getAttribute("aria-label")).toBe("Ask OpenClaw");
-    const toggleListener = vi.fn();
-    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggleListener);
-    toggle?.click();
-    window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggleListener);
-    expect(toggleListener).toHaveBeenCalledOnce();
 
-    gatewayHarness.publish({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: [] as string[] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-footer-bar__custodian")).toBeNull();
+    const link = sidebar.querySelector<HTMLAnchorElement>(".sidebar-session-catalog-new")!;
+    expect(link.getAttribute("aria-label")).toBe("New session — Claude Code");
+    expect(link.getAttribute("href")).toBe("/new?agent=research&catalog=claude");
+    const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    link.dispatchEvent(contextMenu);
+    expect(contextMenu.defaultPrevented).toBe(false);
+    expect(sidebar.querySelector(".sidebar-session-catalog-view-menu")).toBeNull();
+    link.click();
 
-    gatewayHarness.publish({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["openclaw.chat"] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-footer-bar__custodian")).toBeNull();
+    expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
   });
 });
 
@@ -170,8 +160,12 @@ describe("AppSidebar agent chip", () => {
         '[data-session-key="telegram:12345"] .sidebar-recent-session__link',
       )
       ?.getAttribute("href");
-    expect(href).toBe("/chat/research/telegram/12345");
-    expect(sessionRefFromPath(href ?? "")).toMatchObject({
+    const sessionUrl = new URL(href ?? "", window.location.origin);
+    expect(sessionUrl.pathname).toBe("/chat/research/telegram/12345");
+    expect(sessionUrl.searchParams.get(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name)).toBe(
+      SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value,
+    );
+    expect(sessionRefFromPath(sessionUrl.pathname)).toMatchObject({
       kind: "literal",
       sessionKey: "agent:research:telegram:12345",
     });
@@ -292,17 +286,11 @@ describe("AppSidebar agent chip", () => {
     expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
       "Account",
     );
-    expect(card?.querySelector(".sidebar-identity-card__subtitle")?.textContent).toBe(
-      "Reconnecting…",
-    );
-    expect(
-      card?.querySelector(".sidebar-identity-card__subtitle")?.getAttribute("aria-hidden"),
-    ).toBe("true");
-    const connectionStatus = sidebar.querySelector(".sidebar-identity-card__status");
-    expect(connectionStatus?.getAttribute("role")).toBe("status");
+    expect(card?.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
+    const connectionStatus = sidebar.querySelector(".sidebar-footer-bar__status");
     expect(connectionStatus?.getAttribute("aria-live")).toBe("polite");
-    expect(connectionStatus?.textContent).toBe("Reconnecting…");
-    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
+    expect(connectionStatus?.textContent).toContain("Offline");
+    expect(connectionStatus?.textContent).toContain("Reconnecting…");
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).not.toContain(
       "Offline",
     );
@@ -317,7 +305,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.offline = false;
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-    expect(sidebar.querySelector(".sidebar-identity-card__status")?.textContent).toBe("");
+    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
   });
 
   it("shows a working subtitle while the agent has an active run", async () => {
@@ -331,7 +319,15 @@ describe("AppSidebar agent chip", () => {
         path: "",
         count: 1,
         defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 5, hasActiveRun: true }],
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 5,
+            hasActiveRun: true,
+            unread: true,
+          },
+        ],
       },
       agentId: "main",
     });
@@ -345,9 +341,24 @@ describe("AppSidebar agent chip", () => {
     expect(spinner).not.toBeNull();
     expect(sidebar.querySelector(".nav-item--home .nav-item__icon")).not.toBeNull();
     expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).toBeNull();
     expect(spinner?.getAttribute("role")).toBe("img");
     expect(spinner?.getAttribute("aria-label")).toBe("Active run");
     expect(spinner?.getAttribute("title")).toBe("Active run");
+
+    harness.publishList({
+      result: {
+        ts: 3,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 6, unread: true }],
+      },
+      agentId: "main",
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".nav-item--home .session-run-spinner")).toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).not.toBeNull();
   });
 
   it("uses the shared tooltip for the Home dashboard glyph", async () => {
@@ -360,7 +371,7 @@ describe("AppSidebar agent chip", () => {
       sidebar.requestUpdate();
       await sidebar.updateComplete;
 
-      const glyph = sidebar.querySelector(".nav-item--home .sidebar-board-glyph");
+      const glyph = sidebar.querySelector('.nav-item--home [aria-label="Dashboard available"]');
       expect(glyph?.getAttribute("aria-label")).toBe("Dashboard available");
       expect(glyph?.hasAttribute("title")).toBe(false);
       expect(

@@ -94,8 +94,11 @@ function installInspectSpies() {
 
 describe("browser cli snapshot defaults", () => {
   const runBrowserInspect = async (args: string[], withJson = false) => {
-    const program = new Command();
-    const browser = program.command("browser").option("--json", "JSON output", false);
+    const program = new Command().enablePositionalOptions();
+    const browser = program
+      .command("browser")
+      .option("--json", "JSON output", false)
+      .option("--timeout <ms>", "Timeout in ms", "30000");
     registerBrowserInspectCommands(browser, (cmd) => cmd.parent?.opts() ?? {});
     await program.parseAsync(withJson ? ["browser", "--json", ...args] : ["browser", ...args], {
       from: "user",
@@ -122,6 +125,89 @@ describe("browser cli snapshot defaults", () => {
     resetRuntimeCapture();
     configMocks.loadConfig.mockReturnValue({ browser: {} });
   });
+
+  it.each([
+    {
+      command: "screenshot",
+      requestPath: "/screenshot",
+      args: ["screenshot"],
+      timeout: "30000",
+      ownerTimeoutMs: undefined,
+    },
+    {
+      command: "screenshot",
+      requestPath: "/screenshot",
+      args: ["--timeout", "60000", "screenshot"],
+      timeout: "60000",
+      ownerTimeoutMs: 60000,
+    },
+    {
+      command: "screenshot",
+      requestPath: "/screenshot",
+      args: ["screenshot", "tab-42", "--timeout", "60000"],
+      timeout: "60000",
+      ownerTimeoutMs: 60000,
+      targetId: "tab-42",
+    },
+    {
+      command: "screenshot",
+      requestPath: "/screenshot",
+      args: ["--timeout", "60000", "screenshot", "--timeout", "90000"],
+      timeout: "90000",
+      ownerTimeoutMs: 90000,
+    },
+    {
+      command: "snapshot",
+      requestPath: "/snapshot",
+      args: ["snapshot"],
+      timeout: "30000",
+      ownerTimeoutMs: undefined,
+    },
+    {
+      command: "snapshot",
+      requestPath: "/snapshot",
+      args: ["--timeout", "60000", "snapshot"],
+      timeout: "60000",
+      ownerTimeoutMs: 60000,
+    },
+    {
+      command: "snapshot",
+      requestPath: "/snapshot",
+      args: ["snapshot", "--timeout", "60000"],
+      timeout: "60000",
+      ownerTimeoutMs: 60000,
+    },
+    {
+      command: "snapshot",
+      requestPath: "/snapshot",
+      args: ["--timeout", "60000", "snapshot", "--timeout", "90000"],
+      timeout: "90000",
+      ownerTimeoutMs: 90000,
+    },
+  ])(
+    "keeps the gateway and $command owner on the explicit $timeout ms timeout",
+    async ({ command, requestPath, args, timeout, ownerTimeoutMs, targetId }) => {
+      await runBrowserInspect(args, true);
+
+      expect(sharedMocks.callBrowserRequest).toHaveBeenLastCalledWith(
+        expect.objectContaining({ timeout }),
+        expect.objectContaining({ path: requestPath }),
+      );
+      const [, request] = sharedMocks.callBrowserRequest.mock.calls.at(-1) ?? [];
+      const payload = request as {
+        query?: { timeoutMs?: number };
+        body?: { timeoutMs?: number; targetId?: string };
+      };
+      const ownerPayload = command === "snapshot" ? payload.query : payload.body;
+      expect(ownerPayload?.timeoutMs).toBe(ownerTimeoutMs);
+      if (ownerTimeoutMs === undefined) {
+        expect(ownerPayload).not.toHaveProperty("timeoutMs");
+      }
+      if (targetId !== undefined) {
+        expect(payload.body?.targetId).toBe(targetId);
+      }
+    },
+  );
 
   it.each<SnapshotDefaultsCase>([
     {

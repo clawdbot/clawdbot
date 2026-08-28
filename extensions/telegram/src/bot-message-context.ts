@@ -54,7 +54,7 @@ import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import {
   buildTelegramStatusReactionVariants,
   type TelegramReactionEmoji,
-  resolveTelegramAllowedEmojiReactions,
+  resolveTelegramAllowedReactions,
   resolveTelegramReactionEmoji,
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
@@ -595,16 +595,26 @@ export const buildTelegramMessageContext = async ({
             setReaction: async (emoji: string) => {
               if (reactionApi) {
                 if (!allowedStatusReactionEmojisPromise) {
-                  allowedStatusReactionEmojisPromise = resolveTelegramAllowedEmojiReactions({
+                  allowedStatusReactionEmojisPromise = resolveTelegramAllowedReactions({
                     chat: msg.chat,
                     chatId,
                     getChat: getChatApi ?? undefined,
-                  }).catch((err: unknown) => {
-                    logVerbose(
-                      `telegram status-reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
-                    );
-                    return null;
-                  });
+                  })
+                    .then((reactions) =>
+                      reactions
+                        ? new Set(
+                            reactions.flatMap((reaction) =>
+                              reaction.type === "emoji" ? [reaction.emoji] : [],
+                            ),
+                          )
+                        : null,
+                    )
+                    .catch((err: unknown) => {
+                      logVerbose(
+                        `telegram status-reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
+                      );
+                      return null;
+                    });
                 }
                 const allowedStatusReactionEmojis = await allowedStatusReactionEmojisPromise;
                 const resolvedEmoji = resolveTelegramReactionVariant({

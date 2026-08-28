@@ -36,6 +36,7 @@ import {
   createPreparedInboundRegistryLoader,
   preparedModelRuntimeWorkspaceFactsKey,
 } from "./prepared-model-runtime.inbound-registry.js";
+import { notifyPreparedModelRuntimePublication } from "./prepared-model-runtime.publication-events.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
@@ -214,6 +215,7 @@ function createFullModelCatalogAccess(params: {
         pending = build
           .then((catalog) => {
             fullCatalog = catalog;
+            notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
             return catalog;
           })
           .finally(() => {

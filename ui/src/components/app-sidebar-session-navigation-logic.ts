@@ -10,14 +10,11 @@ import {
   isCronSessionKey,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
+  resolveSessionWorkContext,
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
-import {
-  groupSidebarSessionRows,
-  type SidebarSessionSection,
-  type SidebarSessionsGrouping,
-} from "../lib/sessions/grouping.ts";
+import { collectKnownSessionGroups } from "../lib/sessions/grouping.ts";
 import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
@@ -42,9 +39,7 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import {
-  limitSidebarSessionRows,
   SIDEBAR_SESSION_NO_ATTENTION,
-  SIDEBAR_SESSION_PAGE_SIZE,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
@@ -213,6 +208,7 @@ export function buildSidebarSessionNavigationState(input: {
       label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
       userLabel: row.label,
       subtitle: resolveSessionWorkSubtitle(row),
+      workContext: resolveSessionWorkContext(row),
       href: sessionNavigationTarget({
         face: resolveSessionPreferredFace(row),
         sessionKey: row.key,
@@ -245,6 +241,7 @@ export function buildSidebarSessionNavigationState(input: {
         context?.sessions.isPreparedWorkSession(row.key) === true,
       acpSession: isAcpSessionKey(row.key),
       worktreeId: row.worktree?.id,
+      execNode: row.execNode,
       placementState: row.placement?.state,
       diskSpaceStatus:
         row.placement?.state === "active" ? row.placement.diskSpace?.status : undefined,
@@ -269,6 +266,7 @@ export function buildSidebarSessionNavigationState(input: {
       spawnedBy: row.spawnedBy,
       forkSource: row.forkSource,
       status: row.status,
+      createdAt: row.createdAt,
       startedAt: row.startedAt,
       updatedAt: row.updatedAt,
       endedAt: row.endedAt,
@@ -290,81 +288,6 @@ export function buildSidebarSessionNavigationState(input: {
     visibleSessionRows: navigation.visibleSessions,
     toSidebarSession,
   };
-}
-
-export type SidebarVisibleSections = {
-  sections: (SidebarSessionSection<SidebarRecentSession> & {
-    totalRowCount: number;
-    visibleRowCount: number;
-    visibleLimit: number;
-    collapsedVisibleRowCount: number;
-    renderHeader: boolean;
-  })[];
-  expandedRows: SidebarRecentSession[];
-  visibleRows: SidebarRecentSession[];
-};
-
-export function partitionSidebarVisibleSections(input: {
-  rows: SidebarRecentSession[];
-  grouping: SidebarSessionsGrouping;
-  knownGroups: string[] | undefined;
-  catalogIds?: readonly string[];
-  sectionOrder?: readonly string[];
-  collapsedSections: ReadonlySet<string>;
-  hideEmptyOwnerFilteredGroup: (category: string | undefined, rowCount: number) => boolean;
-  visibleSessionLimits: ReadonlyMap<string, number>;
-}): SidebarVisibleSections {
-  const sections = groupSidebarSessionRows(input.rows, {
-    grouping: input.grouping,
-    knownGroups: input.knownGroups,
-    sectionOrder: input.sectionOrder,
-    catalogIds: input.catalogIds,
-  }).filter(
-    (section) =>
-      section.id !== "pinned" &&
-      !input.hideEmptyOwnerFilteredGroup(section.category, section.rows.length),
-  );
-  // A lone catch-all sits directly under the global Sessions toolbar. Empty
-  // Coding does not render, while empty custom/Groups sections remain targets.
-  const ungroupedHasPeerHeader = sections.some(
-    (section) => section.id !== "ungrouped" && (section.id !== "work" || section.rows.length > 0),
-  );
-  // Accepted tradeoff: headerless means no collapse control, so a stored
-  // ungrouped-collapsed preference is deliberately inert here — honoring it
-  // would blank the whole list with no affordance to undo. It re-applies
-  // unchanged once a peer section returns.
-  const expandedRows: SidebarRecentSession[] = [];
-  const visibleRows: SidebarRecentSession[] = [];
-  // totalRowCount is the pre-pagination size: headers and empty-zone
-  // checks must not mistake a page-filtered section for an empty one.
-  const limitedSections: SidebarVisibleSections["sections"] = [];
-  for (const section of sections) {
-    const totalRowCount = section.rows.length;
-    const renderHeader = section.id !== "ungrouped" || ungroupedHasPeerHeader;
-    const collapsed = renderHeader && input.collapsedSections.has(section.id);
-    const visibleLimit = input.visibleSessionLimits.get(section.id) ?? SIDEBAR_SESSION_PAGE_SIZE;
-    const collapsedVisibleRowCount = limitSidebarSessionRows(
-      section.rows,
-      SIDEBAR_SESSION_PAGE_SIZE,
-    ).length;
-    let visibleRowCount = 0;
-    if (!collapsed) {
-      expandedRows.push(...section.rows);
-      section.rows = limitSidebarSessionRows(section.rows, visibleLimit);
-      visibleRows.push(...section.rows);
-      visibleRowCount = section.rows.length;
-    }
-    limitedSections.push(
-      Object.assign(section, {
-        totalRowCount,
-        visibleRowCount,
-        visibleLimit,
-        collapsedVisibleRowCount,
-        renderHeader,
-      }),
-    );
-  }
-  return { sections: limitedSections, expandedRows, visibleRows };
 }
 
 export function buildReconciledSidebarZone(input: {
@@ -454,7 +377,11 @@ function latestVisibleAgentSessionRow(input: {
     filterByAgent: true,
     archivedFilter: "active",
   });
-  return visible.toSorted(compareSessionRowsByUpdatedAt)[0] ?? null;
+  return visible.reduce<SessionRow | null>(
+    (latest, row) =>
+      latest !== null && compareSessionRowsByUpdatedAt(latest, row) <= 0 ? latest : row,
+    null,
+  );
 }
 
 export function resolveActiveSidebarAgent(input: {
@@ -557,7 +484,7 @@ export function resolveSidebarAgentResumeKey(
 }
 
 export function resolveSidebarAgentChipSubtitle(latest: SessionRow | null): string {
-  if (latest?.hasActiveRun) {
+  if (latest && isSessionRunActive(latest)) {
     return t("agentChip.working");
   }
   return latest ? resolveSessionDisplayName(latest.key, latest) : t("agentChip.ready");
@@ -607,12 +534,7 @@ export function collectKnownSidebarSessionGroups(
   catalog: readonly string[],
   rows: readonly GatewaySessionRow[],
 ): string[] {
-  const catalogSet = new Set(catalog);
-  const discovered = rows
-    .map((row) => normalizeOptionalString(row.category))
-    .filter((name): name is string => typeof name === "string" && !catalogSet.has(name))
-    .toSorted((a, b) => a.localeCompare(b));
-  return [...catalog, ...new Set(discovered)];
+  return collectKnownSessionGroups(catalog, rows);
 }
 
 /** Depth-first search across a projected session tree, including descendants.
@@ -655,23 +577,6 @@ export function findProjectedSidebarSession(input: {
   return undefined;
 }
 
-export function promoteSidebarSessionCreatedOrder(
-  createdOrder: Map<string, number>,
-  sessionKey: string,
-): boolean {
-  const currentOrder = createdOrder.get(sessionKey);
-  if (currentOrder === 0) {
-    return false;
-  }
-  for (const [key, order] of createdOrder) {
-    if (key !== sessionKey && (currentOrder === undefined || order < currentOrder)) {
-      createdOrder.set(key, order + 1);
-    }
-  }
-  createdOrder.set(sessionKey, 0);
-  return true;
-}
-
 export function applySidebarSessionOwnerFilter(input: {
   projected: SidebarRecentSession[];
   ownerFacet: SessionsListResult["owners"];
@@ -697,11 +602,14 @@ export function applySidebarSessionOwnerFilter(input: {
     ownerOptions.length < 2 &&
     someSidebarSessionInTree(input.projected, (row) => (row.participantCount ?? 0) > 0);
   const ownershipVisible = ownerOptions.length >= 2 || hasParticipants;
-  const activeOwnerId = ownershipVisible
-    ? ownerOptions.some((owner) => owner.id === input.selectedOwnerId)
-      ? input.selectedOwnerId
-      : null
-    : null;
+  // An absent facet is unresolved during hydration. A present facet is the
+  // Gateway's complete owner inventory, even when rows are owner-filtered.
+  const selectedOwnerId = input.selectedOwnerId?.trim() || null;
+  const activeOwnerId =
+    selectedOwnerId &&
+    (input.ownerFacet === undefined || ownerOptions.some((owner) => owner.id === selectedOwnerId))
+      ? selectedOwnerId
+      : null;
   if (!activeOwnerId) {
     // Involving-me is evaluated by the Gateway against the complete participant table.
     // The bounded display projection cannot safely repeat that predicate client-side.
@@ -733,29 +641,4 @@ export function applySidebarSessionOwnerFilter(input: {
     ownershipVisible,
     activeOwnerId,
   };
-}
-
-/** Merge adopted catalog sessions into the visible PR-indicator rows so an
-    adopted session hidden from the regular list still surfaces its PR state. */
-export function mergeAdoptedSessionPullRequestRows(input: {
-  rows: SidebarRecentSession[];
-  adopted: ReadonlySet<string>;
-  sessionsResult: SessionsListResult | null;
-  sessionResultsByAgent: Record<string, SessionsListResult>;
-  navigationState: SidebarSessionNavigationState;
-}): SidebarRecentSession[] {
-  if (input.adopted.size === 0) {
-    return input.rows;
-  }
-  const byKey = new Map(input.rows.map((row) => [row.key, row]));
-  const liveRows = [
-    ...(input.sessionsResult?.sessions ?? []),
-    ...Object.values(input.sessionResultsByAgent).flatMap((result) => result.sessions),
-  ];
-  for (const row of liveRows) {
-    if (input.adopted.has(row.key) && !byKey.has(row.key)) {
-      byKey.set(row.key, input.navigationState.toSidebarSession(row));
-    }
-  }
-  return [...byKey.values()];
 }

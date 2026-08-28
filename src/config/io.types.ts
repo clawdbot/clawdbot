@@ -6,7 +6,7 @@ import type {
   RuntimeConfigSnapshotRefreshOptions,
   RuntimeConfigWriteNotification,
 } from "./runtime-snapshot.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
+import type { ConfigFileSnapshot, ConfigValidationIssue, OpenClawConfig } from "./types.js";
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 
@@ -149,6 +149,7 @@ export type ReadConfigFileSnapshotWithPluginMetadataResult = {
 export type BestEffortConfigSnapshot = {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
+  configDiagnostics: { path: string; issues: ConfigValidationIssue[] } | null;
 };
 
 export type ConfigRecoveryCandidate = {

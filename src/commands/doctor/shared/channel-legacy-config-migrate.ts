@@ -6,7 +6,7 @@ import { loadBundledChannelDoctorContractApi } from "../../../channels/plugins/d
 import type { OpenClawConfig } from "../../../config/types.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
-  collectRelevantDoctorPluginIds,
+  collectDoctorConfigRepairPluginIds,
 } from "../../../plugins/doctor-contract-registry.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { isRecord } from "./legacy-config-record-shared.js";
@@ -92,7 +92,7 @@ function collectPluginDoctorCompatibilityIds(params: {
   return [
     ...new Set([
       ...params.unresolvedChannelIds,
-      ...collectRelevantDoctorPluginIds(params.raw).filter(
+      ...collectDoctorConfigRepairPluginIds(params.raw).filter(
         (pluginId) => !unresolvedChannelIds.has(pluginId),
       ),
     ]),

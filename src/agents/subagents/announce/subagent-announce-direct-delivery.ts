@@ -10,6 +10,7 @@ import {
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../../sessions/input-provenance.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { sessionDeliveryChannel } from "../../../utils/delivery-context.shared.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -80,6 +81,7 @@ async function runAnnounceAgentCall(params: {
     forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
       params.agentParams.inputProvenance,
     ),
+    operatorRoleActor: { kind: "system" },
     delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
     timeoutMs: params.timeoutMs,
     resolveGatewayContext: params.resolveGatewayContext,
@@ -105,6 +107,7 @@ export async function sendSubagentAnnounceDirectly(params: {
   isSourceSessionEffectsAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
   requesterIsSubagent: boolean;
+  createUserTurnTranscriptRecorder?: (sessionId: string) => UserTurnTranscriptRecorder;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
@@ -230,9 +233,12 @@ export async function sendSubagentAnnounceDirectly(params: {
         onDeliveryResult: params.onDeliveryResult,
         isSourceSessionEffectsAllowed: isCompletionDeliveryAllowed,
       });
+    // Synthetic requester-settle turns must not inherit a tool-only mode that suppresses the final.
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
-      : undefined;
+      : params.requireVisibleReply && deliveryTarget.deliver
+        ? "automatic"
+        : undefined;
     const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
@@ -257,6 +263,13 @@ export async function sendSubagentAnnounceDirectly(params: {
           ? { debounceMs: requesterQueueSettings.debounceMs }
           : {}),
         waitForTranscriptCommit: true,
+        ...(params.createUserTurnTranscriptRecorder
+          ? {
+              userTurnTranscriptRecorder: params.createUserTurnTranscriptRecorder(
+                requesterActivity.sessionId,
+              ),
+            }
+          : {}),
       };
       // Ordinary subagent and harness handoffs must wait through compaction
       // and transcript retries before treating an active wake as failed.
@@ -435,6 +448,7 @@ export async function sendSubagentAnnounceDirectly(params: {
     const completionPayloadVisibility = {
       includeErrorPayloads: false,
       includeReasoningPayloads: false,
+      requireTerminalContent: true,
     };
     const hasVisibleGatewayPayload = Boolean(
       directAnnounceResult &&
@@ -446,7 +460,6 @@ export async function sendSubagentAnnounceDirectly(params: {
       hasVisibleAgentPayload(directAnnounceResult, {
         ...completionPayloadVisibility,
         includeSilentReplyPayloads: false,
-        requireTerminalContent: true,
       }),
     );
     const hasIntentionalSilentCompletionReply = Boolean(

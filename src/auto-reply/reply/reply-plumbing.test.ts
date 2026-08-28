@@ -13,7 +13,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { TemplateContext } from "../templating.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
-import { applyReplyThreading } from "./reply-payloads.js";
+import { applyReplyThreading } from "./reply-payloads-base.js";
 import { formatRunLabel, resolveSubagentLabel, sortSubagentRuns } from "./subagents-utils.js";
 
 function createSlackThreadingPlugin(): ChannelPlugin {

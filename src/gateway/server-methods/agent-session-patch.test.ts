@@ -12,6 +12,7 @@ function buildPatch(touchInteraction: boolean, opts?: { requestLabel?: string; l
     sessionId: "session",
     updatedAt: now,
     lifecycleRunId: "completed-run",
+    lastRunId: "completed-run",
     status: "failed",
     agentStatus: { note: "Need a password", attention: "key", expiresAt: now + 60_000 },
     ...(opts?.label ? { label: opts.label } : {}),
@@ -75,6 +76,7 @@ describe("agent session patch", () => {
     expect(patch.agentStatus).toBeUndefined();
     expect(Object.hasOwn(patch, "lifecycleRunId")).toBe(true);
     expect(patch.lifecycleRunId).toBeUndefined();
+    expect(patch.lastRunId).toBeUndefined();
   });
 
   it("does not clear agent status for lifecycle-only patches", () => {

@@ -12,7 +12,7 @@ const controlUiBasePath = "/rosita";
 const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "managed-image-actions");
 
 suite.define(() => {
-  it("previews, downloads, copies, and opens a ticketed generated image", async () => {
+  it("previews, downloads, and opens a ticketed generated image", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -27,22 +27,6 @@ suite.define(() => {
       path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"),
     );
     const requestedVariants: string[] = [];
-    await page.addInitScript(() => {
-      Object.defineProperty(globalThis, "copiedImage", { configurable: true, writable: true });
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: {
-          write: async (items: ClipboardItem[]) => {
-            const blob = await items[0]?.getType("image/png");
-            Object.defineProperty(globalThis, "copiedImage", {
-              configurable: true,
-              value: blob ? { size: blob.size, type: blob.type } : null,
-              writable: true,
-            });
-          },
-        },
-      });
-    });
     await page.route(`**${controlUiBasePath}/api/chat/media/outgoing/**`, async (route) => {
       const request = route.request();
       const url = new URL(request.url());
@@ -107,8 +91,10 @@ suite.define(() => {
         });
       }
 
-      await page.locator(".chat-image-frame").hover();
-      const downloadButton = page.getByRole("button", { name: "Download image" });
+      const imageFrame = page.locator(".chat-image-frame--managed").filter({ has: image });
+      await imageFrame.hover();
+      const imageActions = imageFrame.locator(".chat-image-actions");
+      const downloadButton = imageActions.getByRole("button", { name: "Download image" });
       await expect
         .poll(() =>
           downloadButton.evaluate((button) => {
@@ -132,20 +118,9 @@ suite.define(() => {
       await downloadButton.click();
       expect((await download).suggestedFilename()).toBe("Ticketed generated image.png");
 
-      await page.getByRole("button", { name: "Copy image" }).click();
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              (globalThis as { copiedImage?: { size: number; type: string } }).copiedImage ?? null,
-          ),
-        )
-        .toEqual({ size: imageBytes.byteLength, type: "image/png" });
-      await expect
-        .poll(() => page.locator("openclaw-toast-host").textContent())
-        .toContain("Copied!");
-
-      await page.locator('.chat-image-action[title="Open original"]').click();
+      await imageActions
+        .getByRole("button", { name: "Open image Ticketed generated image" })
+        .click();
       await page
         .getByRole("dialog", { name: "Image preview: Ticketed generated image" })
         .waitFor({ state: "visible" });

@@ -1,9 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetWorkingProgress, resolveTurnRecap } from "./chat-progress.ts";
+import { resetWorkingProgress, resolveTurnRecap, resolveWorkingProgress } from "./chat-progress.ts";
 
 const SESSION = "agent:main:main";
 const PREVIOUS_ENDED_AT = 900_000;
 const RUN_ENDED_AT = 1_000_000;
+
+describe("resolveWorkingProgress", () => {
+  beforeEach(() => resetWorkingProgress());
+  afterEach(() => resetWorkingProgress());
+
+  it("prefers observed stream identity over a future queued send", () => {
+    expect(
+      resolveWorkingProgress(
+        SESSION,
+        null,
+        1_000,
+        [
+          {
+            id: "future-send",
+            text: "Run next",
+            createdAt: 2_000,
+            sendRunId: "future-run",
+            sendState: "waiting-reconnect",
+            sendAttempts: 1,
+          },
+        ],
+        [{ ts: 1_000, runId: "active-run" }],
+        [],
+      ),
+    ).toMatchObject({ runId: "active-run" });
+  });
+});
 
 const doneRow = (endedAt: number, runtimeMs = 51_000, outputTokens?: number) => ({
   status: "done",

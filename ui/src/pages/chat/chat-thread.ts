@@ -1,10 +1,8 @@
 // Control UI chat module owns Chat thread item derivation and thread-local caches.
 import {
-  streamSegmentHasItemId,
-  streamSegmentUsesAccumulatedText,
+  accumulatedStreamText,
   trimAccumulatedStreamPrefix,
   type ChatItem,
-  type ChatStreamSegment,
   type MessageGroup,
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
@@ -21,13 +19,18 @@ import {
   setSessionCacheValue,
 } from "./session-cache.ts";
 
-export { isPendingSendMessage, persistedMessageEntryId } from "./chat-thread-items.ts";
+export {
+  isPendingSendMessage,
+  persistedMessageEntryId,
+  readPendingSendFailure,
+} from "./chat-thread-items.ts";
 export {
   assistantGroupCanOwnActiveRunStatus,
   coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
 } from "./chat-thread-grouping.ts";
+export { agentRunFrameGroups, coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 
 type CachedChatItems = {
   input: BuildChatItemsProps | null;
@@ -78,6 +81,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     senderIdentityKey(previous.sender) === senderIdentityKey(next.sender) &&
     senderIdentityKey(previous.replyToSender) === senderIdentityKey(next.replyToSender) &&
     previous.isStreaming === next.isStreaming &&
+    previous.runId === next.runId &&
     previous.messages.length === next.messages.length &&
     previous.messages.every((entry, index) => {
       const candidate = next.messages[index];
@@ -127,10 +131,17 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.kind === "stream" &&
         previous.text === next.text &&
         previous.startedAt === next.startedAt &&
-        previous.isStreaming === next.isStreaming
+        previous.isStreaming === next.isStreaming &&
+        previous.runId === next.runId &&
+        previous.boundaryId === next.boundaryId
       );
     case "reading-indicator":
-      return previous.kind === "reading-indicator" && previous.startedAt === next.startedAt;
+      return (
+        previous.kind === "reading-indicator" &&
+        previous.startedAt === next.startedAt &&
+        previous.runId === next.runId &&
+        previous.boundaryId === next.boundaryId
+      );
     case "question":
       return (
         previous.kind === "question" &&
@@ -182,6 +193,7 @@ function stabilizeChatItems(
         !prior ||
         claimedGroupKeys.has(prior.key) ||
         prior.role !== item.role ||
+        prior.runId !== item.runId ||
         prior.senderLabel !== item.senderLabel ||
         senderIdentityKey(prior.sender) !== senderIdentityKey(item.sender)
       ) {
@@ -229,6 +241,8 @@ function sameChatItemsStructuralInput(
 ): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
+    previous.archiveNotice?.key === next.archiveNotice?.key &&
+    previous.archiveNotice?.label === next.archiveNotice?.label &&
     previous.runId === next.runId &&
     previous.locale === next.locale &&
     previous.messages === next.messages &&
@@ -259,20 +273,6 @@ function sameChatItemsInputExceptStream(
   return (
     previous.stream !== null && next.stream !== null && sameChatItemsStructuralInput(previous, next)
   );
-}
-
-function accumulatedIndexedStreamText(segments: readonly ChatStreamSegment[]): string | null {
-  let accumulated: string | null = null;
-  for (const segment of segments) {
-    if (streamSegmentHasItemId(segment) || !streamSegmentUsesAccumulatedText(segment)) {
-      continue;
-    }
-    const text = sanitizeStreamText(segment.text);
-    if (text.length > 0) {
-      accumulated = text;
-    }
-  }
-  return accumulated;
 }
 
 function liveStreamIdentity(input: BuildChatItemsProps): string {
@@ -347,7 +347,7 @@ export function buildCachedChatItems(
   cached.items = items;
   cached.liveStreamIndex = findLiveStreamIndex(items);
   cached.liveStreamIdentity = cached.liveStreamIndex === -1 ? null : liveStreamIdentity(input);
-  cached.liveStreamPrefix = accumulatedIndexedStreamText(input.streamSegments);
+  cached.liveStreamPrefix = accumulatedStreamText(input.streamSegments, sanitizeStreamText);
   return items;
 }
 

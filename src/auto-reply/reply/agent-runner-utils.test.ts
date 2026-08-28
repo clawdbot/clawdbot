@@ -410,10 +410,17 @@ describe("agent-runner-utils", () => {
           context,
         }: {
           accountId?: string | null;
-          context: { ChatType?: string; NativeChannelId?: string; To?: string };
+          context: {
+            ChatType?: string;
+            MessageThreadId?: string | number;
+            NativeChannelId?: string;
+            To?: string;
+          };
         }) => ({
           currentChannelId: context.NativeChannelId ?? context.To,
           currentMessagingTarget: context.To,
+          currentThreadTs:
+            context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
           replyToMode: accountId === "work" && context.ChatType === "direct" ? "off" : "all",
         }),
       },
@@ -425,12 +432,15 @@ describe("agent-runner-utils", () => {
       sessionCtx: {
         Provider: "cron-event",
         NativeChannelId: "D1",
+        SessionKey: "agent:main:main:thread:1234:42",
+        MessageThreadId: "stale-topic",
       },
       replyRoute: {
         originatingChannel: "slack",
         originatingTo: "user:U1",
         originatingAccountId: "work",
         originatingChatType: "direct",
+        originatingThreadId: 42,
       },
       hasRepliedRef: undefined,
       provider: "openai",
@@ -442,6 +452,8 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageTo).toBe("user:U1");
     expect(resolved.embeddedContext.currentChannelId).toBe("D1");
     expect(resolved.embeddedContext.currentMessagingTarget).toBe("user:U1");
+    expect(resolved.embeddedContext.messageThreadId).toBe(42);
+    expect(resolved.embeddedContext.currentThreadTs).toBe("42");
     expect(resolved.embeddedContext.agentAccountId).toBe("work");
     expect(resolved.embeddedContext.chatType).toBe("direct");
     expect(resolved.embeddedContext.replyToMode).toBe("off");

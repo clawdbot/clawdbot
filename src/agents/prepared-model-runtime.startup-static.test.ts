@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type CreateStaticCatalogResolver =
   typeof import("./embedded-agent-runner/model.static-catalog.js").createBundledStaticCatalogModelResolver;
@@ -29,7 +30,7 @@ const mocks = vi.hoisted(() => {
   const modelRegistry = {
     fork: vi.fn((nextAuthStorage: unknown) => ({ authStorage: nextAuthStorage })),
     getAll: vi.fn(() => []),
-    find: vi.fn(() => null),
+    find: vi.fn<ModelRegistry["find"]>(() => undefined),
   };
   const resolveSyntheticAuth = vi.fn(() => ({
     apiKey: "synthetic-openai-key",
@@ -82,6 +83,7 @@ const mocks = vi.hoisted(() => {
                   id: "gpt-5.5",
                   name: "GPT-5.5",
                   reasoning: true,
+                  thinkingLevelMap: { off: null, max: "max" },
                   input: ["text"],
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 128_000,
@@ -209,8 +211,11 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: vi.fn() }),
 }));
 
-const { getPreparedModelRuntimeSnapshot, refreshPreparedModelRuntimeSnapshots } =
-  await import("./prepared-model-runtime.js");
+const {
+  getPreparedModelRuntimeSnapshot,
+  refreshPreparedModelRuntimeSnapshots,
+  registerPreparedModelRuntimePublicationListener,
+} = await import("./prepared-model-runtime.js");
 const { getAvailablePreparedModelCatalogSnapshot } = await import("./prepared-model-catalog.js");
 const { prepareScopedReadOnlyLiveModelCatalog, prepareScopedReadOnlyModelCatalog } =
   await import("./prepared-model-runtime.scoped-catalog.js");
@@ -223,13 +228,29 @@ beforeEach(() => {
     .mockReset()
     .mockReturnValue(createEmptyPluginRegistry());
   vi.clearAllMocks();
+  mocks.modelRegistry.find.mockReset();
   mocks.resolveStaticCatalogModel.mockReturnValue(undefined);
 });
 
 describe("prepared model runtime Gateway catalog mode", () => {
   it("imports and materializes only configured and auth-candidate providers", async () => {
     const config = {
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      models: {
+        providers: {
+          alpha: {
+            api: "openai-completions" as const,
+            baseUrl: "https://alpha.invalid",
+            models: [],
+          },
+          beta: { api: "openai-completions" as const, baseUrl: "https://beta.invalid", models: [] },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          modelPolicy: { allow: ["vllm/*"] },
+        },
+      },
     };
 
     await prepareScopedReadOnlyModelCatalog(
@@ -247,7 +268,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
 
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
-        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai"],
+        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai", "vllm"],
         staticCatalogProviderIds: ["anthropic", "local-runtime", "openai"],
       }),
     );
@@ -256,7 +277,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
       "/tmp/prepared-static-agent",
       expect.objectContaining({
         providerDiscoveryEntriesOnly: true,
-        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai"],
+        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai", "vllm"],
       }),
     );
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
@@ -407,9 +428,8 @@ describe("prepared model runtime Gateway catalog mode", () => {
     );
     expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
     expect(mocks.loadStaticCatalog).not.toHaveBeenCalled();
-    // Two slot-probing resolutions share the published generation: the prepared
-    // cold plugin context and the model-id normalization lane. Neither builds a
-    // catalog; the laziness guards above are the eager-work protections.
+    // The prepared plugin context and model-id normalization probe the same
+    // published metadata generation without starting catalog discovery.
     expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledTimes(2);
     expect(configuredRuntimeModelCount).toBe(1);
     expect(generatedCatalogReadCount).toBe(0);
@@ -432,7 +452,12 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(snapshot?.pluginRegistry).toBeDefined();
     expect(snapshot?.messageToolCatalog).toBeUndefined();
     expect(snapshot?.mediaCapabilityProviders).toBeDefined();
+    const catalogPublicationEvents: string[] = [];
+    const unregisterCatalogPublication = registerPreparedModelRuntimePublicationListener((event) =>
+      catalogPublicationEvents.push(event.phase),
+    );
     await snapshot?.loadFullModelCatalog?.();
+    expect(catalogPublicationEvents).toEqual(["catalog-published"]);
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
@@ -453,13 +478,17 @@ describe("prepared model runtime Gateway catalog mode", () => {
       }),
     ).toEqual({ entries: [], routeVariants: [] });
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
+    expect(catalogPublicationEvents).toEqual(["catalog-published"]);
 
     await snapshot?.loadFullModelCatalog?.({ refresh: true });
+    expect(catalogPublicationEvents).toEqual(["catalog-published", "catalog-published"]);
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
     mocks.runPreparedModelCatalogWorker.mockRejectedValueOnce(new Error("refresh failed"));
     await expect(snapshot?.loadFullModelCatalog?.({ refresh: true })).rejects.toThrow(
       "refresh failed",
     );
+    expect(catalogPublicationEvents).toEqual(["catalog-published", "catalog-published"]);
+    unregisterCatalogPublication();
     expect(snapshot?.readFullModelCatalog?.()).toEqual({ entries: [], routeVariants: [] });
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(3);
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
@@ -497,6 +526,22 @@ describe("prepared model runtime Gateway catalog mode", () => {
       source: "test",
     });
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+    mocks.modelRegistry.find.mockImplementation((registryProvider, registryModelId) =>
+      registryProvider === "registry-only" && registryModelId === "MIXED"
+        ? {
+            provider: registryProvider,
+            id: registryModelId,
+            name: "Exact-case registry model",
+            api: "openai-responses",
+            baseUrl: "https://registry.invalid/v1",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 32_000,
+            maxTokens: 4096,
+          }
+        : undefined,
+    );
     const providerConfig = {
       api: "openai-responses" as const,
       baseUrl: "https://configured.fixture.invalid/v1",
@@ -508,7 +553,14 @@ describe("prepared model runtime Gateway catalog mode", () => {
         defaults: {
           model: {
             primary: `${provider}/${modelId}`,
-            fallbacks: ["openai/gpt-5.5", `${provider}/${modelId}`],
+            fallbacks: [
+              "openai/gpt-5.5",
+              `${provider}/${modelId}`,
+              "registry-only/mixed",
+              "REGISTRY-ONLY/MIXED",
+              "bare-alias",
+              "provider-only/",
+            ],
           },
         },
       },
@@ -551,20 +603,24 @@ describe("prepared model runtime Gateway catalog mode", () => {
       api: "openai-responses",
       baseUrl: "https://fixture.invalid/v1",
     });
-    for (const entries of [
-      snapshot?.modelCatalog.entries,
-      snapshot?.modelCatalog.routeVariants,
-      snapshot?.modelCatalog.staticEntries,
-    ]) {
+    for (const entries of [snapshot?.modelCatalog.entries, snapshot?.modelCatalog.routeVariants]) {
       expect(entries?.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
         `${provider}/${modelId}`,
         "openai/gpt-5.5",
+        "registry-only/MIXED",
       ]);
     }
+    expect(
+      snapshot?.modelCatalog.staticEntries?.map((entry) => `${entry.provider}/${entry.id}`),
+    ).toEqual([`${provider}/${modelId}`, "openai/gpt-5.5"]);
+    expect(
+      snapshot?.modelCatalog.staticEntries?.find((entry) => entry.provider === "openai")
+        ?.thinkingLevelMap,
+    ).toEqual({ off: null, max: "max" });
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
-        providerDiscoveryProviderIds: [provider, "openai"],
-        staticCatalogProviderIds: [provider, "openai"],
+        providerDiscoveryProviderIds: [provider, "openai", "provider-only", "registry-only"],
+        staticCatalogProviderIds: [provider, "openai", "registry-only"],
       }),
     );
     expect(mocks.discoverModels).toHaveBeenCalledOnce();

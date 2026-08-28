@@ -14,6 +14,7 @@ import {
   readConfigFileSnapshot,
   readSourceConfigBestEffort,
 } from "./config.js";
+import { resetConfigOverrides, setConfigOverride } from "./runtime-overrides.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
@@ -33,6 +34,7 @@ function readConfigHealthRow(env: NodeJS.ProcessEnv, configPath: string) {
 describe("readBestEffortConfig", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+    resetConfigOverrides();
   });
 
   it("can read snapshots without updating config observation state", async () => {
@@ -230,6 +232,7 @@ describe("readBestEffortConfig", () => {
   it("materializes fresh-install defaults when the config file is missing", async () => {
     await withTempHome(async () => {
       const { loadConfig } = await import("./io.runtime.js");
+      expect(setConfigOverride("logging.level", "warn").ok).toBe(true);
 
       const snapshot = await readConfigFileSnapshot({ observe: false });
       const loaded = loadConfig({ pin: false, skipPluginValidation: true });
@@ -240,6 +243,7 @@ describe("readBestEffortConfig", () => {
       // stays provider-conditional, so compaction is the parity signal here).
       expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
       expect(loaded.agents?.defaults?.compaction?.mode).toBe("safeguard");
+      expect(loaded.logging?.level).toBe("warn");
     });
   });
 
@@ -293,6 +297,7 @@ describe("readBestEffortConfig", () => {
 
       const snapshot = await readBestEffortConfigSnapshot({ observe: false });
 
+      expect(snapshot.configDiagnostics).toBeNull();
       expect(snapshot.sourceConfig.agents?.defaults?.contextPruning?.mode).toBeUndefined();
       expect(snapshot.config.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
       expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
@@ -304,6 +309,26 @@ describe("readBestEffortConfig", () => {
       expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toMatchObject({
         config_path: configPath,
         last_known_good_json: expect.any(String),
+      });
+    });
+  });
+
+  it("returns invalid config diagnostics with the best-effort fallback", async () => {
+    await withTempHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        gateway: { port: "abc" },
+      } as never);
+
+      const snapshot = await readBestEffortConfigSnapshot({ observe: false });
+
+      expect(snapshot.configDiagnostics).toEqual({
+        path: configPath,
+        issues: [
+          {
+            path: "gateway.port",
+            message: "Invalid input: expected number, received string",
+          },
+        ],
       });
     });
   });

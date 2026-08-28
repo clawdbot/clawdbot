@@ -24,6 +24,8 @@ import {
   claimAgentRunContext,
   clearAgentRunContext,
   getAgentRunContext,
+  getAgentRunContextOwnership,
+  hasProjectedAgentRunForSession,
   releaseAgentRunContext,
   sweepStaleRunContexts,
 } from "../../infra/agent-run-registry.js";
@@ -408,6 +410,7 @@ describe("worker live events", () => {
 
     expect(
       rx.rotateCredential({
+        ackedSeq: 2,
         credentialHash,
         environmentId: ID.environmentId,
         newProcessTurn: true,
@@ -420,6 +423,34 @@ describe("worker live events", () => {
     const nextProcess = { ...ID, credentialHash };
     ack(live(3, lifecycle({ phase: "start", startedAt: 300 })), 3, nextProcess);
     expect(events.map((event) => event.data.phase)).toEqual(["start", "end", "start"]);
+  });
+
+  it("rewinds cancelled preview ACKs before delivering the replacement turn terminal", () => {
+    ack(msg(1, "cancelled preview"));
+    ack(msg(2, "another cancelled preview", 1));
+    const credentialHash = "replacement-process-credential";
+    const runId = "replacement-worker-run";
+
+    expect(
+      rx.rotateCredential({
+        ackedSeq: 0,
+        credentialHash,
+        environmentId: ID.environmentId,
+        newProcessTurn: true,
+        previousCredentialHash: ID.credentialHash,
+        runEpoch: EPOCH,
+        sessionId: SID,
+      }),
+    ).toBe(true);
+
+    const replacement = { ...ID, credentialHash, runId };
+    ack(live(1, lifecycle({ phase: "start", startedAt: 300 }), runId), 1, replacement);
+    ack(
+      live(2, lifecycle({ phase: "finishing", startedAt: 300, endedAt: 400 }), runId),
+      2,
+      replacement,
+    );
+    expect(events.slice(-2).map((event) => event.data.phase)).toEqual(["start", "finishing"]);
   });
 
   it("ACKs before buffered failure", () => {
@@ -651,19 +682,52 @@ describe("worker live events", () => {
     expect(deltas()).toEqual(["worker"]);
   });
 
-  it("adopts a visible dispatch-owned run context so worker live events stay visible", () => {
+  it.each(["terminal process turnover", "detach"])(
+    "clears an ownerless Gateway run context on %s",
+    (settledBy) => {
+      claimAgentRunContext(RUN, {
+        ...LOCAL,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      });
+
+      ack(msg(1, "worker"));
+      if (settledBy === "terminal process turnover") {
+        ack(live(2, lifecycle({ phase: "end", startedAt: 100, endedAt: 200 })));
+        expect(
+          rx.rotateCredential({
+            ackedSeq: 2,
+            credentialHash: "next-process-credential-hash",
+            environmentId: ID.environmentId,
+            newProcessTurn: true,
+            previousCredentialHash: ID.credentialHash,
+            runEpoch: EPOCH,
+            sessionId: SID,
+          }),
+        ).toBe(true);
+      } else {
+        rx.clearEnvironment(ID.environmentId);
+      }
+
+      expect(getAgentRunContext(RUN)).toBeUndefined();
+      expect(hasProjectedAgentRunForSession({ sessionKeys: [KEY], sessionId: SID })).toBe(false);
+    },
+  );
+
+  it("joins a visible dispatch-owned run context without blocking its terminal", () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     // A worker-routed turn keeps its dispatch-owned Control UI visibility. The
     // gateway claims the run context (isControlUiVisible: true for a visible
-    // turn) before handing the turn to the remote worker; adopting live events
-    // must inherit that visibility instead of forcing the run hidden.
+    // turn) before handing the turn to the remote worker; joining live events
+    // must inherit that visibility without excluding the outer terminal.
     claimAgentRunContext(RUN, {
       ...LOCAL,
       isControlUiVisible: true,
       lifecycleGeneration,
     });
 
-    ack(msg(1, "worker"));
+    ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+    ack(msg(2, "worker", 1));
+    ack(live(3, lifecycle({ phase: "finishing", startedAt: 100, endedAt: 200 })));
 
     expect(getAgentRunContext(RUN)).toMatchObject({
       ...LOCAL,
@@ -671,8 +735,25 @@ describe("worker live events", () => {
       lifecycleGeneration,
       projectSessionActive: true,
     });
-    expect(deltas()).toEqual(["worker"]);
-    expect(events[0]?.controlUiVisible).toBe(true);
+    expect(hasProjectedAgentRunForSession({ sessionKeys: [KEY], sessionId: SID })).toBe(true);
+    expect(events.map((event) => [event.stream, event.data.phase ?? event.data.delta])).toEqual([
+      ["lifecycle", "start"],
+      ["assistant", "worker"],
+      ["lifecycle", "finishing"],
+    ]);
+    expect(events.map((event) => event.controlUiVisible)).toEqual([true, true, true]);
+
+    emitAgentEvent({
+      runId: RUN,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 100, endedAt: 200 },
+    });
+
+    const end = events.at(-1);
+    expect(end?.data.phase).toBe("end");
+    clearAgentRunContext(RUN, end?.lifecycleGeneration, end?.contextClaimId);
+    expect(getAgentRunContext(RUN)).toBeUndefined();
+    expect(hasProjectedAgentRunForSession({ sessionKeys: [KEY], sessionId: SID })).toBe(false);
   });
 
   it("shares a compatible non-exclusive Gateway run owner", () => {
@@ -703,6 +784,82 @@ describe("worker live events", () => {
     rx.clear();
     expect(getAgentRunContext(RUN)).toBeDefined();
     releaseAgentRunContext(RUN, gatewayClaim);
+  });
+
+  const farmIdentity = (n: number): Identity => ({
+    ...ID,
+    environmentId: `environment-farm-${n}`,
+    sessionId: `session-farm-${n}`,
+    runId: `run-farm-${n}`,
+    turnClaim: {
+      sessionId: `session-farm-${n}`,
+      claimId: `claim-farm-${n}`,
+      runId: `run-farm-${n}`,
+      placementGeneration: 4,
+      owner: { kind: "worker", environmentId: `environment-farm-${n}`, ownerEpoch: EPOCH },
+    },
+  });
+  const farmSession = (n: number, updatedAt = 20) =>
+    sessions.upsertSessionEntryCore(
+      { agentId: "main", sessionKey: `agent:main:farm-${n}`, storePath: store },
+      { sessionId: `session-farm-${n}`, updatedAt },
+    );
+  const farmStart = (count: number, maxSessions: number) => {
+    start({
+      maxSessions,
+      startupBindings: Array.from({ length: count }, (_, i) => binding(farmIdentity(i + 1))),
+      startupOwners: new Map(
+        Array.from({ length: count }, (_, i) => [`environment-farm-${i + 1}`, EPOCH]),
+      ),
+    });
+  };
+  const farmEvent = (n: number, seq: number, event: Params["event"]): Params => ({
+    runEpoch: EPOCH,
+    lastAckedSeq: seq - 1,
+    seq,
+    runId: `run-farm-${n}`,
+    event,
+  });
+
+  it("evicts the oldest quiescent window instead of rejecting new sessions at the cap", async () => {
+    await Promise.all([farmSession(1), farmSession(2), farmSession(3)]);
+    farmStart(3, 2);
+    for (const n of [1, 2]) {
+      ack(
+        farmEvent(n, 1, { kind: "assistant", payload: { text: "hi", delta: "hi" } }),
+        1,
+        farmIdentity(n),
+      );
+      // Turn completion releases the run context gateway-side; the window's
+      // stale activeRuns entry lingers until the next event revalidates it.
+      for (const claimId of getAgentRunContextOwnership(`run-farm-${n}`)?.claimIds ?? []) {
+        releaseAgentRunContext(`run-farm-${n}`, claimId);
+      }
+    }
+    // Both existing windows are quiescent per the run-context registry; the
+    // third session evicts the oldest instead of failing with capacity-exceeded.
+    ack(
+      farmEvent(3, 1, { kind: "assistant", payload: { text: "new", delta: "new" } }),
+      1,
+      farmIdentity(3),
+    );
+  });
+
+  it("rejects a new session only when every window has an active run", async () => {
+    await Promise.all([farmSession(1), farmSession(2), farmSession(3)]);
+    farmStart(3, 2);
+    for (const n of [1, 2]) {
+      ack(
+        farmEvent(n, 1, { kind: "assistant", payload: { text: "hi", delta: "hi" } }),
+        1,
+        farmIdentity(n),
+      );
+    }
+    fail(
+      farmEvent(3, 1, { kind: "assistant", payload: { text: "new", delta: "new" } }),
+      "capacity-exceeded",
+      farmIdentity(3),
+    );
   });
 
   it("rejects a compatible context held by an exclusive Gateway owner", () => {

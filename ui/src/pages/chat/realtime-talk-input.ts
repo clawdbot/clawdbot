@@ -221,15 +221,17 @@ export async function openRealtimeTalkInput(
   if (!devices?.getUserMedia) {
     throw new Error(t("chat.composer.realtimeTalkRequiresMicrophone"));
   }
-  let audio: MediaStream;
+  let acquisition: { stream: MediaStream } | { failure: string };
   try {
-    audio = await awaitRealtimeTalkMediaRequest(
-      () =>
-        devices.getUserMedia({
-          audio: realtimeTalkAudioConstraints(inputDeviceId),
-        }),
-      options.signal,
-    );
+    acquisition = {
+      stream: await awaitRealtimeTalkMediaRequest(
+        () =>
+          devices.getUserMedia({
+            audio: realtimeTalkAudioConstraints(inputDeviceId),
+          }),
+        options.signal,
+      ),
+    };
   } catch (error) {
     if (
       inputDeviceId?.trim() &&
@@ -238,8 +240,16 @@ export async function openRealtimeTalkInput(
     ) {
       throw new Error(t("chat.composer.selectedMicrophoneUnavailable"), { cause: error });
     }
-    throw error;
+    if (error instanceof DOMException && error.name !== "AbortError") {
+      acquisition = { failure: describeRealtimeTalkInputError(error) };
+    } else {
+      throw error;
+    }
   }
+  if ("failure" in acquisition) {
+    throw new Error(acquisition.failure);
+  }
+  const { stream: audio } = acquisition;
   if (options.signal?.aborted) {
     audio.getTracks().forEach((track) => track.stop());
     throw realtimeTalkAbortReason(options.signal);

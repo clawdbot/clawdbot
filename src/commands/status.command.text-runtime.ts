@@ -40,6 +40,7 @@ export {
   formatDuration,
   formatKTokens,
   formatPromptCacheCompact,
+  formatStatusConfigDiagnosticEntries,
   formatTokensCompact,
   shortenText,
 } from "./status.format.js";

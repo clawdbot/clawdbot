@@ -479,12 +479,13 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     } else {
       commitInboundDedupeIfClaimed();
     }
-    recordProcessed("completed", { reason: "reply_operation_aborted" });
+    recordProcessed("skipped", { reason: "reply_operation_aborted" });
     markIdle("message_completed");
     state.completeDispatchReplyOperation();
     return attachSourceReplyDeliveryMode({
       queuedFinal,
       counts: dispatcher.getQueuedCounts(),
+      ...(state.turnLedger.hasVisibleDelivery() ? { observedReplyDelivery: true } : {}),
     });
   };
 

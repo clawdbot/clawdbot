@@ -5,7 +5,7 @@ type OpenClawCodingToolsFactory =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
 type OpenClawDynamicTool = ReturnType<OpenClawCodingToolsFactory>[number];
 type ExecAliasParams =
-  | { host: "gateway"; processAliasAvailable: boolean }
+  | { host: "gateway"; processAliasAvailable: boolean; ask?: "always" }
   | { host: "node"; node?: string };
 
 export const CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME = "node_exec";
@@ -63,7 +63,7 @@ export function createExecAliasDynamicTool(
     execute: async (toolCallId, args, signal, onUpdate) => {
       const result = await execTool.execute(
         toolCallId,
-        pinExecDynamicToolArgs(args, params.host, pinnedNode),
+        pinExecDynamicToolArgs(args, params, pinnedNode),
         signal,
         onUpdate,
       );
@@ -94,13 +94,13 @@ export function createGatewayProcessAliasDynamicTool(
 
 function pinExecDynamicToolArgs(
   args: unknown,
-  host: "gateway" | "node",
+  params: ExecAliasParams,
   configuredNode?: string,
 ): unknown {
   const source = normalizeExecDynamicToolArgs(args);
   const { host: _host, security: _security, ask: _ask, node: requestedNode, ...rest } = source;
-  if (host === "gateway") {
-    return { ...rest, host };
+  if (params.host === "gateway") {
+    return { ...rest, host: params.host, ...(params.ask ? { ask: params.ask } : {}) };
   }
   const nodeArgs = Object.fromEntries(
     Object.entries(rest).filter(([name]) => CODEX_NODE_EXEC_PARAMETER_NAMES.has(name)),
@@ -108,7 +108,7 @@ function pinExecDynamicToolArgs(
   const node = configuredNode ?? (typeof requestedNode === "string" ? requestedNode.trim() : "");
   return {
     ...nodeArgs,
-    host,
+    host: params.host,
     ...(node ? { node } : {}),
   };
 }

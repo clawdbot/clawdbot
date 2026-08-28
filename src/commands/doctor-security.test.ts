@@ -354,6 +354,36 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("openclaw approvals get --gateway");
   });
 
+  it("explains how to renew inactive generated exec approvals", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        agents: {
+          main: {
+            allowlist: [
+              {
+                pattern: "/usr/bin/git",
+                source: "allow-always",
+                argPattern: "sha256:argv:obsolete",
+              },
+              { pattern: "/usr/bin/python3", argPattern: "^script\\.py$" },
+            ],
+          },
+        },
+      },
+      async () => {
+        const findings = await collectSecurityWarnings({} as OpenClawConfig, {});
+        const finding = findings.find(
+          (candidate) => candidate.checkId === "doctor.exec_approvals_require_cwd_renewal",
+        );
+        expect(finding?.detail).toContain("1 older generated approval is inactive");
+        expect(finding?.remediation).toContain("openclaw doctor --fix");
+        expect(finding?.remediation).toContain('choose "Always allow here"');
+        expect(finding?.remediation).toContain("Manual allowlist rules are unchanged");
+      },
+    );
+  });
+
   it("warns when filesystem tools are disabled but exec remains available", async () => {
     await noteSecurityWarnings({
       tools: {

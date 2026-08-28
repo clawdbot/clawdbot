@@ -8,6 +8,7 @@ import {
   isPrereleaseSemverVersion,
   isPrereleaseResolutionAllowed,
   parseRegistryNpmSpec,
+  resolveOpenClawReleaseCohortVersion,
   resolveNpmJsonEntries,
   validateRegistryNpmSpec,
 } from "./npm-registry-spec.js";
@@ -146,6 +147,16 @@ describe("npm registry spec parsing helpers", () => {
     { left: "1.2.3-1", right: "1.2.3", expected: null },
   ])("compares OpenClaw release versions for %s and %s", ({ left, right, expected }) => {
     expect(compareOpenClawReleaseVersions(left, right)).toBe(expected);
+  });
+
+  it.each([
+    { version: "2026.7.1-2", expected: "2026.7.1" },
+    { version: " 2026.7.1-1 ", expected: "2026.7.1" },
+    { version: "2026.7.1", expected: "2026.7.1" },
+    { version: "2026.7.1-beta.3", expected: "2026.7.1-beta.3" },
+    { version: "1.2.3-1", expected: "1.2.3-1" },
+  ])("resolves the OpenClaw release cohort for $version", ({ version, expected }) => {
+    expect(resolveOpenClawReleaseCohortVersion(version)).toBe(expected);
   });
 });
 

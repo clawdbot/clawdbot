@@ -207,10 +207,14 @@ function installPrCliFixture(repoDir: string) {
     "scripts/pr",
     "scripts/watch-pr-ci.mjs",
     "scripts/watch-pr-ci.mts",
+    "scripts/verify-pr-hosted-gates.mjs",
+    "scripts/verify-pr-hosted-gates.mts",
     "scripts/lib/plain-gh.sh",
     "scripts/lib/plain-gh.mjs",
     "scripts/lib/direct-run.mjs",
     "scripts/lib/tsx-cli-shim.mjs",
+    "scripts/lib/local-check-runtime.mts",
+    "scripts/tsx.mjs",
     "scripts/pr-lib/worktree.sh",
     "scripts/pr-lib/operation-lock.sh",
     "scripts/pr-lib/process-group-runner.mjs",
@@ -218,11 +222,18 @@ function installPrCliFixture(repoDir: string) {
     "scripts/pr-lib/changelog.sh",
     "scripts/pr-lib/gates.sh",
     "scripts/pr-lib/ci-dispatch.mjs",
+    "scripts/pr-lib/crabbox-gate-contract.mjs",
+    "scripts/pr-lib/crabbox-gate-plan.mts",
+    "scripts/pr-lib/crabbox-merge-bypass.mjs",
+    "scripts/pr-lib/crabbox-merge-bypass.sh",
     "scripts/pr-lib/push.sh",
     "scripts/pr-lib/review.sh",
     "scripts/pr-lib/review-artifacts.mjs",
     "scripts/pr-lib/prepare-core.sh",
     "scripts/pr-lib/merge.sh",
+    "scripts/crabbox-untrusted-bootstrap.sh",
+    "scripts/pr-crabbox-gate-publisher.mjs",
+    ".github/workflows/pr-crabbox-gate-publisher.yml",
   ];
   for (const file of files) {
     const target = join(repoDir, file);
@@ -250,9 +261,7 @@ function installRequiredPrCommandStubs(binDir: string) {
 
 interface SupervisedFixtureOptions {
   accelerateTimeouts?: boolean;
-  cwd?: string;
   env?: NodeJS.ProcessEnv;
-  runner?: string;
 }
 
 async function runSupervisedFixture(
@@ -264,12 +273,12 @@ async function runSupervisedFixture(
     process.execPath,
     [
       ...(options.accelerateTimeouts ? ["--require", createProcessGroupTimingPreload()] : []),
-      options.runner ?? processGroupRunner,
+      processGroupRunner,
       repoDir,
       fixture,
     ],
     {
-      cwd: options.cwd ?? repoDir,
+      cwd: repoDir,
       env: { ...process.env, ...options.env },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -1214,66 +1223,175 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(result.stderr).not.toContain("Retaining the operation lock");
     }
   });
-  it("releases the lock after the operation deletes its runner worktree", async () => {
-    const repoDir = createRepo();
-    const doomedDir = tempDirs.make("openclaw-pr-self-deleting-runner-");
-    const copiedLibDir = join(doomedDir, "pr-lib");
-    mkdirSync(copiedLibDir, { recursive: true });
-    for (const file of ["operation-lock.sh", "process-group-runner.mjs"]) {
-      cpSync(join(repoRoot, "scripts/pr-lib", file), join(copiedLibDir, file));
-    }
-    const copiedRunner = join(copiedLibDir, "process-group-runner.mjs");
-    const fixture = join(doomedDir, "delete-own-worktree.sh");
-    writeFileSync(
-      fixture,
-      [
+  it.each([
+    { wrapper: "canonical", command: "merge-run", failure: "none" },
+    { wrapper: "linked", command: "merge-run", failure: "none" },
+    { wrapper: "linked", command: "gc", failure: "none" },
+    { wrapper: "linked", command: "merge-run", failure: "merge" },
+    { wrapper: "linked", command: "merge-run", failure: "release" },
+  ])(
+    "finishes native cleanup with $wrapper wrapper ($command, failure=$failure)",
+    ({ wrapper, command, failure }) => {
+      const repoDir = createRepo();
+      const { binDir, cli } = installPrCliFixture(repoDir);
+      const rg = writeFixtureFile(binDir, "rg", [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        `source '${join(copiedLibDir, "operation-lock.sh")}'`,
-        `repo_root() { printf '%s\\n' '${repoDir}'; }`,
-        "acquire_pr_operation_lock 42",
-        "echo 'fixture: lock acquired'",
-        `rm -rf '${doomedDir}'`,
-        "echo 'fixture: runner worktree deleted'",
-      ].join("\n"),
-    );
-    chmodSync(fixture, 0o755);
-    const result = await runSupervisedFixture(repoDir, fixture, {
-      cwd: doomedDir,
-      runner: copiedRunner,
-    });
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain("fixture: lock acquired");
-    expect(result.stdout).toContain("fixture: runner worktree deleted");
-    expect(result.stderr).not.toContain("Retaining the operation lock");
-    expect(refExists(repoDir)).toBe(false);
-  });
-  it("retains the exact owner when supervisor release cannot take the ref lock", async () => {
-    const repoDir = createRepo();
-    // Retry counts are covered above; this integration case only needs the real ref-lock failure.
-    execFileSync("git", ["config", "core.filesRefLockTimeout", "0"], { cwd: repoDir });
-    const binDir = join(repoDir, "fast-release-bin");
-    mkdirSync(binDir);
-    const sleepPath = join(binDir, "sleep");
-    writeFileSync(sleepPath, "#!/bin/sh\nexit 0\n");
-    chmodSync(sleepPath, 0o755);
-    const refLock = join(repoDir, ".git/refs/openclaw/pr-operation-locks/42.lock");
-    const result = await runSupervisedOperation(
-      repoDir,
-      "blocked-release.sh",
-      ["acquire_pr_operation_lock 42", `: >'${refLock}'`],
-      { env: { PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` } },
-    );
-    const ownerOid = refOid(repoDir);
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
-    expect(result.stderr).toContain("Unable to release the operation lock for 42");
-    expect(result.stderr).toContain(
-      `scripts/pr lock-recover 42 ${ownerOid} --confirmed-no-running-tools`,
-    );
-    expect(refOid(repoDir)).toBe(ownerOid);
-    unlinkSync(refLock);
-    recoverOperationLock(repoDir, ownerOid);
-  });
+        'if [ "$#" -ne 4 ] || [ "$1" != "-n" ] || [ "$2" != "-i" ]; then',
+        '  echo "unexpected fixture rg call: $*" >&2',
+        "  exit 99",
+        "fi",
+        'exec grep -n -i -E -- "$3" "$4"',
+      ]);
+      chmodSync(rg, 0o755);
+      const worktreeDir = join(repoDir, ".worktrees", "pr-42");
+      const lifecycle = join(repoDir, "lifecycle.log");
+      const ownerFile = join(repoDir, "owner-oid");
+      const releaseCwd = join(repoDir, "release-cwd");
+      const refLock = join(repoDir, ".git/refs/openclaw/pr-operation-locks/42.lock");
+      const git = (...args: string[]) =>
+        execFileSync("git", args, { cwd: repoDir, encoding: "utf8" }).trim();
+      git("config", "commit.gpgSign", "false");
+      git("config", "core.hooksPath", "/dev/null");
+      git("config", "core.filesRefLockTimeout", "0");
+      // Gate policy has its own merge tests. Keep the real wrapper, worktree
+      // entry/removal, completion marker, supervisor, and exact-owner release.
+      const mergeScript = join(repoDir, "scripts/pr-lib/merge.sh");
+      writeFileSync(
+        mergeScript,
+        `${readFileSync(mergeScript, "utf8")}\n` +
+          "validate_review_artifact_data() { :; }\n" +
+          "merge_verify() { MERGE_USE_CRABBOX_ADMIN_BYPASS=false; mark_pr_operation_side_effects_started; }\n",
+      );
+      git("add", "scripts", ".github");
+      git("commit", "-qm", "test: native cleanup fixture");
+      const preparedHead = git("rev-parse", "HEAD");
+      git("update-ref", "refs/remotes/origin/main", preparedHead);
+      git("worktree", "add", "-q", "-b", "temp/pr-42", worktreeDir);
+      if (wrapper === "linked") {
+        // origin/main still names the linked wrapper; canonical code must not
+        // be substituted merely to obtain the persistent supervisor cwd.
+        writeFileSync(
+          mergeScript,
+          "merge_run() { echo 'wrong canonical wrapper' >&2; exit 91; }\n",
+        );
+        git("add", "scripts/pr-lib/merge.sh");
+        git("commit", "-qm", "test: canonical wrapper drift");
+      }
+      const canonicalHead = git("rev-parse", "HEAD");
+      const localDir = join(worktreeDir, ".local");
+      mkdirSync(localDir);
+      for (const artifact of ["review.md", "pr-meta.env", "pr-meta.json", "prep.md"]) {
+        writeFileSync(join(localDir, artifact), "fixture\n");
+      }
+      writeFileSync(join(localDir, "review.json"), '{"recommendation":"READY FOR /prepare-pr"}\n');
+      writeFileSync(join(localDir, "prep.env"), `PREP_HEAD_SHA=${preparedHead}\n`);
+      // Both cached and plain gh routes use this executable. Unknown requests
+      // fail locally; neither this fixture nor its origin can contact GitHub.
+      const gh = writeFixtureFile(binDir, "gh", [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'case "$*" in',
+        '  "auth token") exit 1 ;;',
+        '  "api graphql "*) printf "fixture-user\\n" ;;',
+        '  "pr view 42 --json baseRefName")',
+        '    printf "invocation\\t%s\\n" "$PWD" >> "$OPENCLAW_TEST_LIFECYCLE"',
+        `    printf '%s\\n' '{"baseRefName":"main"}' ;;`,
+        `  "pr view 42 --json state,isDraft") printf '%s\\n' '{"state":"OPEN","isDraft":false}' ;;`,
+        '  "pr merge 42 "*)',
+        '    git rev-parse refs/openclaw/pr-operation-locks/42 > "$OPENCLAW_TEST_OWNER"',
+        '    if [ "$OPENCLAW_TEST_FAILURE" = merge ]; then echo "fixture merge failed" >&2; exit 7; fi',
+        '    printf "merged\\n" >> "$OPENCLAW_TEST_LIFECYCLE" ;;',
+        '  "pr view 42 --json state --jq .state") printf "MERGED\\n" ;;',
+        `  "pr view 42 --json mergeCommit "*) printf '%s\\n' '${preparedHead}' ;;`,
+        '  "repo view "*) printf "fixture/repo\\n" ;;',
+        '  "api --method POST repos/{owner}/{repo}/issues/42/comments "*)',
+        '    printf "comment\\n" >> "$OPENCLAW_TEST_LIFECYCLE"',
+        '    printf "https://example.invalid/comment\\n" ;;',
+        `  "pr view 42 --json headRefName,"*) printf '%s\\n' '{"headRefName":""}' ;;`,
+        '  "pr view 42 --json url --jq .url") printf "https://example.invalid/42\\n" ;;',
+        '  *) echo "unexpected fixture gh call: $*" >&2; exit 99 ;;',
+        "esac",
+      ]);
+      chmodSync(gh, 0o755);
+      const realGit = realpathSync(join(binDir, "git"));
+      unlinkSync(join(binDir, "git"));
+      const gitShim = writeFixtureFile(binDir, "git", [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'case "$*" in',
+        '  "fetch "*|"-C "*" fetch "*) exit 0 ;;',
+        '  "worktree remove "*)',
+        '    "$OPENCLAW_TEST_REAL_GIT" "$@"',
+        '    printf "removed\\n" >> "$OPENCLAW_TEST_LIFECYCLE"',
+        '    if [ "$OPENCLAW_TEST_FAILURE" = release ]; then : > "$OPENCLAW_TEST_REF_LOCK"; fi',
+        "    exit 0 ;;",
+        '  *"update-ref --no-deref -d refs/openclaw/pr-operation-locks/42 "*)',
+        '    pwd -P > "$OPENCLAW_TEST_RELEASE_CWD"',
+        '    "$OPENCLAW_TEST_REAL_GIT" "$@"',
+        '    printf "released\\n" >> "$OPENCLAW_TEST_LIFECYCLE"',
+        "    exit 0 ;;",
+        "esac",
+        'exec "$OPENCLAW_TEST_REAL_GIT" "$@"',
+      ]);
+      chmodSync(gitShim, 0o755);
+      const result = spawnSync(
+        wrapper === "linked" ? join(worktreeDir, "scripts/pr") : cli,
+        command === "gc" ? [command] : [command, "42"],
+        {
+          cwd: worktreeDir,
+          encoding: "utf8",
+          timeout: 15_000,
+          env: {
+            ...process.env,
+            OPENCLAW_GH_BIN: gh,
+            OPENCLAW_PR_AUTO_MERGE: "0",
+            OPENCLAW_PR_MERGE_METHOD: "squash",
+            OPENCLAW_TEST_FAILURE: failure,
+            OPENCLAW_TEST_LIFECYCLE: lifecycle,
+            OPENCLAW_TEST_OWNER: ownerFile,
+            OPENCLAW_TEST_REAL_GIT: realGit,
+            OPENCLAW_TEST_REF_LOCK: refLock,
+            OPENCLAW_TEST_RELEASE_CWD: releaseCwd,
+            PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+          },
+        },
+      );
+      const output = `${result.stdout}\n${result.stderr}`;
+      expect(result.error, output).toBeUndefined();
+      expect(existsSync(lifecycle), output).toBe(true);
+      const events = readFileSync(lifecycle, "utf8");
+      expect(git("rev-parse", "HEAD")).toBe(canonicalHead);
+      expect(existsSync(worktreeDir)).toBe(failure === "merge");
+      if (failure === "merge") {
+        expect(result.status, output).toBe(1);
+        expect(output).toContain("fixture merge failed");
+        expect(events).toBe(`invocation\t${worktreeDir}\n`);
+      } else {
+        const completedEvents =
+          command === "gc" ? "removed\n" : `invocation\t${worktreeDir}\nmerged\ncomment\nremoved\n`;
+        expect(events, output).toBe(completedEvents + (failure === "none" ? "released\n" : ""));
+        expect(readFileSync(releaseCwd, "utf8").trim(), output).toBe(repoDir);
+        expect(result.status, output).toBe(failure === "none" ? 0 : 1);
+        expect(result.stdout).toContain(
+          command === "gc" ? "removed .worktrees/pr-42" : "merge-run complete for PR #42",
+        );
+      }
+      if (failure === "none") {
+        expect(refExists(repoDir), output).toBe(false);
+        expect(result.stderr).not.toContain("Retaining the operation lock");
+      } else {
+        const ownerOid = readFileSync(ownerFile, "utf8").trim();
+        expect(refOid(repoDir)).toBe(ownerOid);
+        expect(result.stderr).toContain(
+          `scripts/pr lock-recover 42 ${ownerOid} --confirmed-no-running-tools`,
+        );
+        if (failure === "release") {
+          expect(result.stderr).toContain("Unable to release the operation lock for 42");
+        }
+      }
+    },
+  );
   it("reports exact recovery when lock notification fails", () => {
     const repoDir = createRepo();
     const result = runLockShell(repoDir, [
@@ -1991,9 +2109,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
     );
     expect(script).toContain('recover_pr_operation_lock "$pr" "$owner_oid" "$confirmation"');
     expect(script).toContain('source "$script_parent_dir/pr-lib/operation-lock.sh"');
-    expect(script).toContain(
-      'pr-lib/process-group-runner.mjs" "$script_parent_dir/.." "$script_self" "$@"',
-    );
     expect(script).toContain('prepare_run "$pr"');
     expect(runner).toContain('process.platform === "win32"');
     expect(runner).toContain("requires a POSIX process group");

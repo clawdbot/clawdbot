@@ -8,8 +8,27 @@ import type {
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
 import type { PluginRegistry } from "../registry-types.js";
+import type { OpenClawPluginNodeWorkspace } from "../types.node-host.js";
 
 type PluginRuntimeGatewayRequestScope = {
+  /** Exact placement owner captured before the local harness begins. */
+  assertNodeExecutionCurrent?: (request: {
+    runId: string;
+    agentId: string;
+    nodeId: string;
+    workspace: OpenClawPluginNodeWorkspace;
+  }) => void;
+  /** In-process admitted owner only; never projected into RPC parameters. */
+  invokeWithSessionNodeAuthority?: <T>(
+    request: {
+      pluginId: string;
+      command: string;
+      source: "session-full" | "human-approved";
+      nodeId: string;
+      workspace: OpenClawPluginNodeWorkspace;
+    },
+    invoke: (assertCurrent: () => void, signal: AbortSignal) => Promise<T>,
+  ) => Promise<T | undefined>;
   context?: GatewayRequestContext;
   resolveGatewayContext?: GatewayContextResolver;
   client?: GatewayRequestOptions["client"];
@@ -32,6 +51,7 @@ type PluginRuntimePluginScope = {
 const PLUGIN_RUNTIME_GATEWAY_REQUEST_SCOPE_KEY: unique symbol = Symbol.for(
   "openclaw.pluginRuntimeGatewayRequestScope",
 );
+const GATEWAY_CONTEXT_RESOLVERS_KEY: unique symbol = Symbol.for("openclaw.gatewayContextResolvers");
 
 const pluginRuntimeGatewayRequestScope = resolveGlobalSingleton<
   AsyncLocalStorage<PluginRuntimeGatewayRequestScope>
@@ -39,7 +59,11 @@ const pluginRuntimeGatewayRequestScope = resolveGlobalSingleton<
   PLUGIN_RUNTIME_GATEWAY_REQUEST_SCOPE_KEY,
   () => new AsyncLocalStorage<PluginRuntimeGatewayRequestScope>(),
 );
-const gatewayContextResolvers = new WeakMap<object, GatewayContextResolver>();
+// Built plugin chunks and source Gateway code must redeem the same host-issued owner bindings.
+const gatewayContextResolvers = resolveGlobalSingleton<WeakMap<object, GatewayContextResolver>>(
+  GATEWAY_CONTEXT_RESOLVERS_KEY,
+  () => new WeakMap(),
+);
 
 export function bindGatewayContextResolver(
   owner: object,

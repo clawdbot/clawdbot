@@ -53,11 +53,10 @@ describe("appendRawStream", () => {
     vi.stubEnv("OPENCLAW_RAW_STREAM_PATH", rawStreamPath);
 
     appendRawStream({ event: "test", ts: 1 });
+    // The async writer creates the file before its append completes.
     await vi.waitFor(() => {
-      expect(fs.existsSync(rawStreamPath)).toBe(true);
+      expect(fs.readFileSync(rawStreamPath, "utf8")).toBe('{"event":"test","ts":1}\n');
     });
-
-    expect(fs.readFileSync(rawStreamPath, "utf8")).toBe('{"event":"test","ts":1}\n');
     expect(unhandledRejections).toHaveLength(0);
   });
 

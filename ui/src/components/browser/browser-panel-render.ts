@@ -300,8 +300,9 @@ function renderViewportContent(controller: BrowserPanelController) {
         @click=${(event: MouseEvent) => controller.handleStageClick(event)}
         @pointerdown=${(event: PointerEvent) => controller.handleOverlayPointerDown(event)}
         @pointermove=${(event: PointerEvent) => controller.handleOverlayPointerMove(event)}
-        @pointerup=${() => controller.handleOverlayPointerUp()}
-        @pointercancel=${() => controller.handleOverlayPointerUp()}
+        @pointerup=${(event: PointerEvent) => controller.handleOverlayPointerUp(event)}
+        @pointercancel=${(event: PointerEvent) => controller.handleOverlayPointerUp(event)}
+        @lostpointercapture=${(event: PointerEvent) => controller.handleOverlayPointerUp(event)}
       ></canvas>
       ${renderInspectTooltip(controller)}
     </div>

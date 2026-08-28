@@ -1,12 +1,15 @@
 // Onboard custom config tests cover provider-specific config merging and context-window bounds.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import type { OpenClawConfig } from "../config/config.js";
+import * as currentPluginMetadataSnapshot from "../plugins/current-plugin-metadata-snapshot.js";
+import * as manifestContractEligibility from "../plugins/manifest-contract-eligibility.js";
 import {
   applyCustomApiConfig,
   buildAnthropicVerificationProbeRequest,
   buildOpenAiVerificationProbeRequest,
   parseNonInteractiveCustomApiFlags,
+  resolveCustomModelAliasError,
   resolveCustomModelImageInputInference,
 } from "./onboard-custom-config.js";
 
@@ -49,31 +52,124 @@ function applyCustomModelConfigWithContextWindow(contextWindow?: number) {
   });
 }
 
-it("keeps explicit custom-provider model state on the authored agent entry", () => {
-  const result = applyCustomApiConfig({
-    config: {
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "ops" } },
-        entries: { main: {}, OPS: {} },
+it.each([
+  { setAsPrimary: undefined, expectedPrimary: "custom/foo-large" },
+  { setAsPrimary: false, expectedPrimary: "openai/ops" },
+])(
+  "keeps explicit custom-provider model state on its authored owner ($setAsPrimary)",
+  ({ setAsPrimary, expectedPrimary }) => {
+    const result = applyCustomApiConfig({
+      config: {
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            systemAgent: { agentId: "ops" },
+            model: { primary: "anthropic/global" },
+            models: { "anthropic/global": { alias: "Global" } },
+          },
+          entries: {
+            main: { model: { primary: "anthropic/main" } },
+            OPS: {
+              model: { primary: "openai/ops" },
+              models: { "openai/ops": { alias: "Operations" } },
+              modelPolicy: { allow: ["openai/ops"] },
+            },
+          },
+        },
       },
-    },
-    baseUrl: "https://llm.example.com/v1",
-    modelId: "foo-large",
-    compatibility: "openai",
-    providerId: "custom",
-    alias: "Custom",
-    target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
-  });
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      providerId: "custom",
+      alias: "Custom",
+      target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
+      setAsPrimary,
+    });
 
-  expect(result.config.agents?.entries?.OPS?.model).toEqual({ primary: "custom/foo-large" });
-  expect(result.config.agents?.entries?.OPS?.models).toEqual({
-    "custom/foo-large": { alias: "Custom" },
-  });
-  expect(result.config.agents?.defaults?.model).toBeUndefined();
-  expect(result.config.models?.providers?.custom?.models?.map((model) => model.id)).toEqual([
-    "foo-large",
-  ]);
+    expect(result.config.agents?.entries?.OPS?.model).toEqual({ primary: expectedPrimary });
+    expect(result.config.agents?.entries?.OPS?.models).toEqual({
+      "openai/ops": { alias: "Operations" },
+      "custom/foo-large": { alias: "Custom" },
+    });
+    expect(result.config.agents?.entries?.OPS?.modelPolicy).toEqual({ allow: ["openai/ops"] });
+    expect(result.config.agents?.entries?.main?.model).toEqual({ primary: "anthropic/main" });
+    expect(result.config.agents?.defaults?.model).toEqual({ primary: "anthropic/global" });
+    expect(result.config.agents?.defaults?.models).toEqual({
+      "anthropic/global": { alias: "Global" },
+    });
+    expect(result.config.models?.providers?.custom?.models?.map((model) => model.id)).toEqual([
+      "foo-large",
+    ]);
+  },
+);
+
+it("rejects custom aliases already used by the selected agent", () => {
+  expect(() =>
+    applyCustomApiConfig({
+      config: {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { ops: { models: { "openai/ops": { alias: "Operations" } } } },
+        },
+      },
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      providerId: "custom",
+      alias: "Operations",
+      target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
+    }),
+  ).toThrow("Alias Operations already points to openai/ops.");
+});
+
+it("validates authored and inherited aliases without discovering plugin metadata", () => {
+  const currentSnapshot = vi
+    .spyOn(currentPluginMetadataSnapshot, "getCurrentPluginMetadataSnapshot")
+    .mockImplementation(() => {
+      throw new Error("authored alias validation must not inspect plugin metadata");
+    });
+  const loadedSnapshot = vi
+    .spyOn(manifestContractEligibility, "loadManifestMetadataSnapshot")
+    .mockImplementation(() => {
+      throw new Error("authored alias validation must not load plugin metadata");
+    });
+  const cfg = {
+    agents: {
+      defaults: { models: { "anthropic/global": { alias: "Global" } } },
+      entries: { ops: { models: { "openai/ops": { alias: "Operations" } } } },
+    },
+  } as OpenClawConfig;
+
+  try {
+    expect(
+      resolveCustomModelAliasError({
+        raw: "Operations",
+        cfg,
+        agentId: "ops",
+        modelRef: "custom/new-model",
+      }),
+    ).toBe("Alias Operations already points to openai/ops.");
+    expect(
+      resolveCustomModelAliasError({
+        raw: "Global",
+        cfg,
+        agentId: "ops",
+        modelRef: "custom/new-model",
+      }),
+    ).toBe("Alias Global already points to anthropic/global.");
+    expect(
+      resolveCustomModelAliasError({
+        raw: "Operations",
+        cfg,
+        agentId: "ops",
+        modelRef: "openai/ops",
+      }),
+    ).toBeUndefined();
+  } finally {
+    currentSnapshot.mockRestore();
+    loadedSnapshot.mockRestore();
+  }
 });
 
 it("preserves a list-form roster when applying custom-provider model state", () => {

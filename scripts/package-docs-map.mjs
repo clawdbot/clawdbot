@@ -77,10 +77,8 @@ export async function preparePackageDocsMap(cwd = process.cwd()) {
   const mapPath = path.join(cwd, DOCS_MAP_PATH);
   const content = renderDocsHeadingMap(path.join(cwd, "docs"));
   const original = existsSync(mapPath) ? await readFile(mapPath, "utf8") : null;
-  if (original === content) {
-    return false;
-  }
-
+  // The receipt owns every source-mutating pack step, even when the map is
+  // already generated; skipping it lets another pack restore our prepared files.
   await mkdir(path.dirname(receiptPath), { recursive: true });
   try {
     await writeFile(

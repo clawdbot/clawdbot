@@ -61,7 +61,7 @@ export async function startWebhookServer(
   const host = params.host ?? "127.0.0.1";
   const port = params.port ?? 0;
   const secret = params.secret ?? "nextcloud-secret";
-  const { server, start } = createNextcloudTalkWebhookServer({
+  const { server, start, stop } = createNextcloudTalkWebhookServer({
     ...params,
     port,
     host,
@@ -75,10 +75,7 @@ export async function startWebhookServer(
 
   const harness: WebhookHarness = {
     webhookUrl: `http://${host}:${address.port}${params.path}`,
-    stop: () =>
-      new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      }),
+    stop,
   };
   cleanupFns.push(harness.stop);
   return harness;

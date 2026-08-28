@@ -1,3 +1,4 @@
+import { enableConsoleCapture, routeLogsToStderr } from "../logging/console.js";
 import { signalProcessTree } from "../process/kill-tree.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import {
@@ -113,12 +114,17 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
 export async function runWorkerProcess(
   options: {
     internalWorkerIpc?: boolean;
+    managed?: boolean;
     browserRuntime?: WorkerBrowserRuntime;
   } = {},
 ): Promise<void> {
+  // Stdout belongs to the worker result; diagnostics stay on stderr through process shutdown.
+  routeLogsToStderr();
+  enableConsoleCapture();
   await runWorkerCommand({
     input: process.stdin,
     output: process.stdout,
+    ...(options.managed ? { managed: true } : {}),
     ...(options.internalWorkerIpc ? { lifetime: createWorkerIpcLifetime() } : {}),
     ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
   });

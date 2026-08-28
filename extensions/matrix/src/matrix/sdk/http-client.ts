@@ -1,6 +1,6 @@
 // Matrix plugin module implements http client behavior.
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
-import type { SsrFPolicy } from "../../runtime-api.js";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { buildHttpError } from "./event-helpers.js";
 import { type HttpMethod, type QueryParams, performMatrixRequest } from "./transport.js";
 

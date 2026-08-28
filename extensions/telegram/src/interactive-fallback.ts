@@ -11,11 +11,13 @@ import {
   type MessagePresentationInteractiveBlock,
   type MessagePresentationTableBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  resolveAskUserQuestionOptionIndices,
+  type ReplyPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import {
   buildTelegramPresentationButtons,
   resolveTelegramInlineButtons,
-  resolveTelegramQuestionOptionIndices,
   type TelegramButtonBuildOptions,
 } from "./button-types.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -223,7 +225,7 @@ export function canonicalizeTelegramPresentationPayload(
   const interactive = normalizeLegacyInteractiveReply(payload.interactive);
   const buttonOptions: TelegramButtonBuildOptions = {
     allowWebAppButtons: options?.allowWebAppButtons === true,
-    questionOptionIndices: resolveTelegramQuestionOptionIndices(payload),
+    questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
   };
   const existingButtons = resolveTelegramInlineButtons(
     {

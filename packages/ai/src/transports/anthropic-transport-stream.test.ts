@@ -107,6 +107,22 @@ function createSseResponse(events: Record<string, unknown>[] = []): Response {
   });
 }
 
+function anthropicMessageStart(message: Record<string, unknown>) {
+  return { type: "message_start", message };
+}
+
+function anthropicMessageDelta(delta: Record<string, unknown>, usage: Record<string, unknown>) {
+  return { type: "message_delta", delta, usage };
+}
+
+function anthropicContentBlockStart(index: number, content_block: Record<string, unknown>) {
+  return { type: "content_block_start", index, content_block };
+}
+
+function anthropicContentBlockDelta(index: number, delta: Record<string, unknown>) {
+  return { type: "content_block_delta", index, delta };
+}
+
 function serializeSseEvents(events: Record<string, unknown>[]): string {
   return events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
 }
@@ -132,20 +148,9 @@ function createFailingSseResponse(events: Record<string, unknown>[], error: Erro
 
 function createInterruptedThinkingEvents(): Record<string, unknown>[] {
   return [
-    {
-      type: "message_start",
-      message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
-    },
-    {
-      type: "content_block_start",
-      index: 0,
-      content_block: { type: "thinking", thinking: "step by step", signature: "" },
-    },
-    {
-      type: "content_block_delta",
-      index: 0,
-      delta: { type: "signature_delta", signature: "partial-signature" },
-    },
+    anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
+    anthropicContentBlockStart(0, { type: "thinking", thinking: "step by step", signature: "" }),
+    anthropicContentBlockDelta(0, { type: "signature_delta", signature: "partial-signature" }),
   ];
 }
 
@@ -249,6 +254,10 @@ function findRecord(items: unknown, predicate: (record: Record<string, unknown>)
   throw new Error("Expected matching record");
 }
 
+function latestAnthropicUserMessage() {
+  return findRecord(latestAnthropicRequest().payload.messages, (record) => record.role === "user");
+}
+
 function makeAnthropicTransportModel(
   params: {
     id?: string;
@@ -340,7 +349,7 @@ describe("anthropic transport stream", () => {
     configureAiTransportHost({
       ...coreTransportHost,
       buildModelFetch: buildGuardedModelFetchMock,
-      redactSecrets: redactTestSecrets,
+      redactModelVisibleSecrets: redactTestSecrets,
       resolveProviderRequestCapabilities: (input) => {
         const endpointClass = resolveTestEndpointClass(input.baseUrl);
         return {
@@ -355,15 +364,8 @@ describe("anthropic transport stream", () => {
     });
     guardedFetchMock.mockResolvedValue(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_default", usage: { input_tokens: 0, output_tokens: 0 } },
-        },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 0, output_tokens: 0 },
-        },
+        anthropicMessageStart({ id: "msg_default", usage: { input_tokens: 0, output_tokens: 0 } }),
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 0, output_tokens: 0 }),
         { type: "message_stop" },
       ]),
     );
@@ -514,19 +516,16 @@ describe("anthropic transport stream", () => {
   ])("$name", async (testCase) => {
     const textEvents = testCase.content
       ? [
-          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Done." } },
+          anthropicContentBlockStart(0, { type: "text", text: "" }),
+          anthropicContentBlockDelta(0, { type: "text_delta", text: "Done." }),
           { type: "content_block_stop", index: 0 },
         ]
       : [];
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: testCase.id, model: testCase.model, usage: testCase.initial },
-        },
+        anthropicMessageStart({ id: testCase.id, model: testCase.model, usage: testCase.initial }),
         ...textEvents,
-        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: testCase.final },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, testCase.final),
         { type: "message_stop" },
       ]),
     );
@@ -548,50 +547,27 @@ describe("anthropic transport stream", () => {
     guardedFetchMock
       .mockResolvedValueOnce(
         createSseResponse([
-          {
-            type: "message_start",
-            message: {
-              id: "msg_compaction",
-              model: "claude-sonnet-4-6",
-              usage: { input_tokens: 50_001, output_tokens: 0 },
-            },
-          },
-          {
-            type: "content_block_start",
-            index: 0,
-            content_block: { type: "compaction", content: null },
-          },
-          {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "compaction_delta", content: "summary checkpoint" },
-          },
+          anthropicMessageStart({
+            id: "msg_compaction",
+            model: "claude-sonnet-4-6",
+            usage: { input_tokens: 50_001, output_tokens: 0 },
+          }),
+          anthropicContentBlockStart(0, { type: "compaction", content: null }),
+          anthropicContentBlockDelta(0, {
+            type: "compaction_delta",
+            content: "summary checkpoint",
+          }),
           { type: "content_block_stop", index: 0 },
-          {
-            type: "content_block_start",
-            index: 1,
-            content_block: { type: "text", text: "Done." },
-          },
+          anthropicContentBlockStart(1, { type: "text", text: "Done." }),
           { type: "content_block_stop", index: 1 },
-          {
-            type: "message_delta",
-            delta: { stop_reason: "end_turn" },
-            usage: { input_tokens: 1, output_tokens: 1 },
-          },
+          anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
           { type: "message_stop" },
         ]),
       )
       .mockResolvedValueOnce(
         createSseResponse([
-          {
-            type: "message_start",
-            message: { id: "msg_replay", usage: { input_tokens: 1, output_tokens: 0 } },
-          },
-          {
-            type: "message_delta",
-            delta: { stop_reason: "end_turn" },
-            usage: { input_tokens: 1, output_tokens: 1 },
-          },
+          anthropicMessageStart({ id: "msg_replay", usage: { input_tokens: 1, output_tokens: 0 } }),
+          anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
           { type: "message_stop" },
         ]),
       );
@@ -693,22 +669,19 @@ describe("anthropic transport stream", () => {
   it("prices one-hour cache writes at the same rate as the direct Anthropic provider", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: {
-            id: "msg_cache_ttl_usage",
-            usage: {
-              input_tokens: 100,
-              output_tokens: 0,
-              cache_creation_input_tokens: 1_000_000,
-              cache_creation: {
-                ephemeral_5m_input_tokens: 600_000,
-                ephemeral_1h_input_tokens: 400_000,
-              },
+        anthropicMessageStart({
+          id: "msg_cache_ttl_usage",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 0,
+            cache_creation_input_tokens: 1_000_000,
+            cache_creation: {
+              ephemeral_5m_input_tokens: 600_000,
+              ephemeral_1h_input_tokens: 400_000,
             },
           },
-        },
-        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } },
+        }),
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { output_tokens: 5 }),
         { type: "message_stop" },
       ]),
     );
@@ -734,33 +707,25 @@ describe("anthropic transport stream", () => {
     // 💬 lane — exactly the pioneer commentary gap.
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_pio", usage: { input_tokens: 10, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "text", text: "I'll start by checking the current date." },
-        },
+        anthropicMessageStart({ id: "msg_pio", usage: { input_tokens: 10, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, {
+          type: "text",
+          text: "I'll start by checking the current date.",
+        }),
         { type: "content_block_stop", index: 0 },
-        {
-          type: "content_block_start",
-          index: 1,
-          content_block: { type: "tool_use", id: "toolu_vrtx_01S4", name: "exec", input: {} },
-        },
-        {
-          type: "content_block_delta",
-          index: 1,
-          delta: { type: "input_json_delta", partial_json: '{"command":"date"}' },
-        },
+        anthropicContentBlockStart(1, {
+          type: "tool_use",
+          id: "toolu_vrtx_01S4",
+          name: "exec",
+          input: {},
+        }),
+        anthropicContentBlockDelta(1, {
+          type: "input_json_delta",
+          partial_json: '{"command":"date"}',
+        }),
         { type: "content_block_stop", index: 1 },
-        {
-          // The proxy mislabel: a tool-using turn reported as end_turn, NOT tool_use.
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 10, output_tokens: 7 },
-        },
+        // The proxy mislabel: a tool-using turn reported as end_turn, NOT tool_use.
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 10, output_tokens: 7 }),
       ]),
     );
 
@@ -835,15 +800,8 @@ describe("anthropic transport stream", () => {
     async (model) => {
       guardedFetchMock.mockResolvedValueOnce(
         createSseResponse([
-          {
-            type: "message_start",
-            message: { id: "msg_fb", usage: { input_tokens: 1, output_tokens: 0 } },
-          },
-          {
-            type: "message_delta",
-            delta: { stop_reason: "end_turn" },
-            usage: { input_tokens: 1, output_tokens: 1 },
-          },
+          anthropicMessageStart({ id: "msg_fb", usage: { input_tokens: 1, output_tokens: 0 } }),
+          anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
           { type: "message_stop" },
         ]),
       );
@@ -888,15 +846,8 @@ describe("anthropic transport stream", () => {
   ])("omits server-side fallback params for $label", async ({ model, apiKey }) => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_no_fb", usage: { input_tokens: 1, output_tokens: 0 } },
-        },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 1, output_tokens: 1 },
-        },
+        anthropicMessageStart({ id: "msg_no_fb", usage: { input_tokens: 1, output_tokens: 0 } }),
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
         { type: "message_stop" },
       ]),
     );
@@ -920,65 +871,38 @@ describe("anthropic transport stream", () => {
   it("rebuilds Fable output at a mid-stream server-side fallback boundary", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: {
-            id: "msg_fb",
-            model: "claude-fable-5",
-            usage: { input_tokens: 5, output_tokens: 0 },
-          },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "thinking", thinking: "" },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "thinking_delta", thinking: "pre-boundary reasoning" },
-        },
+        anthropicMessageStart({
+          id: "msg_fb",
+          model: "claude-fable-5",
+          usage: { input_tokens: 5, output_tokens: 0 },
+        }),
+        anthropicContentBlockStart(0, { type: "thinking", thinking: "" }),
+        anthropicContentBlockDelta(0, {
+          type: "thinking_delta",
+          thinking: "pre-boundary reasoning",
+        }),
         { type: "content_block_stop", index: 0 },
-        {
-          type: "content_block_start",
-          index: 1,
-          content_block: { type: "text", text: "partial " },
-        },
+        anthropicContentBlockStart(1, { type: "text", text: "partial " }),
         { type: "content_block_stop", index: 1 },
-        {
-          // Starting a tool call tags the preceding text as commentary before
-          // the classifier declines mid-turn.
-          type: "content_block_start",
-          index: 2,
-          content_block: { type: "tool_use", id: "call_1", name: "lookup", input: {} },
-        },
+        // Starting a tool call tags the preceding text as commentary before
+        // the classifier declines mid-turn.
+        anthropicContentBlockStart(2, {
+          type: "tool_use",
+          id: "call_1",
+          name: "lookup",
+          input: {},
+        }),
         { type: "content_block_stop", index: 2 },
-        {
-          type: "content_block_start",
-          index: 3,
-          content_block: {
-            type: "fallback",
-            from: { model: "claude-fable-5" },
-            to: { model: "claude-opus-4-8" },
-          },
-        },
+        anthropicContentBlockStart(3, {
+          type: "fallback",
+          from: { model: "claude-fable-5" },
+          to: { model: "claude-opus-4-8" },
+        }),
         { type: "content_block_stop", index: 3 },
-        {
-          type: "content_block_start",
-          index: 4,
-          content_block: { type: "text", text: "" },
-        },
-        {
-          type: "content_block_delta",
-          index: 4,
-          delta: { type: "text_delta", text: "continued" },
-        },
+        anthropicContentBlockStart(4, { type: "text", text: "" }),
+        anthropicContentBlockDelta(4, { type: "text_delta", text: "continued" }),
         { type: "content_block_stop", index: 4 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 5, output_tokens: 9 },
-        },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 5, output_tokens: 9 }),
         { type: "message_stop" },
       ]),
     );
@@ -1023,40 +947,21 @@ describe("anthropic transport stream", () => {
   it("records and prices a pre-output server-side fallback boundary", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: {
-            id: "msg_pre_output_fb",
-            model: "claude-fable-5",
-            usage: { input_tokens: 5, output_tokens: 0 },
-          },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: {
-            type: "fallback",
-            from: { model: "claude-fable-5" },
-            to: { model: "claude-opus-5" },
-          },
-        },
+        anthropicMessageStart({
+          id: "msg_pre_output_fb",
+          model: "claude-fable-5",
+          usage: { input_tokens: 5, output_tokens: 0 },
+        }),
+        anthropicContentBlockStart(0, {
+          type: "fallback",
+          from: { model: "claude-fable-5" },
+          to: { model: "claude-opus-5" },
+        }),
         { type: "content_block_stop", index: 0 },
-        {
-          type: "content_block_start",
-          index: 1,
-          content_block: { type: "text", text: "" },
-        },
-        {
-          type: "content_block_delta",
-          index: 1,
-          delta: { type: "text_delta", text: "continued" },
-        },
+        anthropicContentBlockStart(1, { type: "text", text: "" }),
+        anthropicContentBlockDelta(1, { type: "text_delta", text: "continued" }),
         { type: "content_block_stop", index: 1 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 5, output_tokens: 2 },
-        },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 5, output_tokens: 2 }),
         { type: "message_stop" },
       ]),
     );
@@ -1685,24 +1590,12 @@ describe("anthropic transport stream", () => {
   ])("surfaces structured %s streaming refusals for %s", async (id, name, provider) => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_refusal", usage: { input_tokens: 3, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "text", text: "" },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "discard this partial output" },
-        },
+        anthropicMessageStart({ id: "msg_refusal", usage: { input_tokens: 3, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, { type: "text", text: "" }),
+        anthropicContentBlockDelta(0, { type: "text_delta", text: "discard this partial output" }),
         { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: {
+        anthropicMessageDelta(
+          {
             stop_reason: "refusal",
             stop_details: {
               type: "refusal",
@@ -1710,8 +1603,8 @@ describe("anthropic transport stream", () => {
               explanation: "This request is not allowed.",
             },
           },
-          usage: { input_tokens: 3, output_tokens: 2 },
-        },
+          { input_tokens: 3, output_tokens: 2 },
+        ),
         { type: "message_stop" },
       ]),
     );
@@ -1756,16 +1649,8 @@ describe("anthropic transport stream", () => {
   it("discards buffered Fable output when the transport ends before terminal status", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "text", text: "" },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "unsafe partial output" },
-        },
+        anthropicContentBlockStart(0, { type: "text", text: "" }),
+        anthropicContentBlockDelta(0, { type: "text_delta", text: "unsafe partial output" }),
       ]),
     );
     const streamFn = createAnthropicMessagesTransportStreamFn();
@@ -1794,22 +1679,11 @@ describe("anthropic transport stream", () => {
   it("rejects ordinary Anthropic output when the stream ends before message_stop", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_partial", usage: { input_tokens: 3, output_tokens: 0 } },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "truncated answer" },
-        },
+        anthropicMessageStart({ id: "msg_partial", usage: { input_tokens: 3, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, { type: "text", text: "" }),
+        anthropicContentBlockDelta(0, { type: "text_delta", text: "truncated answer" }),
         { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 3, output_tokens: 2 },
-        },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 3, output_tokens: 2 }),
       ]),
     );
 
@@ -1826,22 +1700,11 @@ describe("anthropic transport stream", () => {
   it("accepts proxy provider streams that end without message_stop", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_proxy", usage: { input_tokens: 3, output_tokens: 0 } },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "proxy answer" },
-        },
+        anthropicMessageStart({ id: "msg_proxy", usage: { input_tokens: 3, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, { type: "text", text: "" }),
+        anthropicContentBlockDelta(0, { type: "text_delta", text: "proxy answer" }),
         { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 3, output_tokens: 2 },
-        },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 3, output_tokens: 2 }),
       ]),
     );
 
@@ -1863,28 +1726,13 @@ describe("anthropic transport stream", () => {
   it("defers a pre-tool text block's text_end until it carries the commentary phase", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_defer", usage: { input_tokens: 5, output_tokens: 0 } },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "I'll check the repo." },
-        },
+        anthropicMessageStart({ id: "msg_defer", usage: { input_tokens: 5, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, { type: "text", text: "" }),
+        anthropicContentBlockDelta(0, { type: "text_delta", text: "I'll check the repo." }),
         { type: "content_block_stop", index: 0 },
-        {
-          type: "content_block_start",
-          index: 1,
-          content_block: { type: "tool_use", id: "tool_1", name: "exec", input: {} },
-        },
+        anthropicContentBlockStart(1, { type: "tool_use", id: "tool_1", name: "exec", input: {} }),
         { type: "content_block_stop", index: 1 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "tool_use" },
-          usage: { input_tokens: 5, output_tokens: 7 },
-        },
+        anthropicMessageDelta({ stop_reason: "tool_use" }, { input_tokens: 5, output_tokens: 7 }),
         { type: "message_stop" },
       ]),
     );
@@ -1923,22 +1771,11 @@ describe("anthropic transport stream", () => {
   it("emits a non-tool text block's text_end as unphased answer text", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_answer", usage: { input_tokens: 5, output_tokens: 0 } },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "Here is the answer." },
-        },
+        anthropicMessageStart({ id: "msg_answer", usage: { input_tokens: 5, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, { type: "text", text: "" }),
+        anthropicContentBlockDelta(0, { type: "text_delta", text: "Here is the answer." }),
         { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 5, output_tokens: 4 },
-        },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 5, output_tokens: 4 }),
         { type: "message_stop" },
       ]),
     );
@@ -1979,35 +1816,20 @@ describe("anthropic transport stream", () => {
   it("preserves unsafe integer Anthropic tool-use input deltas", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_unsafe", usage: { input_tokens: 10, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: {
-            type: "tool_use",
-            id: "tool_unsafe",
-            name: "send_message",
-            input: {},
-          },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: {
-            type: "input_json_delta",
-            partial_json:
-              '{"to":1481220477346119781,"safe":42,"maxSafe":9007199254740991,"nested":{"ids":[9007199254740993,-9007199254740992]}}',
-          },
-        },
+        anthropicMessageStart({ id: "msg_unsafe", usage: { input_tokens: 10, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, {
+          type: "tool_use",
+          id: "tool_unsafe",
+          name: "send_message",
+          input: {},
+        }),
+        anthropicContentBlockDelta(0, {
+          type: "input_json_delta",
+          partial_json:
+            '{"to":1481220477346119781,"safe":42,"maxSafe":9007199254740991,"nested":{"ids":[9007199254740993,-9007199254740992]}}',
+        }),
         { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "tool_use" },
-          usage: { input_tokens: 10, output_tokens: 5 },
-        },
+        anthropicMessageDelta({ stop_reason: "tool_use" }, { input_tokens: 10, output_tokens: 5 }),
         { type: "message_stop" },
       ]),
     );
@@ -2037,37 +1859,33 @@ describe("anthropic transport stream", () => {
   it("rejects malformed terminal tool JSON before completing any sibling call", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_malformed_tools", usage: { input_tokens: 2, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "tool_use", id: "call_valid", name: "read", input: {} },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "input_json_delta", partial_json: '{"path":"README.md"}' },
-        },
+        anthropicMessageStart({
+          id: "msg_malformed_tools",
+          usage: { input_tokens: 2, output_tokens: 0 },
+        }),
+        anthropicContentBlockStart(0, {
+          type: "tool_use",
+          id: "call_valid",
+          name: "read",
+          input: {},
+        }),
+        anthropicContentBlockDelta(0, {
+          type: "input_json_delta",
+          partial_json: '{"path":"README.md"}',
+        }),
         { type: "content_block_stop", index: 0 },
-        {
-          type: "content_block_start",
-          index: 1,
-          content_block: { type: "tool_use", id: "call_invalid", name: "read", input: {} },
-        },
-        {
-          type: "content_block_delta",
-          index: 1,
-          delta: { type: "input_json_delta", partial_json: '{"path":"SECRET.md"' },
-        },
+        anthropicContentBlockStart(1, {
+          type: "tool_use",
+          id: "call_invalid",
+          name: "read",
+          input: {},
+        }),
+        anthropicContentBlockDelta(1, {
+          type: "input_json_delta",
+          partial_json: '{"path":"SECRET.md"',
+        }),
         { type: "content_block_stop", index: 1 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "tool_use" },
-          usage: { input_tokens: 2, output_tokens: 2 },
-        },
+        anthropicMessageDelta({ stop_reason: "tool_use" }, { input_tokens: 2, output_tokens: 2 }),
         { type: "message_stop" },
       ]),
     );
@@ -2095,25 +1913,18 @@ describe("anthropic transport stream", () => {
   it("rejects an active tool call that never receives content_block_stop", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_unsealed", usage: { input_tokens: 2, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "tool_use", id: "call_unsealed", name: "read", input: {} },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "input_json_delta", partial_json: '{"path":"README.md"' },
-        },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "tool_use" },
-          usage: { input_tokens: 2, output_tokens: 1 },
-        },
+        anthropicMessageStart({ id: "msg_unsealed", usage: { input_tokens: 2, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, {
+          type: "tool_use",
+          id: "call_unsealed",
+          name: "read",
+          input: {},
+        }),
+        anthropicContentBlockDelta(0, {
+          type: "input_json_delta",
+          partial_json: '{"path":"README.md"',
+        }),
+        anthropicMessageDelta({ stop_reason: "tool_use" }, { input_tokens: 2, output_tokens: 1 }),
         { type: "message_stop" },
       ]),
     );
@@ -2138,29 +1949,140 @@ describe("anthropic transport stream", () => {
     expect(result.content.some((block) => block.type === "toolCall")).toBe(false);
   });
 
+  it("refreshes streamed tool argument previews on geometric checkpoints instead of every delta", async () => {
+    // ~1165 chars of argument JSON split into twelve ~100-char deltas: below
+    // the first preview checkpoint for five deltas, crossing it on the sixth.
+    const argsJson = JSON.stringify({ content: "x".repeat(1150) });
+    const deltaSize = 100;
+    const chunks: string[] = [];
+    for (let offset = 0; offset < argsJson.length; offset += deltaSize) {
+      chunks.push(argsJson.slice(offset, offset + deltaSize));
+    }
+    // Frame delivery waits for consumer observation: partial output blocks are
+    // mutated in place by the handler, so a buffered producer would let later
+    // deltas overwrite the state an earlier snapshot wants to capture.
+    const gates: Array<() => void> = [];
+    const deltaObservedGates = chunks.map(
+      () =>
+        new Promise<void>((resolve) => {
+          gates.push(resolve);
+        }),
+    );
+    const encoder = new TextEncoder();
+    const frames: Array<{ encoded: Uint8Array; waitFor?: Promise<void> }> = [
+      {
+        encoded: encoder.encode(
+          `data: ${JSON.stringify({
+            type: "message_start",
+            message: { id: "msg_preview_schedule", usage: { input_tokens: 2, output_tokens: 0 } },
+          })}\n\n`,
+        ),
+      },
+      {
+        encoded: encoder.encode(
+          `data: ${JSON.stringify({
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "call_preview", name: "write", input: {} },
+          })}\n\n`,
+        ),
+      },
+      ...chunks.map((chunk, index) => ({
+        encoded: encoder.encode(
+          `data: ${JSON.stringify({
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: chunk },
+          })}\n\n`,
+        ),
+        ...(index > 0 ? { waitFor: deltaObservedGates[index - 1] } : {}),
+      })),
+      ...[
+        `data: ${JSON.stringify({ type: "content_block_stop", index: 0 })}\n\n`,
+        `data: ${JSON.stringify({
+          type: "message_delta",
+          delta: { stop_reason: "tool_use" },
+          usage: { input_tokens: 2, output_tokens: 2 },
+        })}\n\n`,
+        `data: ${JSON.stringify({ type: "message_stop" })}\n\n`,
+      ].map((payload) => ({
+        encoded: encoder.encode(payload),
+        waitFor: deltaObservedGates[chunks.length - 1],
+      })),
+    ];
+    let nextFrame = 0;
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const frame = frames[nextFrame];
+        if (!frame) {
+          controller.close();
+          return;
+        }
+        await frame.waitFor;
+        controller.enqueue(frame.encoded);
+        nextFrame += 1;
+      },
+    });
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        makeAnthropicTransportModel(),
+        { messages: [{ role: "user", content: "write" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      ),
+    );
+    const previews: Array<Record<string, unknown>> = [];
+    for await (const event of stream as AsyncIterable<{
+      type: string;
+      partial?: { content?: Array<{ type: string; arguments?: Record<string, unknown> }> };
+    }>) {
+      if (event.type !== "toolcall_delta") {
+        continue;
+      }
+      const block = event.partial?.content?.find((entry) => entry.type === "toolCall");
+      previews.push(structuredClone(block?.arguments ?? {}));
+      gates.shift()?.();
+    }
+    const result = await stream.result();
+
+    // Preview parses are preview-only: below the first checkpoint no parse has
+    // run yet, and the checkpoint refresh keeps later deltas stale until the
+    // next doubling. The terminal parse stays authoritative.
+    expect(previews.length).toBe(chunks.length);
+    for (const snapshot of previews.slice(0, 5)) {
+      expect(snapshot).toEqual({});
+    }
+    expect(previews[5]).not.toEqual({});
+    expect(result.stopReason).toBe("toolUse");
+    const toolCall = result.content.find((block) => block.type === "toolCall");
+    expect(toolCall).toMatchObject({
+      type: "toolCall",
+      name: "write",
+      arguments: { content: "x".repeat(1150) },
+    });
+  });
+
   it("uses seeded Anthropic tool input when no argument deltas arrive", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_seeded_tool", usage: { input_tokens: 2, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: {
-            type: "tool_use",
-            id: "call_seeded",
-            name: "read",
-            input: { path: "README.md" },
-          },
-        },
+        anthropicMessageStart({
+          id: "msg_seeded_tool",
+          usage: { input_tokens: 2, output_tokens: 0 },
+        }),
+        anthropicContentBlockStart(0, {
+          type: "tool_use",
+          id: "call_seeded",
+          name: "read",
+          input: { path: "README.md" },
+        }),
         { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "tool_use" },
-          usage: { input_tokens: 2, output_tokens: 1 },
-        },
+        anthropicMessageDelta({ stop_reason: "tool_use" }, { input_tokens: 2, output_tokens: 1 }),
         { type: "message_stop" },
       ]),
     );
@@ -2179,29 +2101,18 @@ describe("anthropic transport stream", () => {
   it("preserves Anthropic OAuth identity and tool-name remapping with transport overrides", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_1", usage: { input_tokens: 10, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: {
-            type: "tool_use",
-            id: "tool_1",
-            name: "Read",
-            input: { path: "/tmp/a" },
-          },
-        },
+        anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 10, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, {
+          type: "tool_use",
+          id: "tool_1",
+          name: "Read",
+          input: { path: "/tmp/a" },
+        }),
         {
           type: "content_block_stop",
           index: 0,
         },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "tool_use" },
-          usage: { input_tokens: 10, output_tokens: 5 },
-        },
+        anthropicMessageDelta({ stop_reason: "tool_use" }, { input_tokens: 10, output_tokens: 5 }),
         { type: "message_stop" },
       ]),
     );
@@ -2283,38 +2194,23 @@ describe("anthropic transport stream", () => {
   it("preserves text seeded on a text block after a thinking block", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "thinking", thinking: "checking", signature: "sig_1" },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "signature_delta", signature: "sig_2" },
-        },
+        anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, {
+          type: "thinking",
+          thinking: "checking",
+          signature: "sig_1",
+        }),
+        anthropicContentBlockDelta(0, { type: "signature_delta", signature: "sig_2" }),
         {
           type: "content_block_stop",
           index: 0,
         },
-        {
-          type: "content_block_start",
-          index: 1,
-          content_block: { type: "text", text: "NO_REPLY" },
-        },
+        anthropicContentBlockStart(1, { type: "text", text: "NO_REPLY" }),
         {
           type: "content_block_stop",
           index: 1,
         },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 6, output_tokens: 9 },
-        },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 6, output_tokens: 9 }),
       ]),
     );
     const streamFn = createAnthropicMessagesTransportStreamFn();
@@ -2358,34 +2254,19 @@ describe("anthropic transport stream", () => {
     const signedThinking = `keep${highSurrogate}signed`;
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "thinking", thinking: signedThinking, signature: "sig_1" },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "signature_delta", signature: "sig_2" },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "signature_delta", signature: "sig_3" },
-        },
+        anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, {
+          type: "thinking",
+          thinking: signedThinking,
+          signature: "sig_1",
+        }),
+        anthropicContentBlockDelta(0, { type: "signature_delta", signature: "sig_2" }),
+        anthropicContentBlockDelta(0, { type: "signature_delta", signature: "sig_3" }),
         {
           type: "content_block_stop",
           index: 0,
         },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 6, output_tokens: 9 },
-        },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 6, output_tokens: 9 }),
       ]),
     );
 
@@ -2409,37 +2290,17 @@ describe("anthropic transport stream", () => {
   it("routes interleaved active content blocks by their event indexes", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_interleaved", usage: { input_tokens: 1, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "text", text: "" },
-        },
-        {
-          type: "content_block_start",
-          index: 1,
-          content_block: { type: "text", text: "" },
-        },
-        {
-          type: "content_block_delta",
-          index: 1,
-          delta: { type: "text_delta", text: "second" },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "first" },
-        },
+        anthropicMessageStart({
+          id: "msg_interleaved",
+          usage: { input_tokens: 1, output_tokens: 0 },
+        }),
+        anthropicContentBlockStart(0, { type: "text", text: "" }),
+        anthropicContentBlockStart(1, { type: "text", text: "" }),
+        anthropicContentBlockDelta(1, { type: "text_delta", text: "second" }),
+        anthropicContentBlockDelta(0, { type: "text_delta", text: "first" }),
         { type: "content_block_stop", index: 1 },
         { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 1, output_tokens: 2 },
-        },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 2 }),
         { type: "message_stop" },
       ]),
     );
@@ -2459,24 +2320,17 @@ describe("anthropic transport stream", () => {
   it("preserves provider-seeded thinking signatures when no signature_delta follows", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "thinking", thinking: "seeded", signature: "seed_signature" },
-        },
+        anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, {
+          type: "thinking",
+          thinking: "seeded",
+          signature: "seed_signature",
+        }),
         {
           type: "content_block_stop",
           index: 0,
         },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 6, output_tokens: 5 },
-        },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 6, output_tokens: 5 }),
       ]),
     );
 
@@ -2500,39 +2354,20 @@ describe("anthropic transport stream", () => {
   it("concatenates multiple signature_delta events instead of overwriting", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "thinking", thinking: "step by step", signature: "" },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "signature_delta", signature: "chunk1" },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "signature_delta", signature: "chunk2" },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "signature_delta", signature: "chunk3" },
-        },
+        anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, {
+          type: "thinking",
+          thinking: "step by step",
+          signature: "",
+        }),
+        anthropicContentBlockDelta(0, { type: "signature_delta", signature: "chunk1" }),
+        anthropicContentBlockDelta(0, { type: "signature_delta", signature: "chunk2" }),
+        anthropicContentBlockDelta(0, { type: "signature_delta", signature: "chunk3" }),
         {
           type: "content_block_stop",
           index: 0,
         },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 6, output_tokens: 5 },
-        },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 6, output_tokens: 5 }),
       ]),
     );
 
@@ -2623,30 +2458,11 @@ describe("anthropic transport stream", () => {
   it("commits only stopped signatures across interleaved thinking blocks", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "thinking", thinking: "first", signature: "" },
-        },
-        {
-          type: "content_block_start",
-          index: 1,
-          content_block: { type: "thinking", thinking: "second", signature: "" },
-        },
-        {
-          type: "content_block_delta",
-          index: 1,
-          delta: { type: "signature_delta", signature: "complete-second" },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "signature_delta", signature: "partial-first" },
-        },
+        anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, { type: "thinking", thinking: "first", signature: "" }),
+        anthropicContentBlockStart(1, { type: "thinking", thinking: "second", signature: "" }),
+        anthropicContentBlockDelta(1, { type: "signature_delta", signature: "complete-second" }),
+        anthropicContentBlockDelta(0, { type: "signature_delta", signature: "partial-first" }),
         { type: "content_block_stop", index: 1 },
       ]),
     );
@@ -2674,39 +2490,16 @@ describe("anthropic transport stream", () => {
   it("captures OpenAI-style reasoning_content deltas from Anthropic-compatible streams", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { content: "", reasoning_content: "Need " },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { content: "", reasoning_content: "context." },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { content: "Visible answer.", reasoning_content: "" },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { content: " Continued.", reasoning_content: null },
-        },
+        anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
+        anthropicContentBlockDelta(0, { content: "", reasoning_content: "Need " }),
+        anthropicContentBlockDelta(0, { content: "", reasoning_content: "context." }),
+        anthropicContentBlockDelta(0, { content: "Visible answer.", reasoning_content: "" }),
+        anthropicContentBlockDelta(0, { content: " Continued.", reasoning_content: null }),
         {
           type: "content_block_stop",
           index: 0,
         },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 6, output_tokens: 2 },
-        },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 6, output_tokens: 2 }),
       ]),
     );
     const model = makeAnthropicTransportModel({
@@ -2775,34 +2568,15 @@ describe("anthropic transport stream", () => {
   it("captures reasoning_content after compatible streams start a text block", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "text", text: "" },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { content: "Visible ", reasoning_content: "Need " },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { content: "answer.", reasoning_content: null },
-        },
+        anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, { type: "text", text: "" }),
+        anthropicContentBlockDelta(0, { content: "Visible ", reasoning_content: "Need " }),
+        anthropicContentBlockDelta(0, { content: "answer.", reasoning_content: null }),
         {
           type: "content_block_stop",
           index: 0,
         },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 6, output_tokens: 2 },
-        },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 6, output_tokens: 2 }),
       ]),
     );
 
@@ -2838,39 +2612,20 @@ describe("anthropic transport stream", () => {
   it("preserves native text_delta chunks that also carry reasoning_content", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "text", text: "" },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: {
-            type: "text_delta",
-            content: "Visible ",
-            text: "Visible ",
-            reasoning_content: "Need ",
-          },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "answer." },
-        },
+        anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
+        anthropicContentBlockStart(0, { type: "text", text: "" }),
+        anthropicContentBlockDelta(0, {
+          type: "text_delta",
+          content: "Visible ",
+          text: "Visible ",
+          reasoning_content: "Need ",
+        }),
+        anthropicContentBlockDelta(0, { type: "text_delta", text: "answer." }),
         {
           type: "content_block_stop",
           index: 0,
         },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 6, output_tokens: 2 },
-        },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 6, output_tokens: 2 }),
       ]),
     );
 
@@ -2906,24 +2661,13 @@ describe("anthropic transport stream", () => {
   it("recovers orphan text deltas when an Anthropic-compatible provider omits block start", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "你好" },
-        },
+        anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } }),
+        anthropicContentBlockDelta(0, { type: "text_delta", text: "你好" }),
         {
           type: "content_block_stop",
           index: 0,
         },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 6, output_tokens: 1 },
-        },
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 6, output_tokens: 1 }),
       ]),
     );
     const streamFn = createAnthropicMessagesTransportStreamFn();
@@ -3516,10 +3260,7 @@ describe("anthropic transport stream", () => {
       } as AnthropicStreamOptions,
     );
 
-    const userMessage = findRecord(
-      latestAnthropicRequest().payload.messages,
-      (record) => record.role === "user",
-    );
+    const userMessage = latestAnthropicUserMessage();
     const toolResult = findRecord(
       userMessage.content,
       (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
@@ -3554,10 +3295,7 @@ describe("anthropic transport stream", () => {
       { apiKey: "fake" } as AnthropicStreamOptions,
     );
 
-    const userMessage = findRecord(
-      latestAnthropicRequest().payload.messages,
-      (record) => record.role === "user",
-    );
+    const userMessage = latestAnthropicUserMessage();
     const toolResult = findRecord(
       userMessage.content,
       (record) => record.type === "tool_result" && record.tool_use_id === "tool_husk",
@@ -3599,10 +3337,7 @@ describe("anthropic transport stream", () => {
       } as AnthropicStreamOptions,
     );
 
-    const userMessage = findRecord(
-      latestAnthropicRequest().payload.messages,
-      (record) => record.role === "user",
-    );
+    const userMessage = latestAnthropicUserMessage();
     const toolResult = findRecord(
       userMessage.content,
       (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
@@ -3643,10 +3378,7 @@ describe("anthropic transport stream", () => {
       { apiKey: "test-api-key" } as AnthropicStreamOptions,
     );
 
-    const userMessage = findRecord(
-      latestAnthropicRequest().payload.messages,
-      (record) => record.role === "user",
-    );
+    const userMessage = latestAnthropicUserMessage();
     const imageBlock = findRecord(userMessage.content, (record) => record.type === "image");
     expect(imageBlock).toMatchObject({
       type: "image",
@@ -3676,10 +3408,7 @@ describe("anthropic transport stream", () => {
 
     expect(result.stopReason).toBe("stop");
     expect(normalizer).not.toHaveBeenCalled();
-    const userMessage = findRecord(
-      latestAnthropicRequest().payload.messages,
-      (record) => record.role === "user",
-    );
+    const userMessage = latestAnthropicUserMessage();
     expect(JSON.stringify(userMessage.content)).toContain("image omitted");
   });
 
@@ -3721,10 +3450,7 @@ describe("anthropic transport stream", () => {
       { apiKey: "test-api-key" } as AnthropicStreamOptions,
     );
 
-    const userMessage = findRecord(
-      latestAnthropicRequest().payload.messages,
-      (record) => record.role === "user",
-    );
+    const userMessage = latestAnthropicUserMessage();
     const toolResult = findRecord(userMessage.content, (record) => record.type === "tool_result");
     const imageBlock = findRecord(toolResult.content, (record) => record.type === "image");
     expect(imageBlock).toMatchObject({
@@ -3769,10 +3495,7 @@ describe("anthropic transport stream", () => {
       } as AnthropicStreamOptions,
     );
 
-    const userMessage = findRecord(
-      latestAnthropicRequest().payload.messages,
-      (record) => record.role === "user",
-    );
+    const userMessage = latestAnthropicUserMessage();
     const toolResult = findRecord(
       userMessage.content,
       (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
@@ -3780,7 +3503,7 @@ describe("anthropic transport stream", () => {
     // No images → returns sanitized text string, not array
     expect(typeof toolResult.content).toBe("string");
     expect(toolResult.content).toContain('"type":"resource"');
-    expect(toolResult.content).toContain('{\\"key\\":\\"***\\"}');
+    expect(toolResult.content).toContain('{\\"key\\":\\"value\\"}');
     expect(toolResult.is_error).toBe(false);
   });
 
@@ -3825,10 +3548,7 @@ describe("anthropic transport stream", () => {
       } as AnthropicStreamOptions,
     );
 
-    const userMessage = findRecord(
-      latestAnthropicRequest().payload.messages,
-      (record) => record.role === "user",
-    );
+    const userMessage = latestAnthropicUserMessage();
     const toolResult = findRecord(
       userMessage.content,
       (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
@@ -3879,10 +3599,7 @@ describe("anthropic transport stream", () => {
       { apiKey: "fixture" } as AnthropicStreamOptions,
     );
 
-    const userMessage = findRecord(
-      latestAnthropicRequest().payload.messages,
-      (record) => record.role === "user",
-    );
+    const userMessage = latestAnthropicUserMessage();
     const toolResult = findRecord(
       userMessage.content,
       (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
@@ -4195,19 +3912,12 @@ describe("anthropic transport stream", () => {
 
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: {
-            id: "msg_1",
-            model: "claude-fable-5",
-            usage: { input_tokens: 1, output_tokens: 0 },
-          },
-        },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 1, output_tokens: 1 },
-        },
+        anthropicMessageStart({
+          id: "msg_1",
+          model: "claude-fable-5",
+          usage: { input_tokens: 1, output_tokens: 0 },
+        }),
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
         { type: "message_stop" },
       ]),
     );
@@ -4509,15 +4219,8 @@ describe("anthropic transport stream", () => {
   it("emits start event only after message_start so pre-stream SSE errors arrive before any non-error event", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
-        },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 1, output_tokens: 1 },
-        },
+        anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } }),
+        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
       ]),
     );
     const streamFn = createAnthropicMessagesTransportStreamFn();

@@ -187,6 +187,7 @@ function setViewerPresenceContext(page: ChatPage) {
       lastErrorCode: null,
     },
     connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
+    connectionRevision: 0,
     eventLog: [],
     connect: vi.fn(),
     setSessionKey: vi.fn(),
@@ -412,6 +413,7 @@ describe("chat page split layout host", () => {
   });
 
   it("hands each route-provided draft to the active pane only once", async () => {
+    window.history.replaceState({}, "", "/chat/main?draft=one-shot%20draft&panel=details#pane");
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     const firstRouteData = { sessionKey: "main", draft: "one-shot draft" };
@@ -419,14 +421,13 @@ describe("chat page split layout host", () => {
     expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
 
     document.body.append(page);
-    await page.updateComplete;
-    await Promise.resolve();
-    await page.updateComplete;
+    await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
 
     expect(getRouteDraftForActivePane(page)).toBeUndefined();
-    expect(navigation.replace).toHaveBeenCalledOnce();
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: sessionPath("main"),
+      search: "?panel=details",
+      hash: "#pane",
     });
     page.data = { ...firstRouteData };
     expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
@@ -553,6 +554,8 @@ describe("chat page split layout host", () => {
   });
 
   it("keeps catalog identity when consuming a route draft", async () => {
+    const expectedSearch = catalogSessionSearch(CATALOG_KEY);
+    window.history.replaceState({}, "", `/chat/research${expectedSearch}&draft=ship`);
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     page.data = {
@@ -561,14 +564,12 @@ describe("chat page split layout host", () => {
       draft: "one-shot catalog draft",
     };
     document.body.append(page);
-    await page.updateComplete;
-    await Promise.resolve();
-    await page.updateComplete;
+    await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
 
-    const expectedSearch = catalogSessionSearch(CATALOG_KEY);
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: "/chat/research",
       search: expectedSearch,
+      hash: "",
     });
     await expect(
       loadChatRoute(
@@ -605,6 +606,7 @@ describe("chat page split layout host", () => {
   });
 
   it("preserves a resolved long prefix through drafts and face changes", async () => {
+    window.history.replaceState({}, "", "/chat/main/1234567890?draft=ship");
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     page.data = {
@@ -614,12 +616,12 @@ describe("chat page split layout host", () => {
       face: "chat",
     };
     document.body.append(page);
-    await page.updateComplete;
-    await Promise.resolve();
-    await page.updateComplete;
+    await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
 
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: "/chat/main/1234567890",
+      search: "",
+      hash: "",
     });
     navigation.navigate.mockClear();
     const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
@@ -668,6 +670,18 @@ describe("chat page split layout host", () => {
     ).toBe(true);
     expect(panes.every((pane) => pane.onOpenSplitView === undefined)).toBe(true);
     expect(panes[0]?.chatMessagesBySession).toBe(panes[1]?.chatMessagesBySession);
+
+    itemAt(dividers, 0, "split divider").dispatchEvent(
+      new CustomEvent("resize", { detail: { splitRatio: 0.7 } }),
+    );
+    await page.updateComplete;
+    expect(getLayout(page)?.columnWeights[0]).toBeCloseTo(0.7);
+    expect(getLayout(page)?.columnWeights[1]).toBeCloseTo(0.3);
+    expect(loadSettings().chatSplitLayout).toBeUndefined();
+
+    itemAt(dividers, 0, "split divider").dispatchEvent(new CustomEvent("resize-end"));
+    expect(loadSettings().chatSplitLayout?.columnWeights[0]).toBeCloseTo(0.7);
+    expect(loadSettings().chatSplitLayout?.columnWeights[1]).toBeCloseTo(0.3);
 
     itemAt(cells, 0, "split cell").dispatchEvent(new Event("pointerdown"));
     await page.updateComplete;

@@ -20,6 +20,7 @@ interface LineThreadBindingsConfig {
 
 interface LineAccountBaseConfig {
   enabled?: boolean;
+  joinIntro?: boolean;
   channelAccessToken?: string;
   channelSecret?: string;
   tokenFile?: string;
@@ -31,6 +32,7 @@ interface LineAccountBaseConfig {
   groupPolicy?: "open" | "allowlist" | "disabled";
   responsePrefix?: string;
   mediaMaxMb?: number;
+  historyLimit?: number;
   webhookPath?: string;
   threadBindings?: LineThreadBindingsConfig;
   groups?: Record<string, LineGroupConfig>;

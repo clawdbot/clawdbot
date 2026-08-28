@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { NodeHostClient } from "./client.js";
 import { decodeClaudeCliNodeRunParams } from "./invoke-agent-cli-claude-params.js";
 import { runClaudeCliNodeCommand } from "./invoke-agent-cli-claude.js";
@@ -10,6 +15,7 @@ import { handleInvoke, type NodeInvokeRequestPayload } from "./invoke.js";
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -22,10 +28,16 @@ function frame(params: unknown): NodeInvokeRequestPayload {
   };
 }
 
-function client(calls: Array<{ method: string; params: unknown }>): NodeHostClient {
+function client(
+  calls: Array<{ method: string; params: unknown }>,
+  onProgress?: () => void,
+): NodeHostClient {
   return {
     async request<T>(method: string, params?: unknown): Promise<T> {
       calls.push({ method, params });
+      if (method === "node.invoke.progress") {
+        onProgress?.();
+      }
       return {} as T;
     },
   };
@@ -36,9 +48,26 @@ async function executableScript(source: string): Promise<string> {
   // plan canonicalizes argv[0]; raw mkdtemp paths pass on Linux but fail here.
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-")));
   tempDirs.push(dir);
-  const file = path.join(dir, "claude-test");
-  await fs.writeFile(file, `#!/usr/bin/env node\n${source}\n`, { mode: 0o700 });
+  const file = path.join(dir, "claude-test.cjs");
+  await fs.writeFile(file, `#!${process.execPath}\n${source}\n`, { mode: 0o700 });
   return file;
+}
+
+function runCommand(
+  executable: string,
+  request: Parameters<typeof runClaudeCliNodeCommand>[0]["request"],
+  overrides: Partial<Parameters<typeof runClaudeCliNodeCommand>[0]> = {},
+) {
+  return runClaudeCliNodeCommand({
+    client: client([]),
+    frame: frame(request),
+    request,
+    argv: [executable, ...request.argv],
+    cwd: undefined,
+    env: process.env as Record<string, string>,
+    timeoutMs: request.timeoutMs,
+    ...overrides,
+  });
 }
 
 describe("Claude CLI node command", () => {
@@ -84,8 +113,16 @@ describe("Claude CLI node command", () => {
           stdin: "hello",
           systemPrompt: "private prompt",
           cwd,
-          env: { NO_COLOR: "1", CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
-          clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+          env: {
+            NO_COLOR: "1",
+            CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
+            CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
+          },
+          clearEnv: [
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+          ],
           idleTimeoutMs: 1_000,
           timeoutMs: 2_000,
         }),
@@ -94,8 +131,12 @@ describe("Claude CLI node command", () => {
       cwd,
       stdin: "hello",
       systemPrompt: "private prompt",
-      env: { NO_COLOR: "1", CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
-      clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+      env: {
+        NO_COLOR: "1",
+        CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
+        CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
+      },
+      clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_DISABLE_1M_CONTEXT", "CLAUDE_CODE_OAUTH_TOKEN"],
     });
   });
 
@@ -176,55 +217,67 @@ describe("Claude CLI node command", () => {
     });
   });
 
-  it("consults the system.run approval surface with a prompt-free command", async () => {
-    const executable = await executableScript("process.exit(0);");
-    const calls: Array<{ method: string; params: unknown }> = [];
-    const handleSystemRun = vi.fn(
-      async (options: {
-        params: { command: string[] };
-        sendNodeEvent: (client: NodeHostClient, event: string, payload: unknown) => Promise<void>;
-        sendExecFinishedEvent: (params: unknown) => Promise<void>;
-        sendInvokeResult: (result: unknown) => Promise<void>;
-      }) => {
-        expect(options.params.command).toEqual([executable, "-p", "--resume", "session-1"]);
-        await options.sendNodeEvent(client(calls), "exec.denied", {});
-        await options.sendExecFinishedEvent({});
-        await options.sendInvokeResult({
-          ok: false,
-          error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: approval required" },
-        });
-      },
-    );
-    await handleInvoke(
-      frame({
-        argv: ["-p", "--resume", "session-1"],
-        systemPrompt: "private prompt",
-        idleTimeoutMs: 1_000,
-        timeoutMs: 2_000,
-      }),
-      client(calls),
-      { current: async () => [] },
-      undefined,
-      { claudePath: executable, handleSystemRun: handleSystemRun as never },
-    );
-
-    expect(handleSystemRun).toHaveBeenCalledOnce();
-    expect(calls.some((call) => call.method === "node.event")).toBe(false);
-    expect(JSON.stringify(calls)).not.toContain("private prompt");
-    const response = calls.find((call) => call.method === "node.invoke.result")?.params as {
-      ok?: boolean;
-      payloadJSON?: string;
-    };
-    expect(response.ok).toBe(true);
-    expect(JSON.parse(response.payloadJSON ?? "{}")).toMatchObject({
-      approvalRequired: true,
+  it.each([
+    { name: "unconfigured", config: {}, security: "full", ask: "off" },
+    {
+      name: "explicit ask",
+      config: { tools: { exec: { mode: "ask" } } },
       security: "allowlist",
       ask: "on-miss",
-      systemRunPlan: {
-        argv: [executable, "-p", "--resume", "session-1"],
-      },
-    });
-  });
+    },
+  ] as const)(
+    "consults the system.run approval surface with a prompt-free command ($name)",
+    async ({ config, security, ask }) => {
+      setRuntimeConfigSnapshot(config);
+      const executable = await executableScript("process.exit(0);");
+      const calls: Array<{ method: string; params: unknown }> = [];
+      const handleSystemRun = vi.fn(
+        async (options: {
+          params: { command: string[] };
+          sendNodeEvent: (client: NodeHostClient, event: string, payload: unknown) => Promise<void>;
+          sendExecFinishedEvent: (params: unknown) => Promise<void>;
+          sendInvokeResult: (result: unknown) => Promise<void>;
+        }) => {
+          expect(options.params.command).toEqual([executable, "-p", "--resume", "session-1"]);
+          await options.sendNodeEvent(client(calls), "exec.denied", {});
+          await options.sendExecFinishedEvent({});
+          await options.sendInvokeResult({
+            ok: false,
+            error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: approval required" },
+          });
+        },
+      );
+      await handleInvoke(
+        frame({
+          argv: ["-p", "--resume", "session-1"],
+          systemPrompt: "private prompt",
+          idleTimeoutMs: 1_000,
+          timeoutMs: 2_000,
+        }),
+        client(calls),
+        { current: async () => [] },
+        undefined,
+        { claudePath: executable, handleSystemRun: handleSystemRun as never },
+      );
+
+      expect(handleSystemRun).toHaveBeenCalledOnce();
+      expect(calls.some((call) => call.method === "node.event")).toBe(false);
+      expect(JSON.stringify(calls)).not.toContain("private prompt");
+      const response = calls.find((call) => call.method === "node.invoke.result")?.params as {
+        ok?: boolean;
+        payloadJSON?: string;
+      };
+      expect(response.ok).toBe(true);
+      expect(JSON.parse(response.payloadJSON ?? "{}")).toMatchObject({
+        approvalRequired: true,
+        security,
+        ask,
+        systemRunPlan: {
+          argv: [executable, "-p", "--resume", "session-1"],
+        },
+      });
+    },
+  );
 
   it("converts forwarded OAuth into a child-only descriptor after approval", async () => {
     const executable = await executableScript(`
@@ -369,15 +422,7 @@ process.stdin.on("end", () => {
       idleTimeoutMs: 1_000,
       timeoutMs: 5_000,
     };
-    const result = await runClaudeCliNodeCommand({
-      client: client(calls),
-      frame: frame(request),
-      request,
-      argv: [executable, ...request.argv],
-      cwd: undefined,
-      env: process.env as Record<string, string>,
-      timeoutMs: request.timeoutMs,
-    });
+    const result = await runCommand(executable, request, { client: client(calls) });
 
     const progress = calls
       .filter((call) => call.method === "node.invoke.progress")
@@ -392,6 +437,47 @@ process.stdin.on("end", () => {
     expect(promptPath).toBeTruthy();
     await expect(fs.stat(promptPath ?? "")).rejects.toThrow();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "retains the prompt for an authoritative descendant without delaying the root result",
+    async () => {
+      const markerDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-prompt-"));
+      tempDirs.push(markerDir);
+      const marker = path.join(markerDir, "descendant-read");
+      const executable = await executableScript(`
+const { spawn } = require("node:child_process");
+const prompt = process.argv[process.argv.indexOf("--append-system-prompt-file") + 1];
+const child = spawn(process.execPath, ["-e",
+  "setTimeout(() => require('node:fs').writeFileSync(" +
+  JSON.stringify(${JSON.stringify(marker)}) + ", require('node:fs').readFileSync(" +
+  JSON.stringify(prompt) + ", 'utf8')), 300)"
+], { stdio: ["ignore", "ignore", "ignore", 3] });
+child.unref();
+process.stdout.write(JSON.stringify({ type: "result", result: prompt }) + "\\n");`);
+      await withEnvAsync({ OPENCLAW_SERVICE_MARKER: "openclaw" }, async () => {
+        const calls: Array<{ method: string; params: unknown }> = [];
+        const request = {
+          argv: ["-p"],
+          systemPrompt: "descendant-owned prompt",
+          idleTimeoutMs: 2_000,
+          timeoutMs: 5_000,
+        };
+        const result = await runCommand(executable, request, { client: client(calls) });
+        const output = calls
+          .filter((call) => call.method === "node.invoke.progress")
+          .map((call) => (call.params as { chunk: string }).chunk)
+          .join("");
+        const promptPath = (JSON.parse(output) as { result: string }).result;
+
+        expect(result).toMatchObject({ exitCode: 0, success: true });
+        await expect(fs.readFile(promptPath, "utf8")).resolves.toBe("descendant-owned prompt");
+        await vi.waitFor(async () => {
+          expect(await fs.readFile(marker, "utf8")).toBe("descendant-owned prompt");
+          await expect(fs.stat(promptPath)).rejects.toThrow();
+        });
+      });
+    },
+  );
 
   it.each([
     {
@@ -417,12 +503,8 @@ process.stdout.write(JSON.stringify({
 }) + "\\n");`);
       const request = { argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 5_000 };
       const calls: Array<{ method: string; params: unknown }> = [];
-      const result = await runClaudeCliNodeCommand({
+      const result = await runCommand(executable, request, {
         client: client(calls),
-        frame: frame(request),
-        request,
-        argv: [executable, ...request.argv],
-        cwd: undefined,
         env: {
           ...process.env,
           [descriptorEnv]: "3",
@@ -431,7 +513,6 @@ process.stdout.write(JSON.stringify({
           fd: 3,
           createData: () => Buffer.from("selected-node-secret"),
         },
-        timeoutMs: request.timeoutMs,
       });
 
       const progress = calls
@@ -457,19 +538,13 @@ function writeChunk() {
   }
   process.stdout.write("\\n" + JSON.stringify({ type: "result", session_id: "tail-session", result: "done" }) + "\\n", () => process.stderr.write("late failure diagnostic"));
 }
-writeChunk();`,
+process.stdout.write(Buffer.concat([
+  Buffer.alloc(199_997, 120), Buffer.from([0xe2, 0x82]), Buffer.from("A\\n")
+]), writeChunk);`,
     );
     const calls: Array<{ method: string; params: unknown }> = [];
     const request = { argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 5_000 };
-    const result = await runClaudeCliNodeCommand({
-      client: client(calls),
-      frame: frame(request),
-      request,
-      argv: [executable, ...request.argv],
-      cwd: undefined,
-      env: process.env as Record<string, string>,
-      timeoutMs: request.timeoutMs,
-    });
+    const result = await runCommand(executable, request, { client: client(calls) });
     const progressBytes = calls
       .filter((call) => call.method === "node.invoke.progress")
       .reduce((sum, call) => sum + Buffer.byteLength((call.params as { chunk: string }).chunk), 0);
@@ -478,6 +553,7 @@ writeChunk();`,
       .filter((call) => call.method === "node.invoke.progress")
       .map((call) => (call.params as { chunk: string }).chunk)
       .join("");
+    expect(progress.startsWith(`${"x".repeat(199_997)}�A`)).toBe(true);
     // OUTPUT_CAP_BYTES + TERMINAL_EVENT_MAX_BYTES from invoke-agent-cli-claude.ts.
     expect(progressBytes).toBeLessThanOrEqual(200_000 + 1024 * 1024);
     expect(progress).toContain('"session_id":"tail-session"');
@@ -491,26 +567,90 @@ writeChunk();`,
     ).toBeLessThanOrEqual(2);
   });
 
+  it.each([
+    {
+      idleTimeoutMs: 40,
+      timeoutMs: 400,
+      noOutputTimedOut: true,
+      stderr: "Claude CLI produced no output before the idle timeout",
+    },
+    {
+      idleTimeoutMs: 400,
+      timeoutMs: 40,
+      noOutputTimedOut: false,
+      stderr: "Claude CLI exceeded the hard timeout",
+    },
+  ])("preserves the exact timeout result: $stderr", async (request) => {
+    const executable = await executableScript("setInterval(() => {}, 1000);");
+    await expect(runCommand(executable, { argv: ["-p"], ...request })).resolves.toMatchObject({
+      exitCode: 124,
+      timedOut: true,
+      noOutputTimedOut: request.noOutputTimedOut,
+      stderr: request.stderr,
+    });
+  });
+
+  it.each([
+    { name: "spawn", command: "/definitely/not/a/claude-command", error: "ENOENT" },
+    { name: "secret input", command: process.execPath, error: "secret delivery failed" },
+    { name: "progress", command: process.execPath, error: "progress delivery failed" },
+  ])("surfaces $name failures in the invocation result", async ({ name, command, error }) => {
+    const request = { argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 5_000 };
+    await expect(
+      runCommand(command, request, {
+        argv: [command, "-e", 'process.stdout.write("progress"); setInterval(() => {}, 1000)'],
+        ...(name === "secret input"
+          ? {
+              secretInput: {
+                fd: 3,
+                createData: () => {
+                  throw new Error(error);
+                },
+              },
+            }
+          : {}),
+        ...(name === "progress"
+          ? {
+              client: {
+                async request<T>(): Promise<T> {
+                  throw new Error(error);
+                },
+              } satisfies NodeHostClient,
+            }
+          : {}),
+      }),
+    ).resolves.toMatchObject({
+      exitCode: 1,
+      success: false,
+      timedOut: false,
+      error: expect.stringContaining(error),
+      stderr: expect.stringContaining(error),
+    });
+  });
+
   it("terminates an active Claude command when its invoke is cancelled", async () => {
-    const executable = await executableScript(`setInterval(() => {}, 1000);`);
+    const executable = await executableScript(
+      `process.stdout.write("ready"); setInterval(() => {}, 1000);`,
+    );
     const controller = new AbortController();
     const request = { argv: ["-p"], idleTimeoutMs: 5_000, timeoutMs: 10_000 };
-    const run = runClaudeCliNodeCommand({
-      client: client([]),
-      frame: frame(request),
-      request,
-      argv: [executable, ...request.argv],
-      cwd: undefined,
-      env: process.env as Record<string, string>,
-      timeoutMs: request.timeoutMs,
+    const calls: Array<{ method: string; params: unknown }> = [];
+    let resolveProgress!: () => void;
+    const progressObserved = new Promise<void>((resolve) => {
+      resolveProgress = resolve;
+    });
+    const run = runCommand(executable, request, {
+      client: client(calls, resolveProgress),
       signal: controller.signal,
     });
 
+    await progressObserved;
     controller.abort();
 
     await expect(run).resolves.toMatchObject({
       exitCode: 130,
       success: false,
+      timedOut: false,
       stderr: expect.stringContaining("cancelled"),
     });
   });
@@ -527,16 +667,7 @@ writeChunk();`,
     const request = { argv: ["-p"], idleTimeoutMs: 5_000, timeoutMs: 10_000 };
 
     await expect(
-      runClaudeCliNodeCommand({
-        client: client([]),
-        frame: frame(request),
-        request,
-        argv: [executable, ...request.argv],
-        cwd: undefined,
-        env: process.env as Record<string, string>,
-        timeoutMs: request.timeoutMs,
-        signal: controller.signal,
-      }),
+      runCommand(executable, request, { signal: controller.signal }),
     ).resolves.toMatchObject({ exitCode: 130, success: false });
     await expect(fs.stat(marker)).rejects.toThrow();
   });

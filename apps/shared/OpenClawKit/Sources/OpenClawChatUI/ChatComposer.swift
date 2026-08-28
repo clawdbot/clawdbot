@@ -1410,10 +1410,10 @@ extension OpenClawChatComposer {
     }
 
     private var sendButtonForeground: Color {
-        if self.canSendMessage || self.composerChrome == .full {
-            return .white
-        }
-        return .secondary.opacity(0.55)
+        // The enabled glyph sits on sendButtonFill (the user accent when set);
+        // pick contrast-aware ink so light accents stay readable.
+        let disabledInk: Color = self.composerChrome == .full ? .white : .secondary.opacity(0.55)
+        return self.canSendMessage ? OpenClawChatTheme.userText(on: self.userAccent) : disabledInk
     }
 
     private var sendButtonBorderOpacity: Double {

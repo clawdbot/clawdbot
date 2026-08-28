@@ -12,8 +12,6 @@ import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import {
   getBeforeToolCallFailureDisposition,
   isPreExecutionBlockedToolResult,
-  isToolWrappedWithBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
@@ -25,6 +23,8 @@ import {
 } from "./tool-result-error.js";
 import {
   compactToolSearchCatalogEntry,
+  prepareToolSearchCatalogExecutionTool,
+  readToolSearchCatalogTelemetry,
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
@@ -38,7 +38,6 @@ import {
 import { readToolSearchLimit } from "./tool-search-request.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
-  CatalogSource,
   CatalogVisibilityOptions,
   ToolSearchCallOptions,
   ToolSearchCatalogEntry,
@@ -268,21 +267,6 @@ export function prepareToolSearchDispatcherArguments(args: unknown): unknown {
   return { ...outerRest, ...nestedInput, id: selectorValue };
 }
 
-function getTelemetry(catalog: ToolSearchCatalogSession) {
-  const sources: Record<CatalogSource, number> = { openclaw: 0, mcp: 0, client: 0 };
-  for (const entry of catalog.entries) {
-    sources[entry.source] += 1;
-  }
-  return {
-    catalogSize: catalog.entries.length,
-    sources,
-    counterScope: catalog.counterScope,
-    searchCount: catalog.searchCount,
-    describeCount: catalog.describeCount,
-    callCount: catalog.callCount,
-  };
-}
-
 type CatalogSchemaName = "inputSchema" | "outputSchema";
 type CatalogSchemaValidation = ReturnType<
   typeof import("../plugins/schema-validator.js").validateJsonSchemaValue
@@ -462,7 +446,7 @@ export class ToolSearchRuntime {
   constructor(
     private readonly ctx: ToolSearchToolContext,
     private readonly config: ToolSearchConfig,
-    private readonly options: { validateInput?: boolean } = {},
+    private readonly options: { prepareInput?: boolean; validateInput?: boolean } = {},
   ) {}
 
   search = async (query: string, options?: { limit?: number } & CatalogVisibilityOptions) => {
@@ -597,7 +581,9 @@ export class ToolSearchRuntime {
     }
     const pluginMeta = getPluginToolMeta(entry.tool as Parameters<typeof getPluginToolMeta>[0]);
     if (pluginMeta) {
-      return pluginMeta.mcp ? false : pluginMeta.replaySafe === true;
+      return pluginMeta.mcp
+        ? false
+        : pluginMeta.replaySafe === true && pluginMeta.sideEffecting !== true;
     }
     if (getChannelAgentToolMeta(entry.tool as never)) {
       return false;
@@ -644,10 +630,7 @@ export class ToolSearchRuntime {
       return snapshot;
     };
     const validateInput = this.options.validateInput && entry.source === "openclaw";
-    const executionTool =
-      validateInput && !isToolWrappedWithBeforeToolCallHook(entry.tool as never)
-        ? wrapToolWithBeforeToolCallHook(entry.tool as never)
-        : entry.tool;
+    const executionTool = prepareToolSearchCatalogExecutionTool(entry, this.options);
     const runExecution = async () => {
       const parentToolCallId = options?.parentToolCallId ?? toolCallId;
       const signal = options?.signal ?? this.ctx.abortSignal;
@@ -702,11 +685,10 @@ export class ToolSearchRuntime {
         )
       : await runExecution();
     const acceptedResult = await acceptResultBeforeProjection(result);
-    const parentToolCallId = options?.parentToolCallId;
-    if (parentToolCallId) {
+    if (options?.parentToolCallId) {
       this.terminalTargetBatchByParent.set(
-        parentToolCallId,
-        this.terminalTargetBatchByParent.get(parentToolCallId) !== false &&
+        options.parentToolCallId,
+        this.terminalTargetBatchByParent.get(options.parentToolCallId) !== false &&
           acceptedResult.terminate === true,
       );
     }
@@ -714,7 +696,7 @@ export class ToolSearchRuntime {
   };
 
   telemetry() {
-    return getTelemetry(resolveCatalog(this.ctx));
+    return readToolSearchCatalogTelemetry(this.ctx);
   }
 }
 
@@ -738,7 +720,8 @@ export function formatToolSearchControlResult<T>(
   const terminal =
     terminalBatchStatus !== "waiting" &&
     runtime?.takeTerminalTargetBatch(parentToolCallId) === true;
-  return terminalBatchStatus !== "failed" && terminal ? { ...result, terminate: true } : result;
+  // A failed guest cannot revoke an already completed tool's explicit terminal outcome.
+  return terminal ? { ...result, terminate: true } : result;
 }
 
 /** Keep dynamic failures rejected without exposing network-controlled error text. */

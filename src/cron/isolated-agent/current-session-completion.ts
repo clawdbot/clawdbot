@@ -24,6 +24,9 @@ export async function commitCurrentSessionCronCompletion(
   if (!sourceSessionKey) {
     return { ok: false, reason: "current cron delivery is missing its source session binding" };
   }
+  if (!params.sourceSessionGeneration) {
+    return { ok: false, reason: "current cron delivery is missing its source session generation" };
+  }
   const completionText =
     resolveDirectCronTranscriptMirrorText(
       projectOutboundPayloadPlanForMirror(
@@ -37,6 +40,7 @@ export async function commitCurrentSessionCronCompletion(
   const committed = await commitBackgroundResultToSession({
     agentId: params.agentId,
     sessionKey: sourceSessionKey,
+    expectedGeneration: params.sourceSessionGeneration,
     text: completionText,
     idempotencyKey: `cron-current-completion:${runId}`,
     provenance: { kind: "cron", jobId: params.job.id, runId },

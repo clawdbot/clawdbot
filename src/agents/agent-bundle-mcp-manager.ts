@@ -13,10 +13,7 @@ import {
 } from "./agent-bundle-mcp-manager-lifecycle.js";
 import { assignSafeServerNames } from "./agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
-import {
-  resolveSessionMcpRuntimeIdleTtlMs,
-  type CreateSessionMcpRuntime,
-} from "./agent-bundle-mcp-runtime-shared.js";
+import type { CreateSessionMcpRuntime } from "./agent-bundle-mcp-runtime-shared.js";
 import type { SessionMcpRuntime, SessionMcpRuntimeManager } from "./agent-bundle-mcp-types.js";
 import { revokeMcpAppModelContext } from "./mcp-app-model-context.js";
 import {
@@ -52,7 +49,6 @@ export function createSessionMcpRuntimeManager(
   const install = createSessionMcpRuntimeManagerInstall(lifecycle);
   const materializeRequesterScopedRuntime = async (
     params: Parameters<SessionMcpRuntimeManager["getOrCreate"]>[0] & {
-      idleTtlMs: number;
       mcpServers: Record<string, BundleMcpServerConfig>;
       oauthRequesterServerNames: readonly string[];
       resolverRequesterServerNames: readonly string[];
@@ -101,11 +97,8 @@ export function createSessionMcpRuntimeManager(
 
   const manager: SessionMcpRuntimeManager = {
     async getOrCreate(params) {
-      const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs();
       await lifecycle.sweepIdleRuntimes();
-      if (idleTtlMs > 0) {
-        lifecycle.ensureIdleSweepTimer();
-      }
+      lifecycle.ensureIdleSweepTimer();
       if (params.sessionKey) {
         store.sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
       }
@@ -138,7 +131,6 @@ export function createSessionMcpRuntimeManager(
           agentDir: params.agentDir,
           cfg: params.cfg,
           manifestRegistry: params.manifestRegistry,
-          idleTtlMs,
           safeServerNamesByServer,
           toolOverrides: params.toolOverrides,
         });
@@ -157,7 +149,6 @@ export function createSessionMcpRuntimeManager(
             agentDir: params.agentDir,
             cfg: params.cfg,
             manifestRegistry: params.manifestRegistry,
-            idleTtlMs,
             excludeServerNames: scopedNameSet,
             safeServerNamesByServer,
             toolOverrides: params.toolOverrides,
@@ -173,7 +164,6 @@ export function createSessionMcpRuntimeManager(
           agentDir: params.agentDir,
           cfg: params.cfg,
           manifestRegistry: params.manifestRegistry,
-          idleTtlMs,
           includeServerNames: new Set(),
           safeServerNamesByServer,
           toolOverrides: params.toolOverrides,
@@ -184,7 +174,6 @@ export function createSessionMcpRuntimeManager(
       if (requesterSenderId) {
         const { runtimeKey, runtime: scopedRuntime } = await materializeRequesterScopedRuntime({
           ...params,
-          idleTtlMs,
           mcpServers: fullConfig.loaded.mcpServers,
           oauthRequesterServerNames,
           resolverRequesterServerNames,
@@ -209,7 +198,6 @@ export function createSessionMcpRuntimeManager(
             agentDir: params.agentDir,
             cfg: params.cfg,
             manifestRegistry: params.manifestRegistry,
-            idleTtlMs,
             includeServerNames: new Set(),
             safeServerNamesByServer,
             toolOverrides: params.toolOverrides,
@@ -232,11 +220,8 @@ export function createSessionMcpRuntimeManager(
       if (!requesterSenderId) {
         return undefined;
       }
-      const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs();
       await lifecycle.sweepIdleRuntimes();
-      if (idleTtlMs > 0) {
-        lifecycle.ensureIdleSweepTimer();
-      }
+      lifecycle.ensureIdleSweepTimer();
       if (params.sessionKey) {
         store.sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
       }
@@ -261,7 +246,6 @@ export function createSessionMcpRuntimeManager(
       const scopedNameSet = new Set(requesterScopedServerNames);
       const { runtimeKey, runtime } = await materializeRequesterScopedRuntime({
         ...params,
-        idleTtlMs,
         mcpServers: fullConfig.loaded.mcpServers,
         oauthRequesterServerNames,
         resolverRequesterServerNames,
@@ -360,7 +344,6 @@ export function createSessionMcpRuntimeManager(
       const runtimes = Array.from(store.runtimesBySessionId.values());
       store.runtimesBySessionId.clear();
       store.sessionIdBySessionKey.clear();
-      store.idleTtlMsBySessionId.clear();
       store.deferredRetirementSessionIds.clear();
       store.requiredRetirementSessionIds.clear();
       store.connectionMetaByRuntimeKey.clear();
@@ -397,7 +380,6 @@ export function createSessionMcpRuntimeManager(
       createInFlight: store.createInFlight.size,
       requesterWorkChains: store.requesterWorkChains.size,
       sessionKeys: store.sessionIdBySessionKey.size,
-      idleTtl: store.idleTtlMsBySessionId.size,
       deferredRetirement: store.deferredRetirementSessionIds.size,
       advertisedScopedCatalogs: store.advertisedScopedCatalogBySessionId.size,
     }),

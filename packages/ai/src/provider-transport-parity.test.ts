@@ -93,6 +93,11 @@ const openRouterModel = {
   baseUrl: "https://openrouter.ai/api/v1",
 } satisfies Model<"openai-completions">;
 
+const openRouterModelWithoutBaseUrl = {
+  ...openRouterModel,
+  baseUrl: undefined,
+} as unknown as Model<"openai-completions">;
+
 const context = {
   systemPrompt: "Be exact.",
   messages: [{ role: "user", content: "Find the answer.", timestamp: 1 }],
@@ -734,6 +739,24 @@ describe("provider and transport observable parity fixtures", () => {
           { type: "text", text: " Visible third." },
         ]);
       }
+    }
+  });
+
+  it("fails closed before using the OpenAI default endpoint for another provider", async () => {
+    for (const implementation of ["provider", "transport"] as const) {
+      const result = await runOpenAi(
+        implementation,
+        "success",
+        openAiChunks,
+        true,
+        openRouterModelWithoutBaseUrl,
+      );
+
+      expect(result.terminal.stopReason).toBe("error");
+      expect(result.errorFields.errorMessage).toContain(
+        'Provider "openrouter" requires an explicit base URL',
+      );
+      expect(openAiMockState.payloads).toEqual([]);
     }
   });
 

@@ -1,15 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = "scripts/install-trufflehog.sh";
-const tempDirs = new Set<string>();
-
-afterEach(() => {
-  cleanupTempDirs(tempDirs);
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runBash(command: string, env: NodeJS.ProcessEnv = {}): string {
   return execFileSync("/bin/bash", ["--noprofile", "--norc", "-c", command], {
@@ -57,20 +53,20 @@ describe("scripts/install-trufflehog.sh", () => {
     );
 
     expect(output).toContain(
-      "amd64=f6d1106b85107d79527ed7a5b98b592beadd8b770dc3c9e8c1ad99e1b2cf127e",
+      "amd64=62224de2f9dd7cd418800feb953760a302ed2f82a7c547fe1146a4874fb179e4",
     );
     expect(output).toContain(
-      "arm64=9d9c2ec4ea36a089a9c5aaafe1969d176013ddf9f44d68e8cd75291aed8c83ed",
+      "arm64=f48f57e3d4343377865b1b64653f96d381d61a7792d89d026e85524732039fde",
     );
   });
 
   it("does not download TruffleHog again when the pinned version is installed", () => {
-    const root = makeTempDir(tempDirs, "openclaw-trufflehog-install-");
+    const root = tempDirs.make("openclaw-trufflehog-install-");
     const binDir = join(root, "bin");
     const downloadMarker = join(root, "downloaded");
     mkdirSync(binDir);
     const trufflehog = join(binDir, "trufflehog");
-    writeFileSync(trufflehog, "#!/bin/sh\nprintf 'trufflehog 3.95.9\\n'\n");
+    writeFileSync(trufflehog, "#!/bin/sh\nprintf 'trufflehog 3.97.0\\n'\n");
     chmodSync(trufflehog, 0o755);
     const fakeCurl = join(binDir, "curl");
     writeFileSync(
@@ -91,11 +87,11 @@ describe("scripts/install-trufflehog.sh", () => {
     });
 
     expect(existsSync(downloadMarker)).toBe(false);
-    expect(readFileSync(trufflehog, "utf8")).toContain("3.95.9");
+    expect(readFileSync(trufflehog, "utf8")).toContain("3.97.0");
   });
 
   it("creates a missing user-writable install directory without sudo", () => {
-    const root = makeTempDir(tempDirs, "openclaw-trufflehog-user-bin-");
+    const root = tempDirs.make("openclaw-trufflehog-user-bin-");
     const binDir = join(root, "nested", "bin");
     const fakeBin = join(root, "fake-bin");
     const sudoMarker = join(root, "sudo-used");
@@ -114,7 +110,7 @@ describe("scripts/install-trufflehog.sh", () => {
   });
 
   it("does not change permissions on an existing writable install directory", () => {
-    const root = makeTempDir(tempDirs, "openclaw-trufflehog-existing-bin-");
+    const root = tempDirs.make("openclaw-trufflehog-existing-bin-");
     const binDir = join(root, "bin");
     const fakeBin = join(root, "fake-bin");
     const installMarker = join(root, "install-used");
@@ -135,10 +131,54 @@ describe("scripts/install-trufflehog.sh", () => {
     expect(existsSync(installMarker)).toBe(false);
   });
 
+  it("passes bounded download options to curl and cleans up after curl times out", () => {
+    const root = tempDirs.make("openclaw-trufflehog-curl-");
+    const binDir = join(root, "bin");
+    const argsFile = join(root, "curl-args");
+    mkdirSync(binDir);
+    writeFileSync(
+      join(binDir, "curl"),
+      '#!/bin/sh\nprintf "%s\\n" "$@" >"$CURL_ARGS_FILE"\nexit 28\n',
+      { mode: 0o755 },
+    );
+
+    expect(() =>
+      runBash(
+        `uname() { if [ "$1" = "-s" ]; then printf "Linux\\n"; else printf "x86_64\\n"; fi; }\nsource ${SCRIPT}\ninstall_trufflehog`,
+        {
+          CURL_ARGS_FILE: argsFile,
+          OPENCLAW_TRUFFLEHOG_BIN_DIR: join(root, "install"),
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        },
+      ),
+    ).toThrow();
+
+    const archive = "trufflehog_3.97.0_linux_amd64.tar.gz";
+    const args = readFileSync(argsFile, "utf8").trimEnd().split("\n");
+    const outputPath = args[10] ?? "";
+    expect(args.slice(0, 10)).toEqual([
+      "-fsSL",
+      "--connect-timeout",
+      "30",
+      "--max-time",
+      "300",
+      "--retry",
+      "3",
+      "--retry-max-time",
+      "300",
+      "--output",
+    ]);
+    expect(outputPath).toBe(join(dirname(outputPath), archive));
+    expect(args[11]).toBe(
+      `https://github.com/trufflesecurity/trufflehog/releases/download/v3.97.0/${archive}`,
+    );
+    expect(existsSync(dirname(outputPath))).toBe(false);
+  });
+
   it("verifies the archive before extraction and replaces the binary atomically", () => {
     const script = readFileSync(SCRIPT, "utf8");
     expect(script).toContain('"$binary" --no-update --version');
-    const download = script.indexOf('curl -fsSL --retry 3 --output "$tmp_dir/$archive" "$url"');
+    const download = script.indexOf("curl -fsSL");
     const verify = script.indexOf("sha256sum -c -");
     const extract = script.indexOf(
       'tar --no-same-owner -xzf "$tmp_dir/$archive" -C "$tmp_dir" trufflehog',

@@ -471,9 +471,15 @@ suite.define(() => {
       await settingsSearch.fill("channel");
       await captureSettingsSidebarProof(settingsSidebar, "01e-settings-search-route.png");
       await holdUiProof(page);
-      await settingsSidebar.getByRole("link", { name: "Channels" }).first().click();
+      const channelsResult = settingsSidebar.getByRole("link", { name: "Channels" }).first();
+      await channelsResult.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/channels");
       await expect.poll(() => settingsSearch.inputValue()).toBe("channel");
+      await captureSettingsSidebarProof(
+        settingsSidebar,
+        `settings-navigation-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "current"}.png`,
+      );
+      await expect.poll(() => channelsResult.getAttribute("aria-current")).toBe("page");
       await captureSettingsSidebarProof(settingsSidebar, "01f-settings-search-navigated.png");
       await holdUiProof(page);
       await page.keyboard.press("Escape");
@@ -593,15 +599,17 @@ suite.define(() => {
       const navExpand = page.locator(".shell-chrome-controls__nav-toggle");
       await expect.poll(() => navExpand.isVisible()).toBe(true);
       await page.reload();
+      // Sidebar visibility is tab-local and intentionally not persisted; width is.
       await expect
         .poll(() => page.locator(".shell-chrome-controls__nav-toggle").isVisible())
         .toBe(true);
-      await captureUiProof(page, "04-persisted-collapsed.png");
-      await page.locator(".shell-chrome-controls__nav-toggle").click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--nav-collapsed");
       await expect.poll(() => sidebar.isVisible()).toBe(true);
+      await expect.poll(() => roundedWidth(shellNav)).toBe(400);
+      await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("400 pixels");
+      await captureUiProof(page, "04-visibility-not-persisted.png");
       await collapseButton.click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
@@ -691,6 +699,94 @@ suite.define(() => {
     );
   });
 
+  it("moves Home activity clear of the aligned Pages editor", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "sessions.list": {
+              count: 1,
+              defaults: {
+                contextTokens: null,
+                model: "gpt-5.5",
+                modelProvider: "openai",
+              },
+              path: "",
+              sessions: [
+                {
+                  hasActiveRun: true,
+                  key: "main",
+                  kind: "direct",
+                  status: "running",
+                  updatedAt: 100,
+                },
+              ],
+              ts: 100,
+            },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const home = sidebar.locator(".nav-item--home");
+        await expect.poll(() => home.isVisible()).toBe(true);
+        await sidebar.evaluate(async (element) => {
+          const host = element as HTMLElement & {
+            requestUpdate(): void;
+            updateComplete: Promise<unknown>;
+          };
+          // The shell refreshes this callback whenever its lazy outbox runtime
+          // loads. Keep the warning fixture stable until geometry is measured.
+          Object.defineProperty(host, "outboxAttentionCountForSession", {
+            configurable: true,
+            get: () => () => 1,
+            set: () => undefined,
+          });
+          host.requestUpdate();
+          await host.updateComplete;
+        });
+
+        const activity = home.locator(".sidebar-home-session-states");
+        const editor = sidebar.locator(".sidebar-nav__head-action");
+        await expect.poll(() => activity.locator(".session-run-spinner").count()).toBe(1);
+        await expect.poll(() => activity.locator(".session-row-badge--attention").count()).toBe(1);
+
+        await page.mouse.move(900, 400);
+        const restingActivity = await activity.boundingBox();
+        expect(restingActivity).not.toBeNull();
+        await sidebar.locator(".sidebar-nav").hover();
+        await expect
+          .poll(() => editor.evaluate((element) => getComputedStyle(element).opacity))
+          .toBe("1");
+        await expect
+          .poll(async () => {
+            const [homeBox, activityBox, editorBox] = await Promise.all([
+              home.boundingBox(),
+              activity.boundingBox(),
+              editor.boundingBox(),
+            ]);
+            if (!homeBox || !activityBox || !editorBox || !restingActivity) {
+              return null;
+            }
+            return {
+              activityShift: Math.round(restingActivity.x - activityBox.x),
+              centerDelta: Math.abs(
+                editorBox.y + editorBox.height / 2 - (homeBox.y + homeBox.height / 2),
+              ),
+              gap: Math.round(editorBox.x - (activityBox.x + activityBox.width)),
+            };
+          })
+          .toEqual({ activityShift: 25, centerDelta: 0, gap: 4 });
+        await captureUiProof(page, "07-home-activity-editor.png");
+      },
+    );
+  });
+
   it("keeps mobile attention in the drawer while desktop remains unchanged", async () => {
     await suite.withPage(
       {
@@ -756,11 +852,16 @@ suite.define(() => {
         });
 
         const sidebar = page.locator("openclaw-app-sidebar");
-        const sidebarUpdate = sidebar.locator('[data-attention-kind="updateAvailable"]');
+        const sidebarUpdate = sidebar.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
         const sidebarAutomation = sidebar.locator('[data-attention-kind="cronFailed"]');
+        await expect.poll(() => sidebar.locator(".sidebar-issues-button__count").count()).toBe(1);
+        await sidebar.locator(".sidebar-issues-button").click();
         await expect.poll(() => sidebarUpdate.count()).toBe(1);
         await expect.poll(() => sidebarAutomation.count()).toBe(1);
         await captureUiProof(page, "08-desktop-attention-unchanged.png");
+        await sidebar.locator(".sidebar-issues-button").click();
 
         await page.setViewportSize({ height: 852, width: 393 });
         await expect
@@ -783,6 +884,7 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(".shell").getAttribute("class"))
           .toContain("shell--nav-drawer-open");
+        await sidebar.locator(".sidebar-issues-button").click();
         await expect.poll(() => sidebarUpdate.isVisible()).toBe(true);
         await expect.poll(() => sidebarAutomation.isVisible()).toBe(true);
         await captureUiProof(page, "10-mobile-attention-drawer.png");

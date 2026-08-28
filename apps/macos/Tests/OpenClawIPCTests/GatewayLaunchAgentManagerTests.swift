@@ -187,9 +187,19 @@ struct GatewayLaunchAgentManagerTests {
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
             let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride()
+            let installError = await GatewayLaunchAgentManager.set(
+                enabled: true,
+                bundlePath: "/Applications/OpenClaw.app",
+                port: 18789)
+            let uninstallError = await GatewayLaunchAgentManager.set(
+                enabled: false,
+                bundlePath: "/Applications/OpenClaw.app",
+                port: 18789)
             let kickstartError = await GatewayLaunchAgentManager.kickstart()
 
             #expect(error == nil)
+            #expect(installError == nil)
+            #expect(uninstallError == nil)
             #expect(kickstartError == nil)
             #expect(FileManager().fileExists(atPath: marker.path))
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
@@ -211,6 +221,46 @@ struct GatewayLaunchAgentManagerTests {
             let error = await GatewayLaunchAgentManager.kickstart()
 
             #expect(error == "Gateway daemon commands require explicit interception during tests")
+        }
+    }
+
+    @Test(arguments: ["failure-with-hints", "failure-hints-only", "failure-without-hints", "success"])
+    func `gateway daemon failures preserve actionable recovery hints`(_ scenario: String) async {
+        await TestIsolation.withIsolatedState {
+            let marker = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-no-disable-marker-\(UUID().uuidString)")
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+
+            let payload = switch scenario {
+            case "failure-with-hints":
+                """
+                {"ok":false,"error":"Gateway service not installed.",
+                "hints":["openclaw gateway install","openclaw gateway start","third hint"]}
+                """
+            case "failure-hints-only":
+                #"{"ok":false,"hints":["openclaw gateway install","openclaw gateway start"]}"#
+            case "failure-without-hints":
+                #"{"ok":false,"error":"Gateway service not installed."}"#
+            default:
+                #"{"ok":true,"message":"Gateway already started."}"#
+            }
+            let expected: String? = switch scenario {
+            case "failure-with-hints":
+                "Gateway service not installed. (openclaw gateway install · openclaw gateway start)"
+            case "failure-hints-only": "openclaw gateway install · openclaw gateway start"
+            case "failure-without-hints": "Gateway service not installed."
+            default: nil
+            }
+
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(payload)
+
+            #expect(await GatewayLaunchAgentManager.kickstart() == expected)
         }
     }
 

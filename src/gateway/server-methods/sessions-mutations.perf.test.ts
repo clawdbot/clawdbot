@@ -126,8 +126,6 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       key: `agent:main:archive-perf-${index}`,
       expectedSessionId: `session-archive-perf-${index}`,
     }));
-    const transcriptRoots = new Map<string, string>();
-    const transcriptTails = new Map<string, string>();
     for (const [index, target] of targets.entries()) {
       const sessionId = `session-archive-perf-${index}`;
       await upsertSessionEntryCore(
@@ -145,7 +143,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
           now: 1,
         },
       );
-      const tail = await appendTranscriptMessage(
+      await appendTranscriptMessage(
         { agentId: "main", sessionId, sessionKey: target.key },
         {
           message: {
@@ -157,8 +155,6 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
           parentId: root.messageId,
         },
       );
-      transcriptRoots.set(target.key, root.messageId);
-      transcriptTails.set(target.key, tail.messageId);
     }
 
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
@@ -285,12 +281,12 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       );
       expect(statements.counts["whole-store-projection"]).toBe(1);
       expect(statements.counts["transcript-full-hydration"]).toBe(0);
-      // One session-store batch plus one parent-linked audit append per target.
-      expect(transactionCounts).toEqual({ begin: 31, commit: 31 });
+      // Archive attribution stays in the session-store batch; transcripts are untouched.
+      expect(transactionCounts).toEqual({ begin: 1, commit: 1 });
       expect(
         sqliteTransactionLabels.filter((label) => label === "session.entry-replacements"),
       ).toHaveLength(1);
-      expect(sqliteTransactionLabels.filter((label) => label === "agent.write")).toHaveLength(30);
+      expect(sqliteTransactionLabels.filter((label) => label === "agent.write")).toHaveLength(0);
       expect(cronList).toHaveBeenCalledOnce();
       expect(cronUpdate.mock.calls.map(([id, patch]) => [id, patch])).toEqual([
         ["bound-first", { enabled: false }],
@@ -325,7 +321,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
           sessionId,
           sessionKey: target.key,
         })
-      ).filter((event): event is Record<string, unknown> & { message: Record<string, unknown> } => {
+      ).filter((event) => {
         if (!event || typeof event !== "object" || !("message" in event)) {
           return false;
         }
@@ -337,16 +333,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
           message.customType === "openclaw.system-note"
         );
       });
-      expect(auditNotes).toHaveLength(1);
-      expect(transcriptTails.get(target.key)).not.toBe(transcriptRoots.get(target.key));
-      expect(auditNotes[0]?.parentId).not.toBe(transcriptRoots.get(target.key));
-      expect(auditNotes[0]).toMatchObject({
-        parentId: transcriptTails.get(target.key),
-        message: {
-          content: "System note: archived by Performance Reviewer",
-          display: true,
-        },
-      });
+      expect(auditNotes).toEqual([]);
     }
   });
 });

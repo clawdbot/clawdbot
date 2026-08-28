@@ -400,7 +400,11 @@ export async function runQaFlowSuiteStandard(
           concurrency,
           channel: params?.channelId ?? params?.channelDriverSelection?.channel ?? transport.id,
           channelDriver: transportFactoryResult.driver,
-          channelDriverSelection: params?.channelDriverSelection,
+          // Nested workers retain the selection for transport setup, but the outer
+          // aggregate alone owns readiness publication under the shared output tree.
+          channelDriverSelection: isQaSuiteNestedRun(params)
+            ? undefined
+            : params?.channelDriverSelection,
           isolatedWorkers: false,
           writeEvidenceFile: params?.writeEvidenceFile,
           // Same "filtered → executed list, unfiltered → null" convention as

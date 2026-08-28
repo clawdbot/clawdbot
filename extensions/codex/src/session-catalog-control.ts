@@ -176,7 +176,11 @@ function createCodexSessionCatalogControlFromRequests(params: {
             continue;
           }
           const session = toCatalogSession(thread, false);
-          if (session && (!search || session.name?.toLocaleLowerCase().includes(search))) {
+          if (
+            session &&
+            (!search ||
+              (session.name ?? session.fallbackName)?.toLocaleLowerCase().includes(search))
+          ) {
             sessions.push(session);
           }
         }

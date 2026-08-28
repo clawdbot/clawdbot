@@ -1,5 +1,8 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import { classifyOAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import {
+  classifyOAuthRefreshFailure,
+  classifyOAuthRefreshFailureError,
+} from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import {
   isCompactionFailureError,
   isLikelyContextOverflowError,
@@ -17,10 +20,7 @@ import {
   renderRateLimitReplyCopy,
 } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import {
-  AGENT_RUN_RESTART_ABORT_STOP_REASON,
-  resolveAgentRunErrorLifecycleFields,
-} from "../../agents/run-termination.js";
+import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
@@ -206,7 +206,8 @@ export async function handleAgentExecutionError(params: {
   const isContextOverflow =
     !isBilling && (failoverReason === "context_overflow" || isLikelyContextOverflowError(message));
   const isCompactionFailure = !isBilling && isCompactionFailureError(message);
-  const oauthRefreshFailure = classifyOAuthRefreshFailureError(err);
+  const oauthRefreshFailure =
+    classifyOAuthRefreshFailureError(err) ?? classifyOAuthRefreshFailure(message);
   const hasAuthProfileFailoverFailure = buildAuthProfileFailoverFailureText(err) !== null;
   const providerRequestError =
     !isBilling &&
@@ -443,12 +444,11 @@ export async function handleAgentExecutionError(params: {
   const userFacingMessage = isTransientHttp
     ? renderUserFacingText(message, { errorContext: true })
     : message;
-  const externalRunFailureReply =
+  const externalRunFailureCandidate =
     !isBilling &&
     !(isRateLimit && !isOverloaded) &&
     !rateLimitOrOverloadedCopy &&
-    !isContextOverflow &&
-    !params.shouldSurfaceToControlUi
+    !isContextOverflow
       ? buildExternalRunFailureReply(
           { message, error: err },
           {
@@ -459,6 +459,10 @@ export async function handleAgentExecutionError(params: {
             failoverFacts,
           },
         )
+      : undefined;
+  const externalRunFailureReply =
+    !params.shouldSurfaceToControlUi || externalRunFailureCandidate?.presentation
+      ? externalRunFailureCandidate
       : undefined;
   const fallbackText = isBilling
     ? renderBillingReplyCopy({
@@ -480,10 +484,10 @@ export async function handleAgentExecutionError(params: {
         ? rateLimitOrOverloadedCopy
         : isContextOverflow
           ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-          : params.shouldSurfaceToControlUi
-            ? renderControlUiAgentFailureCopy(userFacingMessage)
-            : (externalRunFailureReply?.text ??
-              (turn.isHeartbeat
+          : (externalRunFailureReply?.text ??
+            (params.shouldSurfaceToControlUi
+              ? renderControlUiAgentFailureCopy(userFacingMessage)
+              : turn.isHeartbeat
                 ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
                 : GENERIC_EXTERNAL_RUN_FAILURE_TEXT));
   const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
@@ -498,12 +502,7 @@ export async function handleAgentExecutionError(params: {
       : turn.opts?.abortSignal?.aborted === true
         ? turn.opts.abortSignal
         : undefined;
-  const abortLifecycleFields = {
-    ...resolveAgentRunErrorLifecycleFields(err, abortedSignal),
-    ...(isReplyOperationRestartAbort(turn.replyOperation)
-      ? { aborted: true as const, stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON }
-      : {}),
-  };
+  const abortLifecycleFields = resolveAgentRunErrorLifecycleFields(err, abortedSignal);
   const failedLifecycleTerminal = takePendingLifecycleTerminal();
   if (failedLifecycleTerminal) {
     failedLifecycleTerminal.emit("error", err, { fallbackExhaustedFailure: true });
@@ -526,6 +525,11 @@ export async function handleAgentExecutionError(params: {
   await params.modelPatch.fail(err);
   return {
     kind: "final",
-    payload: markAgentRunFailureReplyPayload({ text: userVisibleFallbackText }),
+    payload: markAgentRunFailureReplyPayload({
+      text: userVisibleFallbackText,
+      ...(externalRunFailureReply?.presentation
+        ? { presentation: externalRunFailureReply.presentation }
+        : {}),
+    }),
   };
 }

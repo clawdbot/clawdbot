@@ -4,6 +4,10 @@ import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { consumeRunSkillUsage, recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
+import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
+import { inspectSkillProposal } from "../../skills/workshop/service.js";
+import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
 import {
   createOpenClawTestState,
@@ -51,6 +55,61 @@ async function seedLiveSkill(
 }
 
 describe("skill_workshop review mode", () => {
+  it("keeps an autonomous foreground repair pending for a user-authored skill", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-user-repair-");
+    const runId = "user-authored-repair";
+    const skillName = "operator-runbook";
+    const skillFile = path.join(workspaceDir, "skills", skillName, "SKILL.md");
+    await writeWorkspaceSkills(workspaceDir, [
+      {
+        name: skillName,
+        description: "Run an operator-owned procedure",
+        body: `# Operator Runbook\n\n${"Detailed operator step.\n".repeat(200)}Check the old prerequisite.\n`,
+      },
+    ]);
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+      env: testState.env,
+      agentId: "main",
+      origin: { agentId: "main", runId },
+      modelContextWindowTokens: 8_192,
+    });
+    const read = await tool.execute("user-repair-read", {
+      action: "read",
+      skill_name: skillName,
+    });
+    expect(read.details).toMatchObject({ contentIncluded: false });
+    await tool.execute("user-repair-prepare", {
+      action: "prepare_patch",
+      skill_name: skillName,
+      old_string: "Check the old prerequisite.",
+    });
+    recordRunSkillUsage({
+      runId,
+      name: skillName,
+      source: "workspace",
+      activation: "read",
+      skillFile,
+    });
+
+    const result = await tool.execute("user-repair-patch", {
+      action: "patch",
+      skill_name: skillName,
+      old_string: "Check the old prerequisite.",
+      new_string: "Check the current prerequisite.",
+    });
+
+    expect(result.details).toMatchObject({ status: "pending", kind: "update" });
+    expect((result.content[0] as { text: string }).text).toContain("user-authored; proposal");
+    const record = await readSkillProposalRecord((result.details as { id: string }).id, {
+      env: testState.env,
+    });
+    expect(record?.statusReason).toBe("user-authored skill; awaiting operator review");
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("old prerequisite");
+    consumeRunSkillUsage(runId);
+  });
+
   it("restricts internal review runs to one pending proposal mutation", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-");
     const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
@@ -60,23 +119,31 @@ describe("skill_workshop review mode", () => {
       proposalOnly: true,
       proposalMutationBudget,
     });
+    const foregroundTool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { approvalPolicy: "auto" } } },
+    });
 
     expect(
       (tool.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum,
-    ).toEqual(["create", "revise", "list", "inspect"]);
+    ).toEqual(
+      (foregroundTool.parameters as { properties: { action: { enum: string[] } } }).properties
+        .action.enum,
+    );
+    expect(tool.description).toBe(foregroundTool.description);
     await expect(
       tool.execute("call-apply", { action: "apply", proposal_id: "proposal-1" }),
-    ).rejects.toThrow("only inspect or draft proposals");
+    ).rejects.toThrow("review allows only");
     await expect(
       tool.execute("call-evaluate", { action: "evaluate", proposal_id: "proposal-1" }),
-    ).rejects.toThrow("only inspect or draft proposals");
+    ).rejects.toThrow("review allows only");
     await expect(
       tool.execute("call-update", {
         action: "update",
         skill_name: "existing-skill",
         proposal_content: "# Replacement\n",
       }),
-    ).rejects.toThrow("only inspect or draft proposals");
+    ).rejects.toThrow("review allows only");
 
     await tool.execute("call-create", {
       action: "create",
@@ -139,6 +206,42 @@ describe("skill_workshop review mode", () => {
     expect(proposalMutationBudget.remaining).toBe(0);
   });
 
+  it("keeps a user-authored update pending when detached review tries to apply it", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-apply-");
+    const skillName = "operator-runbook";
+    const skillFile = path.join(workspaceDir, "skills", skillName, "SKILL.md");
+    await writeWorkspaceSkills(workspaceDir, [
+      {
+        name: skillName,
+        description: "Run an operator-owned procedure",
+        body: "# Operator Runbook\n\nCheck the old prerequisite.\n",
+      },
+    ]);
+    const reviewTool = createSkillWorkshopTool({
+      workspaceDir,
+      env: testState.env,
+      proposalOnly: true,
+      updateProposals: true,
+      proposalMutationBudget: { remaining: 1 },
+    });
+    await reviewTool.execute("review-read", { action: "read", skill_name: skillName });
+    const patched = await reviewTool.execute("review-patch", {
+      action: "patch",
+      skill_name: skillName,
+      old_string: "Check the old prerequisite.",
+      new_string: "Check the current prerequisite.",
+    });
+    const proposalId = (patched.details as { id: string }).id;
+
+    await expect(
+      reviewTool.execute("review-apply", { action: "apply", proposal_id: proposalId }),
+    ).rejects.toThrow("review allows only");
+
+    const record = await readSkillProposalRecord(proposalId, { env: testState.env });
+    expect(record?.status).toBe("pending");
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("old prerequisite");
+  });
+
   it("composes patch proposals by replacing the quoted span of the live body", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-extend-");
     await seedLiveSkill(
@@ -158,7 +261,13 @@ describe("skill_workshop review mode", () => {
     expect(
       (reviewTool.parameters as { properties: { action: { enum: string[] } } }).properties.action
         .enum,
-    ).toEqual(["create", "patch", "update", "read", "revise", "list", "inspect"]);
+    ).toEqual(
+      (
+        createSkillWorkshopTool({ workspaceDir }).parameters as {
+          properties: { action: { enum: string[] } };
+        }
+      ).properties.action.enum,
+    );
 
     await expect(
       reviewTool.execute("patch-without-read", {
@@ -302,7 +411,7 @@ describe("skill_workshop review mode", () => {
     expect(proposalMutationBudget.remaining).toBe(0);
   });
 
-  it("caps reviewer live-skill reads at the read budget", async () => {
+  it("rejects oversized growth but permits shrink in review mode", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-read-cap-");
     await seedLiveSkill(
       workspaceDir,
@@ -315,27 +424,186 @@ describe("skill_workshop review mode", () => {
       workspaceDir,
       proposalOnly: true,
       updateProposals: true,
+      autonomousCapture: true,
       proposalMutationBudget: { remaining: 1 },
       modelContextWindowTokens: 200_000,
     });
+    await expect(
+      reviewTool.execute("oversized-create", {
+        action: "create",
+        name: "too-large",
+        description: "An oversized new skill",
+        proposal_content: `# Too Large\n\n${"Unbounded detail.\n".repeat(800)}`,
+      }),
+    ).rejects.toThrow(/autonomous limit is 10,000.*Prune stale steps/);
+    const read = await reviewTool.execute("review-read", {
+      action: "read",
+      skill_name: "big-skill",
+    });
+    const text = (read.content[0] as { text: string }).text;
+    expect(read.details).toMatchObject({ skillKey: "big-skill", contentIncluded: true });
+    expect(text).toContain("A detailed operational line.");
+
+    await expect(
+      reviewTool.execute("oversized-growth", {
+        action: "update",
+        skill_name: "big-skill",
+        proposal_content: `# Big Skill\n\n${"Longer procedure.\n".repeat(2100)}`,
+      }),
+    ).rejects.toThrow(/autonomous limit is 10,000.*bundled file/);
+
+    const update = await reviewTool.execute("oversized-update", {
+      action: "update",
+      skill_name: "big-skill",
+      proposal_content: `# Big Skill\n\n${"Shorter procedure.\n".repeat(700)}`,
+    });
+    expect(update.details).toMatchObject({ kind: "update", status: "pending" });
+  });
+
+  it("prepares a bounded exact patch for a skill above the read budget", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-read-cap-");
+    const oldString = "Run the legacy deployment preflight.";
+    const secondOldString = "Record the deployment outcome after the preflight.";
+    const newString = "Run openclaw doctor and resolve every reported blocker.";
+    await seedLiveSkill(
+      workspaceDir,
+      "big-skill",
+      "A very large operator skill",
+      `# Big Skill\n\n${"A detailed operational line.\n".repeat(600)}${oldString}\n${secondOldString}\n${"A later operational line.\n".repeat(600)}`,
+    );
+
+    const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
+    const reviewTool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      updateProposals: true,
+      proposalMutationBudget,
+      modelContextWindowTokens: 8_192,
+    });
+    const actionEnum = (reviewTool.parameters as { properties: { action: { enum: string[] } } })
+      .properties.action.enum;
+    expect(actionEnum).toContain("prepare_patch");
+
     const read = await reviewTool.execute("review-read", {
       action: "read",
       skill_name: "big-skill",
     });
     const text = (read.content[0] as { text: string }).text;
     expect(read.details).toMatchObject({ skillKey: "big-skill", contentIncluded: false });
-    expect(text.length).toBeLessThanOrEqual(20_000);
     expect(text).toContain("Content omitted");
-    expect(text).not.toContain("A detailed operational line.");
+    expect(text).not.toContain(oldString);
 
     await expect(
       reviewTool.execute("oversized-patch", {
         action: "patch",
         skill_name: "big-skill",
-        old_string: "A detailed operational line.",
-        new_string: "A rewritten operational line.",
+        old_string: oldString,
+        new_string: newString,
       }),
-    ).rejects.toThrow("cannot be updated autonomously");
+    ).rejects.toThrow("call action=prepare_patch");
+
+    const prepared = await reviewTool.execute("prepare-patch", {
+      action: "prepare_patch",
+      skill_name: "big-skill",
+      old_string: oldString,
+    });
+    const preparedText = (prepared.content[0] as { text: string }).text;
+    expect(prepared.details).toMatchObject({ skillKey: "big-skill", patchPrepared: true });
+    expect(preparedText.length).toBeLessThanOrEqual(2_867);
+    expect(preparedText).toContain("bounded excerpt, not the complete skill");
+    expect(preparedText).toContain(`--- authorized old_string ---\n${oldString}`);
+
+    await expect(
+      reviewTool.execute("prepare-second-patch", {
+        action: "prepare_patch",
+        skill_name: "big-skill",
+        old_string: secondOldString,
+      }),
+    ).rejects.toThrow("already has a prepared patch");
+
+    const retriedReviewTool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      updateProposals: true,
+      proposalMutationBudget,
+      modelContextWindowTokens: 8_192,
+    });
+    const patched = await retriedReviewTool.execute("prepared-patch", {
+      action: "patch",
+      skill_name: "big-skill",
+      old_string: oldString,
+      new_string: newString,
+    });
+    expect(patched.details).toMatchObject({ status: "pending", kind: "update" });
+    const inspected = await inspectSkillProposal((patched.details as { id: string }).id, {
+      workspaceDir,
+    });
+    expect(inspected?.content).toContain(newString);
+    expect(inspected?.content).not.toContain(oldString);
+    await expect(
+      retriedReviewTool.execute("prepare-after-budget-spent", {
+        action: "prepare_patch",
+        skill_name: "big-skill",
+        old_string: secondOldString,
+      }),
+    ).rejects.toThrow("reached its proposal mutation limit");
+  });
+
+  it("invalidates prepared patch authority on substitution or target change", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-prepared-patch-stale-");
+    const oldString = "Run the legacy deployment preflight.";
+    await seedLiveSkill(
+      workspaceDir,
+      "big-skill",
+      "A very large operator skill",
+      `# Big Skill\n\n${"A detailed operational line.\n".repeat(1200)}${oldString}\n`,
+    );
+    const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
+    const reviewTool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      updateProposals: true,
+      proposalMutationBudget,
+      modelContextWindowTokens: 8_192,
+    });
+    await reviewTool.execute("prepare-patch", {
+      action: "prepare_patch",
+      skill_name: "big-skill",
+      old_string: oldString,
+    });
+    await expect(
+      reviewTool.execute("substituted-patch", {
+        action: "patch",
+        skill_name: "big-skill",
+        old_string: "# Big Skill",
+        new_string: "# Bigger Skill",
+      }),
+    ).rejects.toThrow("differs from the prepared exact span");
+    await expect(
+      reviewTool.execute("replayed-patch", {
+        action: "patch",
+        skill_name: "big-skill",
+        old_string: oldString,
+        new_string: "Run the current deployment preflight.",
+      }),
+    ).rejects.toThrow("call action=prepare_patch");
+
+    await reviewTool.execute("prepare-patch-again", {
+      action: "prepare_patch",
+      skill_name: "big-skill",
+      old_string: oldString,
+    });
+    const liveSkillFile = path.join(workspaceDir, "skills", "big-skill", "SKILL.md");
+    await fs.appendFile(liveSkillFile, "\nOperator edit after preparation.\n");
+    await expect(
+      reviewTool.execute("stale-prepared-patch", {
+        action: "patch",
+        skill_name: "big-skill",
+        old_string: oldString,
+        new_string: "Run the current deployment preflight.",
+      }),
+    ).rejects.toThrow("changed since the patch was prepared");
+    expect(proposalMutationBudget.remaining).toBe(1);
   });
 
   it("does not refund the review mutation budget after a failed mutation", async () => {

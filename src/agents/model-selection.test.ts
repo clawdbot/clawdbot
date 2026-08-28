@@ -122,7 +122,8 @@ const providerPolicySurfaceMock = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => manifestNormalizationSnapshot,
 }));
 
@@ -827,6 +828,7 @@ describe("model-selection", () => {
                   id: "Qwen/Qwen3-8B",
                   name: "Qwen 3 8B",
                   reasoning: true,
+                  thinkingLevelMap: { off: null, max: "max" },
                   compat: {
                     thinkingFormat: "qwen-chat-template",
                   },
@@ -843,6 +845,7 @@ describe("model-selection", () => {
       expect(model?.compat).toEqual({ thinkingFormat: "qwen-chat-template" });
       expect(model?.reasoning).toBe(true);
       expect(model?.configuredReasoning).toBe(true);
+      expect(model?.thinkingLevelMap).toEqual({ off: null, max: "max" });
     });
 
     it("carries configured model params into catalog entries for provider policy", () => {
@@ -1507,9 +1510,6 @@ describe("model-selection", () => {
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
       expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(false);
-      expect(result.automaticFallbackKeys).toEqual(
-        new Set(["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"]),
-      );
       expect(result.allowAny).toBe(false);
     });
 
@@ -1527,7 +1527,7 @@ describe("model-selection", () => {
       expect(result.allowAny).toBe(false);
     });
 
-    it("prefers per-agent fallback overrides when agentId is provided", () => {
+    it("keeps per-agent fallback overrides out of explicit selection", () => {
       const cfg = createAgentFallbackConfig({
         fallbacks: ["google/gemini-3-pro"],
         agentFallbacks: ["anthropic/claude-sonnet-4-6"],
@@ -1544,7 +1544,6 @@ describe("model-selection", () => {
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
       expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(false);
-      expect(result.automaticFallbackKeys).toEqual(new Set(["anthropic/claude-sonnet-4-6"]));
       expect(result.allowAny).toBe(false);
     });
   });

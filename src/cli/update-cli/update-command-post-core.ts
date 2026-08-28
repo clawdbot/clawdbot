@@ -36,7 +36,7 @@ import {
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "../../plugins/installed-plugin-index-records.js";
-import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/installed-plugin-index-store.js";
+import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/installed-plugin-index-store-write.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -311,9 +311,6 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   if (params.opts.yes) {
     argv.push("--yes");
   }
-  if (params.opts.acknowledgeClawHubRisk) {
-    argv.push("--acknowledge-clawhub-risk");
-  }
   if (params.opts.timeout) {
     argv.push("--timeout", params.opts.timeout);
   }
@@ -399,18 +396,18 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
         settled = true;
         clearInterval(resultPoll);
         resolve(result);
+        if (result.kind === "plugin-update") {
+          // Only the winning result stops the child. Claim completion first so its
+          // signal cannot reject committed work and roll the plugin index back.
+          stopPostCoreUpdateChild(child);
+        }
       };
       const resultPoll = setInterval(() => {
         void readPostCorePluginUpdateResultFile(resultPath)
           .then((pluginUpdate) => {
-            if (!pluginUpdate) {
-              return;
+            if (pluginUpdate) {
+              finish({ kind: "plugin-update", pluginUpdate });
             }
-            // Claim the settle before stopping: the stop delivers a signal, and the exit
-            // handler below rejects on any signal it still owns. Stopping first would fail
-            // an update this child already committed and roll its plugin index back.
-            finish({ kind: "plugin-update", pluginUpdate });
-            stopPostCoreUpdateChild(child);
           })
           .catch(() => undefined);
       }, POST_CORE_UPDATE_RESULT_POLL_MS);

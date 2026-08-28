@@ -7,14 +7,13 @@ import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
 import {
+  copyCrabboxArtifacts,
   type CommandRunner,
-  type CrabboxInspect,
   defaultCommandRunner,
   inspectCrabbox,
   resolveCrabboxBin,
   runCommand,
   shellQuote,
-  sshCommand,
   stopCrabbox,
   warmupCrabbox,
 } from "./crabbox-runtime.js";
@@ -282,32 +281,6 @@ function renderReport(summary: MantisDesktopBrowserSmokeSummary) {
   return `${lines.join("\n")}\n`;
 }
 
-async function copyRemoteArtifacts(params: {
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  inspect: CrabboxInspect;
-  outputDir: string;
-  remoteOutputDir: string;
-  runner: CommandRunner;
-}) {
-  const { host, sshArgs, sshUser } = await sshCommand(params);
-  await runCommand({
-    command: "rsync",
-    args: [
-      "-az",
-      "-e",
-      sshArgs,
-      "--exclude",
-      "chrome-profile/**",
-      `${sshUser}@${host}:${params.remoteOutputDir}/`,
-      `${params.outputDir}/`,
-    ],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-  });
-}
-
 export async function runMantisDesktopBrowserSmoke(
   opts: MantisDesktopBrowserSmokeOptions = {},
 ): Promise<MantisDesktopBrowserSmokeResult> {
@@ -419,9 +392,10 @@ export async function runMantisDesktopBrowserSmoke(
       runner,
       stdio: "inherit",
     });
-    await copyRemoteArtifacts({
+    await copyCrabboxArtifacts({
       cwd: repoRoot,
       env,
+      exclude: ["chrome-profile/**"],
       inspect: inspected,
       outputDir,
       remoteOutputDir,

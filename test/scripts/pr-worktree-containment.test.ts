@@ -76,6 +76,7 @@ function createReviewFixture(): ReviewFixture {
   writeFileSync(join(root, "transition-a.txt"), "pr-a\n");
   writeFileSync(join(root, "transition-b.txt"), "pr-b\n");
   writeFileSync(join(root, "overlap.txt"), "pr-a-overlap\n");
+  writeFileSync(join(root, "pr-only.txt"), "removed on main\n");
   git(root, "add", ".");
   git(root, "commit", "-m", "PR head A");
   const prASha = git(root, "rev-parse", "HEAD");
@@ -256,6 +257,53 @@ describePosix("scripts/pr worktree containment", () => {
     expectCanonicalCheckoutUnchanged(fixture);
   });
 
+  for (const mode of ["branch", "detached"] as const) {
+    it.each([
+      {
+        name: "partially restored index",
+        setup: ['git restore --source="$target_sha" --staged --worktree -- pr-only.txt'],
+      },
+      {
+        name: "fully restored index",
+        setup: ['git restore --source="$target_sha" --staged --worktree -- .'],
+      },
+      {
+        name: "interrupted recovery checkout",
+        setup: [
+          'git() { if [ "${1:-}" = checkout ]; then return 73; fi; command git "$@"; }',
+          "if recover_review_transition 42; then exit 1; fi",
+          "unset -f git",
+          'git diff --cached --quiet "$target_sha"',
+        ],
+      },
+    ])(`recovers completed deletions after $name (${mode})`, ({ setup }) => {
+      const fixture = createReviewFixture();
+      const worktree = join(fixture.root, ".worktrees", "pr-42");
+      const result = runShell(fixture, [
+        "review_init 42",
+        "review_checkout_pr 42",
+        'printf "preserve me\\n" > .local/review-note',
+        "source_sha=$(git rev-parse HEAD)",
+        "target_sha=$(git rev-parse origin/main)",
+        `write_review_transition_journal 42 "$source_sha" "$target_sha" ${mode} temp/pr-42`,
+        ...setup,
+        "test ! -e pr-only.txt",
+        'test "$(git rev-parse HEAD)" = "$source_sha"',
+        "test -f .local/review-transition.json",
+        "recover_review_transition 42",
+      ]);
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(git(worktree, "rev-parse", "HEAD")).toBe(fixture.mainSha);
+      expect(git(worktree, "branch", "--show-current")).toBe(mode === "branch" ? "temp/pr-42" : "");
+      expect(git(worktree, "status", "--porcelain=v1", "--untracked-files=no")).toBe("");
+      expect(existsSync(join(worktree, "pr-only.txt"))).toBe(false);
+      expect(readFileSync(join(worktree, ".local", "review-note"), "utf8")).toBe("preserve me\n");
+      expect(existsSync(join(worktree, ".local", "review-transition.json"))).toBe(false);
+      expectCanonicalCheckoutUnchanged(fixture);
+    });
+  }
+
   for (const testCase of [
     {
       name: "staged",
@@ -358,6 +406,8 @@ describePosix("scripts/pr worktree containment", () => {
     for (let index = 0; index < 32; index += 1) {
       writeFileSync(join(fixture.root, `transition-batch-${index}.txt`), `${index}\n`);
     }
+    const literalPath = "transition-[literal]*?.txt";
+    writeFileSync(join(fixture.root, literalPath), "literal path\n");
     git(fixture.root, "add", ".");
     git(fixture.root, "commit", "-m", "add transition batch");
     git(fixture.root, "update-ref", "refs/pull/42/head", "HEAD");
@@ -374,6 +424,10 @@ describePosix("scripts/pr worktree containment", () => {
       [
         "#!/usr/bin/env bash",
         'printf "%s\\n" "$*" >> "$GIT_COMMAND_LOG"',
+        'if [[ ( "${1:-}" == "restore" || "${2:-}" == "restore" ) && "$#" -gt 12 ]]; then',
+        '  printf "%s\\n" "Argument list too long" >&2',
+        "  exit 126",
+        "fi",
         'exec "$REAL_GIT" "$@"',
       ].join("\n"),
     );
@@ -392,6 +446,9 @@ describePosix("scripts/pr worktree containment", () => {
     expect(
       commands.filter((command) => command.startsWith("ls-files --others --ignored ")),
     ).toHaveLength(0);
+    expect(readFileSync(join(fixture.root, ".worktrees", "pr-42", literalPath), "utf8")).toBe(
+      "literal path\n",
+    );
     expectCanonicalCheckoutUnchanged(fixture);
   });
 });

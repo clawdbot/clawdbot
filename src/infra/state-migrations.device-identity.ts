@@ -11,6 +11,7 @@ import {
   type NormalizedLegacyDeviceIdentity,
 } from "./device-identity-legacy.js";
 import {
+  readStoredDeviceIdentityReadOnly,
   resolveDeviceIdentityStore,
   validateStoredDeviceIdentity,
   type DeviceIdentity,
@@ -316,6 +317,7 @@ async function cleanupReceiptSources(params: {
   }
   const changes: string[] = [];
   const warnings: string[] = [];
+  const notices: string[] = [];
   let removed = 0;
   for (const candidate of [params.detected.sourcePath, params.detected.claimPath]) {
     if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, candidate)))) {
@@ -333,6 +335,18 @@ async function cleanupReceiptSources(params: {
       continue;
     }
     if (snapshot.sha256 !== params.receipt.sourceSha256) {
+      // SQLite owns runtime identity; warning about inert retired bytes would
+      // make startup refuse an otherwise healthy gateway.
+      try {
+        if (readStoredDeviceIdentityReadOnly({ env: params.env, identityKey: IDENTITY_KEY })) {
+          notices.push(
+            `Preserved retired device identity ${candidate}: bytes differ from the migration receipt; the canonical SQLite identity remains authoritative. Archive or delete the file to clear this notice.`,
+          );
+          continue;
+        }
+      } catch {
+        // Invalid canonical identity must retain its readiness-blocking warning.
+      }
       warnings.push(
         `Retired device identity cleanup preserved ${candidate}: bytes differ from the migration receipt.`,
       );
@@ -346,13 +360,19 @@ async function cleanupReceiptSources(params: {
       warnings.push(`Retired device identity cleanup failed for ${candidate}: ${String(error)}`);
     }
   }
-  if (warnings.length === 0 && (!params.receipt.removedSource || removed > 0)) {
+  // A divergent preserved claim cannot complete its interrupted receipt unless
+  // receipt-covered original bytes were actually removed during this pass.
+  if (
+    warnings.length === 0 &&
+    (!params.receipt.removedSource || removed > 0) &&
+    (notices.length === 0 || removed > 0)
+  ) {
     markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
   }
   if (removed > 0) {
     changes.push("Removed retired device identity JSON covered by its SQLite receipt.");
   }
-  return { changes, warnings };
+  return { changes, warnings, notices };
 }
 
 async function migrateWithExclusiveStateOwnership(params: {

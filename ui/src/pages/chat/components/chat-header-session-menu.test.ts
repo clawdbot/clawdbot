@@ -2,9 +2,23 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import type { SessionMenuData } from "../../../components/session-menu-actions.ts";
 import type { SessionOwnerOption } from "../../../components/session-owner-chip.ts";
+import type { SessionCapability } from "../../../lib/sessions/index.ts";
+import {
+  clearNativeGatewayTestState,
+  setNativeGatewayTestState,
+} from "../../../test-helpers/native-gateways.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createSessionCapabilityFixture,
+  createTestChatPane,
+} from "../chat-pane.test-support.ts";
+import type { ChatPageHost } from "../chat-state-host.ts";
+import { createBackgroundTasksProps } from "./chat-background-tasks.ts";
 import "./chat-header-session-menu.ts";
 import type {
   HeaderMenuAction,
@@ -12,6 +26,7 @@ import type {
   HeaderMenuQuickAction,
   HeaderMenuStatusAction,
 } from "./chat-header-session-menu.ts";
+import { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 
 type HeaderMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
 type MenuItemElement = HTMLElement & { checked: boolean; disabled: boolean; submenuOpen?: boolean };
@@ -22,6 +37,8 @@ afterEach(() => {
   for (const container of containers.splice(0)) {
     container.remove();
   }
+  clearNativeGatewayTestState();
+  vi.restoreAllMocks();
 });
 
 function settings(): UiSettings {
@@ -43,8 +60,8 @@ function settings(): UiSettings {
 
 async function mountMenu(
   options: {
+    session?: Partial<SessionMenuData>;
     worktreePath?: string | null;
-    archived?: boolean;
     onboarding?: boolean;
     preferencesBrowserOnly?: boolean;
     compact?: boolean;
@@ -71,9 +88,18 @@ async function mountMenu(
   document.body.append(container);
   render(
     html`<openclaw-chat-header-session-menu
-      .sessionLabel=${"Test session"}
+      .session=${{
+        label: "Test session",
+        sessionId: "session-123",
+        pinned: false,
+        unread: false,
+        archived: false,
+        category: null,
+        icon: null,
+        categoryClearReturnsToGroups: false,
+        ...options.session,
+      }}
       .worktreePath=${options.worktreePath ?? null}
-      .archived=${options.archived ?? false}
       .onboarding=${options.onboarding ?? false}
       .preferencesBrowserOnly=${options.preferencesBrowserOnly ?? false}
       .compact=${options.compact ?? false}
@@ -81,6 +107,7 @@ async function mountMenu(
       .panelActions=${options.panelActions ?? []}
       .layoutActions=${options.layoutActions ?? []}
       .statusActions=${options.statusActions ?? []}
+      .groups=${["Projects"]}
       .ownerOptions=${options.ownerOptions ?? []}
       .selfOwner=${options.selfOwner ?? null}
       .currentOwnerId=${options.currentOwnerId ?? null}
@@ -130,16 +157,77 @@ function select(menu: ParentNode, value: string) {
 }
 
 describe("chat header session menu", () => {
-  it("renders the curated session actions in order", async () => {
+  it.each([
+    { name: "plain browser", nativeGateway: null, offered: false },
+    { name: "native local gateway", nativeGateway: "local", offered: true },
+    { name: "native remote gateway", nativeGateway: "remote", offered: false },
+    {
+      name: "SSH-tunneled remote native gateway",
+      nativeGateway: "remote",
+      gatewayUrl: "ws://127.0.0.1:18789",
+      offered: false,
+    },
+    {
+      name: "remote execution node",
+      nativeGateway: "local",
+      execNode: "build-mac",
+      offered: false,
+    },
+  ] as const)(
+    "offers session editors only for native-local workspaces: $name",
+    async (testCase) => {
+      setNativeGatewayTestState(testCase.nativeGateway);
+      const client = {
+        gatewayUrl: "gatewayUrl" in testCase ? testCase.gatewayUrl : "ws://localhost:18789",
+      } as GatewayBrowserClient;
+      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const session = {
+        key: state.sessionKey,
+        kind: "direct" as const,
+        updatedAt: 0,
+        spawnedWorkspaceDir: "/workspace",
+        ...("execNode" in testCase
+          ? { execNode: testCase.execNode, execCwd: "/remote/workspace" }
+          : {}),
+      };
+      state.settings = {} as ChatPageHost["settings"];
+      const container = document.createElement("div");
+      document.body.append(container);
+      containers.push(container);
+      render(
+        pane.renderPaneHeader(
+          createSessionWorkspaceProps(state),
+          createBackgroundTasksProps(state),
+          session,
+          false,
+          undefined,
+          false,
+        ),
+        container,
+      );
+      const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
+      await menu?.updateComplete;
+
+      expect(menu?.textContent?.includes("Open in")).toBe(testCase.offered);
+      expect(menu?.textContent?.includes("Cursor")).toBe(testCase.offered);
+    },
+  );
+
+  it("renders pane actions plus the canonical session actions in order", async () => {
     const menu = await mountMenu();
     const labels = Array.from(
       menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
     ).map(itemLabel);
 
     expect(labels).toEqual([
-      "Rename…",
       "View",
+      "Pin session",
+      "Mark as unread",
+      "Rename…",
+      "Set icon",
       "Fork",
+      "Copy session ID",
+      "Move to group",
       "Continue in terminal…",
       "Archive session",
       "Delete…",
@@ -147,6 +235,88 @@ describe("chat header session menu", () => {
     expect(
       menu.querySelector(".chat-header-session-menu__trigger")?.getAttribute("aria-label"),
     ).toBe("Actions for Test session");
+  });
+
+  it("preserves row-discovered groups when the gateway catalog lags", async () => {
+    const session = {
+      key: "agent:main:current",
+      kind: "direct" as const,
+      updatedAt: 2,
+    };
+    const sessions = createSessionCapabilityFixture({
+      state: {
+        error: null,
+        groups: ["Catalog"],
+        result: {
+          count: 2,
+          path: "",
+          ts: 2,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            session,
+            {
+              key: "agent:main:discovered",
+              kind: "direct",
+              updatedAt: 1,
+              category: "Discovered",
+            },
+          ],
+        },
+      },
+    });
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions,
+    });
+    state.settings = {} as ChatPageHost["settings"];
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    render(
+      pane.renderPaneHeader(
+        createSessionWorkspaceProps(state),
+        createBackgroundTasksProps(state),
+        session,
+        false,
+        undefined,
+        false,
+      ),
+      container,
+    );
+    const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
+    if (!menu) {
+      throw new Error("Expected chat header session menu");
+    }
+    await menu.updateComplete;
+
+    const moveToGroup = item(menu, "Move to group");
+    const groupLabels = Array.from(
+      moveToGroup.querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
+    ).map(itemLabel);
+    expect(groupLabels).toEqual(["Catalog", "Discovered", "New group…"]);
+  });
+
+  it("dispatches canonical session actions from the header surface", async () => {
+    const onAction = vi.fn<(action: HeaderMenuAction) => void>();
+    const menu = await mountMenu({ onAction });
+
+    for (const value of [
+      "toggle-pin",
+      "toggle-unread",
+      "set-icon:%F0%9F%A6%9E",
+      "copy-session-id",
+      "move-to-group:Projects",
+    ]) {
+      select(menu, value);
+    }
+
+    expect(onAction.mock.calls).toEqual([
+      [{ kind: "toggle-pin" }],
+      [{ kind: "toggle-unread" }],
+      [{ kind: "set-icon", icon: "🦞" }],
+      [{ kind: "copy-session-id" }],
+      [{ kind: "move-to-group", category: "Projects" }],
+    ]);
   });
 
   it("shows Open in only for a known path and dispatches the selected editor", async () => {
@@ -332,10 +502,15 @@ describe("chat header session menu", () => {
       "Open in",
       "Panels",
       "Layout",
+      "View",
+      "Pin session",
+      "Mark as unread",
       "Rename…",
       "Assign to…",
-      "View",
+      "Set icon",
       "Fork",
+      "Copy session ID",
+      "Move to group",
       "Continue in terminal…",
       "Archive session",
       "Delete…",

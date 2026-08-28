@@ -18,7 +18,6 @@ export function resolveLlamaCppSyntheticApiKey(): string {
 }
 
 export const DEFAULT_LLAMA_CPP_MODEL_ID = "gemma-4-e4b-it-q4_k_m";
-export const DEFAULT_LLAMA_CPP_MODEL_REF = `${LLAMA_CPP_PROVIDER_ID}/${DEFAULT_LLAMA_CPP_MODEL_ID}`;
 export const DEFAULT_LLAMA_CPP_MODEL_URI =
   "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf";
 export const DEFAULT_LLAMA_CPP_MODEL_REVISION = "bfc15c382204943c3a8fff0c750b94ae2364d7a3";
@@ -128,19 +127,25 @@ function buildDefaultLlamaCppModel(): ModelDefinitionConfig {
 }
 
 export function buildLlamaCppProviderConfig(
-  existing?: ModelProviderConfig,
-  managed?: {
-    baseUrl: string;
-    command: string;
-    args: string[];
-    healthUrl: string;
-  },
+  params: {
+    existing?: ModelProviderConfig;
+    managed?: {
+      baseUrl: string;
+      command: string;
+      args: string[];
+      healthUrl: string;
+    };
+    modelInventory?: ModelDefinitionConfig[];
+  } = {},
 ): ModelProviderConfig {
+  const { existing, managed, modelInventory } = params;
   const defaultModel = buildDefaultLlamaCppModel();
   const configuredModels = existing?.models ?? [];
-  const models = configuredModels.some((model) => model.id === defaultModel.id)
-    ? configuredModels
-    : [...configuredModels, defaultModel];
+  const models =
+    modelInventory ??
+    (configuredModels.some((model) => model.id === defaultModel.id)
+      ? configuredModels
+      : [...configuredModels, defaultModel]);
   return {
     ...existing,
     baseUrl:

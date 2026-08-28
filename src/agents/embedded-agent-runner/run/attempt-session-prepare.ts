@@ -49,7 +49,7 @@ import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
-import { installCodeModeRepairHook } from "./code-mode-repair.js";
+import { installCodeModeOutcomeHook } from "./code-mode-outcome.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { reconcilePrePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
 import { resolveSessionBoundaryPromptCacheKey } from "./session-boundary-prompt-cache-key.js";
@@ -222,6 +222,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   };
   setActiveSessionSystemPrompt(input.initialSystemPrompt);
   let didDeliverSourceReplyViaMessageTool = false;
+  let codeModeReconciliationCandidate = false;
+  let codeModeReconciliationReadAuthorized = false;
   const markSourceReplyDelivered = () => {
     didDeliverSourceReplyViaMessageTool = true;
   };
@@ -229,9 +231,26 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     agent: activeSession.agent,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     onDeliveredSourceReply: markSourceReplyDelivered,
+    config: attempt.config,
+    currentProvider: attempt.messageChannel ?? attempt.messageProvider,
+    currentAccountId: attempt.agentAccountId,
+    currentChannelId: attempt.currentChannelId,
+    currentMessagingTarget: attempt.currentMessagingTarget,
+    currentThreadId: attempt.currentThreadTs,
+    currentMessageId: attempt.currentMessageId,
+    replyToMode: attempt.replyToMode,
+    hasRepliedRef: attempt.hasRepliedRef,
+    sessionKey: attempt.sessionKey,
   });
   if (input.clientToolPreparation.codeModeControlsEnabledForRun) {
-    installCodeModeRepairHook({ agent: activeSession.agent });
+    installCodeModeOutcomeHook({
+      agent: activeSession.agent,
+      onReconciliationCandidate: () => {
+        if (codeModeReconciliationReadAuthorized) {
+          codeModeReconciliationCandidate = true;
+        }
+      },
+    });
   }
   input.markStage("agent-session");
 
@@ -239,9 +258,13 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     activeSession,
     allCustomTools,
     ...clientToolRuntime,
+    getCodeModeReconciliationCandidate: () => codeModeReconciliationCandidate,
     hasDeliveredSourceReply: () => didDeliverSourceReplyViaMessageTool,
     hookRunner,
     markSourceReplyDelivered,
+    setCodeModeReconciliationReadAuthorized: (value: boolean) => {
+      codeModeReconciliationReadAuthorized = clientToolRuntime.coreReadAuthorized && value;
+    },
     setActiveSessionSystemPrompt,
     settingsManager,
   };
@@ -422,6 +445,13 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
         ? SessionManager.open(
             attempt.sessionTarget as SessionTranscriptRuntimeTarget,
             input.effectiveCwd,
+            {
+              maxBytes: Math.min(
+                64 * 1024 * 1024,
+                Math.max(1024, (attempt.contextTokenBudget ?? 128_000) * 8),
+              ),
+              maxEvents: 10_000,
+            },
           )
         : SessionManager.inMemory(input.effectiveCwd)),
     {

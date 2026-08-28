@@ -30,6 +30,21 @@ These tools are still subject to the active tool profile and allow/deny policy. 
 
 Group, provider, sandbox, and per-agent policies can still remove those tools after the profile stage. Use `/tools` from the affected session to inspect the effective tool list.
 
+Session access denials are rendered from the same typed visibility decision
+used by the enforcement boundary. When execution audit collection is enabled
+for an admitted run, a private queued fact retains the evaluated policy inputs
+and an installation-local opaque target reference, not the raw target session
+key. Public inspection renders that generic fact as an unverified
+`decision.record`; it does not claim a trusted reason or target display. A
+successful session operation is not labeled `enforced` merely because its
+mechanics succeeded.
+
+For the same admitted run, create, fork, send, patch, reset, archive, restore,
+and delete results can queue attribution-only generic facts. The private facts
+distinguish committed or scheduled work from typed lifecycle conflicts and
+definitive no-ops; their public display remains generic and unverified. Direct
+Gateway sharing operations are outside this run-audit boundary.
+
 ## Listing and reading sessions
 
 `sessions_list` returns focused discovery rows: session key, durable session ID, agent, kind, channel, label/title/preview fields, sidebar category, parent and child relationships, last update, archive/pin state, state version, model, context/total token counts, run status, and whether the last run aborted. Filter by `kinds` (array; accepted values: `main`, `group`, `cron`, `hook`, `node`, `other`), exact `label`, exact `agentId`, `search` text, or recency (`activeMinutes`). Active sessions are returned by default; pass `archived: true` to inspect archived sessions instead. Set `includeDerivedTitles`, `includeLastMessage`, or `messageLimit` (capped at 20) when you need mailbox-style triage: a visibility-scoped derived title, a last-message preview snippet, or bounded recent messages on each row. Use the returned `sessionId` as `expectedSessionId` when the `sessions` tool archives, restores, or deletes another session; this prevents a stale key from targeting a replacement. Delivery routing, other internal IDs, per-run timings/settings, cost estimates, and transcript paths remain omitted; use `session_status`, conversation tools, and `sessions_history` for those owner-specific details. Derived titles and previews are produced only for sessions the caller can already see under the configured session tool visibility policy, so unrelated sessions stay hidden. When visibility is restricted, `sessions_list` returns optional `visibility` metadata showing the effective mode and a warning that results may be scope-limited.

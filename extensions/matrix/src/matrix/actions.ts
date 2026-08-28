@@ -6,7 +6,11 @@ export {
   readMatrixMessages,
 } from "./actions/messages.js";
 export { voteMatrixPoll } from "./actions/polls.js";
-export { listMatrixReactions, removeMatrixReactions } from "./actions/reactions.js";
+export {
+  listMatrixEmojis,
+  listMatrixReactions,
+  removeMatrixReactions,
+} from "./actions/reactions.js";
 export { pinMatrixMessage, unpinMatrixMessage, listMatrixPins } from "./actions/pins.js";
 export { getMatrixMemberInfo, getMatrixRoomInfo } from "./actions/room.js";
 export {

@@ -118,6 +118,23 @@ struct RuntimeLocatorTests {
         #expect(path == node.path)
     }
 
+    @Test func `resolve rejects a failing node shim that prints a supported version`() async throws {
+        let node = try self.makeTempExecutable(contents: """
+        #!/bin/sh
+        echo v24.15.0
+        exit 1
+        """)
+
+        let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
+
+        guard case let .failure(.versionParse(_, raw, path, _)) = result else {
+            Issue.record("Expected the failed runtime probe to be rejected, got \(result)")
+            return
+        }
+        #expect(raw == "(unreadable)")
+        #expect(path == node.path)
+    }
+
     @Test func `describe failure includes paths`() {
         let msg = RuntimeLocator.describeFailure(.notFound(searchPaths: ["/tmp/a", "/tmp/b"]))
         #expect(msg.contains("Node >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0"))

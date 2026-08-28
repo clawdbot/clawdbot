@@ -105,12 +105,17 @@ Core:
 - `/gateway-status` (alias `/gwstatus`; shows Gateway connection status directly)
 - `/agent <id>` (or `/agents`)
 - `/session <key>` (or `/sessions`)
-- `/model <provider/model>` (or `/models`)
+- `/model <provider/model|default>` (or `/models`; `default` clears the session override)
+
+Gateway-connected model updates honor the optional
+[`agents.defaults.modelSelectionScope`](/gateway/config-agents#agentsdefaultsmodelselectionscope)
+setting. When it is unset, they retain their existing configured-default behavior
+for admins. The embedded local TUI stays session-only regardless of this setting.
 
 Session controls:
 
-- `/think <off|minimal|low|medium|high>` (higher tiers may add levels like `xhigh`/`max` depending on the model)
-- `/fast <status|auto|on|off>`
+- `/think <off|minimal|low|medium|high|default>` (higher tiers may add levels like `xhigh`/`max` depending on the model; `default` clears the session override)
+- `/fast <status|auto|on|off|default>` (`default` clears the session override)
 - `/verbose <on|full|off>`
 - `/trace <on|off>`
 - `/reasoning <on|off|stream>`
@@ -130,6 +135,8 @@ Session lifecycle:
 - `/stop` (stop the active or queued run)
 - `/settings`
 - `/exit` (or `/quit`)
+
+When the current session is reset, the TUI confirms it after refreshing the transcript, including resets initiated by another client.
 
 Local mode only:
 
@@ -221,6 +228,7 @@ Tips:
 ## History + streaming
 
 - On connect, the TUI loads the latest history (default 200 messages).
+- Reconnect and event-gap recovery reconcile active runs with history, retaining concurrent and newly observed runs without reviving runs that exact history has excluded.
 - Streaming responses update in place until finalized.
 - Messages sent to the same session from another client appear automatically.
 - The TUI also listens to agent tool events for richer tool cards.

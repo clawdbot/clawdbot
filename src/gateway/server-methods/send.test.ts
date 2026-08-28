@@ -9,25 +9,32 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  GatewayErrorDetailCodes,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
 import {
   mintMessageActionTurnCapability,
@@ -1336,7 +1343,6 @@ describe("gateway send mirroring", () => {
       clearInterval(maintenance.dedupeCleanup);
       clearInterval(maintenance.worktreeCleanup);
       await maintenance.stopMediaCleanup();
-      maintenance.skillCuratorCleanup();
       vi.useRealTimers();
     }
   });
@@ -1389,7 +1395,6 @@ describe("gateway send mirroring", () => {
       clearInterval(maintenance.dedupeCleanup);
       clearInterval(maintenance.worktreeCleanup);
       await maintenance.stopMediaCleanup();
-      maintenance.skillCuratorCleanup();
       vi.useRealTimers();
     }
   });
@@ -1424,6 +1429,73 @@ describe("gateway send mirroring", () => {
     );
 
     expect(lastDispatchChannelMessageActionCall()?.conversationReadOrigin).toBe("delegated");
+  });
+
+  it.each([
+    ["an agent runtime message tool", true, "caller"],
+    ["an operator CLI client", false, undefined],
+  ])(
+    "hands gateway-owned plugin deliveries the retry owner for %s",
+    async (_label, isAgentRuntime, expected) => {
+      const sessionKey = "agent:main:slack:channel:C1";
+      mocks.dispatchChannelMessageAction.mockResolvedValueOnce({
+        details: { action: "handled" },
+      });
+
+      await runMessageActionRequest(
+        {
+          channel: "slack",
+          action: "send",
+          params: { channelId: "C1", message: "hi" },
+          sessionKey,
+          agentId: "main",
+          idempotencyKey: `idem-retry-owner-${expected ?? "reporting-only"}`,
+        },
+        isAgentRuntime ? agentRuntimeClient(sessionKey) : (directCliClient() as never),
+      );
+
+      // Only the message tool resends a proven-not-sent failure; leaving its
+      // queue row replayable is what duplicated the send (#124279), and marking
+      // a reporting-only caller would strand its row instead (#100979).
+      expect(lastDispatchChannelMessageActionCall()?.deliveryRetryOwner).toBe(expected);
+    },
+  );
+
+  it.each([
+    ["queue-owned retry", true],
+    ["ordinary failure", false],
+  ])("reports structured details for %s", async (_label, recoveryOwnedRetry) => {
+    const dispatchError = new OutboundDeliveryError("connect ECONNREFUSED", {
+      cause: new Error("connect ECONNREFUSED"),
+      stage: "platform_send",
+    });
+    if (recoveryOwnedRetry) {
+      dispatchError.recoveryOwnedRetry = true;
+    }
+    mocks.dispatchChannelMessageAction.mockRejectedValueOnce(dispatchError);
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "slack",
+        action: "send",
+        params: { channelId: "C1", message: "hi" },
+        idempotencyKey: `idem-queued-detail-${recoveryOwnedRetry}`,
+      },
+      directCliClient(),
+    );
+
+    const error = firstRespondCall(respond)[2];
+    expect(error).toMatchObject({ code: ErrorCodes.UNAVAILABLE });
+    if (recoveryOwnedRetry) {
+      expect(error?.details).toEqual({
+        code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED,
+      });
+    } else {
+      expect(error).not.toHaveProperty("details");
+    }
+    // A queued or ordinary delivery failure must not advertise retryability;
+    // only a partial-delivery receipt sets `retryable: false`.
+    expect(error?.retryable).toBeUndefined();
   });
 
   it("does not send after delegated authority closes during session preparation", async () => {
@@ -2389,6 +2461,59 @@ describe("gateway send mirroring", () => {
 
     expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:slack:channel:resolved");
     expect(deliveryCall()?.mirror?.agentId).toBe("main");
+  });
+
+  it("carries an authenticated creator's required sandbox into an outbound session", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profile = ensureProfileForEmail("required-outbound@example.test");
+      const cfg = {
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "view" as const },
+                agents: "*" as const,
+                scopes: ["operator.write"],
+                sandbox: "required" as const,
+              },
+            },
+          },
+        },
+      };
+      const context = {
+        ...makeContext(),
+        getRuntimeConfig: () => cfg,
+      } as unknown as GatewayRequestContext;
+      const client = {
+        authenticatedUserProfile: {
+          profileId: profile.id,
+          displayName: profile.displayName,
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        },
+        connect: { scopes: ["operator.write"] },
+      };
+      mockDeliverySuccess("required-outbound-message");
+
+      const { respond } = await runSendWithClient(
+        {
+          to: "channel:first-contact",
+          message: "hello",
+          channel: "slack",
+          idempotencyKey: "required-outbound-creation",
+        },
+        client,
+        context,
+      );
+
+      expect(firstRespondCall(respond)[0]).toBe(true);
+      expect(ensureSessionEntryCall()?.creation).toEqual({
+        via: "operator",
+        actor: { type: "human", id: profile.id },
+        sandbox: "required",
+      });
+    });
   });
 
   it("uses explicit agentId for delivery when sessionKey is not provided", async () => {
@@ -4193,6 +4318,67 @@ describe("gateway send mirroring", () => {
     expect(mocks.beginRestartRecoveryTerminalDelivery).toHaveBeenCalledOnce();
     expect(mocks.cancelRestartRecoveryTerminalDelivery).not.toHaveBeenCalled();
     expect(mocks.completeRestartRecoveryTerminalDelivery).not.toHaveBeenCalled();
+  });
+
+  it("returns the caption receipt through message.action when dispatch fails with partial delivery", async () => {
+    // A caption sent before the media upload failed carries a partial-delivery
+    // receipt. The Gateway boundary must surface that receipt on the structured
+    // error and mark the result non-retryable, so the agent does not resend an
+    // already-visible caption.
+    mocks.dispatchChannelMessageAction.mockRejectedValueOnce(
+      createChannelPartialDeliveryError(new Error("upload failed"), {
+        messageIds: ["caption_msg"],
+        visibleReplySent: true,
+      }),
+    );
+    const sessionKey = "agent:main:telegram:direct:chat-partial";
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: { to: "chat-partial", message: "caption text" },
+      sessionKey,
+      sessionId: "session-partial",
+      agentId: "main",
+      idempotencyKey: "idem-partial-delivery",
+    });
+
+    const response = firstRespondCall(respond);
+    expect(response[0]).toBe(false);
+    expect(response[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
+    expect(response[2]?.retryable).toBe(false);
+    expect(response[2]?.details).toMatchObject({
+      partialDelivery: {
+        messageIds: ["caption_msg"],
+        visibleReplySent: true,
+      },
+    });
+    expect(JSON.stringify(response[2])).toContain("caption_msg");
+  });
+
+  it("does not mark a plain unavailable failure as retryable", async () => {
+    // Without a partial-delivery receipt, the failure carries no retryable
+    // signal and no partial-delivery details, matching the pre-change shape
+    // (Gateway clients treat only `retryable === true` as permission to replay,
+    // so omitting it keeps an indeterminate send non-retryable).
+    mocks.dispatchChannelMessageAction.mockRejectedValueOnce(new Error("upload failed"));
+    const sessionKey = "agent:main:telegram:direct:chat-plain";
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: { to: "chat-plain", message: "caption text" },
+      sessionKey,
+      sessionId: "session-plain",
+      agentId: "main",
+      idempotencyKey: "idem-plain-error",
+    });
+
+    const response = firstRespondCall(respond);
+    expect(response[0]).toBe(false);
+    expect(response[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
+    expect(response[2]?.retryable).toBeUndefined();
+    expect(response[2]?.details).toBeUndefined();
   });
 
   it("passes reader-free agent-scoped media access to gateway attachment actions", async () => {

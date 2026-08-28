@@ -69,7 +69,7 @@ type OutboundAuditTerminal =
       sentBeforeError?: boolean;
     };
 
-type IndexedOutboundAuditTerminal = {
+export type IndexedOutboundAuditTerminal = {
   payloadIndex: number;
   terminal: OutboundAuditTerminal;
 };

@@ -29,7 +29,6 @@ openclaw update --tag beta
 openclaw update --dry-run
 openclaw update --no-restart
 openclaw update --yes
-openclaw update --acknowledge-clawhub-risk
 openclaw update --json
 openclaw --update
 ```
@@ -48,7 +47,6 @@ launcher scripts).
 | `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                  |
 | `--timeout <seconds>`                            | Per-step timeout. Default `1800`.                                                                                                                                                                                                                                                                                                             |
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                               |
-| `--acknowledge-clawhub-risk`                     | Allow post-update plugin sync to continue past community ClawHub trust warnings without an interactive prompt. Without it, risky community releases are skipped and left unchanged when OpenClaw cannot prompt. Official ClawHub packages and bundled plugin sources bypass this prompt.                                                      |
 
 There is no `--verbose` flag. Use `--dry-run` to preview planned actions,
 `--json` for machine-readable results, and `openclaw update status --json`
@@ -100,7 +98,6 @@ converge.
 ```bash
 openclaw update repair
 openclaw update repair --channel beta
-openclaw update repair --acknowledge-clawhub-risk
 openclaw update repair --json
 ```
 
@@ -110,7 +107,6 @@ openclaw update repair --json
 | `--json`                                         | Print machine-readable finalization JSON.                                                                                                                                                                                                                           |
 | `--timeout <seconds>`                            | Timeout for repair steps. Default `1800`.                                                                                                                                                                                                                           |
 | `--yes`                                          | Skip confirmation prompts.                                                                                                                                                                                                                                          |
-| `--acknowledge-clawhub-risk`                     | Same behavior as on `openclaw update`.                                                                                                                                                                                                                              |
 | `--no-restart`                                   | Accepted for parity; repair never restarts the Gateway.                                                                                                                                                                                                             |
 
 `update repair` runs `openclaw doctor --fix`, reloads the repaired config and
@@ -118,6 +114,10 @@ install records, syncs tracked plugins for the active update channel, updates
 managed npm plugin installs, repairs missing configured plugin payloads,
 refreshes the plugin registry, and writes converged install-record metadata.
 It does not install a new core package and does not restart the Gateway.
+
+With `--json`, stdout contains one JSON document. Doctor panels and other
+diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
+plugin finalization steps still exit non-zero.
 
 ## `update wizard`
 
@@ -173,6 +173,29 @@ Package-manager updates additionally verify the restarted Gateway reports the
 expected package version; git-checkout updates verify gateway health and
 service readiness after the rebuild.
 
+Code updates do not require permission to rewrite the native service definition.
+On Linux, sealed or unverified definition-write authority skips metadata refresh,
+even when metadata is stale. An inspectable service owned by the updated install
+still uses its native manager for restart and health/version verification.
+Activation runs the updated CLI with `gateway restart --preserve-definition` so
+its own version guards apply and automatic repair stays disabled. If the target
+CLI does not support that option, it rejects activation before repair. The code
+update stays installed, but the command exits nonzero with the activation error
+(on stderr in JSON mode). A service stopped for the update may remain stopped.
+Run `openclaw gateway status --deep` and ask the deployment owner to restart it
+through its native manager or repair stale metadata; do not retry without the
+preservation option unless definition repair is intended.
+
+Shell installers do not establish the same service ownership proof. If their
+service refresh is denied, they report code installation success, leave the
+service untouched, and print guidance to inspect ownership and restart manually.
+
+If service inspection is unavailable, the code update continues with a warning
+and leaves service control and definition files untouched; it does not assume
+that no service exists. Run `openclaw gateway status --deep`, then restart manually
+when access is restored. Services owned by another install remain untouched.
+`--no-restart` still skips service restart.
+
 Package-manager updates normally keep using the Node binary recorded in the
 managed service. If that Node cannot run the target release, but the current
 CLI Node can and the service is proven to belong to the package being updated,
@@ -185,13 +208,15 @@ loaded/running for the active profile and the configured loopback port is
 healthy. If the plist is installed but launchd is not supervising it, OpenClaw
 re-bootstraps the LaunchAgent automatically and reruns the health/version/
 channel readiness checks (a fresh bootstrap loads the `RunAtLoad` job directly,
-so recovery does not immediately `kickstart -k` the newly spawned Gateway). If
+so recovery does not immediately `kickstart -k` the newly spawned Gateway).
+When preserving a definition, native restart/bootstrap runs without file repair;
+a failed native activation or health check does not trigger a later plist rewrite. If
 the Gateway still does not become healthy, the command exits non-zero and
 prints the restart log path plus restart, reinstall, and package rollback
 instructions.
 
 If restart cannot run, the command prints `Gateway: restart skipped (...)` or
-`Gateway: restart failed: ...` with a manual `openclaw gateway restart` hint.
+`Gateway: restart failed: ...` with guidance to inspect the service and restart manually.
 With `--no-restart`, package replacement or git rebuild still runs, but the
 managed service is not stopped or restarted, so the running Gateway keeps old
 code until you restart it manually.

@@ -10,6 +10,7 @@ import {
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveSendableOutboundReplyParts,
@@ -20,6 +21,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { mergeTelegramAccountConfig, resolveDefaultTelegramAccountId } from "./accounts.js";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
+import { TELEGRAM_MAX_CAPTION_LENGTH, telegramCaptionDeliveryMetadata } from "./caption.js";
 import { splitTelegramHtmlChunks } from "./format.js";
 import {
   canonicalizeTelegramPresentationPayload,
@@ -34,8 +36,10 @@ import {
 import { registerTelegramQuestionDelivery } from "./question-finalization.js";
 import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
+import { resolveTelegramTextChunkLimit, TELEGRAM_TEXT_CHUNK_LIMIT } from "./text-chunk-limit.js";
 
-export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
+export { TELEGRAM_TEXT_CHUNK_LIMIT } from "./text-chunk-limit.js";
+
 const TELEGRAM_POLL_OPTION_LIMIT = 12;
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
@@ -332,7 +336,9 @@ export async function sendTelegramPayloadMessages(params: {
     presentation: payload.presentation,
     interactive: payload.interactive,
   });
-  const replyToMessageId = params.baseOpts.replyToMessageId;
+  const replyToMessageId = parseStrictPositiveInteger(
+    telegramData?.reaction?.replyToId ?? params.baseOpts.replyToMessageId,
+  );
   const promptContextSource = resolveTelegramPromptContextSource(params.payload);
   const projectionCursor = promptContextSource
     ? createTelegramPromptContextProjectionCursor(promptContextSource)
@@ -525,13 +531,21 @@ export function createTelegramOutboundAdapter(
           : normalizeTelegramOutboundTarget(target.to);
       const messageId = result.messageId;
       const accountId = target.accountId ?? undefined;
+      const deliveredPart = result.receipt?.parts.find(
+        (part) => part.platformMessageId === messageId,
+      );
+      const isCaptionDelivery =
+        deliveredPart?.kind === "media" ||
+        (deliveredPart?.kind !== "text" &&
+          result.meta !== undefined &&
+          telegramCaptionDeliveryMetadata.has(result.meta));
       registerTelegramQuestionDelivery({
         accountId,
         chatId,
         messageId,
         payload,
         text,
-        textLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
+        textLimit: isCaptionDelivery ? TELEGRAM_MAX_CAPTION_LENGTH : TELEGRAM_TEXT_CHUNK_LIMIT,
         clearButtons: async () => {
           const { editMessageReplyMarkupTelegram } = await loadSendModule();
           await editMessageReplyMarkupTelegram(chatId, messageId, [], {
@@ -546,6 +560,7 @@ export function createTelegramOutboundAdapter(
             cfg,
             accountId,
             verbose: false,
+            ...(isCaptionDelivery ? { editMode: "caption" } : {}),
           });
         },
       });
@@ -562,8 +577,8 @@ export function createTelegramOutboundAdapter(
         gatewayClientScopes,
       });
     },
-    resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
-      typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
+    resolveEffectiveTextChunkLimit: ({ cfg, accountId, formatting }) =>
+      resolveTelegramTextChunkLimit({ cfg, accountId, formatting }),
     pollMaxOptions: TELEGRAM_POLL_OPTION_LIMIT,
     supportsPollDurationSeconds: true,
     supportsAnonymousPolls: true,

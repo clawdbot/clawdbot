@@ -172,6 +172,7 @@ export function createStatusScanResultFixture(
     env: { OPENCLAW_STATE_DIR: STATUS_TEST_STATE_DIR },
     cfg: baseStatusCfg,
     sourceConfig: baseStatusCfg,
+    configDiagnostics: null,
     secretDiagnostics: [],
     osSummary: {
       platform: "linux",

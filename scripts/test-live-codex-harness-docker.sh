@@ -191,16 +191,13 @@ tmp_dir="$(mktemp -d)"
 openclaw_live_stage_source_tree "$tmp_dir"
 openclaw_live_stage_node_modules "$tmp_dir"
 openclaw_live_link_runtime_tree "$tmp_dir"
-if [ -d /app/dist-runtime/extensions/codex ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist-runtime/extensions
-elif [ -d /app/dist/extensions/codex ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/extensions
-elif [ -f "$tmp_dir/extensions/codex/openclaw.plugin.json" ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR="$tmp_dir/extensions"
-else
+if [ ! -f "$tmp_dir/extensions/codex/openclaw.plugin.json" ]; then
   echo "ERROR: staged Codex plugin not found for live harness." >&2
   exit 1
 fi
+# Source Gateway and plugin must share one prepared-runtime owner; built artifacts own a
+# separate lifecycle and are validated by the packaged-plugin Docker lane instead.
+export OPENCLAW_BUNDLED_PLUGINS_DIR="$tmp_dir/extensions"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 if [ -n "${OPENCLAW_LIVE_CODEX_TRUSTED_HARNESS_DIR:-}" ] && [ -d "$OPENCLAW_LIVE_CODEX_TRUSTED_HARNESS_DIR" ]; then
   for harness_file in src/gateway/gateway-codex-harness.live-helpers.ts; do

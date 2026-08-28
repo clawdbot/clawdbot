@@ -39,7 +39,7 @@ const SHARED_CHANNEL_FIELD_HELP: Record<string, string> = {
   heartbeatVisibility: "Which heartbeat results this channel shows.",
   historyLimit: "How many earlier messages to include as context. 0 disables history.",
   markdown: "Markdown rendering overrides for this channel.",
-  mediaMaxMb: "Largest inbound attachment to download, in megabytes.",
+  mediaMaxMb: "Per-attachment media limit in MiB. Channel transport limits still apply.",
   mentionPatterns: "Extra patterns that count as mentioning the agent in group chats.",
   model: "Model override for runs started from this channel.",
   name: "Display name for this account in the Control UI and logs.",

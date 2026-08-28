@@ -457,6 +457,7 @@ describe("resolveMedia original filename preservation", () => {
     });
     expectResolvedMediaFields(result, "document filename", {
       path: "/tmp/business-plan---uuid.pdf",
+      fileName: "business-plan.pdf",
     });
   });
 

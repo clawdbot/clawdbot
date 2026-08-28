@@ -3,6 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionDeliveryState } from "../../../config/sessions/types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
+import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
 import { testing as subagentAnnounceTesting } from "../announce/subagent-announce.js";
@@ -19,7 +21,11 @@ type LifecycleData = {
   endedAt?: number;
   aborted?: boolean;
   error?: string;
+  stopReason?: string;
   terminalReply?: AgentRunTerminalReplySnapshot;
+  status?: string;
+  timeoutPhase?: string;
+  providerStarted?: boolean;
 };
 type LifecycleEvent = {
   stream?: string;
@@ -398,6 +404,98 @@ describe("subagent registry lifecycle error grace", () => {
         return typeof event?.result === "string" ? [event.result] : [];
       });
   }
+
+  it("yields an owned visible child and delivers its requester final exactly once", async () => {
+    const requesterTurnRunId = "run-requester-visible-yield";
+    const runId = "run-visible-yield";
+    const childSessionKey = "agent:main:dashboard:visible-yield";
+    const spawnResult = await maybeSpawnVisibleSession({
+      raw: { visible: true },
+      task: "finish visible dashboard work",
+      label: "Visible child",
+      runtime: "subagent",
+      sandbox: "inherit",
+      options: {
+        agentSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        requesterTurnRunId,
+        requesterAgentIdOverride: "main",
+        config: {
+          agents: { list: [{ id: "main" }] },
+          session: { mainKey: "main", scope: "per-sender" },
+        },
+        callGateway: vi.fn(async () => ({
+          key: childSessionKey,
+          runStarted: true,
+          runId,
+        })) as never,
+        registerRun: mod.registerSubagentRun,
+        countActiveRuns: () => 0,
+      },
+    });
+    expect(spawnResult).toMatchObject({ status: "accepted", runId, childSessionKey });
+    setAssistantOutput(childSessionKey, "visible dashboard child complete");
+
+    const onYield = vi.fn();
+    const yieldTool = createSessionsYieldTool({
+      sessionId: "sess-main",
+      claimYield: () =>
+        mod.markRequesterTurnYielded({
+          requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+          requesterAgentId: "main",
+          requesterTurnRunId,
+        }) > 0,
+      onYield,
+    });
+    const yieldResult = await yieldTool.execute("yield-visible-child", {
+      message: "Wait for the visible dashboard child",
+    });
+    expect(yieldResult.details).toEqual({
+      status: "yielded",
+      message: "Wait for the visible dashboard child",
+    });
+    expect(onYield).toHaveBeenCalledOnce();
+
+    expect(
+      mod.settleRequesterAfterSessionSpawns({
+        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        requesterAgentId: "main",
+        requesterTurnRunId,
+        requesterYielded: true,
+        acceptedSessionSpawns: [{ runId, childSessionKey }],
+      }),
+    ).toBe(true);
+    expect(
+      mod
+        .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+        .find((run) => run.runId === runId)?.execution.status,
+    ).toBe("running");
+    expect(getAgentCalls()).toHaveLength(0);
+
+    const endedAt = Date.now();
+    const terminalResult = {
+      phase: "end",
+      endedAt,
+      terminalReply: {
+        disposition: "visible" as const,
+        text: "visible dashboard child complete",
+      },
+    };
+    emitLifecycleEvent(runId, terminalResult, { sessionKey: childSessionKey });
+    await waitForAgentCallCount(1);
+    await waitForDeliveredCleanup(runId);
+    expect(getAgentCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()[0]?.params).toMatchObject({
+      sessionKey: MAIN_REQUESTER_SESSION_KEY,
+      message: expect.stringContaining("visible final answer"),
+    });
+
+    emitLifecycleEvent(runId, terminalResult, { sessionKey: childSessionKey });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flushAsync();
+    expect(getAgentCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()).toHaveLength(1);
+  });
 
   it("does not replay a requester-owned final already delivered before its turn yields", async () => {
     const requesterTurnRunId = "run-requester-already-delivered";
@@ -840,28 +938,65 @@ describe("subagent registry lifecycle error grace", () => {
     expect(run.completion?.capturedAt).toBeTypeOf("number");
   });
 
-  it("completes with timeout status when aborted end event fires after grace window", async () => {
-    registerCompletionRun("run-timeout", "timeout", "timeout test");
-    setAssistantOutput("agent:main:subagent:timeout", "Partial output before timeout");
+  it("records a bare aborted end event as cancellation after retry grace", async () => {
+    registerCompletionRun("run-aborted", "aborted", "aborted test");
+    setAssistantOutput("agent:main:subagent:aborted", "Partial output before cancellation");
 
-    // Emit an end event with aborted=true which triggers the timeout grace path
-    emitLifecycleEvent("run-timeout", {
+    emitLifecycleEvent("run-aborted", {
       phase: "end",
       aborted: true,
       endedAt: 3_000,
-    } as LifecycleData & { aborted: boolean });
+    });
     await flushAsync();
+
     expect(getAgentCalls()).toHaveLength(0);
+    expect(
+      mod
+        .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+        .find((candidate) => candidate.runId === "run-aborted")?.execution.status,
+    ).toBe("running");
 
-    // Advance past the lifecycle timeout retry grace window
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(15_000);
     await flushAsync();
-
-    await waitForAgentCallCount(1);
 
     const run = mod
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
-      .find((candidate) => candidate.runId === "run-timeout");
+      .find((candidate) => candidate.runId === "run-aborted");
+    expect(run).toMatchObject({
+      endedReason: "subagent-killed",
+      execution: { outcome: { status: "error", error: "subagent run terminated" } },
+    });
+    expect(getAgentCalls()).toHaveLength(0);
+  });
+
+  it("announces a provider hard timeout from its canonical lifecycle metadata", async () => {
+    registerCompletionRun("run-provider-timeout", "provider-timeout", "provider timeout test");
+    setAssistantOutput(
+      "agent:main:subagent:provider-timeout",
+      "Partial output before provider timeout",
+    );
+
+    emitLifecycleEvent("run-provider-timeout", {
+      phase: "end",
+      aborted: true,
+      stopReason: "restart",
+      status: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
+      endedAt: 3_000,
+      error: "provider timed out",
+    });
+    await flushAsync();
+    expect(getAgentCalls()).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flushAsync();
+    await waitForAgentCallCount(1);
+
+    expect(readFirstAnnounceOutcome()?.status).toBe("timeout");
+    const run = mod
+      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+      .find((candidate) => candidate.runId === "run-provider-timeout");
     expect(run?.execution.outcome?.status).toBe("timeout");
   });
 
@@ -869,12 +1004,15 @@ describe("subagent registry lifecycle error grace", () => {
     registerCompletionRun("run-timeout-cancel", "timeout-cancel", "timeout cancel test");
     setAssistantOutput("agent:main:subagent:timeout-cancel", "Final answer after recovery");
 
-    // Emit an aborted end event (starts timeout grace)
+    // Emit a structured timeout terminal (starts timeout grace).
     emitLifecycleEvent("run-timeout-cancel", {
       phase: "end",
       aborted: true,
+      status: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
       endedAt: 4_000,
-    } as LifecycleData & { aborted: boolean });
+    });
     await flushAsync();
     expect(getAgentCalls()).toHaveLength(0);
 

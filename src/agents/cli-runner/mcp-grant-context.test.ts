@@ -41,6 +41,59 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     expect(buildGrant({ replyToMode: "all" }).replyToMode).toBe("all");
   });
 
+  it.each(["read-only", "guarded", "workspace", "full"] as const)(
+    "carries the exact %s session permission into the loopback grant",
+    (permissionMode) => {
+      const grant = buildGrant({
+        sessionEntry: {
+          sessionId: "cli-session",
+          updatedAt: 1,
+          permissionMode,
+          execHost: "gateway",
+        },
+      });
+
+      expect(grant.execSession).toMatchObject({ permissionMode, execHost: "gateway" });
+    },
+  );
+
+  it.each([
+    { execMode: "deny", permissionMode: "read-only" },
+    { execMode: "allowlist", permissionMode: "guarded" },
+    { execMode: "ask", permissionMode: "guarded" },
+    { execMode: "auto", permissionMode: "workspace" },
+    { execMode: "full", permissionMode: "full" },
+  ] as const)(
+    "preserves effective $execMode execution authority in the granted session",
+    ({ execMode, permissionMode }) => {
+      const grant = buildGrant({
+        sessionEntry: {
+          sessionId: "cli-session",
+          updatedAt: 1,
+          permissionMode: "workspace",
+        },
+        execOverrides: { mode: execMode },
+      });
+
+      expect(grant.execSession?.permissionMode).toBe(permissionMode);
+      expect(grant.execOverrides?.mode).toBe(execMode);
+    },
+  );
+
+  it("narrows a persisted full session to guarded approval for an allowlist override", () => {
+    const grant = buildGrant({
+      sessionEntry: {
+        sessionId: "cli-session",
+        updatedAt: 1,
+        permissionMode: "full",
+      },
+      execOverrides: { mode: "allowlist" },
+    });
+
+    expect(grant.execSession?.permissionMode).toBe("guarded");
+    expect(grant.execOverrides?.mode).toBe("allowlist");
+  });
+
   it("carries the exact Skill Workshop revision into the loopback grant", () => {
     const proposalRevision = {
       agentId: "proposal-owner",

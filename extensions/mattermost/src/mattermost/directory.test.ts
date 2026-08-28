@@ -62,6 +62,31 @@ describe("mattermost directory", () => {
     expect(createMattermostClientMock).toHaveBeenCalledOnce();
   });
 
+  it("uses only the requested account for scoped directory discovery", async () => {
+    const personalClient = { token: "token-personal", request: vi.fn().mockResolvedValue([]) };
+    listMattermostAccountIdsMock.mockReturnValue(["personal", "finance"]);
+    resolveMattermostAccountMock.mockImplementation(({ accountId }) => ({
+      enabled: true,
+      botToken: `token-${accountId}`,
+      baseUrl: "https://chat.example.com",
+    }));
+    createMattermostClientMock.mockReturnValue(personalClient);
+    fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
+
+    await expect(
+      listMattermostDirectoryGroups({
+        cfg: {} as never,
+        accountId: "personal",
+        runtime: {} as never,
+      }),
+    ).resolves.toEqual([]);
+    expect(resolveMattermostAccountMock).toHaveBeenCalledOnce();
+    expect(resolveMattermostAccountMock).toHaveBeenCalledWith({
+      cfg: {},
+      accountId: "personal",
+    });
+  });
+
   it("deduplicates channels across enabled accounts and skips failing accounts", async () => {
     const clientA = {
       token: "token-a",

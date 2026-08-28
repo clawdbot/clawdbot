@@ -1,10 +1,7 @@
 import { html, nothing } from "lit";
-import type {
-  ProgressCard,
-  SessionObserverDigest,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -24,7 +21,6 @@ import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-import type { SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   isSidebarSlotVisible,
@@ -38,12 +34,9 @@ type ChatPaneLayoutRenderParams = {
   currentAgentId: string;
   board: ResolvedBoardView;
   sidebarLayout: SidebarLayout;
-  progressCardInRail: boolean;
-  onDismissProgressCard?: (card: ProgressCard) => void;
   sessionWorkspace: SessionWorkspaceProps;
   backgroundTasks: BackgroundTasksProps;
   chatProps: ChatProps;
-  fullMessageLoader: SidebarFullMessageLoader | null;
   observerDigest: SessionObserverDigest | null;
   observerRunId: string | null;
   catalog: boolean;
@@ -61,12 +54,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       currentAgentId,
       board,
       sidebarLayout,
-      progressCardInRail,
-      onDismissProgressCard,
       sessionWorkspace,
       backgroundTasks,
       chatProps,
-      fullMessageLoader,
       observerDigest,
       observerRunId,
       catalog,
@@ -86,6 +76,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     );
     const chat = renderChat({
       ...chatProps,
+      historyState: catalog ? undefined : state,
       header: board.face === "dashboard" ? nothing : header,
     });
     // Keep this root stable across board face changes so the guarded board runtime
@@ -94,6 +85,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       ${board.face === "dashboard" ? header : nothing}${this.renderBoardPrimary(board, chat)}
     </div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
+    const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
+    const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
     const browserPresented =
@@ -119,7 +112,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           backgroundTasks,
           chat: chatProps,
           content,
-          fullMessageLoader,
           host: state,
           layout: sidebarLayout,
           transcript: this.taskSidebarTranscript,
@@ -129,8 +121,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       startedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
       lastReadAt: selectedSession?.lastReadAt,
       pullRequests: this.sessionPullRequests,
-      progressCard: progressCardInRail ? this.progressCard.card : null,
-      onDismissProgressCard,
       companion: companionThread,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionDraftChange: (draft) =>
@@ -140,6 +130,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       pendingQuestion: companionThread.pendingQuestion,
       onClearCompanion: () => void this.clearSessionCompanion(),
       discussion,
+      discussionAvailable,
       discussionOpenUrl: discussion?.openUrl ?? null,
       discussionSourceGeneration: this.connectionGeneration,
     });
@@ -151,6 +142,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       availableSlots,
       callbacks: sidebarRegionCallbacks({
         state,
+        layout: sidebarLayout,
         closePanelSlot,
         openPanelSlot,
         hideBoard: () => this.handleBoardDockChange("hidden"),

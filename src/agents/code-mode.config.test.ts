@@ -14,7 +14,7 @@ describe("Code Mode configuration", () => {
         },
       },
     } as never);
-    expect(resolved.enabled).toBe("auto");
+    expect(resolved.enabled).toBe(false);
     expect(resolveCodeModeConfig({ tools: { codeMode: { enabled: true } } } as never).enabled).toBe(
       true,
     );
@@ -71,5 +71,18 @@ describe("Code Mode configuration", () => {
 
     expect(resolveCodeModeConfig(config, "chat").enabled).toBe(false);
     expect(resolveCodeModeConfig(config, "missing").enabled).toBe(false);
+
+    const configuredAgent = resolveCodeModeConfig(
+      {
+        agents: {
+          entries: {
+            ops: { tools: { codeMode: { timeoutMs: 2345 } } },
+          },
+        },
+      } as never,
+      "ops",
+    );
+    expect(configuredAgent.enabled).toBe(false);
+    expect(configuredAgent.timeoutMs).toBe(2345);
   });
 });

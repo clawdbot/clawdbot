@@ -1,7 +1,10 @@
 // Tests dispatch-from-config runtime selection, hooks, and provider handoff.
 import { vi, type Mock } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
-import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
+import type {
+  ChannelMessagingAdapter,
+  ChannelThreadingAdapter,
+} from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type {
   AcpRuntime,
@@ -287,7 +290,11 @@ export function firstRouteReplyCall(): Record<string, unknown> {
   return call as Record<string, unknown>;
 }
 
-export function installThreadingTestPlugin(params: { defaultAccountId?: string; id: string }) {
+export function installThreadingTestPlugin(params: {
+  defaultAccountId?: string;
+  id: string;
+  resolveReplyToMode?: NonNullable<ChannelThreadingAdapter["resolveReplyToMode"]>;
+}) {
   const plugin = createChannelTestPluginBase({ id: params.id });
   const defaultAccountId = params.defaultAccountId;
   const registry = createTestRegistry([
@@ -300,7 +307,7 @@ export function installThreadingTestPlugin(params: { defaultAccountId?: string; 
           ? { ...plugin.config, defaultAccountId: () => defaultAccountId }
           : plugin.config,
         threading: {
-          resolveReplyToMode: () => "all",
+          resolveReplyToMode: params.resolveReplyToMode ?? (() => "all"),
         },
       },
     },

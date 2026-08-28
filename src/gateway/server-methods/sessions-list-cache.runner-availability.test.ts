@@ -1,5 +1,17 @@
 import { expect, it } from "vitest";
+import {
+  loadSessionEntry,
+  recordSessionParticipant,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import {
+  ensureProfileForEmail,
+  getUserProfileDisplay,
+  linkEmail,
+} from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { SessionsListResult } from "../session-utils.types.js";
 import { respondWithCachedSessionList } from "./sessions-list-cache.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -90,4 +102,44 @@ it("does not publish old in-flight runner availability across a version transiti
   });
   expect(await fresh).toBe(offline);
   expect(await requestList(async () => result("available"))).toBe(offline);
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:runner-fence" };
+    await upsertSessionEntryCore(scope, { sessionId: "cache-publication", updatedAt: 1 });
+    const former = ensureProfileForEmail("former@example.test", { env: state.env });
+    const current = ensureProfileForEmail("current@example.test", { env: state.env });
+    const snapshot = async () => {
+      const value = result("offline");
+      value.sessions[0]!.participantCount = loadSessionEntry(scope)?.participants?.length ?? 0;
+      const profile = getUserProfileDisplay(former.id, { env: state.env });
+      value.sessions[0]!.participants = [{ identity: { type: "profile", id: profile.id } }];
+      return value;
+    };
+    const empty = await requestList(snapshot);
+    expect(empty?.sessions[0]?.participantCount).toBe(0);
+    expect(() =>
+      runOpenClawAgentWriteTransaction(() => {
+        recordSessionParticipant(scope, {
+          identity: { type: "profile", id: former.id },
+          promptedAt: 10,
+        });
+        throw new Error("rollback participant");
+      }, scope),
+    ).toThrow("rollback participant");
+    expect(loadSessionEntry(scope)?.participants).toBeUndefined();
+    expect(await requestList(snapshot)).toBe(empty);
+    recordSessionParticipant(scope, {
+      identity: { type: "profile", id: former.id },
+      promptedAt: 10,
+    });
+    const participated = await requestList(snapshot);
+    expect(participated?.sessions[0]?.participantCount).toBe(1);
+    expect(participated).not.toBe(empty);
+    linkEmail("former@example.test", current.id, { env: state.env });
+    const merged = await requestList(snapshot);
+    expect(merged?.sessions[0]?.participants).toEqual([
+      { identity: { type: "profile", id: current.id } },
+    ]);
+    expect(merged).not.toBe(participated);
+    expect(await requestList(snapshot)).toBe(merged);
+  });
 });

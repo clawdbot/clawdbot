@@ -24,7 +24,7 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
 });
 
-async function installChunkFailure(page: Page, chunk: RegExp) {
+async function installChunkFailure(page: Page, chunk: RegExp, manualProbe?: Promise<void>) {
   let headCount = 0;
   let chunkRequestCount = 0;
   await page.route("**/*", async (route) => {
@@ -37,6 +37,7 @@ async function installChunkFailure(page: Page, chunk: RegExp) {
       await route.fulfill({ status: 503 });
       return;
     }
+    await manualProbe;
     await route.fallback();
   });
   await page.route(chunk, async (route: Route) => {
@@ -121,7 +122,13 @@ const focusedCases = [
       sessionKey,
       featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
       methodResponses: {
-        "sessions.resolve": { ok: true, key: sessionKey },
+        "sessions.resolve": {
+          ok: true,
+          key: sessionKey,
+          agentId: "main",
+          boardFace: "dashboard",
+          displayName: "Lazy dashboard",
+        },
         "sessions.describe": {
           session: {
             key: sessionKey,
@@ -139,6 +146,93 @@ const focusedCases = [
 ];
 
 suite.define(() => {
+  it("does not reload after a lazy surface is dismissed during its retry probe", async () => {
+    let releaseProbe = () => {};
+    const manualProbe = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    try {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport },
+        async ({ page }) => {
+          await page.addInitScript(() => {
+            const observed = window as Window & { completedHeadFrames?: number };
+            const originalFetch = window.fetch;
+            window.fetch = async (...args) => {
+              const response = await originalFetch(...args);
+              if (args[1]?.method === "HEAD") {
+                // Observe the frame after the real fetch and its reload promise chain settle.
+                requestAnimationFrame(() => {
+                  observed.completedHeadFrames = (observed.completedHeadFrames ?? 0) + 1;
+                });
+              }
+              return response;
+            };
+          });
+          const failure = await installChunkFailure(
+            page,
+            /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+            manualProbe,
+          );
+          await installMockGateway(page);
+          let documentRequests = 0;
+          page.on("request", (request) => {
+            if (request.resourceType() === "document") {
+              documentRequests += 1;
+            }
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await waitForControlUiGatewayReady(page);
+          await page.keyboard.press("ControlOrMeta+k");
+          const error = await expectRealChunkFailure(page, "command palette");
+          await expect.poll(failure.headCount).toBe(1);
+          if (captureUiProof) {
+            await mkdir(artifactDir, { recursive: true });
+            await page.screenshot({ path: path.join(artifactDir, "dismissed-retry-before.png") });
+          }
+
+          const reloaded = new Promise<void>((resolve) => {
+            page.once("domcontentloaded", () => resolve());
+          });
+          await error.getByRole("button", { name: "Retry", exact: true }).click();
+          await expect.poll(failure.headCount).toBe(2);
+          await page.keyboard.press("Escape");
+          const paletteModal = page.locator('openclaw-modal-dialog[label="command palette"]');
+          await expect.poll(() => paletteModal.count()).toBe(0);
+          releaseProbe();
+          await expect
+            .poll(
+              async () =>
+                documentRequests > 1 ||
+                (await page.evaluate(
+                  () =>
+                    (window as Window & { completedHeadFrames?: number }).completedHeadFrames ?? 0,
+                )) >= 2,
+            )
+            .toBe(true);
+          if (documentRequests > 1) {
+            await reloaded;
+          }
+          await waitForControlUiGatewayReady(page);
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(artifactDir, "dismissed-retry-after.png") });
+          }
+          console.info("LAZY_RETRY_DISMISSED", {
+            documentRequests,
+            headCount: failure.headCount(),
+          });
+          expect(documentRequests).toBe(1);
+          expect(await paletteModal.count()).toBe(0);
+          expect(
+            await page.evaluate(() => sessionStorage.getItem("openclaw:lazy-event")),
+          ).toBeNull();
+        },
+      );
+    } finally {
+      releaseProbe();
+    }
+  });
+
   for (const testCase of focusedCases) {
     it(`reloads the focused ${testCase.name} after its real hashed chunk fails`, async () => {
       await suite.withPage(
@@ -216,8 +310,8 @@ suite.define(() => {
       await expect.poll(failure.chunkRequestCount).toBe(2);
       expect(await page.locator("openclaw-command-palette").count()).toBe(1);
       if (captureUiProof) {
-        await page.waitForTimeout(250);
         await page.screenshot({
+          animations: "disabled",
           fullPage: true,
           path: path.join(artifactDir, "recovered.png"),
         });

@@ -1,7 +1,9 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  commandRpcMocks,
+  pinnedConnectionMocks,
   createCodexSessionCatalogControl,
   continueLocalCodexSession,
   registerCodexSessionCatalog,
@@ -18,105 +20,7 @@ import {
   createCodexTestBindingStore,
   CODEX_LOCAL_SESSION_HOST_ID,
   type OpenClawConfig,
-  originalPath,
-  tempDirs,
-  fs,
 } from "./session-catalog.test-helpers.js";
-
-const commandRpcMocks = vi.hoisted(() => ({
-  codexControlRequest: vi.fn(),
-}));
-const pinnedConnectionMocks = vi.hoisted(() => ({
-  client: { connectionId: "pinned-catalog-client" },
-  getClient: vi.fn(),
-  releaseClient: vi.fn(),
-  request: vi.fn(),
-}));
-const transcriptMirrorMocks = vi.hoisted(() => ({
-  importCodexThreadHistoryToTranscript: vi.fn(async () => ({
-    importedMessages: 0,
-    omittedMessages: 0,
-  })),
-}));
-const nodeHostMocks = vi.hoisted(() => ({
-  runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
-  userShellPaths: new Map<string, string>(),
-}));
-
-vi.mock("./command-rpc.js", () => ({
-  codexControlRequest: commandRpcMocks.codexControlRequest,
-}));
-vi.mock("./app-server/request.js", () => ({
-  requestCodexAppServerClientJson: pinnedConnectionMocks.request,
-}));
-vi.mock("./app-server/shared-client.js", () => ({
-  getLeasedSharedCodexAppServerClient: pinnedConnectionMocks.getClient,
-  releaseLeasedSharedCodexAppServerClient: pinnedConnectionMocks.releaseClient,
-}));
-vi.mock("./app-server/transcript-mirror.js", () => ({
-  importCodexThreadHistoryToTranscript: transcriptMirrorMocks.importCodexThreadHistoryToTranscript,
-}));
-vi.mock("./session-catalog-pty.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-catalog-pty.runtime.js")>();
-  return {
-    ...actual,
-    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-    resolveNodeHostExecutable: (
-      command: string,
-      options: {
-        env?: NodeJS.ProcessEnv;
-        pathEnv?: string;
-        includeExtensionless?: boolean;
-        strategy: "direct" | "fallback" | "prefer";
-      },
-    ) => {
-      const env = options.env ?? process.env;
-      const pathEnv = options.pathEnv ?? env.PATH ?? env.Path ?? "";
-      const direct = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      if (direct && options.strategy !== "prefer") {
-        return direct;
-      }
-      const shellPath = nodeHostMocks.userShellPaths.get(command);
-      if (!shellPath) {
-        return direct;
-      }
-      const shellExecutable = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv: shellPath,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      return shellExecutable
-        ? { executable: shellExecutable.executable, pathEnv: shellPath }
-        : direct;
-    },
-  };
-});
-
-beforeEach(() => {
-  nodeHostMocks.runNodePtyCommand.mockClear();
-  nodeHostMocks.userShellPaths.clear();
-  commandRpcMocks.codexControlRequest.mockReset();
-  pinnedConnectionMocks.getClient.mockReset();
-  pinnedConnectionMocks.getClient.mockResolvedValue(pinnedConnectionMocks.client);
-  pinnedConnectionMocks.releaseClient.mockReset();
-  pinnedConnectionMocks.request.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockResolvedValue({
-    importedMessages: 0,
-    omittedMessages: 0,
-  });
-});
-
-afterEach(async () => {
-  process.env.PATH = originalPath;
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
 
 describe("Codex supervision actions", () => {
   it("walks the canonical non-archived catalog before continuing a known thread", async () => {
@@ -440,7 +344,9 @@ describe("Codex supervision actions", () => {
 
   it("rejects archive when a spawned descendant is active", async () => {
     const control = createEligibleControl({
-      listDescendantPage: vi.fn(async () => ({ data: [{ id: "active-descendant" }] })),
+      listDescendantPage: vi.fn(async () => ({
+        data: [{ id: "active-descendant", projectId: null }],
+      })),
       readThread: vi.fn(async (threadId: string) =>
         idleThread({
           id: threadId,
@@ -470,7 +376,7 @@ describe("Codex supervision actions", () => {
     const listDescendantPage = vi.fn(async () => {
       validationReached();
       await validationReleased;
-      return { data: [{ id: "idle-descendant" }] };
+      return { data: [{ id: "idle-descendant", projectId: null }] };
     });
     const control = createEligibleControl({ listDescendantPage });
 
@@ -566,10 +472,21 @@ describe("Codex supervision actions", () => {
     const { runtime, createSessionEntry } = createRuntime();
     const { api, getProvider, registerSessionCatalog } = createGatewayApi(runtime);
     const control = createEligibleControl();
+    const processFallbackControl = {
+      forRequest: () => control,
+      homesForAgent: () => [
+        {
+          hostId: CODEX_LOCAL_SESSION_HOST_ID,
+          sourceHomeId: "process-home",
+          usesProcessHomeFallback: true,
+        } as never,
+      ],
+      forUpstream: () => undefined,
+    };
     registerCodexSessionCatalog({
       api,
       bindingStore: createCodexTestBindingStore(),
-      control,
+      control: processFallbackControl,
       getRuntimeConfig: () => config,
     });
     expect(registerSessionCatalog).toHaveBeenCalledOnce();

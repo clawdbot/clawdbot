@@ -52,6 +52,11 @@ const gatewayInjectedSessions = {
   ts: Date.now(),
 };
 
+const highPressureSessions = {
+  ...gatewayInjectedSessions,
+  sessions: [{ ...gatewayInjectedSessions.sessions[0], totalTokens: 190_000 }],
+};
+
 const claudeSubscriptionAuthStatus = {
   ts: baseTime,
   providers: [
@@ -144,6 +149,31 @@ async function closeChat(fixture: { context: BrowserContext; page: Page }): Prom
 }
 
 suite.define(() => {
+  it("shows high context pressure without a compact action", async () => {
+    const fixture = await openChat(authStatusWithUsage, {
+      "sessions.list": highPressureSessions,
+    });
+    const { page } = fixture;
+    try {
+      const contextRing = page.locator(".context-ring");
+      await contextRing.waitFor({ state: "visible" });
+      expect(await contextRing.getAttribute("aria-label")).toBe(
+        "Session context usage: 190k of 200k (95%)",
+      );
+      expect(
+        await contextRing.evaluate((element) =>
+          element.classList.contains("context-ring--warning"),
+        ),
+      ).toBe(true);
+      expect(await page.locator(".context-usage button").count()).toBe(0);
+      await page.screenshot({
+        path: path.join(artifactDir, "00-high-context-without-compact-action.png"),
+      });
+    } finally {
+      await closeChat(fixture);
+    }
+  });
+
   it("renders provider usage inside the desktop context popover", async () => {
     const fixture = await openChat(authStatusWithUsage, {
       "sessions.list": gatewayInjectedSessions,

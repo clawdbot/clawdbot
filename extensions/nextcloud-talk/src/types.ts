@@ -3,6 +3,7 @@ import type {
   ChannelDeliveryStreamingConfig,
   MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type {
   DmConfig,
   DmPolicy,
@@ -35,6 +36,8 @@ export type NextcloudTalkAccountConfig = {
   name?: string;
   /** If false, do not start this Nextcloud Talk account. Default: true. */
   enabled?: boolean;
+  /** Reply-threading mode for this account. */
+  replyToMode?: ReplyToMode;
   /** Base URL of the Nextcloud instance (e.g., "https://cloud.example.com"). */
   baseUrl?: string;
   /** Bot shared secret from occ talk:bot:install output. */

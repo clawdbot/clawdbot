@@ -66,7 +66,7 @@ on:
         default: false
         type: boolean
       fail_fast:
-        description: Cancel only an exact active child after its first blocking job; false drains all children to completion
+        description: Cancel only an exact active child after its first blocking job; false drains all children and permits same-parent recovery
         required: false
         default: false
         type: boolean
@@ -150,7 +150,6 @@ on:
         required: false
         default: ""
         type: string
-
 permissions:
   actions: write
   contents: read
@@ -164,7 +163,7 @@ env:
   GH_REPO: ${{ github.repository }}
   # Read retries and one-shot dispatch recovery share this classifier; dispatch POSTs never retry.
   GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|(^|[^A-Za-z0-9_])EOF([^A-Za-z0-9_]|$)|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "24.19.0"
   RELEASE_ISOLATION_TOOLING_CONTRACT: "2"
 
 jobs:
@@ -179,7 +178,7 @@ jobs:
       cross_os_suite_filter: ${{ steps.filters.outputs.cross_os_suite_filter }}
     steps:
       - name: Checkout trusted workflow helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: workflow
@@ -242,7 +241,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout target package manifest
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.resolve.outputs.sha }}
           path: target
@@ -266,7 +265,6 @@ jobs:
             echo "skip_package_telegram_e2e is allowed only for release_profile=beta." >&2
             exit 1
           fi
-
           context_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"
           context_ref="${context_ref#refs/heads/}"
           context_ref="${context_ref#refs/tags/}"
@@ -446,7 +444,7 @@ jobs:
       changed_paths: ${{ steps.find.outputs.changed_paths }}
     steps:
       - name: Checkout trusted workflow helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: workflow
@@ -455,7 +453,7 @@ jobs:
           submodules: false
 
       - name: Checkout target SHA
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_target.outputs.sha }}
           path: target
@@ -570,7 +568,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout target SHA
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_target.outputs.sha }}
           fetch-depth: 1
@@ -599,6 +597,8 @@ jobs:
     with:
       ref: ${{ needs.resolve_target.outputs.sha }}
       prepare_only: true
+      emit_candidate_evidence: true
+      release_soak: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
       include_repo_e2e: false
       include_release_path_suites: false
       include_openwebui: false
@@ -1085,23 +1085,39 @@ jobs:
       source_parent_attempt: ${{ steps.plan.outputs.source_parent_attempt }}
     steps:
       - name: Checkout release execution plan tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           sparse-checkout: |
             scripts/full-release-validation-state.mjs
             scripts/full-release-validation-policy.mjs
+            scripts/full-release-candidate-contract.mjs
             scripts/release-ci-summary.mjs
+            scripts/lib/canonical-json.mjs
             scripts/lib/plain-gh.mjs
+            scripts/lib/record-shared.mjs
+            scripts/lib/upgrade-survivor-policy.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
-      - name: Restore immutable release execution plan
-        if: ${{ github.run_attempt != 1 }}
+      # Cache is acceleration only. Parent reruns recover the immutable attempt-one
+      # plan from the workflow artifact before validating its complete provenance.
+      - name: Cache immutable release execution plan
+        id: plan_cache
+        continue-on-error: true
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/full-release-execution-plan
+          key: full-release-execution-plan-v1-${{ github.run_id }}
+
+      - name: Restore immutable release execution plan artifact
+        if: ${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: full-release-execution-plan-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-execution-plan
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
 
       - name: Seal immutable release execution plan
         id: plan
@@ -1144,7 +1160,15 @@ jobs:
           PERFORMANCE_URL: ${{ needs.performance.outputs.url }}
           RESOLVE_TARGET_RESULT: ${{ needs.resolve_target.result }}
           DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT: ${{ needs.docker_runtime_assets_preflight.result }}
-          PREPARE_RELEASE_CANDIDATE_RESULT: ${{ needs.prepare_release_candidate.result }}
+          CANDIDATE_BINDING_RESULT: ${{ needs.prepare_release_candidate.result }}
+          CANDIDATE_EVIDENCE_JSON: ${{ needs.prepare_release_candidate.outputs.candidate_evidence_json }}
+          CANDIDATE_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
+          CANDIDATE_UPGRADE_SURVIVOR_BASELINE: openclaw@latest
+          CANDIDATE_UPGRADE_SURVIVOR_BASELINES: ""
+          CANDIDATE_UPGRADE_SURVIVOR_SCENARIOS: ${{ (inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full') && 'reported-issues' || '' }}
+          CANDIDATE_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.target_context_ref != '' }}
+          CANDIDATE_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
+          CANDIDATE_SHARED_IMAGE_POLICY: no-push-artifact
           FULL_RELEASE_RESTORE_PLAN: ${{ github.run_attempt != 1 }}
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
         run: |
@@ -1171,7 +1195,19 @@ jobs:
               --arg liveSuiteFilter "$LIVE_SUITE_FILTER" \
               --arg resolveTargetResult "$RESOLVE_TARGET_RESULT" \
               --arg dockerPreflightResult "$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" \
-              --arg prepareCandidateResult "$PREPARE_RELEASE_CANDIDATE_RESULT" \
+              --arg candidateBindingResult "$CANDIDATE_BINDING_RESULT" \
+              --argjson candidateEvidence "${CANDIDATE_EVIDENCE_JSON:-null}" \
+              --arg candidateRepository "$GITHUB_REPOSITORY" \
+              --arg candidateTargetSha "$TARGET_SHA" \
+              --arg candidateToolingSha "$GITHUB_SHA" \
+              --arg candidateReleaseProfile "$RELEASE_PROFILE" \
+              --argjson candidateReleaseSoak "$CANDIDATE_RELEASE_SOAK" \
+              --arg candidateUpgradeSurvivorBaseline "$CANDIDATE_UPGRADE_SURVIVOR_BASELINE" \
+              --arg candidateUpgradeSurvivorBaselines "$CANDIDATE_UPGRADE_SURVIVOR_BASELINES" \
+              --arg candidateUpgradeSurvivorScenarios "$CANDIDATE_UPGRADE_SURVIVOR_SCENARIOS" \
+              --argjson candidateAllowFrozenTargetScenarioOmissions "$CANDIDATE_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" \
+              --argjson candidateAllowUnreleasedChangelog "$CANDIDATE_ALLOW_UNRELEASED_CHANGELOG" \
+              --arg candidateSharedImagePolicy "$CANDIDATE_SHARED_IMAGE_POLICY" \
               --arg normalCiResult "$NORMAL_CI_RESULT" \
               --arg normalCiRunId "$NORMAL_CI_RUN_ID" \
               --arg normalCiRunAttempt "$NORMAL_CI_RUN_ATTEMPT" \
@@ -1212,7 +1248,21 @@ jobs:
                 liveSuiteFilter: $liveSuiteFilter,
                 resolveTargetResult: $resolveTargetResult,
                 dockerPreflightResult: $dockerPreflightResult,
-                prepareCandidateResult: $prepareCandidateResult,
+                candidateBindingResult: $candidateBindingResult,
+                candidateEvidence: $candidateEvidence,
+                candidateRequestInput: {
+                  repository: $candidateRepository,
+                  targetSha: $candidateTargetSha,
+                  toolingSha: $candidateToolingSha,
+                  releaseProfile: $candidateReleaseProfile,
+                  releaseSoak: $candidateReleaseSoak,
+                  upgradeSurvivorBaseline: $candidateUpgradeSurvivorBaseline,
+                  upgradeSurvivorBaselines: $candidateUpgradeSurvivorBaselines,
+                  upgradeSurvivorScenarios: $candidateUpgradeSurvivorScenarios,
+                  allowFrozenTargetScenarioOmissions: $candidateAllowFrozenTargetScenarioOmissions,
+                  allowUnreleasedChangelog: $candidateAllowUnreleasedChangelog,
+                  sharedImagePolicy: $candidateSharedImagePolicy
+                },
                 children: {
                   normalCi: {result: $normalCiResult, runId: $normalCiRunId, runAttempt: $normalCiRunAttempt, url: $normalCiUrl},
                   pluginPrerelease: {result: $pluginPrereleaseResult, runId: $pluginPrereleaseRunId, runAttempt: $pluginPrereleaseRunAttempt, url: $pluginPrereleaseUrl},
@@ -1226,12 +1276,13 @@ jobs:
           node scripts/full-release-validation-state.mjs plan
 
       - name: Upload immutable release execution plan
-        if: ${{ always() && github.run_attempt == 1 }}
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: full-release-execution-plan-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-execution-plan
           if-no-files-found: error
+          overwrite: true
 
   release_decision:
     name: Release Decision
@@ -1243,12 +1294,18 @@ jobs:
       state: ${{ steps.state.outputs.state }}
     steps:
       - name: Checkout release decision tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           sparse-checkout: |
             scripts/full-release-validation-state.mjs
             scripts/full-release-validation-policy.mjs
+            scripts/full-release-candidate-contract.mjs
+            scripts/release-ci-summary.mjs
+            scripts/lib/canonical-json.mjs
+            scripts/lib/plain-gh.mjs
+            scripts/lib/record-shared.mjs
+            scripts/lib/upgrade-survivor-policy.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -1309,14 +1366,18 @@ jobs:
       performance_conclusion: ${{ steps.state.outputs.productPerformance_conclusion }}
     steps:
       - name: Checkout diagnostic drain tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           sparse-checkout: |
             scripts/full-release-validation-state.mjs
             scripts/full-release-validation-policy.mjs
+            scripts/full-release-candidate-contract.mjs
             scripts/release-ci-summary.mjs
+            scripts/lib/canonical-json.mjs
             scripts/lib/plain-gh.mjs
+            scripts/lib/record-shared.mjs
+            scripts/lib/upgrade-survivor-policy.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -1386,14 +1447,18 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout release state verifier
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           sparse-checkout: |
             scripts/full-release-validation-state.mjs
             scripts/full-release-validation-policy.mjs
+            scripts/full-release-candidate-contract.mjs
             scripts/release-ci-summary.mjs
+            scripts/lib/canonical-json.mjs
             scripts/lib/plain-gh.mjs
+            scripts/lib/record-shared.mjs
+            scripts/lib/upgrade-survivor-policy.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -1567,6 +1632,35 @@ jobs:
           EVIDENCE_CHANGED_PATHS="$(jq -c '.evidenceReuse.changedPaths // []' "$RELEASE_EXECUTION_PLAN_PATH")"
           EVIDENCE_MANIFEST="$(jq -c '.evidenceReuse.sourceManifest // empty' "$RELEASE_EXECUTION_PLAN_PATH")"
           PERFORMANCE_CONCLUSION="$(jq -r '.children.productPerformance.conclusion // ""' "$DIAGNOSTIC_DRAIN_PATH")"
+          CHILD_EVIDENCE="$(
+            jq -c '
+              .children
+              | with_entries(
+                  .value = {
+                    runId: .value.runId,
+                    plannedRunAttempt: .value.plannedRunAttempt,
+                    effectiveRunAttempt: .value.runAttempt,
+                    observedRunAttempts: .value.observedRunAttempts,
+                    compositeJobsSha256: .value.compositeJobsSha256,
+                    dispatchActor: .value.dispatchActor,
+                    triggeringActor: .value.triggeringActor,
+                    repository: .value.repository,
+                    jobs: (
+                      .value.timing.jobs
+                      | map({
+                          name,
+                          status,
+                          conclusion,
+                          acceptedRunAttempt,
+                          startedAt,
+                          completedAt,
+                          url
+                        })
+                    )
+                  }
+                )
+            ' "$DIAGNOSTIC_DRAIN_PATH"
+          )"
           if [[ "$EVIDENCE_REUSE" == "true" ]]; then
             # Inherit the evidence manifest (profile, soak, child runs) so future
             # reuse lookups and evidence consumers keep resolving the chain root.
@@ -1586,6 +1680,7 @@ jobs:
               --arg executionPlanSha256 "$EXECUTION_PLAN_SHA256" \
               --arg sourceParentRunAttempt "$SOURCE_PARENT_RUN_ATTEMPT" \
               --argjson evidenceChangedPaths "$EVIDENCE_CHANGED_PATHS" \
+              --argjson childEvidence "$CHILD_EVIDENCE" \
               '. + {
                 version: 3,
                 runId: $runId,
@@ -1606,6 +1701,7 @@ jobs:
                 controls: ((.controls // {}) + {
                   performanceReportPublication: "artifact-only"
                 }),
+                childEvidence: $childEvidence,
                 executionPlanSha256: $executionPlanSha256,
                 sourceParentRunAttempt: ($sourceParentRunAttempt | tonumber)
               }' <<< "$EVIDENCE_MANIFEST" > "${manifest_dir}/full-release-validation-manifest.json"
@@ -1646,6 +1742,7 @@ jobs:
             --arg skipPackageTelegramE2e "$SKIP_PACKAGE_TELEGRAM_E2E" \
             --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
             --arg pluginPrereleaseNodeExcludePatternsJson "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON" \
+            --argjson childEvidence "$CHILD_EVIDENCE" \
             '{
               version: 3,
               workflowName: $workflowName,
@@ -1662,6 +1759,7 @@ jobs:
               runReleaseSoak: $runReleaseSoak,
               executionPlanSha256: $executionPlanSha256,
               sourceParentRunAttempt: ($sourceParentRunAttempt | tonumber),
+              childEvidence: $childEvidence,
               validationInputs: {
                 provider: $provider,
                 mode: $mode,
@@ -1702,6 +1800,8 @@ jobs:
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
+          RELEASE_DECISION_PATH: ${{ runner.temp }}/full-release-decision/full-release-decision.json
+          DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
           RELEASE_VALIDATION_MANIFEST_PATH: ${{ runner.temp }}/full-release-validation/full-release-validation-manifest.json
         run: node scripts/full-release-validation-state.mjs validate-manifest
 

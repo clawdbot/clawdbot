@@ -3,13 +3,10 @@
 import { fileURLToPath } from "node:url";
 import {
   isLikelyRepoFilePath,
-  KNIP_MAX_BUFFER_BYTES,
   runKnip,
   type KnipRunResult,
   uniqueSorted,
 } from "./deadcode-knip-runner.mts";
-
-export { KNIP_MAX_BUFFER_BYTES };
 
 const KNIP_COMMON_ARGS = ["--no-progress", "--reporter", "compact", "--files", "--no-config-hints"];
 
@@ -51,14 +48,6 @@ export function parseKnipCompactUnusedFiles(output: string) {
   }
 
   return uniqueSorted(files);
-}
-
-/** Runs Knip and returns parsed unused-file results. */
-export async function runKnipUnusedFiles(params: NonNullable<Parameters<typeof runKnip>[1]> = {}) {
-  return await runKnip([...KNIP_SCANS[0].args, ...KNIP_COMMON_ARGS], {
-    ...params,
-    scanName: KNIP_SCANS[0].name,
-  });
 }
 
 /** Rejects every unused file reported by Knip. */

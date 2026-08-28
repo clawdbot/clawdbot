@@ -329,9 +329,64 @@ describe("channels controller WhatsApp logout", () => {
     expect(channels.state.whatsappLoginMessage).toBe("credential cleanup failed");
     expect(channels.state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,current-qr");
     expect(channels.state.whatsappLoginConnected).toBe(true);
-    expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(0);
     channels.dispose();
   });
+});
+
+describe("channels controller WhatsApp mutation failures", () => {
+  it.each([
+    {
+      operation: "login",
+      method: "web.login.start",
+      invoke: (channels: ReturnType<typeof createChannelCapability>) =>
+        channels.startWhatsApp(false),
+      preservesQr: false,
+    },
+    {
+      operation: "scan wait",
+      method: "web.login.wait",
+      invoke: (channels: ReturnType<typeof createChannelCapability>) => channels.waitWhatsApp(),
+      preservesQr: true,
+    },
+    {
+      operation: "logout",
+      method: "channels.logout",
+      invoke: (channels: ReturnType<typeof createChannelCapability>) => channels.logoutWhatsApp(),
+      preservesQr: true,
+    },
+  ])(
+    "publishes a rejected $operation without probing channel status",
+    async ({ method, invoke, preservesQr }) => {
+      const request = vi.fn(async (requestedMethod: string) => {
+        if (requestedMethod === method) {
+          throw new Error("WhatsApp request rejected");
+        }
+        return createChannelsSnapshot("unexpected refresh");
+      });
+      const channels = createChannelCapability({
+        snapshot: { client: { request }, phase: "connected" },
+        subscribe: () => () => undefined,
+      } as never);
+      channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
+      channels.state.whatsappLoginConnected = true;
+      const updates: Array<{ busy: boolean; message: string | null }> = [];
+      channels.subscribe((state) => {
+        updates.push({ busy: state.whatsappBusy, message: state.whatsappLoginMessage });
+      });
+
+      await invoke(channels);
+
+      expect(
+        request.mock.calls.filter(([requestedMethod]) => requestedMethod === "channels.status"),
+      ).toHaveLength(0);
+      expect(updates.at(-1)).toEqual({ busy: false, message: "WhatsApp request rejected" });
+      expect(channels.state.whatsappLoginQrDataUrl).toBe(
+        preservesQr ? "data:image/png;base64,current-qr" : null,
+      );
+      channels.dispose();
+    },
+  );
 });
 
 describe("channels controller DM pairing", () => {

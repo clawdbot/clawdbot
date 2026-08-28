@@ -30,8 +30,10 @@ share one trust boundary, split them across Gateways, hosts, or OS users. See
 
 <Steps>
   <Step title="Create the server">
-    In Hetzner Cloud, create a Debian or Ubuntu server with at least 2 GB RAM
-    for a source image build. Add your SSH key during provisioning.
+    In Hetzner Cloud, create a Debian or Ubuntu server with at least 6 GB RAM
+    for a source image build. On a smaller server, use the official pre-built
+    image described in [Docker VM runtime](/install/docker-vm-runtime). Add your
+    SSH key during provisioning.
 
     Connect as root:
 

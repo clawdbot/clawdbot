@@ -10,7 +10,7 @@ vi.mock("./diagnosis.js", () => ({
 }));
 
 describe("buildStatusAllReportLines", () => {
-  it("renders bootstrap column using file-presence semantics", async () => {
+  it("renders bootstrap state and invalid config diagnostics", async () => {
     const progress: ProgressReporter = {
       setLabel: () => {},
       setPercent: () => {},
@@ -19,6 +19,10 @@ describe("buildStatusAllReportLines", () => {
     };
     const lines = await buildStatusAllReportLines({
       progress,
+      configDiagnostics: {
+        path: "/tmp/openclaw.json",
+        issues: [{ path: "gateway.port", message: "invalid" }],
+      },
       overviewRows: [{ Item: "Gateway", Value: "ok" }],
       channels: {
         rows: [
@@ -84,6 +88,13 @@ describe("buildStatusAllReportLines", () => {
     expect(output).toContain("Bootstrap file");
     expect(output).toContain("PRESENT");
     expect(output).toContain("ABSENT");
+    expect(output).toContain("Config diagnostics:");
+    expect(output).toContain("Config file is invalid: /tmp/openclaw.json");
+    expect(output).toContain("gateway.port: invalid");
+    expect(output).toContain("Fix: openclaw doctor --fix");
+    expect(output.indexOf("Config diagnostics:")).toBeLessThan(
+      output.indexOf("OpenClaw status --all"),
+    );
     expect(output).not.toContain(String.fromCharCode(0xd83d));
     expect(diagnosisSpy).toHaveBeenCalledOnce();
     const [diagnosisOptions] = diagnosisSpy.mock.calls[0] as unknown as [

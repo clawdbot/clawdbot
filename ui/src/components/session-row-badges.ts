@@ -148,7 +148,7 @@ export function renderSessionRowBadges(params: {
     ${pullRequestLabel
       ? renderSessionRowBadge(
           pullRequestLabel,
-          icons.gitPullRequest,
+          pullRequestState === "merged" ? icons.gitMerge : icons.gitPullRequest,
           "session-row-badge--pull-request",
           0,
           pullRequestState,
@@ -191,14 +191,24 @@ export function renderSessionRowBadges(params: {
   </span>`;
 }
 
-export function renderOfflineSidebarStatus(props: {
-  queuedOutboxCount: number;
-  reconnecting: string;
+export function renderSidebarConnectionStatus(props: {
+  kind: "offline" | "restarting";
+  queuedOutboxCount?: number;
   title?: string;
   onRetry: () => void;
 }) {
+  if (props.kind === "restarting") {
+    return html`<span
+      class="sidebar-footer-bar__status sidebar-footer-bar__status--restarting"
+      role="status"
+      aria-live="polite"
+      ><span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
+        "connection.restarting",
+      )}</span
+    >`;
+  }
   const offline = t("common.offline");
-  const count = props.queuedOutboxCount;
+  const count = props.queuedOutboxCount ?? 0;
   const queued = count ? t("connection.queuedCount", { count: String(count) }) : null;
   return html`<openclaw-tooltip .content=${props.title ?? ""}>
     <button
@@ -210,7 +220,7 @@ export function renderOfflineSidebarStatus(props: {
     >
       <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${offline}<span
         class="sidebar-footer-bar__status-detail"
-        >· ${props.reconnecting}</span
+        >· ${t("connection.reconnecting")}</span
       >${queued
         ? html`<span class="sidebar-footer-bar__status-detail">· ${queued}</span>`
         : nothing}

@@ -7,7 +7,9 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import {
-  redactSecrets,
+  redactModelVisibleSecrets,
+  redactModelVisibleSensitiveFieldValueWithConfig,
+  redactModelVisibleToolPayloadText,
   redactSensitiveFieldValue,
   redactToolPayloadText,
 } from "../logging/redact.js";
@@ -248,10 +250,10 @@ export function sanitizeToolArgs(args: unknown): unknown {
 
 export function sanitizeToolResult(result: unknown): unknown {
   if (typeof result === "string") {
-    return redactToolPayloadText(result);
+    return redactModelVisibleToolPayloadText(result);
   }
   if (Array.isArray(result)) {
-    return redactSecrets(result);
+    return redactModelVisibleSecrets(result);
   }
   if (!result || typeof result !== "object") {
     return result;
@@ -280,7 +282,7 @@ export function sanitizeToolResult(result: unknown): unknown {
   }
   // Deep-redact the entire result so any top-level or nested string is
   // protected, not just `details` and text content blocks.
-  const baseline = redactSecrets(preCleaned);
+  const baseline = redactModelVisibleSecrets(preCleaned);
   const out: Record<string, unknown> = { ...baseline };
   const content = Array.isArray(baseline.content) ? baseline.content : null;
   if (content) {
@@ -340,7 +342,9 @@ function sanitizeStructuredToolResultValue(
     if (OPAQUE_STRUCTURED_RESULT_FIELDS.has(key)) {
       return `[opaque data omitted: ${value.length} chars]`;
     }
-    return truncateToolText(redactInlineDataUriValue(redactSensitiveFieldValue(key, value)));
+    return truncateToolText(
+      redactInlineDataUriValue(redactModelVisibleSensitiveFieldValueWithConfig(key, value)),
+    );
   }
   if (typeof value === "bigint") {
     return value.toString();
@@ -379,7 +383,7 @@ function stringifyStructuredToolResultContent(block: unknown): string | undefine
   }
   try {
     const serialized = JSON.stringify(sanitizeStructuredToolResultValue(record));
-    const redacted = serialized ? redactToolPayloadText(serialized) : serialized;
+    const redacted = serialized ? redactModelVisibleToolPayloadText(serialized) : serialized;
     return redacted && redacted !== "{}" ? redacted : undefined;
   } catch {
     return undefined;
@@ -406,7 +410,7 @@ function resolveToolResultContentBlocks(result: object): unknown[] {
 
 export function extractToolResultText(result: unknown): string | undefined {
   if (typeof result === "string") {
-    const trimmed = redactToolPayloadText(redactInlineDataUriValue(result)).trim();
+    const trimmed = redactModelVisibleToolPayloadText(redactInlineDataUriValue(result)).trim();
     return trimmed ? truncateToolText(trimmed) : undefined;
   }
   if (!result || typeof result !== "object") {

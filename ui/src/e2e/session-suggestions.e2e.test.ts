@@ -60,6 +60,7 @@ function sessionRow(sharingRole: "owner" | "viewer") {
 const featureMethods = [
   "chat.metadata",
   "chat.startup",
+  "commands.list",
   "session.suggestions.add",
   "session.suggestions.list",
   "session.suggestions.resolve",
@@ -154,6 +155,42 @@ suite.define(() => {
     await expect(page.locator(".session-suggestion__state")).toHaveText("Pending");
     await expect(page.locator(".session-suggestion__text")).toHaveText("Try the focused change");
     await screenshot(page, "viewer-pending.png");
+    await context.close();
+  });
+
+  it("does not offer live-session commands in a viewer suggestion composer", async () => {
+    const { context, page } = await contextAndPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods,
+      presenceUsers: [
+        { self: true, id: "alice", name: "Alice", watchedSessions: ["main", sessionKey] },
+        { id: "owner", name: "Owner", watchedSessions: ["main", sessionKey] },
+      ],
+      methodResponses: {
+        "commands.list": {
+          commands: [
+            {
+              acceptsArgs: false,
+              description: "Show gateway status.",
+              name: "status",
+              scope: "both",
+              source: "native",
+              textAliases: ["/status"],
+            },
+          ],
+        },
+        "sessions.list": sessionRow("viewer"),
+        "session.suggestions.list": { suggestions: [], role: "viewer" },
+      },
+    });
+
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    await gateway.waitForRequest("session.suggestions.list");
+    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    await expect(composer).toBeEnabled();
+    await composer.fill("Keep this /sta");
+    await gateway.waitForRequest("commands.list");
+    await expect(page.getByRole("option", { name: /\/status/u })).toHaveCount(0);
     await context.close();
   });
 

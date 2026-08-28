@@ -37,3 +37,14 @@ export function previewTranscriptRowKeys(
   });
   return new Set(preview.getVirtualIndexes().flatMap((index) => nextKeys[index] ?? []));
 }
+
+export function focusedTranscriptRowKey(
+  scrollElement: HTMLElement | null,
+  target: EventTarget | null,
+): string | null {
+  if (!(target instanceof Element) || !scrollElement?.contains(target)) {
+    return null;
+  }
+  const row = target.closest<HTMLElement>(".chat-virtual-row[data-virtual-row-key]");
+  return row && scrollElement.contains(row) ? row.dataset.virtualRowKey || null : null;
+}

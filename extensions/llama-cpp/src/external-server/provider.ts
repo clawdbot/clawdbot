@@ -1,8 +1,6 @@
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   ProviderCatalogContext,
   ProviderPrepareDynamicModelContext,
-  ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
@@ -14,47 +12,7 @@ import {
 } from "./auth.js";
 import { discoverLlamaServer } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
-import { buildLlamaServerProviderConfig, type LlamaServerDiscoveredModel } from "./models.js";
-
-const dynamicModels = new Map<string, ProviderRuntimeModel[]>();
-const LLAMA_SERVER_DYNAMIC_MODEL_MAX_SCOPES = 100;
-
-function cacheDynamicModels(key: string, models: ProviderRuntimeModel[]): void {
-  dynamicModels.delete(key);
-  dynamicModels.set(key, models);
-  pruneMapToMaxSize(dynamicModels, LLAMA_SERVER_DYNAMIC_MODEL_MAX_SCOPES);
-}
-
-function dynamicModelScopeKey(
-  ctx: Pick<
-    ProviderResolveDynamicModelContext,
-    "agentRuntimeId" | "agentDir" | "authProfileId" | "providerConfig"
-  >,
-): string {
-  return [
-    ctx.agentRuntimeId ?? ctx.agentDir ?? "",
-    ctx.authProfileId ?? "",
-    ctx.providerConfig?.baseUrl ?? "",
-  ].join("\u0000");
-}
-
-function toRuntimeModel(
-  model: LlamaServerDiscoveredModel,
-  providerConfig: {
-    baseUrl?: string;
-    api?: ProviderRuntimeModel["api"];
-  },
-): ProviderRuntimeModel {
-  return {
-    ...model.config,
-    provider: LLAMA_CPP_PROVIDER_ID,
-    api: providerConfig.api ?? "openai-completions",
-    baseUrl: resolveLlamaServerEndpoint(providerConfig.baseUrl).inferenceBaseUrl,
-    input: model.config.input.filter(
-      (entry): entry is "text" | "image" => entry === "text" || entry === "image",
-    ),
-  };
-}
+import { buildLlamaServerProviderConfig } from "./models.js";
 
 /** Discovers external llama-server models for provider runtime resolution. */
 export async function discoverLlamaServerProvider(
@@ -96,9 +54,9 @@ export async function discoverLlamaServerProvider(
   };
 }
 
-export async function prepareLlamaServerDynamicModels(
+export async function prepareLlamaServerDynamicModel(
   ctx: ProviderPrepareDynamicModelContext,
-): Promise<void> {
+): Promise<ProviderRuntimeModel | undefined> {
   const apiKey = await resolveLlamaServerRuntimeApiKey({
     config: ctx.config,
     agentDir: ctx.agentDir,
@@ -115,19 +73,20 @@ export async function prepareLlamaServerDynamicModels(
     headers,
     cacheTtlMs: 0,
   });
-  const key = dynamicModelScopeKey(ctx);
-  cacheDynamicModels(
-    key,
+  const model =
     discovery.kind === "success"
-      ? discovery.models.map((model) => toRuntimeModel(model, ctx.providerConfig ?? {}))
-      : [],
-  );
-}
-
-export function resolveLlamaServerDynamicModel(
-  params: ProviderResolveDynamicModelContext,
-): ProviderRuntimeModel | undefined {
-  return dynamicModels
-    .get(dynamicModelScopeKey(params))
-    ?.find((model) => model.id === params.modelId);
+      ? discovery.models.find((entry) => entry.config.id === ctx.modelId)
+      : undefined;
+  if (!model) {
+    return undefined;
+  }
+  return {
+    ...model.config,
+    provider: LLAMA_CPP_PROVIDER_ID,
+    api: ctx.providerConfig?.api ?? "openai-completions",
+    baseUrl: resolveLlamaServerEndpoint(ctx.providerConfig?.baseUrl).inferenceBaseUrl,
+    input: model.config.input.filter(
+      (entry): entry is "text" | "image" => entry === "text" || entry === "image",
+    ),
+  };
 }

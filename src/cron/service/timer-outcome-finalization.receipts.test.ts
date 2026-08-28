@@ -8,16 +8,19 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { markCronJobActive } from "../active-jobs.js";
+import { advanceCronActiveJobGeneration, markCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
+  inspectActiveCronRunReceipt,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
+import { reserveQueuedCronRun } from "./run-admission.js";
 import { createCronServiceState } from "./state.js";
+import { tryCreateCronTaskRunHandle } from "./task-runs.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
 import { authorCronRunCompletion } from "./timer.js";
@@ -49,6 +52,104 @@ function authorOutcome(
 }
 
 describe("cron outcome receipt finalization", () => {
+  it.each([false, true])(
+    "refreshes a retired outcome without consuming a same-millisecond successor (replaced=%s)",
+    async (replaced) => {
+      const store = fixtures.makeStorePath();
+      const startedAt = Date.now();
+      const retired = createDueIsolatedJob({
+        id: "retired-batch",
+        nowMs: startedAt,
+        nextRunAtMs: startedAt,
+      });
+      const current = createDueIsolatedJob({
+        id: "current-batch",
+        nowMs: startedAt,
+        nextRunAtMs: startedAt,
+      });
+      retired.schedule = { kind: "at", at: new Date(startedAt).toISOString() };
+      retired.deleteAfterRun = false;
+      retired.state.runningAtMs = startedAt;
+      current.state.runningAtMs = startedAt;
+      await saveCronStore(store.storePath, { version: 1, jobs: [retired, current] });
+      const retiredReceipt = claimReceipt(store.storePath, retired, startedAt);
+      const currentReceipt = claimReceipt(store.storePath, current, startedAt);
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => startedAt,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(),
+      });
+      const taskRunId = tryCreateCronTaskRunHandle({
+        state,
+        job: retired,
+        startedAt,
+        runReceipt: retiredReceipt,
+      }).runId;
+      const retiredMarker = markCronJobActive(retired.id);
+      const reservationIdentity = reserveQueuedCronRun(state, retired.id, startedAt, {
+        runReceipt: retiredReceipt,
+      });
+      advanceCronActiveJobGeneration();
+      const currentMarker = markCronJobActive(current.id);
+      let successor: ReturnType<typeof claimReceipt> | undefined;
+      if (replaced) {
+        finishCronRunReceipt({
+          handle: retiredReceipt,
+          status: "superseded",
+          finishedAtMs: startedAt,
+        });
+        successor = claimReceipt(store.storePath, retired, startedAt);
+      }
+      try {
+        await finalizeCompletedCronRunOutcomes(state, [
+          authorOutcome(state, {
+            jobId: retired.id,
+            job: retired,
+            taskRunId,
+            activeJobMarker: retiredMarker,
+            reservationIdentity,
+            runReceipt: retiredReceipt,
+            status: "ok",
+            startedAt,
+            endedAt: startedAt,
+          }),
+          authorOutcome(state, {
+            jobId: current.id,
+            job: current,
+            activeJobMarker: currentMarker,
+            runReceipt: currentReceipt,
+            status: "ok",
+            startedAt,
+            endedAt: startedAt,
+          }),
+        ]);
+        const persisted = (await loadCronStore(store.storePath)).jobs.find(
+          (job) => job.id === retired.id,
+        );
+        if (successor) {
+          expect(persisted?.state.runningAtMs).toBe(startedAt);
+          expect(persisted?.state.lastRunStatus).toBeUndefined();
+          expect(
+            inspectActiveCronRunReceipt({ storePath: store.storePath, jobId: retired.id })
+              ?.receiptId,
+          ).toBe(successor.receiptId);
+        } else {
+          expect(persisted).toMatchObject({ enabled: false, state: { lastRunStatus: "ok" } });
+          expect(persisted?.state.runningAtMs).toBeUndefined();
+        }
+        expect(state.store?.jobs.find((job) => job.id === retired.id)).toEqual(persisted);
+      } finally {
+        if (successor) {
+          finishCronRunReceipt({ handle: successor, status: "skipped", finishedAtMs: startedAt });
+        }
+      }
+    },
+  );
+
   it("emits only committed authoritative outcomes after a rejected batch attempt", async () => {
     const store = fixtures.makeStorePath();
     const startedAt = Date.parse("2026-02-06T10:04:59.250Z");
