@@ -220,6 +220,31 @@ On npm 11.15 and earlier, omit `--allow-scripts=openclaw`. Plugin dependency
 convergence remains intentionally script-disabled and continues to use the
 `--ignore-scripts` commands above.
 
+### Native imports from a standalone source build
+
+To import an already-built `extensions/<package>/dist` directly with Node,
+explicitly prepare its host link from the source checkout root:
+
+```bash
+node scripts/lib/plugin-npm-runtime-build.mjs --prepare-native-import extensions/<package>
+```
+
+This requires existing root SDK output in `dist/plugin-sdk` and the selected
+package's standalone runtime output. If the package output is missing, build
+it first with `node scripts/lib/plugin-npm-runtime-build.mjs extensions/<package>`.
+The preparation command does not rebuild either output or execute plugin code.
+It only links the checkout as `node_modules/openclaw` for a real immediate
+source package that declares `openclaw` in `peerDependencies` or `dependencies`.
+It does not install third-party dependencies; those must already be available
+through the pnpm workspace.
+
+Preparation refuses symlinked package paths, unsafe manifests, and conflicting
+dependency paths instead of reporting success. Ordinary package builds remain
+artifact-only. Postinstall and root build preparation still remove source
+plugin-local `node_modules`, including this link; rerun the explicit preparation
+command afterward when needed. Runtime loading never performs this setup or
+runs a package manager.
+
 ## Legacy cleanup
 
 Older OpenClaw versions generated bundled-plugin dependency roots at startup
