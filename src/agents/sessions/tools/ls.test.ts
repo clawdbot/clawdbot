@@ -42,7 +42,7 @@ describe("ls tool", () => {
     const cwd = tempDirs.make("openclaw-ls-links-");
     const tool = createLsTool(cwd);
     const symlinkType = process.platform === "win32" ? "junction" : "dir";
-    const list = (limit?: number) => tool.execute("ls-links", { ...(limit ? { limit } : {}) });
+    const list = (limit?: number) => tool.execute("ls-links", limit ? { limit } : {});
 
     expect((await list()).content).toEqual([{ type: "text", text: "(empty directory)" }]);
     await fs.symlink(path.join(cwd, "missing-target"), path.join(cwd, "a-broken"), symlinkType);
