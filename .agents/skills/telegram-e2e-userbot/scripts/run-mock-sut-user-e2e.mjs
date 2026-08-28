@@ -789,7 +789,7 @@ async function waitForGatewayReady(child, port, timeoutMs) {
 }
 
 function waitForExit(child, timeoutMs) {
-  if (!child || child.exitCode !== null) return Promise.resolve(true);
+  if (!child || child.spawnError || child.exitCode !== null) return Promise.resolve(true);
   return new Promise((resolveWait) => {
     const timeout = setTimeout(() => finish(false), timeoutMs);
     const finish = (exited) => {
@@ -803,12 +803,29 @@ function waitForExit(child, timeoutMs) {
 }
 
 function processGroupExists(child) {
+  if (!child.pid) return false;
   try {
     process.kill(-child.pid, 0);
     return true;
   } catch {
     return false;
   }
+}
+
+export function watchChildCompletion(child) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (outcome) => {
+      if (settled) return;
+      settled = true;
+      resolve(outcome);
+    };
+    child.once("exit", (code) => finish({ type: "exit", code }));
+    child.once("error", (error) => {
+      child.spawnError = error;
+      finish({ type: "spawn-error", error });
+    });
+  });
 }
 
 function waitForProcessGroupExit(child, timeoutMs) {
@@ -856,6 +873,7 @@ async function stopChild(child, graceMs = 5_000) {
 async function waitForRecorderReady(pathname, child, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (child.spawnError) throw child.spawnError;
     if (fs.existsSync(pathname)) {
       return parseRecorderReady(JSON.parse(fs.readFileSync(pathname, "utf8")));
     }
@@ -1180,6 +1198,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
         stdio: ["inherit", "pipe", "pipe"],
       }),
     );
+    const probeCompletion = watchChildCompletion(probe);
     let recorderStdout = "";
     let recorderStderr = "";
     probe.stdout.setEncoding("utf8");
@@ -1382,10 +1401,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
           () => controlsStopped,
         )
       : Promise.resolve([]);
-    const probeOutcome = await Promise.race([
-      new Promise((resolveCode) => probe.on("exit", (code) => resolveCode({ type: "exit", code }))),
-      leaseFailure,
-    ]);
+    const probeOutcome = await Promise.race([probeCompletion, leaseFailure]);
     if (probeOutcome.type === "lease-failure") {
       await fenceLeaseFailure({
         error: probeOutcome.error,
@@ -1397,6 +1413,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
         persistLogs: persistRecorderLogs,
       });
     }
+    if (probeOutcome.type === "spawn-error") throw probeOutcome.error;
     const code = probeOutcome.code;
     ownedChildren.delete(probe);
     persistRecorderLogs();

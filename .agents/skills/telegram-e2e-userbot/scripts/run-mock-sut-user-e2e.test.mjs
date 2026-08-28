@@ -19,6 +19,7 @@ import {
   sanitizeChildEnvironment,
   summarizeScenarioCommand,
   waitForGatewayLeaseReady,
+  watchChildCompletion,
 } from "./run-mock-sut-user-e2e.mjs";
 
 function startOwnedChild() {
@@ -389,6 +390,25 @@ test("failed executable launches settle before credential release", async () => 
   assert.equal(result.status, null);
   assert.equal(result.timedOut, false);
   assert.match(result.stderr, /ENOENT/u);
+  let released = false;
+  await cleanupOwnedRuntime({
+    async release() {
+      released = true;
+    },
+  });
+  assert.equal(released, true);
+});
+
+test("failed direct probe launches settle before credential release", async () => {
+  const probe = ownChild(
+    spawn("/missing/openclaw-telegram-uv", [], {
+      detached: true,
+      stdio: "ignore",
+    }),
+  );
+  const outcome = await watchChildCompletion(probe);
+  assert.equal(outcome.type, "spawn-error");
+  assert.match(outcome.error.message, /ENOENT/u);
   let released = false;
   await cleanupOwnedRuntime({
     async release() {
