@@ -59,7 +59,13 @@ function context() {
   return { ...validatePublisherRequest(event(), env()), plan: gatePlan() };
 }
 
-function gatePlan() {
+function gatePlan(): {
+  baseSha: string;
+  changedPaths: Array<{ path: string; status: "M" }>;
+  headSha: string;
+  targets: string[];
+  version: 1;
+} {
   return {
     baseSha,
     changedPaths: [{ path: "scripts/pr", status: "M" }],

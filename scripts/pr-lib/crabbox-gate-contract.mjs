@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 export const CRABBOX_GATE_CHECK_NAME = "openclaw/crabbox-gate";
-export const CRABBOX_GATE_TEST_ENV =
+const CRABBOX_GATE_TEST_ENV =
   "CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_VITEST_MAX_WORKERS=1";
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;

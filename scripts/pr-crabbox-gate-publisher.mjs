@@ -290,8 +290,8 @@ export function validateBrokerProof({ bootstrapSha256, context, events, log, now
   }
 }
 
-function bootstrapHash(path = BOOTSTRAP_PATH) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+function bootstrapHash(bootstrapPath = BOOTSTRAP_PATH) {
+  return createHash("sha256").update(readFileSync(bootstrapPath)).digest("hex");
 }
 
 function resolvePlanInDetachedWorktree(context) {
@@ -322,6 +322,9 @@ function resolvePlanInDetachedWorktree(context) {
   }
 }
 
+/** @type {(context: Parameters<typeof resolvePlanInDetachedWorktree>[0]) => ReturnType<typeof resolvePlanInDetachedWorktree> | Promise<ReturnType<typeof resolvePlanInDetachedWorktree>>} */
+const defaultResolvePlan = resolvePlanInDetachedWorktree;
+
 export async function runPublisher({
   broker,
   event,
@@ -329,7 +332,7 @@ export async function runPublisher({
   organization,
   env,
   now = Date.now(),
-  resolvePlan = resolvePlanInDetachedWorktree,
+  resolvePlan = defaultResolvePlan,
 }) {
   const context = validatePublisherRequest(event, env);
   const localBootstrapHash = bootstrapHash();
@@ -351,7 +354,7 @@ export async function runPublisher({
     await github.request("GET", `/repos/${REPOSITORY}/git/ref/heads/main`),
     context.workflowSha,
   );
-  context.plan = await resolvePlan(context);
+  context.plan = await Promise.resolve(resolvePlan(context));
   if (context.plan.baseSha !== context.baseSha || context.plan.headSha !== context.headSha) {
     throw new Error("Crabbox gate plan does not bind the requested base and head");
   }
@@ -438,8 +441,8 @@ export function createJsonApi({
   requiredString(accessClientSecret, "Crabbox Access client secret");
   requiredString(token, "Crabbox coordinator token");
   return {
-    async request(path, options = {}) {
-      const response = await fetchImpl(new URL(path, base), {
+    async request(requestPath, options = {}) {
+      const response = await fetchImpl(new URL(requestPath, base), {
         headers: {
           Authorization: `Bearer ${token}`,
           "CF-Access-Client-Id": accessClientId,
@@ -449,7 +452,7 @@ export function createJsonApi({
       });
       if (!response.ok) {
         throw new Error(
-          `API GET ${path} failed (${response.status}): ${(await response.text()).slice(0, 300)}`,
+          `API GET ${requestPath} failed (${response.status}): ${(await response.text()).slice(0, 300)}`,
         );
       }
       return options.text ? response.text() : response.json();
@@ -459,8 +462,8 @@ export function createJsonApi({
 
 export function createGitHubApi({ token, fetchImpl = fetch }) {
   return {
-    async request(method, path, body) {
-      const response = await fetchImpl(`https://api.github.com${path}`, {
+    async request(method, requestPath, body) {
+      const response = await fetchImpl(`https://api.github.com${requestPath}`, {
         body: body === undefined ? undefined : JSON.stringify(body),
         headers: {
           Accept: "application/vnd.github+json",
@@ -473,7 +476,7 @@ export function createGitHubApi({ token, fetchImpl = fetch }) {
       });
       if (!response.ok) {
         throw new Error(
-          `GitHub API ${method} ${path} failed (${response.status}): ${(await response.text()).slice(0, 300)}`,
+          `GitHub API ${method} ${requestPath} failed (${response.status}): ${(await response.text()).slice(0, 300)}`,
         );
       }
       return response.status === 204 ? null : response.json();

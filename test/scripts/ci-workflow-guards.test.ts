@@ -6116,7 +6116,7 @@ server.listen(0, "127.0.0.1", () => {
 
       expect(checkoutStep.uses, jobName).toBe(CHECKOUT_V6);
       expect(checkoutStep.with, jobName).toEqual({
-        "fetch-depth": 0,
+        "fetch-depth": 1,
         "persist-credentials": false,
       });
     }
