@@ -28,7 +28,7 @@ function invalidSnapshot(params: {
     valid: false,
     runtimeConfig: params.config,
     config: params.config,
-    issues: params.issuePaths.map((path) => ({ path, message: "retired" })),
+    issues: params.issuePaths.map((issuePath) => ({ path: issuePath, message: "retired" })),
     warnings: [],
     legacyIssues: [{ path: "", message: "retired" }],
   };
