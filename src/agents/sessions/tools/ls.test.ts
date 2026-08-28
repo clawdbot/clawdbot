@@ -1,7 +1,12 @@
 // ls tool tests cover deterministic directory listings and safe limit
 // normalization for agent-visible file enumeration.
-import { describe, expect, it, vi } from "vitest";
-import { createLsToolDefinition, type LsOperations } from "./ls.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { createLsTool, createLsToolDefinition, type LsOperations } from "./ls.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function operations(entries: string[]): LsOperations {
   return {
@@ -33,6 +38,33 @@ function trackAbortListener(signal: AbortSignal) {
 }
 
 describe("ls tool", () => {
+  it("retains dangling links without losing directory suffixes or entry limits", async () => {
+    const cwd = tempDirs.make("openclaw-ls-links-");
+    const tool = createLsTool(cwd);
+    const symlinkType = process.platform === "win32" ? "junction" : "dir";
+    const list = (limit?: number) => tool.execute("ls-links", { ...(limit ? { limit } : {}) });
+
+    expect((await list()).content).toEqual([{ type: "text", text: "(empty directory)" }]);
+    await fs.symlink(path.join(cwd, "missing-target"), path.join(cwd, "a-broken"), symlinkType);
+
+    const dangling = await list();
+    expect(dangling.content).toEqual([{ type: "text", text: "a-broken" }]);
+    expect(dangling.details).toBeUndefined();
+
+    await fs.mkdir(path.join(cwd, "target-dir"));
+    await fs.symlink(path.join(cwd, "target-dir"), path.join(cwd, "link-to-dir"), symlinkType);
+    await fs.writeFile(path.join(cwd, "z-file.txt"), "fixture\n");
+    expect((await list()).content).toEqual([
+      { type: "text", text: "a-broken\nlink-to-dir/\ntarget-dir/\nz-file.txt" },
+    ]);
+
+    const limited = await list(1);
+    expect(limited.content).toEqual([
+      { type: "text", text: "a-broken\n\n[1 entries limit reached. Use limit=2 for more]" },
+    ]);
+    expect(limited.details).toEqual({ entryLimitReached: 1 });
+  });
+
   it("clamps non-positive limits instead of reporting a non-empty directory as empty", async () => {
     // Clamp to one entry so bad numeric input cannot hide directory contents.
     const tool = createLsToolDefinition("/workspace", {
