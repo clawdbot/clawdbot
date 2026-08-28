@@ -1,7 +1,6 @@
 /** Shared media tool routing, auth, path, and reference helpers. */
 import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -23,7 +22,6 @@ import {
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
 import type { WebMediaResult } from "../../media/web-media.js";
-import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
 import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
 import { resolveUserPath } from "../../utils.js";
@@ -461,16 +459,6 @@ export function resolveGenerateAction(
     default:
       throw new ToolInputError('action must be "generate", "status", or "list"');
   }
-}
-
-/**
- * Reads boolean tool parameters from either canonical or snake_case keys.
- */
-export function readBooleanToolParam(
-  params: Record<string, unknown>,
-  key: string,
-): boolean | undefined {
-  return parseBoolean(readSnakeCaseParamRaw(params, key));
 }
 
 /**

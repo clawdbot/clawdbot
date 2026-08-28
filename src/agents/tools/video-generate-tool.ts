@@ -9,6 +9,7 @@ import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.
 import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -57,7 +58,6 @@ import {
   hasGenerationToolAvailability,
   loadMediaToolReferences,
   normalizeMediaReferenceInputs,
-  readBooleanToolParam,
   readGenerationTimeoutMs,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
@@ -900,8 +900,8 @@ export function createVideoGenerateTool(options?: {
       ) {
         throw new ToolInputError("durationSeconds must be a positive integer");
       }
-      const audio = readBooleanToolParam(args, "audio");
-      const watermark = readBooleanToolParam(args, "watermark");
+      const audio = readBooleanParam(args, "audio");
+      const watermark = readBooleanParam(args, "watermark");
       const timeoutMs = readGenerationTimeoutMs(args) ?? videoGenerationModelConfig.timeoutMs;
       // providerOptions must be a plain object. Arrays are objects in JS, so
       // exclude them explicitly — a bogus call like `providerOptions: ["seed", 42]`
