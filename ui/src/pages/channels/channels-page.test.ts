@@ -72,7 +72,9 @@ function createGateway(): TestGateway {
               channelAccounts: {},
               channelDefaultAccountId: {},
             }
-          : {},
+          : method === "plugins.list"
+            ? { plugins: [], diagnostics: [], mutationAllowed: true }
+            : {},
     ),
   } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
@@ -118,6 +120,7 @@ function createContext(gateway: ApplicationContext["gateway"]) {
   const ensureSchemaLoaded = vi.spyOn(runtimeConfig, "ensureSchemaLoaded").mockResolvedValue();
   const context = {
     basePath: "",
+    resourceBasePath: "",
     gateway,
     channels,
     runtimeConfig,
@@ -135,6 +138,75 @@ afterEach(() => {
 });
 
 describe("ChannelsPage lifecycle", () => {
+  it("loads plugin metadata and package icons for channel presentation", async () => {
+    const gateway = createGateway();
+    gateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
+      } as unknown as ApplicationGatewaySnapshot["hello"],
+    });
+    const source = createContext(gateway);
+    source.channels.state.channelsSnapshot = {
+      ts: 0,
+      channelOrder: ["slack"],
+      channelLabels: { slack: "slack" },
+      channelDetailLabels: { slack: "Legacy channel subtitle" },
+      channels: { slack: { configured: false } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    };
+    const request = vi.spyOn(gateway.snapshot.client!, "request");
+    const baseRequest = request.getMockImplementation();
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "plugins.list") {
+        return {
+          plugins: [
+            {
+              id: "slack",
+              name: "Slack",
+              description: "OpenClaw Slack channel plugin.",
+              origin: "bundled",
+              installed: true,
+              enabled: false,
+              state: "disabled",
+              hasIcon: true,
+            },
+          ],
+          diagnostics: [],
+          mutationAllowed: true,
+        };
+      }
+      return await baseRequest?.(method, params);
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(new Uint8Array([137, 80, 78, 71]), {
+            status: 200,
+            headers: { "Content-Type": "image/png" },
+          }),
+      ),
+    );
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:slack-plugin-icon");
+    const page = document.createElement("openclaw-channels-page") as ChannelsPageTestElement;
+    page.context = source.context;
+    document.body.append(page);
+
+    await vi.waitFor(() => {
+      expect(page.querySelector(".settings-row__title")?.textContent).toBe("Slack");
+      expect(page.querySelector(".settings-row__desc")?.textContent).toBe(
+        "OpenClaw Slack channel plugin.",
+      );
+      expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(
+        "blob:slack-plugin-icon",
+      );
+    });
+    expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.any(Object));
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
   it("loads schema again when the runtime-config source changes", async () => {
     const gateway = createGateway();
     const first = createContext(gateway);
@@ -250,13 +322,17 @@ describe("ChannelsPage lifecycle", () => {
     const refreshConfig = vi.spyOn(source.runtimeConfig, "refresh");
     const refreshChannels = vi.spyOn(source.channels, "refresh");
     const request = vi.spyOn(gateway.snapshot.client!, "request");
-    request.mockRejectedValueOnce(
-      new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message:
-          "channel rejected: OPENAI_API_KEY=sk-1234567890abcdef <img src=x onerror=alert(1)>",
-      }),
-    );
+    const baseRequest = request.getMockImplementation();
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "config.set") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message:
+            "channel rejected: OPENAI_API_KEY=sk-1234567890abcdef <img src=x onerror=alert(1)>",
+        });
+      }
+      return await baseRequest?.(method, params);
+    });
     const page = document.createElement("openclaw-channels-page") as ChannelsPageTestElement;
     page.context = source.context;
     document.body.append(page);

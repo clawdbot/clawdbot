@@ -11,9 +11,10 @@ export function renderChannelIcon(
   channelId: string,
   label: string,
   variant: "tile" | "cover" | "picker",
+  options: { pluginIconUrl?: string; preferPluginIcon?: boolean } = {},
 ) {
   const artVariant = variant === "picker" ? "tile" : variant;
-  const art = pluginArtPath(channelId);
+  const art = options.pluginIconUrl ?? (options.preferPluginIcon ? null : pluginArtPath(channelId));
   const [from, to] = art ? ["", ""] : pluginFallbackGradient(channelId);
   const style = `${variant === "picker" ? "--channels-art-size:24px;" : ""}${
     art ? "" : `--channels-art-a:${from};--channels-art-b:${to}`

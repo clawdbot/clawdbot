@@ -1,6 +1,7 @@
 import { consume } from "@lit/context";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   ChannelsPairingListResult,
   ChannelsPairingRequest,
@@ -17,6 +18,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
   GatewayPageController,
@@ -25,6 +27,7 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { fetchPluginIconBlobUrl } from "../plugins/icon-loader.ts";
 import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./nostr-profile-ops.ts";
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
 import { renderChannels } from "./view.ts";
@@ -33,8 +36,14 @@ import { runWhatsAppLogoutConfirmation } from "./whatsapp-logout.ts";
 import { ChannelWizardHost } from "./wizard-host.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
+type PluginPresentationRequest = {
+  client: GatewayBrowserClient;
+  controller: AbortController;
+  iconTimeout?: ReturnType<typeof setTimeout>;
+};
 
 const CHANNEL_PAIRING_POLL_INTERVAL_MS = 30_000;
+const CHANNEL_PLUGIN_ICON_TIMEOUT_MS = 10_000;
 const CHANNELS_DOCS_URL = "https://docs.openclaw.ai/channels";
 
 type NostrOperation = {
@@ -79,6 +88,14 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   @state()
   private showAdvancedSettings = false;
+
+  @state()
+  private pluginCatalog: PluginListResult | null = null;
+
+  @state()
+  private pluginIconUrls: Record<string, string> = {};
+
+  private pluginPresentationRequest: PluginPresentationRequest | null = null;
 
   private readonly wizardHost = new ChannelWizardHost({
     getContext: () => this.context,
@@ -166,6 +183,9 @@ class ChannelsPage extends OpenClawLightDomElement {
     if (change.identityChanged || snapshot.phase !== "connected") {
       this.clearNostrForm();
     }
+    if (change.identityChanged || change.connectionChanged || snapshot.phase !== "connected") {
+      this.resetPluginPresentation();
+    }
     if (
       change.identityChanged ||
       pairingAuthChanged ||
@@ -215,6 +235,8 @@ class ChannelsPage extends OpenClawLightDomElement {
       return;
     }
 
+    this.ensurePluginCatalog(client);
+
     const channels = context.channels.state;
     const config = context.runtimeConfig.state;
     if (!channels.channelsSnapshot && !channels.channelsLoading) {
@@ -246,10 +268,88 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.pairingAccountFilter = null;
     this.pairingNotice = null;
     this.pairingPolling.stop();
+    this.resetPluginPresentation();
     this.invalidateNostrForm();
     this.subscriptions.clear();
     this.schemaLoadStarted = false;
     super.disconnectedCallback();
+  }
+
+  private ensurePluginCatalog(client: GatewayBrowserClient) {
+    if (this.pluginCatalog || this.pluginPresentationRequest?.client === client) {
+      return;
+    }
+    this.pluginPresentationRequest?.controller.abort();
+    const controller = new AbortController();
+    const request: PluginPresentationRequest = { client, controller };
+    this.pluginPresentationRequest = request;
+    void client
+      .request<PluginListResult>("plugins.list", {}, { signal: controller.signal })
+      .then(async (result) => {
+        if (
+          this.pluginPresentationRequest !== request ||
+          this.context.gateway.snapshot.client !== client
+        ) {
+          return;
+        }
+        this.pluginCatalog = result;
+        request.iconTimeout = setTimeout(
+          () => controller.abort(new DOMException("plugin icon fetch timed out", "TimeoutError")),
+          CHANNEL_PLUGIN_ICON_TIMEOUT_MS,
+        );
+        const iconEntries = await Promise.all(
+          result.plugins
+            .filter((plugin) => plugin.hasIcon)
+            .map(async (plugin) => {
+              const url = await fetchPluginIconBlobUrl({
+                pluginId: plugin.id,
+                resourceBasePath: this.context.resourceBasePath,
+                gatewayUrl: this.context.gateway.connection.gatewayUrl,
+                auth: {
+                  hello: this.context.gateway.snapshot.hello,
+                  settings: { token: this.context.gateway.connection.token },
+                  password: this.context.gateway.connection.password,
+                },
+                signal: controller.signal,
+              }).catch(() => null);
+              return [plugin.id, url] as const;
+            }),
+        );
+        const loadedUrls = Object.fromEntries(
+          iconEntries.filter((entry): entry is readonly [string, string] => entry[1] !== null),
+        );
+        if (this.pluginPresentationRequest !== request || !this.isConnected) {
+          for (const url of Object.values(loadedUrls)) {
+            URL.revokeObjectURL(url);
+          }
+          return;
+        }
+        this.pluginIconUrls = loadedUrls;
+      })
+      .catch(() => {
+        // Channel status metadata remains a complete fallback when catalog loading fails.
+      })
+      .finally(() => {
+        if (request.iconTimeout) {
+          clearTimeout(request.iconTimeout);
+        }
+        if (this.pluginPresentationRequest === request) {
+          this.pluginPresentationRequest = null;
+        }
+      });
+  }
+
+  private resetPluginPresentation() {
+    this.pluginPresentationRequest?.controller.abort();
+    if (this.pluginPresentationRequest?.iconTimeout) {
+      clearTimeout(this.pluginPresentationRequest.iconTimeout);
+    }
+    this.pluginPresentationRequest = null;
+    for (const url of Object.values(this.pluginIconUrls)) {
+      URL.revokeObjectURL(url);
+    }
+    this.pluginCatalog = null;
+    this.pluginIconUrls = {};
   }
 
   private setShowAdvancedSettings(enabled: boolean) {
@@ -659,6 +759,8 @@ class ChannelsPage extends OpenClawLightDomElement {
           connected: channels.connected,
           loading: channels.channelsLoading,
           snapshot: channels.channelsSnapshot,
+          pluginCatalog: this.pluginCatalog,
+          pluginIconUrls: this.pluginIconUrls,
           lastError: channels.channelsError,
           lastSuccessAt: channels.channelsLastSuccess,
           pairingLoading: channels.pairingLoading,

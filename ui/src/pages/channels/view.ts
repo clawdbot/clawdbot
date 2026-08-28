@@ -115,7 +115,7 @@ export function renderChannels(props: ChannelsProps) {
     ${selected
       ? renderChannelDetail({
           channelId: selected,
-          label: resolveChannelLabel(props.snapshot, selected),
+          label: resolveChannelLabel(props, selected),
           props,
           data,
           onClose: () => props.onCloseDetail(),
@@ -125,7 +125,10 @@ export function renderChannels(props: ChannelsProps) {
     ${props.canAdmin
       ? renderChannelWizard({
           wizard: props.wizard,
-          channelLabel: (channelId) => resolveChannelLabel(props.snapshot, channelId),
+          channelLabel: (channelId) => resolveChannelLabel(props, channelId),
+          channelIconUrl: (channelId) => props.pluginIconUrls[channelId],
+          channelHasPluginIcon: (channelId) =>
+            resolveChannelPlugin(props, channelId)?.hasIcon === true,
           multiselectValues: props.wizardMultiselect,
           onToggleMultiselect: props.onWizardToggleMultiselect,
           textValue: props.wizardTextValue,
@@ -168,24 +171,28 @@ function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKe
   return [...new Set([...statusOrder, ...RECOMMENDED_CHANNEL_ORDER])];
 }
 
-function resolveChannelLabel(snapshot: ChannelsStatusSnapshot | null, key: string): string {
+function resolveChannelPlugin(props: ChannelsProps, key: string) {
+  return props.pluginCatalog?.plugins.find((plugin) => plugin.id === key);
+}
+
+function resolveChannelLabel(props: ChannelsProps, key: string): string {
+  const snapshot = props.snapshot;
   const labels = snapshot?.channelLabels;
   return (
+    resolveChannelPlugin(props, key)?.name ??
     snapshot?.channelMeta?.find((entry) => entry.id === key)?.label ??
     (labels && Object.hasOwn(labels, key) ? labels[key] : undefined) ??
     key
   );
 }
 
-function resolveChannelDetailLabel(
-  snapshot: ChannelsStatusSnapshot | null,
-  key: string,
-): string | null {
+function resolveChannelDetailLabel(props: ChannelsProps, key: string): string | null {
+  const snapshot = props.snapshot;
   const labels = snapshot?.channelDetailLabels;
   const detail =
     snapshot?.channelMeta?.find((entry) => entry.id === key)?.detailLabel ??
     (labels && Object.hasOwn(labels, key) ? labels[key] : null);
-  return detail && detail !== resolveChannelLabel(snapshot, key) ? detail : null;
+  return detail && detail !== resolveChannelLabel(props, key) ? detail : null;
 }
 
 function resolveRowState(key: ChannelKey, props: ChannelsProps): ChannelCardState {
@@ -230,10 +237,10 @@ function lastActivityLine(key: ChannelKey, props: ChannelsProps): string | null 
 }
 
 function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
-  const label = resolveChannelLabel(props.snapshot, key);
+  const label = resolveChannelLabel(props, key);
   const description =
     lastActivityLine(key, props) ??
-    resolveChannelDetailLabel(props.snapshot, key) ??
+    resolveChannelDetailLabel(props, key) ??
     t("channels.hub.openDetails");
   return html`
     <button
@@ -241,7 +248,10 @@ function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
       class="settings-row settings-row--nav channels-item"
       @click=${() => props.onShowDetail(key)}
     >
-      ${renderChannelIcon(key, label, "tile")}
+      ${renderChannelIcon(key, label, "tile", {
+        pluginIconUrl: props.pluginIconUrls[key],
+        preferPluginIcon: resolveChannelPlugin(props, key)?.hasIcon === true,
+      })}
       <div class="settings-row__text">
         <span class="settings-row__title">${label}</span>
         <span class="settings-row__desc">${description}</span>
@@ -255,9 +265,10 @@ function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
 }
 
 function renderAvailableRow(key: ChannelKey, props: ChannelsProps) {
-  const label = resolveChannelLabel(props.snapshot, key);
+  const plugin = resolveChannelPlugin(props, key);
+  const label = resolveChannelLabel(props, key);
   const description =
-    resolveChannelDetailLabel(props.snapshot, key) ?? t("channels.hub.guidedSetup");
+    plugin?.description ?? resolveChannelDetailLabel(props, key) ?? t("channels.hub.guidedSetup");
   return html`
     <div class="settings-row channels-item">
       <button
@@ -266,7 +277,10 @@ function renderAvailableRow(key: ChannelKey, props: ChannelsProps) {
         title=${t("channels.hub.openDetails")}
         @click=${() => props.onShowDetail(key)}
       >
-        ${renderChannelIcon(key, label, "tile")}
+        ${renderChannelIcon(key, label, "tile", {
+          pluginIconUrl: props.pluginIconUrls[key],
+          preferPluginIcon: plugin?.hasIcon === true,
+        })}
         <span class="settings-row__text">
           <span class="settings-row__title">${label}</span>
           <span class="settings-row__desc">${description}</span>
