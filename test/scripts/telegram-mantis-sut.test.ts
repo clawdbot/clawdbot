@@ -21,6 +21,40 @@ function sutSupervisorCommand(): string {
   return match[1];
 }
 
+function copyHermeticSutStopScript(params: {
+  root: string;
+  runtimeRootFile: string;
+  docker: string;
+  timeout?: { from: string; to: string };
+}): string {
+  const networkLockFile = path.join(params.root, "network.lock");
+  let source = fs
+    .readFileSync("scripts/mantis/mantis-sut-container.sh", "utf8")
+    .replace(
+      'readonly runtime_root_file="/etc/openclaw-mantis-sut-runtime-root"',
+      `readonly runtime_root_file=${JSON.stringify(params.runtimeRootFile)}`,
+    )
+    .replace(
+      'readonly docker_bin="/usr/bin/docker"',
+      `readonly docker_bin=${JSON.stringify(params.docker)}`,
+    )
+    .replace(
+      'readonly network_lock_file="/run/lock/openclaw-mantis-sut-network.lock"',
+      `readonly network_lock_file=${JSON.stringify(networkLockFile)}`,
+    );
+  if (params.timeout) {
+    source = source.replace(params.timeout.from, params.timeout.to);
+  }
+  // Missing substitutions would escape the tracked fixture root or restore the real deadline.
+  expect(source).toContain(params.runtimeRootFile);
+  expect(source).toContain(params.docker);
+  expect(source).toContain(networkLockFile);
+  if (params.timeout) {
+    expect(source).toContain(params.timeout.to);
+  }
+  return source;
+}
+
 describe("Telegram Mantis SUT", () => {
   it("keeps stderr when a container action is terminated", () => {
     expect(() =>
@@ -94,22 +128,12 @@ describe("Telegram Mantis SUT", () => {
       { mode: 0o755 },
     );
     const sutScript = path.join(root, "mantis-sut-container.sh");
-    const source = fs
-      .readFileSync("scripts/mantis/mantis-sut-container.sh", "utf8")
-      .replace(
-        'readonly runtime_root_file="/etc/openclaw-mantis-sut-runtime-root"',
-        `readonly runtime_root_file=${JSON.stringify(runtimeRootFile)}`,
-      )
-      .replace(
-        'readonly docker_bin="/usr/bin/docker"',
-        `readonly docker_bin=${JSON.stringify(docker)}`,
-      )
-      .replace("--kill-after=5s 30s", "--kill-after=1s 1s");
-    // A substitution that stops matching would silently point the test at the real Docker
-    // binary and the real 30s deadline, so it would still pass while proving nothing.
-    expect(source).toContain(runtimeRootFile);
-    expect(source).toContain(docker);
-    expect(source).toContain("--kill-after=1s 1s");
+    const source = copyHermeticSutStopScript({
+      root,
+      runtimeRootFile,
+      docker,
+      timeout: { from: "--kill-after=5s 30s", to: "--kill-after=1s 1s" },
+    });
     fs.writeFileSync(sutScript, source, { mode: 0o755 });
 
     try {
@@ -169,18 +193,7 @@ describe("Telegram Mantis SUT", () => {
       { mode: 0o755 },
     );
     const sutScript = path.join(root, "mantis-sut-container.sh");
-    const source = fs
-      .readFileSync("scripts/mantis/mantis-sut-container.sh", "utf8")
-      .replace(
-        'readonly runtime_root_file="/etc/openclaw-mantis-sut-runtime-root"',
-        `readonly runtime_root_file=${JSON.stringify(runtimeRootFile)}`,
-      )
-      .replace(
-        'readonly docker_bin="/usr/bin/docker"',
-        `readonly docker_bin=${JSON.stringify(docker)}`,
-      );
-    expect(source).toContain(runtimeRootFile);
-    expect(source).toContain(docker);
+    const source = copyHermeticSutStopScript({ root, runtimeRootFile, docker });
     fs.writeFileSync(sutScript, source, { mode: 0o755 });
 
     try {
