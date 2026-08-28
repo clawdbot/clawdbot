@@ -24,6 +24,7 @@ import {
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
   resolvePluginApprovalTimeoutMs,
   truncatePluginApprovalDetail,
+  truncatePluginApprovalDisplayField,
 } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -159,25 +160,18 @@ export function createPluginApprovalHandlers(
 
       // Sanitize once at the creation boundary, like exec command text: the
       // raw record otherwise reaches channel messages, iOS push, and the web
-      // modal unescaped (bidi/invisible spoofing). Escaping expands invisible
-      // chars to \u{...}, so re-check the protocol caps: a spoof-heavy title
-      // must fail loud here, not as a misleading registration throw later.
-      const sanitizedTitle = sanitizeExecApprovalDisplayText(p.title);
-      const sanitizedDescription = sanitizeExecApprovalWarningText(p.description);
-      if (
-        Array.from(sanitizedTitle).length > PLUGIN_APPROVAL_TITLE_MAX_LENGTH ||
-        Array.from(sanitizedDescription).length > PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH
-      ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "approval title or description exceeds the display limit after sanitization",
-          ),
-        );
-        return;
-      }
+      // modal unescaped (bidi/invisible spoofing). Redaction and invisible-char
+      // escaping are renderer-neutral; channel markup escaping belongs to the
+      // renderer that owns the markup dialect, so the stored copy stays literal
+      // for the Control UI, Teams, and Discord.
+      const sanitizedTitle = truncatePluginApprovalDisplayField(
+        sanitizeExecApprovalDisplayText(p.title),
+        PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+      );
+      const sanitizedDescription = truncatePluginApprovalDisplayField(
+        sanitizeExecApprovalWarningText(p.description),
+        PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
+      );
       const rawDetail = normalizeTrimmedString(p.detail);
       // Untrusted display metadata gets the same escape as title/description:
       // pluginId/toolName/agentId are interpolated into channel approval text.

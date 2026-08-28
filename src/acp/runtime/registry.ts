@@ -9,6 +9,14 @@ export type AcpRuntimeBackend = {
   id: string;
   runtime: AcpRuntime;
   healthy?: () => boolean;
+  /**
+   * Plugin that owns approvals raised by this backend's permission requests.
+   * The Gateway trusts this id for approval policy and audit, so a backend must
+   * declare it explicitly; the registry id is not a substitute because any
+   * plugin may register an arbitrary id. Backends that omit it cannot route
+   * permission requests through the plugin approval bus.
+   */
+  approvalOwnerPluginId?: string;
 };
 
 type AcpRuntimeRegistryGlobalState = {
@@ -90,6 +98,21 @@ export function getAcpRuntimeBackend(id?: string): AcpRuntimeBackend | null {
     }
   }
   return ACP_BACKENDS_BY_ID.values().next().value ?? null;
+}
+
+/**
+ * Resolves the approval owner a backend declared at registration.
+ *
+ * Returns null when the backend is unknown or declared no owner, so callers
+ * fail closed instead of attributing the approval to an unrelated plugin.
+ */
+export function resolveAcpRuntimeApprovalOwnerPluginId(backendId?: string): string | null {
+  const normalized = normalizeOptionalLowercaseString(backendId) || "";
+  if (!normalized) {
+    return null;
+  }
+  const backend = ACP_BACKENDS_BY_ID.get(normalized);
+  return normalizeOptionalLowercaseString(backend?.approvalOwnerPluginId) || null;
 }
 
 /** Resolves a healthy backend or throws a typed ACP runtime error. */

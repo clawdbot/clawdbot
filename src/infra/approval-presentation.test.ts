@@ -136,18 +136,63 @@ describe("buildApprovalPresentation", () => {
       title,
       description,
     });
-    expect(
-      buildPluginPresentation({
-        title: `${title}${String.fromCodePoint(0x1f680)}`,
-        description,
-      }),
-    ).toBeNull();
-    expect(
-      buildPluginPresentation({
-        title,
-        description: `${description}${String.fromCodePoint(0x1f6e1)}`,
-      }),
-    ).toBeNull();
+    const truncatedTitle = buildPluginPresentation({
+      title: `${title}${String.fromCodePoint(0x1f680)}`,
+      description,
+    });
+    expect(truncatedTitle).toMatchObject({
+      kind: "plugin",
+      title: expect.stringMatching(/…$/u),
+    });
+    if (truncatedTitle?.kind !== "plugin") {
+      throw new Error("expected plugin presentation");
+    }
+    expect(Array.from(truncatedTitle.title)).toHaveLength(80);
+    const truncatedDescription = buildPluginPresentation({
+      title,
+      description: `${description}${String.fromCodePoint(0x1f6e1)}`,
+    });
+    expect(truncatedDescription).toMatchObject({
+      kind: "plugin",
+      description: expect.stringMatching(/…$/u),
+    });
+    if (truncatedDescription?.kind !== "plugin") {
+      throw new Error("expected plugin presentation");
+    }
+    expect(Array.from(truncatedDescription.description)).toHaveLength(512);
+  });
+
+  it("leaves channel entities in stored plugin copy untouched", () => {
+    const storedTitle = "deploy &amp; ship";
+    const presentation = buildPluginPresentation({
+      title: storedTitle,
+      description: "Command: foo && bar",
+    });
+
+    expect(presentation).toMatchObject({
+      kind: "plugin",
+      title: storedTitle,
+      description: expect.stringContaining("foo && bar"),
+    });
+    expect(JSON.stringify(presentation)).not.toContain("&amp;amp;");
+  });
+
+  it("keeps plugin presentation text renderer-neutral for non-Slack surfaces", () => {
+    // Control UI, Teams, and Discord render this projection verbatim, so shell
+    // punctuation must survive. Slack escapes mrkdwn in its own renderer.
+    const presentation = buildPluginPresentation({
+      title: "*Run* @channel",
+      description: "ACP tool kind: execute. Command: `rm -rf /` <https://evil.test|click>",
+    });
+
+    expect(presentation).toMatchObject({
+      kind: "plugin",
+      title: "*Run* @channel",
+      description: expect.stringContaining("`rm -rf /`"),
+    });
+    const serialized = JSON.stringify(presentation);
+    expect(serialized).not.toContain("\u2217Run\u2217");
+    expect(serialized).not.toContain("\uff20channel");
   });
 
   it("truncates oversized plugin detail without invalidating the presentation", () => {

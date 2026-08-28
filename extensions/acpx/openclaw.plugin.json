@@ -33,7 +33,7 @@
       },
       "nonInteractivePermissions": {
         "type": "string",
-        "enum": ["deny", "fail"]
+        "enum": ["plugin", "deny", "fail"]
       },
       "pluginToolsMcpBridge": {
         "type": "boolean"
@@ -115,7 +115,7 @@
     },
     "nonInteractivePermissions": {
       "label": "Non-Interactive Permission Policy",
-      "help": "Policy when interactive permission prompts are unavailable."
+      "help": "Policy when interactive permission prompts are unavailable. Absent config keeps fail; set plugin to ask through OpenClaw plugin approvals."
     },
     "pluginToolsMcpBridge": {
       "label": "Plugin Tools MCP Bridge",

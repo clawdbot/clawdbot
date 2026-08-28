@@ -68,34 +68,42 @@ form and URL requests can still reach the operator as Gateway questions during
 a channel-delivered turn; those are separate from permission approval. ACPX
 uses separate harness-level settings under `plugins.entries.acpx.config`:
 
-| Setting                     | Values          | Meaning                                     |
-| --------------------------- | --------------- | ------------------------------------------- |
-| `permissionMode`            | `approve-reads` | Auto-approve reads only.                    |
-| `permissionMode`            | `approve-all`   | Auto-approve writes and shell commands.     |
-| `permissionMode`            | `deny-all`      | Deny all permission prompts.                |
-| `nonInteractivePermissions` | `fail`          | Abort when a prompt would be required.      |
-| `nonInteractivePermissions` | `deny`          | Deny the prompt and continue when possible. |
+| Setting                     | Values          | Meaning                                              |
+| --------------------------- | --------------- | ---------------------------------------------------- |
+| `permissionMode`            | `approve-reads` | Auto-approve reads only.                             |
+| `permissionMode`            | `approve-all`   | Auto-approve writes and shell commands.              |
+| `permissionMode`            | `deny-all`      | Deny all permission prompts.                         |
+| `nonInteractivePermissions` | `fail`          | Abort when a prompt would be required. **(default)** |
+| `nonInteractivePermissions` | `plugin`        | Ask through OpenClaw plugin approvals.               |
+| `nonInteractivePermissions` | `deny`          | Deny the prompt and continue when possible.          |
 
 Set ACPX permissions separately from OpenClaw exec approvals:
 
 ```bash
-openclaw config set plugins.entries.acpx.config.permissionMode approve-all
-openclaw config set plugins.entries.acpx.config.nonInteractivePermissions fail
+openclaw config set plugins.entries.acpx.config.permissionMode approve-reads
+openclaw config set plugins.entries.acpx.config.nonInteractivePermissions plugin
+openclaw config set approvals.plugin.enabled true
 openclaw gateway restart
 ```
 
-Use `approve-all` as the ACPX break-glass equivalent of a no-prompt harness session. For setup details and failure modes, see [ACP agents setup](/tools/acp-agents-setup#permission-configuration).
+The recommended combination for human-reviewed Slack/ACP workflows is
+`approve-reads` plus an explicit `nonInteractivePermissions: "plugin"`. Absent
+config still resolves to `fail`. Use `approve-all` only as the ACPX
+break-glass equivalent of a no-prompt harness session. For setup details and
+failure modes, see
+[ACP agents setup](/tools/acp-agents-setup#permission-configuration).
 
 ## Choosing a mode
 
-| Goal                                          | Configure                                                   |
-| --------------------------------------------- | ----------------------------------------------------------- |
-| Block host commands completely                | `tools.exec.mode: "deny"`                                   |
-| Let known-safe commands run only              | `tools.exec.mode: "allowlist"`                              |
-| Ask a human for every new command shape       | `tools.exec.mode: "ask"`                                    |
-| Use Codex/OpenClaw auto-review before humans  | `tools.exec.mode: "auto"`                                   |
-| Skip host exec approvals entirely             | `tools.exec.mode: "full"` plus matching host approvals file |
-| Make non-interactive ACPX sessions write/exec | `plugins.entries.acpx.config.permissionMode: "approve-all"` |
+| Goal                                         | Configure                                                    |
+| -------------------------------------------- | ------------------------------------------------------------ |
+| Block host commands completely               | `tools.exec.mode: "deny"`                                    |
+| Let known-safe commands run only             | `tools.exec.mode: "allowlist"`                               |
+| Ask a human for every new command shape      | `tools.exec.mode: "ask"`                                     |
+| Use Codex/OpenClaw auto-review before humans | `tools.exec.mode: "auto"`                                    |
+| Skip host exec approvals entirely            | `tools.exec.mode: "full"` plus matching host approvals file  |
+| Review non-interactive ACPX writes and exec  | ACPX `approve-reads` + `nonInteractivePermissions: "plugin"` |
+| Skip ACPX permission review                  | `plugins.entries.acpx.config.permissionMode: "approve-all"`  |
 
 If a command still prompts or fails after changing mode, inspect both layers:
 

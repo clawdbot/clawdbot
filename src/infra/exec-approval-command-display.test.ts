@@ -228,6 +228,15 @@ describe("sanitizeExecApprovalDisplayText", () => {
     expect(result).toContain("client_id=visible");
     expect(result).toContain("safe=1");
   });
+
+  it("keeps canonical approval text renderer-neutral so non-Slack surfaces read literally", () => {
+    // Channel markup escaping belongs to the renderer that owns the dialect.
+    // Control UI, Teams, and Discord render this copy verbatim, so shell
+    // punctuation must survive unchanged instead of becoming mrkdwn escapes or
+    // fullwidth lookalikes.
+    const command = "touch /tmp/SIDE_EFFECT_HAPPENED && echo *done* @team";
+    expect(sanitizeExecApprovalDisplayText(command)).toBe(command);
+  });
 });
 
 describe("sanitizeExecApprovalWarningText", () => {

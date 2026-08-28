@@ -696,7 +696,7 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards the exact elicitation closure with the manager-composed turn signal", async () => {
+  it("forwards turn-owned interaction closures with the manager-composed signal", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -716,6 +716,7 @@ describe("AcpSessionManager", () => {
       yield { type: "done" as const, status: "cancelled" as const };
     });
     const onElicitation = vi.fn(async () => ({ action: "cancel" as const }));
+    const onPermissionRequest = vi.fn(async () => ({ outcome: "cancel" as const }));
     const caller = new AbortController();
     const manager = new AcpSessionManager();
 
@@ -728,10 +729,12 @@ describe("AcpSessionManager", () => {
       requestId: "r-elicitation",
       signal: caller.signal,
       onElicitation,
+      onPermissionRequest,
     });
     await vi.waitFor(() => expect(captured).toBeDefined());
 
     expect(captured?.onElicitation).toBe(onElicitation);
+    expect(captured?.onPermissionRequest).toBe(onPermissionRequest);
     expect(captured?.signal).not.toBe(caller.signal);
     expect(captured?.signal?.aborted).toBe(false);
 

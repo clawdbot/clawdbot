@@ -18,6 +18,7 @@ import {
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
   truncatePluginApprovalDetail,
+  truncatePluginApprovalDisplayField,
   type PluginApprovalRequestPayload,
 } from "./plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals.js";
@@ -33,10 +34,6 @@ function normalizeDecisionList(decisions: readonly ApprovalDecision[]): Approval
     result.push("deny");
   }
   return result;
-}
-
-function isWithinCodePointLimit(value: string, maxLength: number): boolean {
-  return Array.from(value).length <= maxLength;
 }
 
 function sanitizeOptionalSingleLine(value: unknown): string | null {
@@ -89,14 +86,16 @@ function buildPluginApprovalPresentation(params: {
   }
   // Plugin text crosses every reviewer surface. Apply the same redaction and
   // spoof-resistant escaping as exec prompts before enforcing wire-size limits.
-  const title = sanitizeExecApprovalDisplayText(rawTitle);
-  const description = sanitizeExecApprovalWarningText(rawDescription);
-  if (
-    !isWithinCodePointLimit(title, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
-    !isWithinCodePointLimit(description, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
-  ) {
-    return null;
-  }
+  // Markup escaping stays with the renderer so this canonical copy reads
+  // literally on surfaces that are not Slack mrkdwn.
+  const title = truncatePluginApprovalDisplayField(
+    sanitizeExecApprovalDisplayText(rawTitle),
+    PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+  );
+  const description = truncatePluginApprovalDisplayField(
+    sanitizeExecApprovalWarningText(rawDescription),
+    PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
+  );
   const severity =
     request.severity === "info" || request.severity === "warning" || request.severity === "critical"
       ? request.severity

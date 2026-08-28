@@ -272,6 +272,7 @@ export async function runManagerTurn(params: {
               requestId: input.requestId,
               signal: combinedSignal,
               onElicitation: input.onElicitation,
+              onPermissionRequest: input.onPermissionRequest,
             },
             eventGate,
             onBeforePrompt: input.onBeforePrompt,

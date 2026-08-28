@@ -16,6 +16,7 @@ import {
   formatAcpRuntimeErrorText,
   toAcpRuntimeError,
 } from "../../acp/runtime/errors.js";
+import { resolveAcpRuntimeApprovalOwnerPluginId } from "../../acp/runtime/registry.js";
 import {
   closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
@@ -70,12 +71,19 @@ import { needsTtsFallback } from "./dispatch-from-config.finalize.js";
 import { appendRecentHistoryImageContext } from "./history-media.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 
 const dispatchAcpManagerRuntimeLoader = createLazyImportLoader(
   () => import("./dispatch-acp-manager.runtime.js"),
 );
 const dispatchAcpAuditRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/command/attempt-execution.runtime.js"),
+);
+const dispatchAcpHostCapabilityLoader = createLazyImportLoader(
+  () => import("../../agents/harness/host-capability.js"),
+);
+const dispatchAcpPermissionHandlerLoader = createLazyImportLoader(
+  () => import("./acp-permission-handler.js"),
 );
 
 type OrderedAcpAttachment = {
@@ -121,6 +129,14 @@ function loadDispatchAcpManagerRuntime() {
 
 function loadDispatchAcpAuditRuntime() {
   return dispatchAcpAuditRuntimeLoader.load();
+}
+
+function loadDispatchAcpHostCapability() {
+  return dispatchAcpHostCapabilityLoader.load();
+}
+
+function loadDispatchAcpPermissionHandler() {
+  return dispatchAcpPermissionHandlerLoader.load();
 }
 
 function loadDispatchAcpTtsRuntime() {
@@ -713,6 +729,7 @@ export async function tryDispatchAcpReplyCore(params: {
     }
   };
   let admittedRunContext: AdmittedRunContext | undefined;
+  let closeAcpHostCapabilities: (() => void) | undefined;
   let nativeActionEvidenceRecorded = false;
   const recordUnsupportedNativeActionEvidence = () => {
     if (nativeActionEvidenceRecorded) {
@@ -893,6 +910,62 @@ export async function tryDispatchAcpReplyCore(params: {
     }).admit("acp");
     recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
     const turnAdmission = admittedRunContext;
+    const approvalSessionKey = normalizeOptionalString(params.ctx.ParentSessionKey) ?? sessionKey;
+    const sourceAgentId = resolveAgentIdFromSessionKey(
+      approvalSessionKey,
+      normalizeOptionalString(params.ctx.AgentId) ?? acpAgentId,
+    );
+    const routedThreadId = resolveRoutedDeliveryThreadId({
+      ctx: params.ctx,
+      sessionKey,
+    });
+    const sourceThreadId =
+      routedThreadId == null ? undefined : normalizeOptionalString(String(routedThreadId));
+    const { createAgentHarnessHostCapabilities } = await loadDispatchAcpHostCapability();
+    // Approval ownership follows the backend serving this session, not a fixed
+    // plugin id: the Gateway trusts it for approval policy and audit.
+    const acpBackendId =
+      acpResolution.kind === "ready"
+        ? normalizeOptionalString(acpResolution.meta.backend)
+        : undefined;
+    const approvalOwnerPluginId = resolveAcpRuntimeApprovalOwnerPluginId(acpBackendId);
+    const host = createAgentHarnessHostCapabilities({
+      pluginId: approvalOwnerPluginId ?? acpBackendId ?? "acp",
+      attempt: {
+        admittedRunContext,
+        runId: requestId,
+        agentId: sourceAgentId,
+        sessionKey: approvalSessionKey,
+        config: params.cfg,
+        abortSignal: params.abortSignal,
+        messageChannel:
+          params.originatingChannel ??
+          params.ctx.OriginatingChannel ??
+          params.ctx.Surface ??
+          params.ctx.Provider,
+        currentMessagingTarget:
+          params.originatingTo ??
+          normalizeOptionalString(params.ctx.OriginatingTo) ??
+          normalizeOptionalString(params.ctx.To) ??
+          undefined,
+        agentAccountId: params.originatingAccountId ?? effectiveDispatchAccountId,
+        currentThreadTs: sourceThreadId,
+        approvalReviewerDeviceId: normalizeOptionalString(params.ctx.ApprovalReviewerDeviceId),
+      },
+    });
+    closeAcpHostCapabilities = host.close;
+    const { createAcpPermissionHandler } = await loadDispatchAcpPermissionHandler();
+    // Fail closed when the backend declared no approval owner rather than
+    // raising approvals under another plugin's authority.
+    const onPermissionRequest = approvalOwnerPluginId
+      ? createAcpPermissionHandler({
+          host: host.capabilities,
+          cwd:
+            acpResolution.kind === "ready"
+              ? normalizeOptionalString(acpResolution.meta.cwd)
+              : undefined,
+        })
+      : undefined;
     const elicitationParams = {
       sourceSessionKey: sessionKey,
       targetSessionKey: canonicalSessionKey,
@@ -923,6 +996,7 @@ export async function tryDispatchAcpReplyCore(params: {
       requestId,
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
       onElicitation,
+      onPermissionRequest,
       onLifecycle: recordUnsupportedNativeActionEvidence,
       onEvent: async (event) => {
         auditRuntime.emitAcpRuntimeEvent({
@@ -1013,6 +1087,7 @@ export async function tryDispatchAcpReplyCore(params: {
       outcome: { kind: "error", error: acpError },
     });
   } finally {
+    closeAcpHostCapabilities?.();
     if (admittedRunContext) {
       closeAdmittedRunDelegatedAuthority(admittedRunContext);
     }

@@ -565,6 +565,9 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
 vi.mock("../../acp/runtime/registry.js", () => ({
   getAcpRuntimeBackend: acpMocks.getAcpRuntimeBackend,
   requireAcpRuntimeBackend: acpMocks.requireAcpRuntimeBackend,
+  // Backends declare themselves as their own approval owner, so mirror the
+  // backend id here: a null owner would drop the permission bridge entirely.
+  resolveAcpRuntimeApprovalOwnerPluginId: (backendId?: string) => backendId ?? "acpx",
 }));
 vi.mock("../../infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => ({

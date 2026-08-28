@@ -14,12 +14,14 @@ import {
   resolveAcpDispatchPolicyError,
   resolveAcpDispatchPolicyMessage,
 } from "../../../acp/policy.js";
+import { resolveAcpRuntimeApprovalOwnerPluginId } from "../../../acp/runtime/registry.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import {
   closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../../agents/admitted-run-context.js";
+import { createAgentHarnessHostCapabilities } from "../../../agents/harness/host-capability.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import {
   resolveAcpSpawnRuntimePolicyError,
@@ -38,6 +40,7 @@ import {
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import { createAcpPermissionHandler } from "../acp-permission-handler.js";
 import { consumeChannelRunAdmission } from "../channel-run-admission.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
@@ -395,6 +398,14 @@ async function runAcpSteer(params: {
   instruction: string;
   requestId: string;
   channelAdmissionEvidence?: ChannelAdmissionEvidence;
+  approvalSessionKey: string;
+  approvalAgentId: string;
+  messageChannel?: string;
+  currentMessagingTarget?: string;
+  agentAccountId?: string;
+  currentThreadTs?: string;
+  approvalReviewerDeviceId?: string;
+  abortSignal?: AbortSignal;
 }): Promise<string> {
   const acpManager = getAcpSessionManager();
   let output = "";
@@ -415,7 +426,41 @@ async function runAcpSteer(params: {
     onAdmitted: channelAdmission.onAdmitted,
   }).admit("acp");
 
+  let closeAcpHostCapabilities: (() => void) | undefined;
   try {
+    // Approval ownership follows the backend serving this session so a
+    // non-ACPX ACP backend cannot raise approvals under ACPX authority.
+    const steerResolution = acpManager.resolveSession({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    });
+    const steerBackendId =
+      steerResolution?.kind === "ready"
+        ? normalizeOptionalString(steerResolution.meta?.backend)
+        : undefined;
+    const approvalOwnerPluginId = resolveAcpRuntimeApprovalOwnerPluginId(steerBackendId);
+    const host = createAgentHarnessHostCapabilities({
+      pluginId: approvalOwnerPluginId ?? steerBackendId ?? "acp",
+      attempt: {
+        admittedRunContext,
+        runId: params.requestId,
+        agentId: params.approvalAgentId,
+        sessionKey: params.approvalSessionKey,
+        config: params.cfg,
+        abortSignal: params.abortSignal,
+        messageChannel: params.messageChannel,
+        currentMessagingTarget: params.currentMessagingTarget,
+        agentAccountId: params.agentAccountId,
+        currentThreadTs: params.currentThreadTs,
+        approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+      },
+    });
+    closeAcpHostCapabilities = host.close;
+    const onPermissionRequest = approvalOwnerPluginId
+      ? createAcpPermissionHandler({
+          host: host.capabilities,
+        })
+      : undefined;
     await acpManager.runTurn({
       admittedRunContext,
       cfg: params.cfg,
@@ -424,6 +469,11 @@ async function runAcpSteer(params: {
       text: params.instruction,
       mode: "steer",
       requestId: params.requestId,
+      // The permission handler receives the manager's combined turn signal, so the
+      // command abort signal must reach runTurn or a cancelled steer could still
+      // resolve a pending approval into a harness side effect.
+      ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+      onPermissionRequest,
       onEvent: (event) => {
         if (event.type !== "text_delta") {
           return;
@@ -440,6 +490,7 @@ async function runAcpSteer(params: {
       },
     });
   } finally {
+    closeAcpHostCapabilities?.();
     closeAdmittedRunDelegatedAuthority(admittedRunContext);
   }
   return output.trim();
@@ -491,6 +542,26 @@ export async function handleAcpSteerAction(
         instruction: parsed.value.instruction,
         requestId: `${resolveCommandRequestId(params)}:steer`,
         channelAdmissionEvidence: readChannelContextAdmissionEvidence(params.rootCtx ?? params.ctx),
+        approvalSessionKey: params.sessionKey,
+        approvalAgentId: resolveAgentIdFromSessionKey(
+          params.sessionKey,
+          normalizeOptionalString(params.agentId),
+        ),
+        messageChannel:
+          params.command.channel ||
+          normalizeOptionalString(params.ctx.OriginatingChannel) ||
+          normalizeOptionalString(params.ctx.Surface) ||
+          normalizeOptionalString(params.ctx.Provider),
+        currentMessagingTarget:
+          normalizeOptionalString(params.ctx.OriginatingTo) ??
+          normalizeOptionalString(params.ctx.To) ??
+          normalizeOptionalString(params.command.to),
+        agentAccountId:
+          normalizeOptionalString(params.command.accountId) ??
+          normalizeOptionalString(params.ctx.AccountId),
+        currentThreadTs: resolveAcpCommandThreadId(params),
+        approvalReviewerDeviceId: normalizeOptionalString(params.ctx.ApprovalReviewerDeviceId),
+        abortSignal: params.commandInvocationSignal ?? params.opts?.abortSignal,
       }),
     fallbackCode: "ACP_TURN_FAILED",
     fallbackMessage: "ACP steer failed before completion.",

@@ -1052,6 +1052,179 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     ]);
   });
 
+  it("routes an active turn permission request to its turn-owned handler", async () => {
+    const result = createDeferred<{
+      status: "completed";
+      stopReason: "end_turn";
+    }>();
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:cursor:acp:test",
+        acpSessionId: "cursor-session-1",
+        agentCommand: "cursor-agent acp",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      nonInteractivePermissions: "plugin",
+    });
+    vi.spyOn(delegate, "startTurn").mockImplementation(
+      (input): AcpRuntimeTurn => ({
+        requestId: input.requestId,
+        events: (async function* () {})(),
+        result: result.promise,
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      }),
+    );
+    const onPermissionRequest = vi.fn(async () => ({ outcome: "allow_once" as const }));
+    const turn = runtime.startTurn({
+      handle: {
+        sessionKey: "agent:cursor:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:cursor:acp:test",
+        acpxRecordId: "agent:cursor:acp:test",
+      },
+      text: "run a command",
+      mode: "prompt",
+      requestId: "turn-permission",
+      onPermissionRequest,
+    });
+    await vi.waitFor(() => expect(delegate.startTurn).toHaveBeenCalledOnce());
+
+    const upstreamPermissionHandler = (
+      delegate as unknown as {
+        options: {
+          onPermissionRequest: (
+            request: {
+              sessionId: string;
+              raw: {
+                toolCall: { toolCallId: string; title: string; kind: "execute" };
+                options: Array<{
+                  optionId: string;
+                  name: string;
+                  kind: "allow_once" | "reject_once";
+                }>;
+              };
+              inferredKind: "execute";
+            },
+            context: { signal: AbortSignal },
+          ) => Promise<{ outcome: string }>;
+        };
+      }
+    ).options.onPermissionRequest;
+    const request = {
+      sessionId: "cursor-session-1",
+      raw: {
+        toolCall: {
+          toolCallId: "tool-1",
+          title: "Run touch",
+          kind: "execute" as const,
+        },
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" as const },
+          { optionId: "deny", name: "Reject once", kind: "reject_once" as const },
+        ],
+      },
+      inferredKind: "execute" as const,
+    };
+    const signal = new AbortController().signal;
+
+    await expect(upstreamPermissionHandler(request, { signal })).resolves.toEqual({
+      outcome: "allow_once",
+    });
+    expect(onPermissionRequest).toHaveBeenCalledWith(
+      {
+        sessionId: "cursor-session-1",
+        toolCall: request.raw.toolCall,
+        options: request.raw.options,
+        inferredKind: "execute",
+      },
+      { signal },
+    );
+
+    result.resolve({ status: "completed", stopReason: "end_turn" });
+    await turn.result;
+    await expect(upstreamPermissionHandler(request, { signal })).resolves.toEqual({
+      outcome: "cancel",
+    });
+    expect(onPermissionRequest).toHaveBeenCalledOnce();
+  });
+
+  it("routes permission requests using handle backendSessionId when the record snapshot lacks acpSessionId", async () => {
+    const result = createDeferred<{
+      status: "completed";
+      stopReason: "end_turn";
+    }>();
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:cursor:acp:test",
+        agentCommand: "cursor-agent acp",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      nonInteractivePermissions: "plugin",
+    });
+    vi.spyOn(delegate, "startTurn").mockImplementation(
+      (input): AcpRuntimeTurn => ({
+        requestId: input.requestId,
+        events: (async function* () {})(),
+        result: result.promise,
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      }),
+    );
+    const onPermissionRequest = vi.fn(async () => ({ outcome: "allow_once" as const }));
+    runtime.startTurn({
+      handle: {
+        sessionKey: "agent:cursor:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:cursor:acp:test",
+        acpxRecordId: "agent:cursor:acp:test",
+        backendSessionId: "cursor-session-from-handle",
+      },
+      text: "run a command",
+      mode: "prompt",
+      requestId: "turn-permission-handle-fallback",
+      onPermissionRequest,
+    });
+    await vi.waitFor(() => expect(delegate.startTurn).toHaveBeenCalledOnce());
+
+    const upstreamPermissionHandler = (
+      delegate as unknown as {
+        options: {
+          onPermissionRequest: (
+            request: { sessionId: string },
+            context: { signal: AbortSignal },
+          ) => Promise<{ outcome: string }>;
+        };
+      }
+    ).options.onPermissionRequest;
+
+    const request = {
+      sessionId: "cursor-session-from-handle",
+      raw: {
+        toolCall: {
+          toolCallId: "tool-1",
+          title: "Run touch",
+          kind: "execute" as const,
+        },
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" as const },
+          { optionId: "deny", name: "Reject once", kind: "reject_once" as const },
+        ],
+      },
+      inferredKind: "execute" as const,
+    };
+    const signal = new AbortController().signal;
+
+    await expect(upstreamPermissionHandler(request, { signal })).resolves.toEqual({
+      outcome: "allow_once",
+    });
+    expect(onPermissionRequest).toHaveBeenCalledOnce();
+  });
+
   it("adds Codex wrapper stderr tail when startTurn creation throws", async () => {
     const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
     await fs.writeFile(

@@ -25,6 +25,7 @@ import {
 import { normalizeSlackApproverId } from "./exec-approvals.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import type { SlackEventScope } from "./monitor/event-scope.js";
+import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { sendMessageSlack } from "./send.js";
 import { parseSlackTarget } from "./target-parsing.js";
@@ -168,8 +169,19 @@ function buildSlackPluginMetadata(view: SlackPluginApprovalView): SlackMetadataI
   return [{ label: "Approval ID", value: view.approvalId }, ...view.metadata];
 }
 
+// The canonical approval record keeps plugin copy literal, so this renderer owns
+// Slack presentation. The request body goes in a code block like exec commands:
+// Slack does not parse mrkdwn inside a fence, so harness text renders exactly as
+// stored and stays copy-pastable. Backslash escaping is not used here because
+// Slack mrkdwn does not consume it, which would show the escapes to the operator.
+function buildSlackPluginRequestBody(title: string): string {
+  return buildSlackCodeBlock(truncateSlackMrkdwn(title, 2600));
+}
+
 function resolveSlackPluginDescription(view: SlackPluginApprovalView): string {
-  return normalizeOptionalString(view.description) ?? "A plugin action needs your approval.";
+  const description = normalizeOptionalString(view.description);
+  // Prose renders as mrkdwn, so entity-escape mention and link triggers.
+  return description ? escapeSlackMrkdwn(description) : "A plugin action needs your approval.";
 }
 
 function buildSlackPluginRequestBlocks(view: SlackPluginApprovalView): SlackBlock[] {
@@ -178,7 +190,7 @@ function buildSlackPluginRequestBlocks(view: SlackPluginApprovalView): SlackBloc
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*Request*\n${truncateSlackMrkdwn(view.title, 2600)}`,
+        text: `*Request*\n${buildSlackPluginRequestBody(view.title)}`,
       },
     },
     ...buildSlackMetadataContextBlocks(buildSlackPluginMetadata(view)),
@@ -213,7 +225,9 @@ function buildSlackApprovalPayload(input: SlackApprovalRenderInput): SlackPendin
 
   const metadata = isPlugin ? buildSlackPluginMetadata(view) : view.metadata;
   const bodyLabel = isPlugin ? "*Request*" : "*Command*";
-  const bodyText = isPlugin ? view.title : buildSlackCodeBlock(view.commandText);
+  const bodyText = isPlugin
+    ? buildSlackCodeBlock(view.title)
+    : buildSlackCodeBlock(view.commandText);
   const includeMetadata = isPlugin || phase === "pending";
   const text = [
     heading,

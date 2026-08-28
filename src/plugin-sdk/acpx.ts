@@ -22,6 +22,7 @@ export {
   unregisterAcpRuntimeBackend,
 } from "../acp/runtime/registry.js";
 export type {
+  AcpPermissionHandler,
   AcpRuntime,
   AcpRuntimeCapabilities,
   AcpRuntimeDoctorReport,

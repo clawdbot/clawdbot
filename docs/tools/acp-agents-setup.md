@@ -288,7 +288,10 @@ permission prompts. This does not disable ACP form or URL elicitation during a
 channel-delivered turn: those requests use transient Gateway questions instead.
 The acpx plugin provides two config keys that control harness permissions:
 
-These ACPX harness permissions are separate from OpenClaw exec approvals and separate from CLI-backend vendor bypass flags such as Claude CLI `--permission-mode bypassPermissions`. ACPX `approve-all` is the harness-level break-glass switch for ACP sessions.
+These ACPX harness permissions are separate from OpenClaw exec approvals and
+separate from CLI-backend vendor bypass flags such as Claude CLI
+`--permission-mode bypassPermissions`. ACPX `approve-all` is the harness-level
+break-glass switch for ACP sessions.
 
 For the broader comparison between OpenClaw `tools.exec.mode`, Codex Guardian
 approvals, and ACPX harness permissions, see
@@ -308,27 +311,45 @@ Controls which operations the harness agent can perform without prompting.
 
 Controls what happens when a permission prompt would be shown but no interactive TTY is available (which is always the case for ACP sessions).
 
-| Value  | Behavior                                                                 |
-| ------ | ------------------------------------------------------------------------ |
-| `fail` | Abort the session with `PermissionPromptUnavailableError`. **(default)** |
-| `deny` | Silently deny the permission and continue (graceful degradation).        |
+| Value    | Behavior                                                                                                 |
+| -------- | -------------------------------------------------------------------------------------------------------- |
+| `fail`   | Abort the turn with `PermissionPromptUnavailableError` when no native prompt can be shown. **(default)** |
+| `plugin` | Ask through OpenClaw plugin approvals and keep the ACP request pending.                                  |
+| `deny`   | Select a reject option or cancel the permission without asking.                                          |
 
 ### Configuration
 
 Set via plugin config:
 
 ```bash
-openclaw config set plugins.entries.acpx.config.permissionMode approve-all
-openclaw config set plugins.entries.acpx.config.nonInteractivePermissions fail
+openclaw config set plugins.entries.acpx.config.permissionMode approve-reads
+openclaw config set plugins.entries.acpx.config.nonInteractivePermissions plugin
+openclaw config set approvals.plugin.enabled true
 ```
 
-Restart the gateway after changing these values.
+Restart the gateway after changing these values. Configure an
+`approvals.plugin.targets` entry when no approval-capable chat session owns the
+turn. For Slack, also authorize the reviewer through the channel's plugin
+approval rules (`channels.slack.allowFrom` or the matching account-level
+`allowFrom`); `channels.slack.execApprovals.approvers` applies only to exec
+approvals.
 
 <Warning>
-OpenClaw defaults to `permissionMode=approve-reads` and `nonInteractivePermissions=fail`. In non-interactive ACP sessions, any write or exec that triggers a permission prompt can fail with `PermissionPromptUnavailableError: Permission prompt unavailable in non-interactive mode`.
-
-If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions degrade gracefully instead of crashing.
+`permissionMode=approve-all` bypasses ACP permission prompts. Use it only when
+you intentionally trust the harness with unreviewed writes and commands. Keep
+the shipped default `nonInteractivePermissions=fail` unless you explicitly want
+plugin approvals; then set `permissionMode=approve-reads` and
+`nonInteractivePermissions=plugin`.
 </Warning>
+
+Plugin-routed ACP requests offer the decisions the harness advertised for that
+request (`allow-once`, `allow-always`, and `deny`), wait for up to 10 minutes,
+and fail closed on timeout, cancellation, missing delivery routes, or Gateway
+restart. The pending request inherits the parent chat and actual thread
+identifier so a Slack button or `/approve <id> allow-once` resumes the same ACP
+permission RPC. See
+[Plugin permission requests](/plugins/plugin-permission-requests#acp-harness-permissions)
+for decision and routing details.
 
 ## Related
 

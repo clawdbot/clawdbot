@@ -134,7 +134,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-reply-pipeline": 12,
   "interactive-runtime": 11,
   // +3: canonical incognito classifier projected through deprecated compatibility barrels.
-  "infra-runtime": 596,
+  "infra-runtime": 597,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   // +1: deprecated agent media projection re-export during the media migration window.
@@ -325,7 +325,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
       // +1: focused account media-limit resolver avoids the deprecated barrel on startup.
       // +1: shared bounded HTTP rejection transport replaces plugin-local close policies.
-      4351,
+      // +1: post-sanitize plugin approval display truncator; the channel markup
+      //     sanitizers live in the non-public exec-approval-text-sanitize leaf.
+      4352,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -427,7 +429,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
       // +1: focused account media-limit resolver avoids the deprecated barrel on startup.
       // +1: shared bounded HTTP rejection transport replaces plugin-local close policies.
-      2587,
+      // +1: post-sanitize plugin approval display truncator.
+      2588,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -446,7 +449,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -18: retire the expired August compatibility exports and messaging-targets subpath.
-      1134,
+      1138,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
