@@ -1,7 +1,7 @@
 import { homedir as readHomeDir } from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexAppServerStartOptions } from "./config.js";
+import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { normalizeCodexAppServerArgs } from "./launch-args.js";
 
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
