@@ -7,7 +7,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
+import {
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  prepareRuntimeAuthProfileStoreSnapshots,
+} from "../agents/auth-profiles/runtime-snapshots.js";
 import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
@@ -454,16 +457,18 @@ function createRecordedChannelHandlers(events: string[]) {
 
 function makePreparedSecretsSnapshot(
   config: OpenClawConfig,
-  overrides: Partial<PreparedSecretsRuntimeSnapshot> = {},
+  overrides: Omit<Partial<PreparedSecretsRuntimeSnapshot>, "authStores"> & {
+    authStores?: Parameters<typeof prepareRuntimeAuthProfileStoreSnapshots>[0];
+  } = {},
 ): PreparedSecretsRuntimeSnapshot {
   return {
     sourceConfig: config,
     config,
-    authStores: [],
     authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
     warnings: [],
     webTools: createEmptyRuntimeWebToolsMetadata(),
     ...overrides,
+    authStores: prepareRuntimeAuthProfileStoreSnapshots(overrides.authStores ?? []),
   };
 }
 
@@ -5008,12 +5013,12 @@ describe("gateway Gmail hot reload handlers", () => {
     const initialSnapshot = makePreparedSecretsSnapshot(initialConfig);
     const refreshedSnapshot: PreparedSecretsRuntimeSnapshot = {
       ...initialSnapshot,
-      authStores: [
+      authStores: prepareRuntimeAuthProfileStoreSnapshots([
         {
           agentDir: "/tmp/refreshed-agent",
           store: { version: 1, profiles: {} },
         },
-      ],
+      ]),
     };
     activateSecretsRuntimeSnapshot(initialSnapshot);
     const initialSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();

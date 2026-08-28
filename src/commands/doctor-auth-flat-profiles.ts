@@ -44,7 +44,7 @@ import {
   type AuthProfileDatabase,
 } from "../agents/auth-profiles/sqlite.js";
 import { coerceAuthProfileState } from "../agents/auth-profiles/state.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStoreWithPreparedOwner } from "../agents/auth-profiles/store.js";
 import type {
   AuthProfileCredential,
   AuthProfileState,
@@ -820,7 +820,7 @@ function migrateLockedLegacyOAuthFile(params: {
   });
   const loaded = runAuthProfileWriteTransaction(
     undefined,
-    (database) => {
+    (database, owner) => {
       const authoritative = loadAuthProfileMigrationTargetStore(
         undefined,
         loadPersistedAuthProfileStore,
@@ -829,7 +829,7 @@ function migrateLockedLegacyOAuthFile(params: {
       if (!isDeepStrictEqual(authoritative, existing)) {
         throw new Error("canonical auth profile store changed during legacy OAuth migration");
       }
-      saveAuthProfileStore(
+      saveAuthProfileStoreWithPreparedOwner(
         next,
         undefined,
         {
@@ -840,6 +840,7 @@ function migrateLockedLegacyOAuthFile(params: {
           syncExternalCli: false,
         },
         database,
+        owner,
       );
       const verified = loadPersistedAuthProfileStore(undefined, { database });
       const verificationFailure = formatMissingAuthProfileSqliteVerification({
@@ -1167,7 +1168,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
           assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
           verifiedStore = runAuthProfileWriteTransaction(
             transactionAgentDir,
-            (database) => {
+            (database, owner) => {
               const authoritative = loadAuthProfileMigrationTargetStore(
                 candidate.agentDir,
                 loadMigratedStore,
@@ -1178,7 +1179,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
               if (!isDeepStrictEqual(authoritative, existing)) {
                 throw new Error("canonical auth profile store changed during legacy migration");
               }
-              saveAuthProfileStore(
+              saveAuthProfileStoreWithPreparedOwner(
                 next,
                 candidate.agentDir,
                 {
@@ -1188,6 +1189,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
                   syncExternalCli: false,
                 },
                 database,
+                owner,
               );
               const loaded = loadMigratedStore(candidate.agentDir, { database });
               const persistedStores = {
