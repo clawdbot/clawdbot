@@ -1511,7 +1511,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑214.5k");
   });
 
-  it("renders relative labels while preserving absolute message and streaming timestamps", () => {
+  it("renders relative labels while preserving absolute message and settled stream timestamps", () => {
     vi.useFakeTimers();
     const timestamp = Date.UTC(2026, 3, 24, 18, 30);
     vi.setSystemTime(timestamp + 5 * 60 * 1000);
@@ -1528,9 +1528,9 @@ describe("grouped chat rendering", () => {
         {
           kind: "stream",
           key: `stream:${timestamp}`,
-          text: "Working",
+          text: "Done",
           startedAt: timestamp,
-          isStreaming: true,
+          isStreaming: false,
         },
       ]),
       container,
@@ -1567,7 +1567,7 @@ describe("grouped chat rendering", () => {
     );
   });
 
-  it("uses the earliest segment timestamp for a multi-segment stream footer", () => {
+  it("uses the earliest segment timestamp for a settled multi-segment stream footer", () => {
     const container = document.createElement("div");
 
     render(
@@ -1580,7 +1580,7 @@ describe("grouped chat rendering", () => {
           startedAt: 10,
           isStreaming: false,
         },
-        { kind: "stream", key: "stream:s:live", text: "third", startedAt: 30, isStreaming: true },
+        { kind: "stream", key: "stream-seg:s:2", text: "third", startedAt: 30, isStreaming: false },
       ]),
       container,
     );
@@ -1711,6 +1711,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
       "Working…",
     );
+    expect(container.querySelector(".chat-group-footer")).toBeNull();
 
     renderAssistantMessage(container, message, {
       turnRecap: { runtimeMs: 5_000, outputTokens: 42 },
@@ -1722,6 +1723,7 @@ describe("grouped chat rendering", () => {
       "Done in 5 seconds",
     );
     expect(container.querySelector(".chat-tasks-status__claw")).toBeNull();
+    expect(container.querySelector(".chat-group-footer")).not.toBeNull();
   });
 
   it.each([
@@ -1835,7 +1837,7 @@ describe("grouped chat rendering", () => {
     expect(group?.classList.contains("chat-group--working")).toBe(false);
     expect(group?.classList.contains("chat-group--with-footer")).toBe(true);
     expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
-    expect(container.querySelectorAll(".chat-group-footer")).toHaveLength(1);
+    expect(container.querySelector(".chat-group-footer")).toBeNull();
     expect(container.querySelectorAll(".chat-working-indicator")).toHaveLength(1);
     expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
   });
