@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsUsageResult, SessionUsageTimeSeries } from "../../api/types.ts";
+import type { SessionsUsageResult } from "../../api/types.ts";
 import * as toast from "../../lib/toast.ts";
 import * as usageQuery from "./query.ts";
 import type { UsageSessionEntry } from "./types.ts";

@@ -98,6 +98,7 @@ export class UsageDetailsController {
     this.timeSeries = createUsageDetailRequest(host, gateway, requestSessionUsageTimeSeries);
     this.sessionLogs = createUsageDetailRequest(host, gateway, async (client, key) => {
       const payload = await requestSessionUsageLogs(client, key);
+      // SAFETY: sessions.usage.logs returns entries normalized by the Gateway's loadSessionLogs.
       return Array.isArray(payload.logs) ? (payload.logs as SessionLogEntry[]) : null;
     });
     this.contextWeight = createUsageDetailRequest(
