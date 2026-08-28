@@ -705,7 +705,13 @@ export async function dispatchCronDelivery(
       }
       params.queueSourceSessionMessageToolAwareness = undefined;
       if (!completion.requiresExternalDelivery) {
-        recordDelivery("delivered");
+        // A deliveryError means the conversation's external route failed to
+        // resolve; the committed turn keeps its ok status with the failure
+        // recorded, instead of collapsing into a run error.
+        recordDelivery(
+          completion.deliveryError ? "not-delivered" : "delivered",
+          completion.deliveryError,
+        );
         return null;
       }
       // The source transcript is committed. External custody remains required

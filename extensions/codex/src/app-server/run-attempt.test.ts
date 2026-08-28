@@ -1035,6 +1035,31 @@ beforeEach(() => {
 });
 
 describe("runCodexAppServerAttempt", () => {
+  it("drains executable tool cleanup once after a completed attempt", async () => {
+    const cleanup = vi.fn(async (_reason: string) => undefined);
+    const cleanupOwners: boolean[] = [];
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      cleanupOwners.push(options?.registerRunCleanup !== undefined);
+      options?.registerRunCleanup?.(cleanup);
+      return [createRuntimeDynamicTool("message")];
+    });
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(cleanupOwners).toEqual([true, false]);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledWith("completion");
+  });
+
   it("executes and reports the same materialized SecretRef credential", async () => {
     const { sessionFile, workspaceDir, agentDir } = createRunPaths();
     const authProfileId = "openai:work";
@@ -6397,10 +6422,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(calledWithFailedClient).toBe(true);
     retireSpy.mockRestore();
   });
-  it("uses the prepared execution model without exposing it in lifecycle events", async () => {
+  it("retains the prepared execution model across native resume without exposing it in lifecycle events", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const runtimeModelId = "codex-execution-model";
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(async (method) =>
+    const runtimeModelId = "umbreon-latest";
+    const freshHarness = createStartedThreadHarness(async (method) =>
       method === "thread/start" ? { ...threadStartResult(), model: runtimeModelId } : undefined,
     );
     const params = createParams(sessionFile, workspaceDir);
@@ -6413,21 +6438,54 @@ describe("runCodexAppServerAttempt", () => {
         ...buildCodexRuntimeModelParams("gpt-5.6-sol", runtimeModelId),
       },
     };
-    const onAgentEvent = vi.fn();
-    params.onAgentEvent = onAgentEvent;
+    const onFreshAgentEvent = vi.fn();
+    params.onAgentEvent = onFreshAgentEvent;
 
-    const run = runCodexAppServerAttempt(params, { runtimeModelId });
-    await completeStartedRun(run, waitForMethod, completeTurn);
+    const freshRun = runCodexAppServerAttempt(params, { runtimeModelId });
+    await completeStartedRun(freshRun, freshHarness.waitForMethod, freshHarness.completeTurn);
 
     for (const method of ["thread/start", "turn/start"]) {
-      const request = requests.find((entry) => entry.method === method);
-      const requestParams = request?.params as Record<string, unknown> | undefined;
-      expect(requestParams?.model).toBe(runtimeModelId);
+      expect(freshHarness.requests.find((entry) => entry.method === method)).toMatchObject({
+        params: { model: runtimeModelId },
+      });
     }
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "codex_app_server.lifecycle",
-      data: expect.objectContaining({ phase: "turn_starting", model: "gpt-5.6-sol" }),
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-1",
+      model: runtimeModelId,
+      clientId: "test-client-1",
     });
+
+    const resumedHarness = createStartedThreadHarness(async (method) =>
+      method === "thread/resume" ? { ...threadStartResult(), model: runtimeModelId } : undefined,
+    );
+    // A different physical client forces native resume instead of warm thread reuse.
+    vi.spyOn(resumedHarness.client, "getInstanceId").mockReturnValue("test-client-2");
+    const onResumedAgentEvent = vi.fn();
+    const resumedRun = runCodexAppServerAttempt(
+      { ...params, runId: "run-2", onAgentEvent: onResumedAgentEvent },
+      { runtimeModelId },
+    );
+    await completeStartedRun(resumedRun, resumedHarness.waitForMethod, resumedHarness.completeTurn);
+
+    expectResumeRequest(resumedHarness.requests, {
+      threadId: "thread-1",
+      model: runtimeModelId,
+    });
+    expect(resumedHarness.requests.map((entry) => entry.method)).not.toContain("thread/start");
+    expect(resumedHarness.requests.find((entry) => entry.method === "turn/start")).toMatchObject({
+      params: { threadId: "thread-1", model: runtimeModelId },
+    });
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-1",
+      model: runtimeModelId,
+      clientId: "test-client-2",
+    });
+    for (const onAgentEvent of [onFreshAgentEvent, onResumedAgentEvent]) {
+      expect(onAgentEvent).toHaveBeenCalledWith({
+        stream: "codex_app_server.lifecycle",
+        data: expect.objectContaining({ phase: "turn_starting", model: "gpt-5.6-sol" }),
+      });
+    }
   });
 
   it("passes configured app-server policy, sandbox, service tier, and model on resume", async () => {

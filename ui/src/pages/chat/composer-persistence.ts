@@ -727,7 +727,13 @@ export class ChatComposerPersistence {
   private committedDraftRevision = 0;
   private latestDraftRevision = 0;
   private durableRestoreProtected = false;
-  private durableOwnerKey = "";
+  // A transient disconnect invalidates scope readiness, not the owner authenticated
+  // by this client. Client or Gateway replacement still fences the cached owner.
+  private durableOwner: {
+    client: ChatComposerPersistenceState["client"];
+    gatewayOwner: string;
+    recoveryScope: string;
+  } | null = null;
   private durableRetiredScopeKey = "";
   private forceDurableOwnerRestore = false;
   private readonly durablePersistence = new DurableChatComposerPersistence(
@@ -1044,7 +1050,16 @@ export class ChatComposerPersistence {
     if (state.selectedChatSessionIncognito) {
       return null;
     }
-    return this.resolveConnectedDurableScope(state, scope);
+    return (
+      this.resolveConnectedDurableScope(state, scope) ??
+      (this.durableOwner &&
+      !state.connected &&
+      this.durableOwner.client === state.client &&
+      this.durableOwner.gatewayOwner ===
+        storageTargetForGateway(state.settings?.gatewayUrl).gatewayOwner
+        ? { ...this.durableOwner, scopeKey: storedChatOutboxScopeKey(scope) }
+        : null)
+    );
   }
 
   private resolveConnectedDurableScope(
@@ -1073,7 +1088,7 @@ export class ChatComposerPersistence {
         const scopeKey = durableComposerScopeIdentity(connectedScope);
         if (this.durableRetiredScopeKey !== scopeKey) {
           this.durableRetiredScopeKey = scopeKey;
-          this.durableOwnerKey = "";
+          this.durableOwner = null;
           this.forceDurableOwnerRestore = false;
           this.durableRestoreProtected = false;
           this.durablePersistence.retire(connectedScope, this.latestDraftRevision);
@@ -1086,8 +1101,11 @@ export class ChatComposerPersistence {
     if (!scope) {
       return;
     }
-    const ownerKey = JSON.stringify([scope.gatewayOwner, scope.recoveryScope]);
-    if (this.durableOwnerKey && this.durableOwnerKey !== ownerKey) {
+    if (
+      this.durableOwner &&
+      (this.durableOwner.gatewayOwner !== scope.gatewayOwner ||
+        this.durableOwner.recoveryScope !== scope.recoveryScope)
+    ) {
       releaseChatAttachmentPayloads(state.chatAttachments);
       state.chatMessage = "";
       state.chatGoalDraftMode = null;
@@ -1108,7 +1126,11 @@ export class ChatComposerPersistence {
       this.durablePersistence.resetRestoreScope();
       state.requestUpdate?.();
     }
-    this.durableOwnerKey = ownerKey;
+    this.durableOwner = {
+      client: state.client,
+      gatewayOwner: scope.gatewayOwner,
+      recoveryScope: scope.recoveryScope,
+    };
     if (this.durableRestoreProtected) {
       this.durableRestoreProtected = false;
       const snapshot = this.snapshot(

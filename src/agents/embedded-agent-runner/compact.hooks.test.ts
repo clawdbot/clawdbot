@@ -38,6 +38,7 @@ import {
   maybeCompactAgentHarnessSessionMock,
   resolveAgentHarnessPolicyMock,
   registerProviderStreamForModelMock,
+  resolveAgentConfigMock,
   resolveProviderEntryApiKeyProfileReferenceMock,
   resolveContextWindowInfoMock,
   resolveCliBackendConfigMock,
@@ -1002,10 +1003,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
-  it("passes resolved agent context to compacted system prompt rebuilds", async () => {
+  it("passes resolved agent identity context to compacted system prompt rebuilds", async () => {
     resolveSessionAgentIdsMock.mockReturnValue({
       defaultAgentId: "main",
       sessionAgentId: "marketing-agent",
+    });
+    resolveAgentConfigMock.mockReturnValue({
+      identity: { name: "Campaign Navigator" },
     });
 
     await compactEmbeddedAgentSessionDirect({
@@ -1013,12 +1017,18 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       sessionKey: "agent:marketing-agent:session-1",
       sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
+      config: {
+        agents: {
+          list: [{ id: "marketing-agent", identity: { name: "Campaign Navigator" } }],
+        },
+      },
     });
 
     expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
       expect.objectContaining({
         runtimeInfo: expect.objectContaining({
           agentId: "marketing-agent",
+          agentName: "Campaign Navigator",
           sessionKey: "agent:marketing-agent:session-1",
         }),
       }),

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -9,7 +9,14 @@ import {
   mockedResolveAuthProfileOrder,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
+  resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
+
+let runHarness: Awaited<ReturnType<typeof loadRunOverflowCompactionHarness>>;
+beforeAll(async () => {
+  runHarness = await loadRunOverflowCompactionHarness();
+});
+beforeEach(resetSharedRunIntegrationHarnessMocks);
 
 const failedProfile = "openai:failed";
 const backupProfile = "openai:backup";
@@ -22,9 +29,8 @@ function permanentAuthFailure(): Error {
   });
 }
 
-async function prepareAuthFailoverRun() {
-  const { registerPreparedAgentHarness, runEmbeddedAgent } =
-    await loadRunOverflowCompactionHarness();
+function prepareAuthFailoverRun() {
+  const { registerPreparedAgentHarness, runEmbeddedAgent } = runHarness;
   registerPreparedAgentHarness({
     id: "codex",
     label: "Codex",
@@ -61,7 +67,7 @@ async function prepareAuthFailoverRun() {
 
 describe("native harness auth failover", () => {
   it("retries a permanent harness auth failure with the next automatic profile", async () => {
-    const runEmbeddedAgent = await prepareAuthFailoverRun();
+    const runEmbeddedAgent = prepareAuthFailoverRun();
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "OK" }]);
     mockedRunEmbeddedAttempt
       .mockRejectedValueOnce(permanentAuthFailure())
@@ -87,7 +93,7 @@ describe("native harness auth failover", () => {
   });
 
   it("keeps an explicit user profile strict", async () => {
-    const runEmbeddedAgent = await prepareAuthFailoverRun();
+    const runEmbeddedAgent = prepareAuthFailoverRun();
     const failure = permanentAuthFailure();
     mockedRunEmbeddedAttempt.mockRejectedValueOnce(failure);
 
@@ -108,7 +114,7 @@ describe("native harness auth failover", () => {
   });
 
   it("surfaces the original auth failure when automatic profiles are exhausted", async () => {
-    const runEmbeddedAgent = await prepareAuthFailoverRun();
+    const runEmbeddedAgent = prepareAuthFailoverRun();
     mockedResolveAuthProfileOrder.mockReturnValue([failedProfile]);
     const failure = permanentAuthFailure();
     mockedRunEmbeddedAttempt.mockRejectedValueOnce(failure);
@@ -130,7 +136,7 @@ describe("native harness auth failover", () => {
   });
 
   it("does not rotate profiles for an unclassified harness failure", async () => {
-    const runEmbeddedAgent = await prepareAuthFailoverRun();
+    const runEmbeddedAgent = prepareAuthFailoverRun();
     const failure = new Error("native harness process exited");
     mockedRunEmbeddedAttempt.mockRejectedValueOnce(failure);
 

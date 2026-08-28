@@ -2029,6 +2029,7 @@ describe("update-cli", () => {
           opts: {},
           pluginInstallRecords: {},
           updateStartedAtMs: 123,
+          timeoutMs: 30_000,
         });
 
         const env = spawnCall()?.[2]?.env;
@@ -2735,6 +2736,99 @@ describe("update-cli", () => {
     expectNoSideEffects(replaceConfigFile, syncPluginsForUpdateChannel, updateNpmInstalledPlugins);
   });
 
+  it("carries explicit capability consent into post-core plugin convergence", async () => {
+    const { entrypoints } = setupUpdatedRootRefresh({
+      gatewayUpdateImpl: async (root) =>
+        makeOkUpdateResult({
+          mode: "git",
+          root,
+          before: { sha: "old-sha", version: "2026.4.26" },
+          after: { sha: "new-sha", version: "2026.4.27" },
+        }),
+    });
+    vi.mocked(runExec).mockResolvedValueOnce({
+      stdout: new Command("update").option("--accept-capabilities").helpInformation(),
+      stderr: "",
+    });
+
+    await updateCommand({ acceptCapabilities: true, yes: true, restart: false });
+
+    expect(spawnCall()?.[1]).toEqual([
+      entrypoints[0],
+      "update",
+      "--no-restart",
+      "--yes",
+      "--accept-capabilities",
+    ]);
+  });
+
+  it.each([
+    { acceptCapabilities: true, supported: true, resumed: true },
+    { acceptCapabilities: true, supported: false, resumed: false },
+    { acceptCapabilities: false, supported: false, resumed: true },
+  ])(
+    "checks target consent support before handoff (explicit=$acceptCapabilities, supported=$supported)",
+    async ({ acceptCapabilities, supported, resumed }) => {
+      const { root, entrypoints } = setupUpdatedRootRefresh();
+      readPackageVersion.mockResolvedValue(VERSION);
+      const targetCommand = new Command("update");
+      if (supported) {
+        targetCommand.option("--accept-capabilities");
+      }
+      vi.mocked(runExec).mockResolvedValue({ stdout: targetCommand.helpInformation(), stderr: "" });
+
+      const result = await continuePostCoreUpdateInFreshProcess({
+        root,
+        channel: "stable",
+        requestedChannel: null,
+        opts: { acceptCapabilities, restart: false },
+        pluginInstallRecords: {},
+        updateStartedAtMs: Date.now(),
+        timeoutMs: 30_000,
+      });
+
+      expect(result).toEqual({ resumed });
+      if (acceptCapabilities) {
+        expect(runExec).toHaveBeenCalledWith(
+          expect.any(String),
+          [entrypoints[0], "update", "--help"],
+          expect.objectContaining({ timeoutMs: 30_000, logOutput: false }),
+        );
+      } else {
+        expect(runExec).not.toHaveBeenCalled();
+      }
+      if (resumed) {
+        expect(spawnCall()?.[1]).toEqual([
+          entrypoints[0],
+          "update",
+          "--no-restart",
+          ...(acceptCapabilities ? ["--accept-capabilities"] : []),
+        ]);
+      } else {
+        expect(spawn).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("does not treat failed target consent help as an unsupported option", async () => {
+    const { root } = setupUpdatedRootRefresh();
+    const failure = new Error("target help failed");
+    vi.mocked(runExec).mockRejectedValueOnce(failure);
+
+    await expect(
+      continuePostCoreUpdateInFreshProcess({
+        root,
+        channel: "stable",
+        requestedChannel: null,
+        opts: { acceptCapabilities: true },
+        pluginInstallRecords: {},
+        updateStartedAtMs: Date.now(),
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toBe(failure);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("keeps downgrade post-update work in the current process", async () => {
     const downgradedRoot = createCaseDir("openclaw-downgraded-root");
     setupUpdatedRootRefresh({
@@ -2759,6 +2853,44 @@ describe("update-cli", () => {
     expectNoSideEffects(runDaemonInstall, probeGateway);
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
+
+  it.each([false, true])(
+    "keeps downgrade consent separate from --yes (explicit=%s)",
+    async (acceptCapabilities) => {
+      const downgradedRoot = createCaseDir("openclaw-downgraded-consent-root");
+      setupUpdatedRootRefresh({
+        gatewayUpdateImpl: async () =>
+          makeOkUpdateResult({
+            mode: "npm",
+            root: downgradedRoot,
+            before: { version: "2026.4.14" },
+            after: { version: "2026.4.10" },
+          }),
+      });
+      readPackageVersion.mockResolvedValue("2026.4.14");
+      primeNpmChannelTag("latest", "2026.4.10");
+      mockCurrentProcessFreshDoctor();
+
+      await updateCommand({
+        acceptCapabilities,
+        yes: true,
+        tag: "2026.4.10",
+        restart: false,
+      });
+
+      const handler = npmPluginUpdateCall()?.onCapabilityConsent as
+        | ((review: { reviewToken: string }) => Promise<{ reviewToken: string }>)
+        | undefined;
+      if (acceptCapabilities) {
+        await expect(handler?.({ reviewToken: "reviewed-surface" })).resolves.toEqual({
+          reviewToken: "reviewed-surface",
+        });
+      } else {
+        expect(handler).toBeUndefined();
+      }
+      expect(syncPluginCall()?.onCapabilityConsent).toBe(handler);
+    },
+  );
 
   it("pins the compatibility host version to the downgraded target during current-process post-core plugin convergence (#87914)", async () => {
     const downgradedRoot = createCaseDir("openclaw-downgraded-compat-root");
@@ -2794,6 +2926,9 @@ describe("update-cli", () => {
       // still-running old VERSION, so incompatible newer plugins are disabled
       // before restart.
       expect(hostVersionDuringPluginUpdate).toBe("2026.4.10");
+      expect(runPostCorePluginConvergenceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ compatibilityHostVersion: "2026.4.10" }),
+      );
       // The override is scoped to the plugin convergence and restored afterward.
       expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
     } finally {
@@ -3745,10 +3880,16 @@ describe("update-cli", () => {
   });
 
   it("does not clean managed-service handoffs during a JSON dry run", async () => {
-    await updateCommand({ dryRun: true, json: true, channel: "beta" });
+    await updateCommand({ dryRun: true, json: true, channel: "beta", acceptCapabilities: true });
 
     expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
-    expectNoSideEffects(replaceConfigFile, runGatewayUpdate, runDaemonInstall);
+    expectNoSideEffects(
+      replaceConfigFile,
+      runGatewayUpdate,
+      runDaemonInstall,
+      syncPluginsForUpdateChannel,
+      updateNpmInstalledPlugins,
+    );
     expect(defaultRuntime.writeJson).toHaveBeenCalled();
   });
 
@@ -7757,6 +7898,49 @@ describe("update-cli", () => {
     });
   });
 
+  it.each(
+    ["repair", "finalize"].flatMap((leaf) =>
+      ["before", "after", "absent"].map((position) => ({ leaf, position })),
+    ),
+  )(
+    "resolves capability consent $position $leaf without deriving it from --yes",
+    async ({ leaf, position }) => {
+      setTty(false);
+      pathExists.mockResolvedValue(false);
+      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+        FRESH_POST_UPDATE_ENTRYPOINT,
+      );
+      const program = new Command();
+      program.name("openclaw");
+      program.exitOverride();
+      registerUpdateCli(program);
+
+      await program.parseAsync([
+        "node",
+        "openclaw",
+        "update",
+        ...(position === "before" ? ["--accept-capabilities"] : []),
+        leaf,
+        ...(position === "after" ? ["--accept-capabilities"] : []),
+        "--json",
+        "--yes",
+      ]);
+
+      const handler = syncPluginCall()?.onCapabilityConsent as
+        | ((review: { reviewToken: string }) => Promise<{ reviewToken: string }>)
+        | undefined;
+      expect(syncPluginsForUpdateChannel).toHaveBeenCalledOnce();
+      expect(lastWriteJsonCall()).toMatchObject({ status: "ok", mode: "finalize" });
+      if (position === "absent") {
+        expect(handler).toBeUndefined();
+      } else {
+        await expect(handler?.({ reviewToken: "repair-reviewed-surface" })).resolves.toEqual({
+          reviewToken: "repair-reviewed-surface",
+        });
+      }
+    },
+  );
+
   it("updateFinalizeCommand rejects extended-stable on Git before persistence", async () => {
     await updateFinalizeCommand({
       channel: "extended-stable",
@@ -8033,34 +8217,53 @@ describe("update-cli", () => {
     ).toBe(shouldRunPackageUpdate);
   });
 
-  it("updateWizardCommand offers dev checkout and forwards selections", async () => {
-    const root = tempDirs.make("openclaw-update-wizard-");
-    const tempDir = path.join(root, "openclaw");
-    await withEnvAsync({ OPENCLAW_GIT_DIR: tempDir }, async () => {
-      setTty(true);
+  it.each(["before", "after"])(
+    "update wizard forwards explicit consent %s the subcommand",
+    async (position) => {
+      const root = tempDirs.make("openclaw-update-wizard-");
+      const tempDir = path.join(root, "openclaw");
+      await withEnvAsync({ OPENCLAW_GIT_DIR: tempDir }, async () => {
+        setTty(true);
 
-      vi.mocked(checkUpdateStatus).mockResolvedValue({
-        root: "/test/path",
-        installKind: "package",
-        packageManager: "npm",
-        deps: {
-          manager: "npm",
-          status: "ok",
-          lockfilePath: null,
-          markerPath: null,
-        },
+        vi.mocked(checkUpdateStatus).mockResolvedValue({
+          root: "/test/path",
+          installKind: "package",
+          packageManager: "npm",
+          deps: {
+            manager: "npm",
+            status: "ok",
+            lockfilePath: null,
+            markerPath: null,
+          },
+        });
+        select.mockResolvedValue("dev");
+        confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+        vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+
+        const program = new Command();
+        program.exitOverride();
+        registerUpdateCli(program);
+        await program.parseAsync([
+          "node",
+          "openclaw",
+          "update",
+          ...(position === "before" ? ["--accept-capabilities"] : []),
+          "wizard",
+          ...(position === "after" ? ["--accept-capabilities"] : []),
+        ]);
+
+        expect(readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+        const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
+        expect(call?.channel).toBe("dev");
+        const handler = syncPluginCall()?.onCapabilityConsent as
+          | ((review: { reviewToken: string }) => Promise<{ reviewToken: string }>)
+          | undefined;
+        await expect(handler?.({ reviewToken: "wizard-reviewed-surface" })).resolves.toEqual({
+          reviewToken: "wizard-reviewed-surface",
+        });
       });
-      select.mockResolvedValue("dev");
-      confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-      vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
-
-      await updateWizardCommand({});
-
-      expect(readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
-      const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
-      expect(call?.channel).toBe("dev");
-    });
-  });
+    },
+  );
 
   it.each([
     {

@@ -2,10 +2,18 @@ import type { AgentsListResult } from "../api/types.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 
 type AgentSelectionGateway = {
+  readonly connection: {
+    gatewayUrl: string;
+  };
   readonly snapshot: {
     assistantAgentId: string | null;
   };
   subscribe: (listener: (snapshot: AgentSelectionGateway["snapshot"]) => void) => () => void;
+};
+
+type AgentSelectionPersistence = {
+  load: (gatewayUrl: string) => string | null;
+  save: (gatewayUrl: string, selectedAgentId: string | null) => void;
 };
 
 type AgentSelectionRoster = {
@@ -45,6 +53,7 @@ export function selectApplicationSession(params: {
 export function createAgentSelectionCapability(
   gateway: AgentSelectionGateway,
   roster: AgentSelectionRoster,
+  persistence?: AgentSelectionPersistence,
 ): AgentSelectionCapability {
   const reconcileSelectedId = (value: string | null): string | null => {
     const selectedId = value?.trim() ? normalizeAgentId(value) : null;
@@ -66,18 +75,25 @@ export function createAgentSelectionCapability(
     );
     return isSystem ? null : scopeId;
   };
-  const initialId = gateway.snapshot.assistantAgentId
-    ? normalizeAgentId(gateway.snapshot.assistantAgentId)
-    : null;
+  let gatewayUrl = gateway.connection.gatewayUrl;
+  const persistedId = persistence?.load(gatewayUrl)?.trim();
+  const initialId = persistedId
+    ? normalizeAgentId(persistedId)
+    : gateway.snapshot.assistantAgentId
+      ? normalizeAgentId(gateway.snapshot.assistantAgentId)
+      : null;
   const initialSelectedId = reconcileSelectedId(initialId);
   let state: AgentSelectionState = {
     selectedId: initialSelectedId,
     scopeId: resolveScopeId(initialSelectedId),
   };
-  let assistantAgentId = initialId;
-  // Construction has no explicit-selection input: a roster repair still follows
-  // hello until a navigation or picker action establishes explicit ownership.
-  let followsGatewayDefault = true;
+  let assistantAgentId = gateway.snapshot.assistantAgentId
+    ? normalizeAgentId(gateway.snapshot.assistantAgentId)
+    : null;
+  let followsGatewayDefault = !persistedId || initialSelectedId !== normalizeAgentId(persistedId);
+  if (persistedId && followsGatewayDefault) {
+    persistence?.save(gatewayUrl, null);
+  }
   const listeners = new Set<(next: AgentSelectionState) => void>();
 
   const publish = (next: AgentSelectionState) => {
@@ -101,6 +117,18 @@ export function createAgentSelectionCapability(
       : null;
     const assistantChanged = nextAssistantAgentId !== assistantAgentId;
     assistantAgentId = nextAssistantAgentId;
+    const nextGatewayUrl = gateway.connection.gatewayUrl;
+    if (nextGatewayUrl !== gatewayUrl) {
+      gatewayUrl = nextGatewayUrl;
+      const nextPersistedId = persistence?.load(gatewayUrl)?.trim();
+      followsGatewayDefault = !nextPersistedId;
+      const selectedId = nextPersistedId ? normalizeAgentId(nextPersistedId) : nextAssistantAgentId;
+      // AgentCapability subscribes first and clears the old roster on a
+      // connection change, so a target Gateway's saved id is not judged
+      // against the previous Gateway's agents.
+      publish({ selectedId, scopeId: selectedId });
+      return;
+    }
     // A reconnect publishes a transient null before hello. Keep the last
     // implicit default selected until the next authoritative default arrives.
     if (assistantChanged && followsGatewayDefault && nextAssistantAgentId) {
@@ -112,6 +140,7 @@ export function createAgentSelectionCapability(
     // synchronous subscriber may establish a new explicit owner during publish.
     if (!followsGatewayDefault && reconcileSelectedId(state.selectedId) !== state.selectedId) {
       followsGatewayDefault = true;
+      persistence?.save(gatewayUrl, null);
     }
     if (followsGatewayDefault && assistantAgentId) {
       publish({
@@ -133,7 +162,8 @@ export function createAgentSelectionCapability(
       // scope field lets page controls expose all agents without losing the
       // concrete agent required by chat and new-session flows.
       // Establish ownership before publish notifies synchronous subscribers.
-      followsGatewayDefault = reconcileSelectedId(selectedId) !== selectedId;
+      followsGatewayDefault = !selectedId || reconcileSelectedId(selectedId) !== selectedId;
+      persistence?.save(gatewayUrl, followsGatewayDefault ? null : selectedId);
       publish({ selectedId, scopeId: selectedId });
     },
     setScope(agentId) {

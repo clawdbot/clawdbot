@@ -57,7 +57,12 @@ function contextFor(
   const context = {
     basePath: "",
     gateway: {
-      snapshot: { phase: "connected", client, hello: null },
+      snapshot: {
+        phase: "connected",
+        client,
+        hello: null,
+        sessionKey: "agent:roboclaw:main",
+      },
       subscribe: vi.fn(() => () => undefined),
     },
     agents: { state: { agentsList: { mainKey: "main" } } },
@@ -758,8 +763,9 @@ describe("gateway-backed session route resolution", () => {
     expect(loaded).toMatchObject({ kind: "ambiguous", shortId: "12345678", truncated: true });
   });
 
-  it("returns not found when the gateway has no short-id match", async () => {
+  it("routes a missing-session exit to the route agent's main session", async () => {
     const { context, list } = contextFor(() => result([]));
+    context.gateway.snapshot.sessionKey = "agent:main:saved-active-session";
     const request = installShortResolver(context, [], { ok: false });
 
     const loaded = await loadChatRoute(
@@ -769,7 +775,12 @@ describe("gateway-backed session route resolution", () => {
       new AbortController().signal,
     );
 
-    expect(loaded).not.toHaveProperty("kind", "session");
+    expect(loaded).toEqual({
+      kind: "missing-session",
+      face: "chat",
+      currentSessionHref: "/chat/roboclaw",
+      sessionsHref: "/sessions",
+    });
     expect(list).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "roboclaw", search: "agent:roboclaw:deadbeef" }),
     );
@@ -900,7 +911,7 @@ describe("gateway-backed session route resolution", () => {
     });
   });
 
-  it("returns not found when neither a literal key nor slug resolves", async () => {
+  it("returns a persistent missing-session state when neither a literal key nor slug resolves", async () => {
     const { context, list } = contextFor(() => result([]));
     const loaded = await loadChatRoute(
       context,
@@ -909,8 +920,36 @@ describe("gateway-backed session route resolution", () => {
       new AbortController().signal,
     );
 
-    expect(loaded).not.toHaveProperty("kind", "session");
+    expect(loaded).toEqual({
+      kind: "missing-session",
+      face: "chat",
+      currentSessionHref: "/chat/roboclaw",
+      sessionsHref: "/sessions",
+    });
     expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a capped slug lookup nonterminal while later matches remain possible", async () => {
+    const exactKey = "agent:roboclaw:unknown-thread";
+    const laterMatch = row({ displayName: "Unknown thread" });
+    const { context, list } = contextFor(({ search, offset = 0 }) => {
+      if (search === exactKey) {
+        return result([]);
+      }
+      return offset === 100
+        ? result([laterMatch], { offset })
+        : result([], { hasMore: true, nextOffset: offset + 20, offset });
+    });
+    const loaded = await loadChatRoute(
+      context,
+      { pathname: "/chat/roboclaw/unknown-thread", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "ambiguous", candidates: [], truncated: true });
+    expect(list).toHaveBeenCalledTimes(6);
+    expect(list).not.toHaveBeenCalledWith(expect.objectContaining({ offset: 100 }));
   });
 
   it("resolves a cached literal without a gateway round-trip", async () => {

@@ -8,6 +8,7 @@ packages:
 minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
+  - "@openclaw/crabline@0.1.19"
   - "@openclaw/fs-safe@0.5.5"
   - "@openclaw/libterminal@0.3.2"
   - "@openclaw/proxyline@0.3.4"
@@ -189,3 +190,6 @@ packageExtensions:
     peerDependenciesMeta:
       sharp:
         optional: true
+
+patchedDependencies:
+  "@vitest/runner@4.1.11": patches/@vitest__runner@4.1.11.patch

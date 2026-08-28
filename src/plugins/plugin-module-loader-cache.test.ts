@@ -935,10 +935,10 @@ describe("plugin module cache generation cleanup", () => {
     { boundaryRoot: "/repo/dist/extensions", dependencyRoot: "/repo/dist" },
     { boundaryRoot: "/repo/installed/demo", dependencyRoot: "/repo/installed/demo" },
   ])("evicts native dependencies under $dependencyRoot for $boundaryRoot", async (params) => {
-    const clearNativeRequireJavaScriptModuleCache = vi.fn();
+    const clearPluginModuleRequireCache = vi.fn();
     vi.doMock("./native-module-require.js", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./native-module-require.js")>()),
-      clearNativeRequireJavaScriptModuleCache,
+      clearPluginModuleRequireCache,
     }));
     const { recordPluginModuleRoot } = await importPluginModuleLoader(
       "./plugin-module-loader-cache.js?scope=lifecycle-disposal",
@@ -949,7 +949,7 @@ describe("plugin module cache generation cleanup", () => {
 
     resetPluginCache();
 
-    expect(clearNativeRequireJavaScriptModuleCache).toHaveBeenCalledWith(modulePath, {
+    expect(clearPluginModuleRequireCache).toHaveBeenCalledWith(modulePath, {
       dependencyRoot: params.dependencyRoot,
     });
     expect(getPluginCache()).not.toBe(previous);

@@ -838,7 +838,10 @@ suite.define(() => {
       await page.locator(".chat-queue").getByText("Applying chat settings").waitFor({
         timeout: 10_000,
       });
-      await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
+      await page
+        .locator(".chat-group.user .chat-bubble")
+        .getByText(prompt)
+        .waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
       await gateway.resolveDeferred("sessions.patch", {});

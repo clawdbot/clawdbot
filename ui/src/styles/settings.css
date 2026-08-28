@@ -3,7 +3,7 @@
  * One structural pattern for every settings surface:
  *   .settings-page > .settings-section > .settings-group > .settings-row
  *
- * Rules (see ui/docs/settings-design.md):
+ * Rules (see ui/docs/design-system/settings-design.md):
  * - Sections are typography (heading outside any surface), not chrome.
  * - Exactly one level of elevation: the group. Never nest a card in a group.
  * - Status is a dot + plain text, never a colored pill.

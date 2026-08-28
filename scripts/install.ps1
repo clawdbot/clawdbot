@@ -892,6 +892,15 @@ function Ensure-Git {
     return $false
 }
 
+function Test-GitFilterSupport {
+    try {
+        $help = (& git clone -h 2>&1 | Out-String)
+        return $help -match '(?m)\s--(?:\[no-\])?filter(?:[ =]|$)'
+    } catch {
+        return $false
+    }
+}
+
 function Get-OpenClawCommandPath {
     $openclawCmd = Get-Command openclaw.cmd -ErrorAction SilentlyContinue
     if ($openclawCmd -and $openclawCmd.Source) {
@@ -1312,9 +1321,19 @@ function Test-NpmConfigFileKey {
 }
 
 function Test-NpmConfigRawKey {
-    param([string]$Key)
+    param(
+        [string]$Key,
+        [string]$ProjectDir
+    )
     $files = New-Object System.Collections.Generic.List[string]
-    $userConfig = if ($env:NPM_CONFIG_USERCONFIG) { $env:NPM_CONFIG_USERCONFIG } else { $env:npm_config_userconfig }
+    if (-not [string]::IsNullOrWhiteSpace($ProjectDir)) {
+        $files.Add((Join-Path $ProjectDir ".npmrc"))
+    }
+    $userConfig = if ($env:NPM_CONFIG_USERCONFIG) {
+        $env:NPM_CONFIG_USERCONFIG
+    } else {
+        $env:npm_config_userconfig
+    }
     if ($userConfig) {
         $resolvedUserConfig = Resolve-NpmConfigPath $userConfig
         if ($resolvedUserConfig) { $files.Add($resolvedUserConfig) }
@@ -1340,6 +1359,34 @@ function Test-NpmConfigRawKey {
         }
     }
     return $false
+}
+
+function Test-ShouldPreferOfflinePnpmInstall {
+    param([string]$ProjectDir)
+    if (
+        (Test-Path -LiteralPath "Env:PNPM_CONFIG_PREFER_OFFLINE") -or
+        (Test-Path -LiteralPath "Env:pnpm_config_prefer_offline")
+    ) {
+        return $false
+    }
+    $pnpmCommand = Get-PnpmCommandPath
+    if (-not $pnpmCommand) {
+        return $false
+    }
+    $pushedLocation = $false
+    try {
+        Push-Location -LiteralPath $ProjectDir
+        $pushedLocation = $true
+        $configured = (& $pnpmCommand config get prefer-offline 2>$null)
+        $configExitCode = $LASTEXITCODE
+    } catch { return $false } finally {
+        if ($pushedLocation) { Pop-Location }
+    }
+    if ($configExitCode -ne 0) {
+        return $false
+    }
+    $value = "$configured".Trim()
+    return [string]::IsNullOrWhiteSpace($value) -or $value -eq "undefined" -or $value -eq "null"
 }
 
 function Add-NpmCacheCandidate {
@@ -1657,7 +1704,15 @@ function New-TransactionalGitCheckout {
     $retainStaging = $false
 
     try {
-        git clone $RepoUrl $stagingDir
+        # Keep ref metadata for later updates while avoiding file blobs when
+        # the local Git client supports partial clones. Git warns and falls
+        # back to a full clone when the server cannot filter.
+        $cloneArgs = @("clone")
+        if (Test-GitFilterSupport) {
+            $cloneArgs += "--filter=blob:none"
+        }
+        $cloneArgs += @($RepoUrl, $stagingDir)
+        & git @cloneArgs
         if ($LASTEXITCODE -ne 0) {
             throw "git clone failed with exit code $LASTEXITCODE"
         }
@@ -1758,9 +1813,11 @@ function Install-OpenClawFromGit {
     try {
         Push-Location -LiteralPath $RepoDir
         $pushedRepoLocation = $true
-        $sourceInstallArgs = @(
-            "install",
-            "--prefer-offline",
+        $sourceInstallArgs = @("install")
+        if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $RepoDir) {
+            $sourceInstallArgs += "--prefer-offline"
+        }
+        $sourceInstallArgs += @(
             "--config.node-linker=hoisted",
             "--config.engine-strict=false",
             "--config.enable-pre-post-scripts=true",

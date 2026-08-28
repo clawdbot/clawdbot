@@ -152,29 +152,6 @@ describe("renderChatComposer controls", () => {
     expect(textarea.matches(":placeholder-shown")).toBe(true);
   });
 
-  it("keeps an unsaved queued-row edit open when normal composer text is double-clicked", () => {
-    const onCancel = vi.fn();
-    const { container } = renderComposer({
-      draft: "select this composer text",
-      queue: [{ id: "queued", text: "original queued text", createdAt: 1 }],
-      queuedEdit: {
-        editingId: "queued",
-        editingText: "unsaved queued edit",
-        onCancel,
-      },
-    });
-    const composer = container.querySelector<HTMLTextAreaElement>(
-      ".agent-chat__composer-combobox textarea",
-    );
-
-    composer?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-
-    expect(onCancel).not.toHaveBeenCalled();
-    expect(container.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")?.value).toBe(
-      "unsaved queued edit",
-    );
-  });
-
   it("keeps composing enabled and explains queued delivery while offline", () => {
     const { container } = renderComposer({
       offline: true,

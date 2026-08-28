@@ -1555,7 +1555,7 @@ describe("runAgentHarnessAttempt", () => {
     expect(received[0]?.safeDeniedTools).toEqual(["image_generate"]);
   });
 
-  it("marks only explicit restrictive policy layers for plugin harness isolation", async () => {
+  it("isolates collector runs and explicit restrictive policy layers for plugin harnesses", async () => {
     const received: boolean[] = [];
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
       received.push(attempt.pluginHarnessToolPolicyRestricted === true);
@@ -1578,11 +1578,14 @@ describe("runAgentHarnessAttempt", () => {
       conversationToolPolicy?: EmbeddedRunAttemptParams["conversationToolPolicy"];
       agentId?: string;
       sessionKey?: string;
+      swarmCollector?: boolean;
     }> = [
       {},
       { config: { tools: { profile: "coding" } } as OpenClawConfig },
       { conversationToolPolicy: {} },
       { conversationToolPolicy: { allow: ["*"] } },
+      { swarmCollector: false },
+      { swarmCollector: true },
       { conversationToolPolicy: { deny: ["exec"] } },
       { config: { tools: { deny: ["exec"] } } as OpenClawConfig },
       {
@@ -1604,10 +1607,11 @@ describe("runAgentHarnessAttempt", () => {
         conversationToolPolicy: testCase.conversationToolPolicy,
         agentId: testCase.agentId,
         sessionKey: testCase.sessionKey,
+        swarmCollector: testCase.swarmCollector,
       });
     }
 
-    expect(received).toEqual([false, false, false, false, true, true, true, true]);
+    expect(received).toEqual([false, false, false, false, false, true, true, true, true, true]);
   });
 
   it("rejects restrictive policy before an unsupported plugin harness runs", async () => {

@@ -79,6 +79,29 @@ const browserActionsMocks = vi.hoisted(() => ({
       },
     ],
   })),
+  browserRequests: vi.fn(
+    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+      ok: true,
+      targetId: "t1",
+      requests: [],
+    }),
+  ),
+  browserErrors: vi.fn(
+    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+      ok: true,
+      targetId: "t1",
+      errors: [],
+    }),
+  ),
+  browserPageText: vi.fn(
+    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+      ok: true,
+      targetId: "t1",
+      text: "Page prose",
+      truncated: false,
+    }),
+  ),
+  browserEmulateSetting: vi.fn(async (..._args: unknown[]) => ({ ok: true, targetId: "t1" })),
   browserNavigate: vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true })),
   browserDownload: vi.fn(async () => ({
     ok: true,
@@ -283,6 +306,10 @@ vi.mock("./browser-tool.runtime.js", async () => {
         supportsBatchActions: !existingSession,
         supportsDownloads: !existingSession,
         supportsPdf: !existingSession,
+        supportsRequests: !existingSession,
+        supportsErrors: !existingSession,
+        supportsPageText: !existingSession,
+        supportsEmulation: !existingSession,
       };
     },
     describeImageFile: toolCommonMocks.describeImageFile,
@@ -1800,6 +1827,7 @@ describe("browser tool snapshot maxChars", () => {
       url: `https://example.com/${"x".repeat(2_028)}`,
       annotationCount: 1_000,
       media: { outbound: false },
+      browserTab: { targetId: "tab-1", url: `https://example.com/${"x".repeat(2_028)}` },
     });
   });
 
@@ -2577,6 +2605,7 @@ describe("browser tool url alias support", () => {
       title: "Example",
       url: "https://example.com",
       type: "page",
+      browserTab: { targetId: "tab-123", title: "Example", url: "https://example.com" },
     });
   });
 
@@ -2613,6 +2642,7 @@ describe("browser tool url alias support", () => {
       title: "Node Example",
       url: "https://example.com",
       type: "page",
+      browserTab: { targetId: "node-tab-123", title: "Node Example", url: "https://example.com" },
     });
     expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3249,7 +3279,11 @@ describe("browser tool url alias support", () => {
     });
 
     expect(sessionTabRegistryMocks.trackSessionBrowserTab).not.toHaveBeenCalled();
-    expect(focusResult?.details).toEqual({ ok: true, targetId: "USER-TAB" });
+    expect(focusResult?.details).toEqual({
+      ok: true,
+      targetId: "USER-TAB",
+      browserTab: { targetId: "USER-TAB" },
+    });
   });
 });
 
@@ -3548,51 +3582,55 @@ describe("browser tool act compatibility", () => {
 describe("browser tool snapshot labels", () => {
   registerBrowserToolAfterEachReset();
 
-  it("returns image + text when labels are requested", async () => {
-    configMocks.loadConfig.mockReturnValue({
-      browser: {},
-      agents: { defaults: { imageMaxDimensionPx: 2000 } },
-    } as never);
-    const tool = createBrowserTool();
-    const imageResult = {
-      content: [
-        { type: "text", text: "label text" },
-        { type: "image", data: "base64", mimeType: "image/png" },
-      ],
-      details: { path: "/tmp/snap.png" },
-    };
+  it.each([undefined, "label"])(
+    "returns image + text when labels are requested (query=%s)",
+    async (query) => {
+      configMocks.loadConfig.mockReturnValue({
+        browser: {},
+        agents: { defaults: { imageMaxDimensionPx: 2000 } },
+      } as never);
+      const tool = createBrowserTool();
+      const imageResult = {
+        content: [
+          { type: "text", text: "label text" },
+          { type: "image", data: "base64", mimeType: "image/png" },
+        ],
+        details: { path: "/tmp/snap.png" },
+      };
 
-    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce(imageResult);
-    browserClientMocks.browserSnapshot.mockResolvedValueOnce({
-      ok: true,
-      format: "ai",
-      targetId: "t1",
-      url: "https://example.com",
-      snapshot: "label text",
-      imagePath: "/tmp/snap.png",
-    });
+      toolCommonMocks.imageResultFromFile.mockResolvedValueOnce(imageResult);
+      browserClientMocks.browserSnapshot.mockResolvedValueOnce({
+        ok: true,
+        format: "ai",
+        targetId: "t1",
+        url: "https://example.com",
+        snapshot: "label text",
+        imagePath: "/tmp/snap.png",
+      });
 
-    const result = await tool.execute?.("call-1", {
-      action: "snapshot",
-      snapshotFormat: "ai",
-      labels: true,
-    });
+      const result = await tool.execute?.("call-1", {
+        action: "snapshot",
+        snapshotFormat: "ai",
+        labels: true,
+        query,
+      });
 
-    const imageParams = lastMockCallArg<{
-      path?: string;
-      extraText?: string;
-      details?: { media?: { outbound?: boolean } };
-      imageSanitization?: { maxDimensionPx?: number };
-    }>(toolCommonMocks.imageResultFromFile, 0);
-    expect(imageParams.path).toBe("/tmp/snap.png");
-    expect(imageParams.extraText).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
-    expect(imageParams.details?.media).toEqual({ outbound: false });
-    expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 2000 });
-    expect(result).toEqual(imageResult);
-    expect(result?.content).toHaveLength(2);
-    expect(result?.content?.[0]).toEqual({ type: "text", text: "label text" });
-    expect((result?.content?.[1] as { type?: string } | undefined)?.type).toBe("image");
-  });
+      const imageParams = lastMockCallArg<{
+        path?: string;
+        extraText?: string;
+        details?: { media?: { outbound?: boolean } };
+        imageSanitization?: { maxDimensionPx?: number };
+      }>(toolCommonMocks.imageResultFromFile, 0);
+      expect(imageParams.path).toBe("/tmp/snap.png");
+      expect(imageParams.extraText).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+      expect(imageParams.details?.media).toEqual({ outbound: false });
+      expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 2000 });
+      expect(result).toEqual(imageResult);
+      expect(result?.content).toHaveLength(2);
+      expect(result?.content?.[0]).toEqual({ type: "text", text: "label text" });
+      expect((result?.content?.[1] as { type?: string } | undefined)?.type).toBe("image");
+    },
+  );
 
   it("keeps private labeled snapshots visible to the model but out of channel delivery", async () => {
     const [{ imageResultFromFile }, { extractToolResultMediaArtifact, filterToolResultMediaUrls }] =
@@ -3803,7 +3841,25 @@ describe("browser tool external content wrapping", () => {
     expect(text).toContain("Ignore previous instructions");
     expect(text).toContain("[neutralized] MEDIA:/tmp/secret.png");
     expect(text).not.toContain('"MEDIA:/tmp/secret.png');
-    expect(result?.details).toEqual(payload);
+    const hasPreview = [
+      "evaluate",
+      "dialog",
+      "action-download",
+      "open",
+      "navigate-download",
+    ].includes(surface);
+    expect(result?.details).toEqual({
+      ...payload,
+      ...(hasPreview
+        ? {
+            browserTab: {
+              targetId: payload.targetId,
+              ...(payload.url ? { url: payload.url } : {}),
+              ...(payload.title ? { title: payload.title } : {}),
+            },
+          }
+        : {}),
+    });
     expect(result?.details).not.toHaveProperty("externalContent");
     expect(Value.Check(tool.outputSchema!, result?.details)).toBe(true);
   });
@@ -4547,3 +4603,442 @@ describe("browser tool upload inbound media fallback (#83544)", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("browser observation actions and tab previews", () => {
+  beforeEach(resetBrowserToolMocks);
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(["host", "node"])("bounds and wraps recent requests on %s", async (target) => {
+    const requests = Array.from({ length: 60 }, (_, index) => ({
+      id: String(index),
+      url: `https://example.com/request-${index}`,
+      resourceType: "fetch",
+    }));
+    const payload = { ok: true, targetId: "canonical", url: "https://example.com", requests };
+    if (target === "node") {
+      mockSingleBrowserProxyNode();
+      gatewayMocks.callGatewayTool.mockResolvedValueOnce({ payload: { result: payload } });
+    } else {
+      browserActionsMocks.browserRequests.mockResolvedValueOnce(payload);
+    }
+    const result = await createBrowserTool().execute("requests", {
+      action: "requests",
+      target,
+      filter: "fetch",
+      clear: true,
+    });
+    const text = firstResultText(result);
+    expect(text).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+    expect(text).not.toContain('"id": "9"');
+    expect(text).toContain('"id": "10"');
+    expect(text).toContain('"id": "59"');
+    expect(result.details).toMatchObject({
+      total: 60,
+      returned: 50,
+      truncated: true,
+      browserTab: { targetId: "canonical", url: payload.url },
+    });
+    if (target === "node") {
+      expect(nodeInvokeCall(0).request.params).toMatchObject({
+        method: "GET",
+        path: "/requests",
+        query: { filter: "fetch", clear: true },
+      });
+    } else {
+      expect(browserActionsMocks.browserRequests).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({ filter: "fetch", clear: true }),
+      );
+    }
+  });
+
+  it("keeps request counts truthful when the text budget drops oversized records", async () => {
+    browserActionsMocks.browserRequests.mockResolvedValueOnce({
+      ok: true,
+      targetId: "t1",
+      requests: [
+        { id: "old", url: "https://example.com/old" },
+        { id: "large", url: `https://example.com/${"x".repeat(20_000)}` },
+        { id: "latest", url: "https://example.com/latest" },
+      ],
+    });
+    const result = await createBrowserTool().execute("requests", { action: "requests", limit: 2 });
+    const text = firstResultText(result);
+    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(text).toContain('"returned": 1');
+    expect(text).toContain('"id": "latest"');
+    expect(text).not.toContain('"id": "large"');
+    expect(result.details).toMatchObject({ total: 3, returned: 1, truncated: true });
+  });
+
+  it.each([
+    ["host", undefined],
+    ["node", undefined],
+    ["host", 2],
+    ["node", 2],
+  ] as const)("bounds and wraps recent errors on %s (limit=%s)", async (target, limit) => {
+    const errors = Array.from({ length: 60 }, (_, index) => ({
+      message: `page-error-${index}`,
+      name: "Error",
+      stack: `Error: page-error-${index}`,
+      timestamp: "2026-08-28T00:00:00.000Z",
+    }));
+    const payload = { ok: true, targetId: "canonical", url: "https://example.com", errors };
+    if (target === "node") {
+      mockSingleBrowserProxyNode();
+      gatewayMocks.callGatewayTool.mockResolvedValueOnce({ payload: { result: payload } });
+    } else {
+      browserActionsMocks.browserErrors.mockResolvedValueOnce(payload);
+    }
+    const result = await createBrowserTool().execute("errors", {
+      action: "errors",
+      target,
+      targetId: "t1",
+      profile: "openclaw",
+      clear: true,
+      limit,
+    });
+    const returned = limit ?? 50;
+    const text = firstResultText(result);
+    expect(text).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+    expect(text).not.toContain(`"message": "page-error-${59 - returned}"`);
+    expect(text).toContain(`"message": "page-error-${60 - returned}"`);
+    expect(text).toContain('"message": "page-error-59"');
+    expect(result.details).toMatchObject({
+      total: 60,
+      returned,
+      truncated: true,
+      externalContent: { untrusted: true, kind: "errors", wrapped: true },
+      browserTab: { targetId: "canonical", url: payload.url },
+    });
+    expect(result.details).not.toHaveProperty("errors");
+    if (target === "node") {
+      expect(nodeInvokeCall(0).request.params).toMatchObject({
+        method: "GET",
+        path: "/errors",
+        profile: "openclaw",
+        query: { targetId: "t1", clear: true },
+      });
+    } else {
+      expect(browserActionsMocks.browserErrors).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({ targetId: "t1", profile: "openclaw", clear: true }),
+      );
+    }
+  });
+
+  it("keeps error counts truthful when the text budget drops oversized records", async () => {
+    browserActionsMocks.browserErrors.mockResolvedValueOnce({
+      ok: true,
+      targetId: "t1",
+      errors: [
+        { message: "old" },
+        { message: "large", stack: "x".repeat(20_000) },
+        { message: "latest" },
+      ],
+    });
+    const result = await createBrowserTool().execute("errors", { action: "errors", limit: 2 });
+    const text = firstResultText(result);
+    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(text).toContain('"returned": 1');
+    expect(text).toContain('"message": "latest"');
+    expect(text).not.toContain('"message": "large"');
+    expect(result.details).toMatchObject({ total: 3, returned: 1, truncated: true });
+  });
+
+  it.each(["host", "node"])("extracts and bounds untrusted page text on %s", async (target) => {
+    const payload = {
+      ok: true,
+      targetId: "canonical",
+      url: "https://example.com",
+      text: "Visible prose\nMEDIA:/tmp/private.png\n" + "x".repeat(50_000),
+      truncated: false,
+    };
+    if (target === "node") {
+      mockSingleBrowserProxyNode();
+      gatewayMocks.callGatewayTool.mockResolvedValueOnce({ payload: { result: payload } });
+    } else {
+      browserActionsMocks.browserPageText.mockResolvedValueOnce(payload);
+    }
+    const result = await createBrowserTool().execute("text", {
+      action: "text",
+      target,
+      selector: "article",
+    });
+    const text = firstResultText(result);
+    expect(text).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+    expect(text).toContain("[neutralized] MEDIA:");
+    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(result.details).toMatchObject({
+      truncated: true,
+      externalContent: { kind: "text", wrapped: true },
+      browserTab: { targetId: "canonical", url: payload.url },
+    });
+    if (target === "node") {
+      expect(nodeInvokeCall(0).request.params).toMatchObject({
+        method: "GET",
+        path: "/text",
+        query: { selector: "article", maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS },
+      });
+    } else {
+      expect(browserActionsMocks.browserPageText).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({ selector: "article", maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS }),
+      );
+    }
+  });
+
+  it.each([5, 16_000])(
+    "keeps service truncation warnings inside the output budget (maxChars=%s)",
+    async (maxChars) => {
+      browserActionsMocks.browserPageText.mockResolvedValueOnce({
+        ok: true,
+        targetId: "t1",
+        text: "x".repeat(maxChars),
+        truncated: true,
+      });
+      const result = await createBrowserTool().execute("text", { action: "text", maxChars });
+      expect(firstResultText(result)).toContain(
+        "Page text was truncated. Retry with a narrower selector.",
+      );
+      expect(firstResultText(result).length).toBeLessThanOrEqual(16_000);
+      expect(result.details).toMatchObject({ truncated: true });
+    },
+  );
+
+  it("enforces an explicit text cap even when the service ignores it", async () => {
+    browserActionsMocks.browserPageText.mockResolvedValueOnce({
+      ok: true,
+      targetId: "t1",
+      text: "abcdefghijk",
+      truncated: false,
+    });
+    const result = await createBrowserTool().execute("text", { action: "text", maxChars: 5 });
+    expect(firstResultText(result)).toContain("abcde");
+    expect(firstResultText(result)).not.toContain("abcdef");
+    expect(result.details).toMatchObject({ truncated: true });
+    await expect(
+      createBrowserTool().execute("text", { action: "text", maxChars: 0 }),
+    ).rejects.toThrow("positive integer");
+  });
+
+  it.each(["requests", "errors", "text", "emulate"])(
+    "gives recovery guidance for existing-session %s",
+    async (action) => {
+      setResolvedBrowserProfiles({ user: { driver: "existing-session", attachOnly: true } });
+      await expect(
+        createBrowserTool().execute("unsupported", {
+          action,
+          target: "host",
+          profile: "user",
+          locale: "en-US",
+        }),
+      ).rejects.toThrow(/existing-session.*snapshot.*managed/);
+    },
+  );
+
+  it("validates all emulation settings before applying anything", async () => {
+    const tool = createBrowserTool();
+    await expect(tool.execute("empty", { action: "emulate" })).rejects.toThrow("at least one");
+    await expect(
+      tool.execute("invalid", { action: "emulate", device: "iPhone 15", colorScheme: "invalid" }),
+    ).rejects.toThrow("colorScheme must be");
+    expect(browserActionsMocks.browserEmulateSetting).not.toHaveBeenCalled();
+  });
+
+  it.each(["host", "node"])(
+    "applies emulation in order to one resolved tab on %s",
+    async (target) => {
+      if (target === "node") {
+        mockSingleBrowserProxyNode();
+        for (let index = 0; index < 4; index++) {
+          gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+            payload: { result: { ok: true, targetId: "canonical" } },
+          });
+        }
+      } else {
+        browserActionsMocks.browserEmulateSetting.mockResolvedValue({
+          ok: true,
+          targetId: "canonical",
+        });
+      }
+      const result = await createBrowserTool().execute("emulate", {
+        action: "emulate",
+        target,
+        device: "iPhone 15",
+        colorScheme: "none",
+        timezoneId: "America/New_York",
+        locale: "en-US",
+      });
+      expect(result.details).toEqual({
+        ok: true,
+        targetId: "canonical",
+        applied: ["device", "colorScheme", "timezoneId", "locale"],
+        browserTab: { targetId: "canonical" },
+      });
+      const expected = [
+        ["device", { targetId: undefined, name: "iPhone 15" }],
+        ["media", { targetId: "canonical", colorScheme: "none" }],
+        ["timezone", { targetId: "canonical", timezoneId: "America/New_York" }],
+        ["locale", { targetId: "canonical", locale: "en-US" }],
+      ] as const;
+      expected.forEach(([setting, body], index) => {
+        if (target === "node") {
+          expect(nodeInvokeCall(index).request.params).toMatchObject({
+            method: "POST",
+            path: `/set/${setting}`,
+            body,
+          });
+        } else {
+          expect(browserActionsMocks.browserEmulateSetting).toHaveBeenNthCalledWith(
+            index + 1,
+            undefined,
+            expect.objectContaining({ setting, body }),
+          );
+        }
+      });
+    },
+  );
+
+  it("bounds preview metadata and ignores non-string fields", async () => {
+    browserClientMocks.browserOpenTab.mockResolvedValueOnce({
+      targetId: "t".repeat(200),
+      title: "a".repeat(600),
+      url: "u".repeat(3000),
+    });
+    const tool = createBrowserTool();
+    const opened = await tool.execute("open", { action: "open", url: "https://example.com" });
+    expect(opened.details).toMatchObject({
+      browserTab: { targetId: "t".repeat(128), title: "a".repeat(512), url: "u".repeat(2048) },
+    });
+    browserClientMocks.browserFocusTab.mockResolvedValueOnce({ ok: true, title: 42, url: {} });
+    const focused = await tool.execute("focus", { action: "focus", targetId: "known" });
+    expect(focused.details).toMatchObject({ browserTab: { targetId: "known" } });
+    expect((focused.details as { browserTab: object }).browserTab).toEqual({ targetId: "known" });
+  });
+
+  it("attaches previews only to successful concrete tab actions", async () => {
+    browserActionsMocks.browserAct.mockResolvedValue({ ok: true });
+    const tool = createBrowserTool({ screenshotResultMode: "path" });
+    browserActionsMocks.browserNavigate.mockResolvedValueOnce({
+      ok: true,
+      targetId: "nav",
+      url: "https://example.com",
+    });
+    for (const args of [
+      { action: "snapshot" },
+      { action: "screenshot" },
+      { action: "navigate", url: "https://example.com" },
+      { action: "act", request: { kind: "click", targetId: "known", ref: "e1" } },
+    ]) {
+      expect((await tool.execute("preview", args)).details).toHaveProperty("browserTab.targetId");
+    }
+    for (const args of [
+      { action: "tabs" },
+      { action: "status" },
+      { action: "start" },
+      { action: "stop" },
+      { action: "close", targetId: "known" },
+      { action: "act", request: { kind: "close", targetId: "known" } },
+      { action: "act", request: { kind: "click", ref: "e1" } },
+    ]) {
+      expect((await tool.execute("no-preview", args)).details).not.toHaveProperty("browserTab");
+    }
+    browserActionsMocks.browserAct.mockResolvedValueOnce({
+      ok: false,
+      targetId: "known",
+      error: "failed",
+    });
+    expect(
+      (await tool.execute("failed", { action: "act", kind: "click", targetId: "known", ref: "e1" }))
+        .details,
+    ).not.toHaveProperty("browserTab");
+    browserActionsMocks.browserAct.mockResolvedValueOnce({
+      ok: true,
+      targetId: "known",
+      results: [{ ok: false, error: "failed" }],
+    });
+    expect(
+      (await tool.execute("failed-batch", { action: "act", kind: "batch", actions: [] })).details,
+    ).not.toHaveProperty("browserTab");
+  });
+
+  it.each(["ai", "aria"])(
+    "filters %s snapshots by all case-insensitive tokens and preserves refs",
+    async (format) => {
+      const nodes = [
+        { ref: "e1", role: "button", name: "Sign in" },
+        { ref: "e2", role: "button", name: "Sign out" },
+      ];
+      browserClientMocks.browserSnapshot.mockResolvedValueOnce({
+        ok: true,
+        targetId: "t1",
+        url: "https://example.com",
+        format,
+        ...(format === "ai"
+          ? {
+              snapshot: '- button "Sign in" [ref=e1]\n- button "Sign out" [ref=e2]',
+              refs: Object.fromEntries(nodes.map((node) => [node.ref, node])),
+              stats: { lines: 2, chars: 100, refs: 2, interactive: 2 },
+            }
+          : { nodes }),
+      });
+      const result = await createBrowserTool().execute("query", {
+        action: "snapshot",
+        snapshotFormat: format,
+        query: "  IN\tSIGN ",
+      });
+      const text = result.content
+        .filter((item) => item.type === "text")
+        .map((item) => item.text)
+        .join("\n");
+      expect(text).toContain("1 matching line");
+      expect(text).toContain("[ref=e1]");
+      expect(text).not.toContain("[ref=e2]");
+      expect(result.details).toMatchObject({
+        matchCount: 1,
+        refs: 1,
+        stats: { lines: 1, refs: 1, interactive: 1 },
+        browserTab: { targetId: "t1" },
+      });
+    },
+  );
+
+  it("reports zero query matches and honors maxChars without stale stats", async () => {
+    browserClientMocks.browserSnapshot.mockResolvedValueOnce({
+      ok: true,
+      format: "ai",
+      targetId: "t1",
+      snapshot: '- button "Sign in" [ref=e1]',
+      refs: { e1: { role: "button" } },
+      stats: { lines: 1, chars: 25, refs: 1, interactive: 1 },
+    });
+    const tool = createBrowserTool();
+    const empty = await tool.execute("empty-query", { action: "snapshot", query: "not found" });
+    expect(firstResultText(empty)).toContain("No matching lines");
+    expect(firstResultText(empty)).toContain("Refine");
+    expect(empty.details).toMatchObject({
+      matchCount: 0,
+      refs: 0,
+      stats: { lines: 0, chars: 0, refs: 0, interactive: 0 },
+    });
+    browserClientMocks.browserSnapshot.mockResolvedValueOnce({
+      ok: true,
+      format: "ai",
+      targetId: "t1",
+      snapshot: '- button "Sign in" [ref=e1]',
+      refs: { e1: { role: "button" } },
+    });
+    const capped = await tool.execute("capped-query", {
+      action: "snapshot",
+      query: "sign",
+      maxChars: 5,
+    });
+    expect(capped.details).toMatchObject({
+      matchCount: 1,
+      truncated: true,
+      refs: 0,
+      stats: { chars: 5, refs: 0 },
+    });
+  });
+});

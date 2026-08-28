@@ -167,26 +167,48 @@ function createNativeShowEarlierPane(request: ReturnType<typeof vi.fn>, scrollTo
 }
 
 describe("chat pane native history pagination", () => {
-  it("preserves the steer split through the refresh callback and later cumulative deltas", async () => {
-    class RefreshChatPane extends ChatPane {
-      chatProps: ChatProps | undefined;
+  class RefreshChatPane extends ChatPane {
+    chatProps: ChatProps | undefined;
 
-      initialize(context: ApplicationContext) {
-        this.context = context;
-        this.state = createPageState(
-          context,
-          { afterCommit: () => () => {}, invalidate: () => {} },
-          this,
-        );
-        return this.state;
-      }
-
-      protected override renderChatPaneLayout(params: { chatProps: ChatProps }) {
-        this.chatProps = params.chatProps;
-        return html``;
-      }
+    initialize(context: ApplicationContext) {
+      this.context = context;
+      this.state = createPageState(
+        context,
+        { afterCommit: () => () => {}, invalidate: () => {} },
+        this,
+      );
+      return this.state;
     }
-    customElements.define("openclaw-chat-refresh-regression", RefreshChatPane);
+
+    protected override renderChatPaneLayout(params: { chatProps: ChatProps }) {
+      this.chatProps = params.chatProps;
+      return html``;
+    }
+  }
+  customElements.define("openclaw-chat-refresh-regression", RefreshChatPane);
+
+  it("passes only a proven profile viewer identity to transcript rendering", () => {
+    const pane = document.createElement("openclaw-chat-refresh-regression") as RefreshChatPane;
+    const context: ApplicationContext = {
+      ...createInitializationContext(),
+      sessions: createSessionCapabilityFixture({
+        state: { result: null, agentId: "main", modelOverrides: {} },
+        think: () => undefined,
+        reconcile: vi.fn(),
+      }),
+    };
+    pane.initialize(context);
+    const user = { id: "collision", name: "Viewer", avatarUrl: "/api/users/collision/avatar" };
+    context.gateway.snapshot.selfUser = user;
+    pane.render();
+    expect(pane.chatProps?.userId).toBeNull();
+    context.gateway.snapshot.selfUser = { ...user, identity: { type: "profile", id: "collision" } };
+    pane.render();
+    expect(pane.chatProps?.userId).toBe("collision");
+    expect(pane.chatProps?.userAvatar).toBe(user.avatarUrl);
+  });
+
+  it("preserves the steer split through the refresh callback and later cumulative deltas", async () => {
     const pane = document.createElement("openclaw-chat-refresh-regression") as RefreshChatPane;
     const history = createDeferred<ChatHistoryResult>();
     const request = vi.fn(() => history.promise);

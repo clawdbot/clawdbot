@@ -296,6 +296,7 @@ function runReleaseInputCapture(params: {
         RELEASE_LIVE_SUITE_FILTER_INPUT: "",
         RELEASE_MODE_INPUT: "both",
         RELEASE_PACKAGE_SPEC_INPUT: params.releasePackageSpec ?? "",
+        RELEASE_PHASE_INPUT: "all",
         RELEASE_PROFILE_INPUT: "beta",
         RELEASE_PROVIDER_INPUT: "openai",
         RELEASE_QA_DISCORD_LIVE_CI_ENABLED: "false",
@@ -512,7 +513,8 @@ describe("package source preflight", () => {
         "${{ needs.resolve_target.outputs.package_mode != 'published' }}",
     });
     expect(workflow.jobs.package_acceptance_release_checks?.with).toMatchObject({
-      candidate_artifact_json: "${{ needs.resolve_target.outputs.candidate_artifact_json }}",
+      candidate_artifact_json:
+        "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.candidate_artifact_json || '' }}",
       source:
         "${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.package_mode == 'published') && 'npm' || 'artifact' }}",
     });

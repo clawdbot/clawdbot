@@ -102,6 +102,8 @@ const DEPRECATION_HYGIENE_PATH_RE =
   /^(?:package\.json$|src\/|extensions\/|packages\/|scripts\/(?:check-deprecated-api-usage\.mts$|plugin-boundary-report\.ts$|lib\/plugin-sdk))/u;
 const WRAPPER_SHADOWING_PATH_RE =
   /^(?:package\.json$|src\/|scripts\/(?:check-(?:export-name-collisions|wrapper-shadowing)\.mts$|lib\/ts-guard-utils\.mts$))/u;
+const EXTENSION_TEST_CORE_IMPORT_PATH_RE =
+  /^(?:extensions\/|test\/helpers\/|scripts\/(?:check-no-extension-test-core-imports|check-file-utils)\.ts$|scripts\/check-changed\.m[jt]s$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
   /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/(?:control-ui-i18n-[^/]+\.ts|control-ui-i18n-config\.json))$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
 const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
@@ -567,6 +569,12 @@ export function createChangedCheckPlan(
   add("doctor deprecation registry", ["check:doctor-deprecation-registry"]);
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
+  if (
+    result.lanes.all ||
+    result.paths.some((changedPath) => EXTENSION_TEST_CORE_IMPORT_PATH_RE.test(changedPath))
+  ) {
+    add("extension test core imports", ["lint:plugins:no-extension-test-core-imports"]);
+  }
   add("duplicate scan target coverage", ["dup:check:coverage"]);
   add("coercion helper declaration guard", ["check:coercion-helpers"]);
   add("dependency pin guard", ["deps:pins:check"]);
@@ -667,6 +675,12 @@ export function createChangedCheckPlan(
   const lanes = result.lanes;
   const runAll = lanes.all;
   const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
+
+  // Typechecking alone accepts extension imports; the graph guard also covers
+  // shared test/tooling dependencies that core tests can pull into their graph.
+  if (runAll || lanes.core || lanes.coreTests || lanes.ui || lanes.tooling) {
+    add("core tsgo graph boundary", ["lint:tmp:tsgo-core-boundary"]);
+  }
 
   if (runAll || lanes.scripts || result.paths.includes("scripts/check-script-erasability.mjs")) {
     add("script TypeScript erasability", ["check:script-erasability"]);
@@ -771,6 +785,7 @@ export function createChangedCheckPlan(
     lanes.liveDockerTooling &&
     result.paths.some((changedPath) => getChangedPathFacts(changedPath).surface === "source")
   ) {
+    add("core tsgo graph boundary", ["lint:tmp:tsgo-core-boundary"]);
     addTypecheck("typecheck core tests", ["tsgo:core:test"]);
     addLint("lint core", ["lint:core"]);
   }

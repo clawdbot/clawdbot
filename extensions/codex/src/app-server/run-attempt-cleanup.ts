@@ -149,6 +149,17 @@ export async function cleanupCodexAttempt(
       userInputBridgeRef.current?.cancelPending(),
     );
     await runCleanupStep("codex-turn-watch-clear", () => turnWatches.clearAllTimers());
+    await runCleanupStep("codex-dynamic-tool-cleanup", async () => {
+      const cleanupReason = terminalState.turnSucceeded
+        ? "completion"
+        : state.timedOut
+          ? "timeout"
+          : runAbortController.signal.aborted
+            ? "cancel"
+            : "error";
+      const cleanups = prompt.context.attemptTools.runCleanups.splice(0);
+      await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(cleanupReason)));
+    });
     await runCleanupStep("codex-route-release", releaseCurrentRoute);
     await runCleanupStep("codex-transcript-checkpoint", () =>
       activeTurn.activeProjector.transcriptCheckpoint.flush(true),

@@ -34,6 +34,7 @@ import {
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
   chatMessagesContainQueuedSend,
+  chatSendHoldReason,
   OFFLINE_QUEUE_STORAGE_ERROR,
   preserveQueuedUserTurn,
   surfaceChatDeliveryFailure,
@@ -343,7 +344,7 @@ async function drainStoredChatOutbox(
 ): Promise<"blocked" | "empty"> {
   while (true) {
     const host = lane.host;
-    if (!host.connected || !host.client) {
+    if (!host.connected || !host.client || chatSendHoldReason(host, scope.sessionKey)) {
       return "blocked";
     }
     const outbox = readStoredChatOutbox(host, scope);
@@ -460,6 +461,9 @@ async function drainStoredChatOutbox(
         if (reconciled === "continue") {
           continue;
         }
+      }
+      if (chatSendHoldReason(host, outbox.sessionKey)) {
+        return "blocked";
       }
       // Claim before execution to preserve FIFO and crash-review state.
       const claimed = setCommandState("executing-command");

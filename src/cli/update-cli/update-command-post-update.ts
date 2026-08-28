@@ -222,6 +222,7 @@ export async function finishUpdate(params: {
           opts: params.opts,
           pluginInstallRecords: params.preUpdatePluginInstallRecords,
           updateStartedAtMs: params.startedAt,
+          timeoutMs: params.updateStepTimeoutMs,
           nodeRunner: params.packageUpdateNodeRunner,
           preUpdateConfig: params.configSnapshot.valid
             ? {
@@ -469,12 +470,6 @@ export async function finishUpdate(params: {
     }
   }
 
-  await tryWriteCompletionCache(postUpdateRoot, Boolean(params.opts.json));
-  await tryInstallShellCompletion({
-    jsonMode: Boolean(params.opts.json),
-    skipPrompt: Boolean(params.opts.yes),
-  });
-
   await writeControlPlaneUpdateRestartSentinelBestEffort({
     meta: params.controlPlaneUpdateSentinelMeta,
     result: buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
@@ -513,6 +508,28 @@ export async function finishUpdate(params: {
     defaultRuntime.exit(1);
     return;
   }
+
+  // Restart and health verification own recovery of the service stopped for this update.
+  // Optional completion refresh must run only after that lifecycle boundary settles.
+  try {
+    await tryWriteCompletionCache(postUpdateRoot, Boolean(params.opts.json));
+  } catch (err) {
+    if (!params.opts.json) {
+      const completionCacheRefreshCommand = replaceCliName(
+        formatCliCommand("openclaw completion --write-state"),
+        CLI_NAME,
+      );
+      defaultRuntime.log(
+        theme.warn(
+          `Completion cache update failed: ${formatErrorMessage(err)}. Update will continue; retry with: ${completionCacheRefreshCommand}`,
+        ),
+      );
+    }
+  }
+  await tryInstallShellCompletion({
+    jsonMode: Boolean(params.opts.json),
+    skipPrompt: Boolean(params.opts.yes),
+  });
 
   if (params.installKindChanged && resultWithPostUpdate.mode !== "git") {
     const retirement = await retireStandaloneGitWrapper({
