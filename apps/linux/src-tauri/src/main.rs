@@ -787,28 +787,24 @@ impl DesktopState {
         expected_generation: Option<u64>,
     ) -> Result<GatewaySnapshot, String> {
         let snapshot = GatewaySnapshot::missing_cli();
-        match self.show_local(app, "missingCli", force, expected_generation) {
-            Ok(false) => return Ok(snapshot),
-            Ok(true) => {}
-            Err(error) => {
-                self.update_tray(&snapshot);
-                return Err(error);
-            }
+        let navigation = self.show_local(app, "missingCli", force, expected_generation);
+        if !local_recovery_owns_gateway(&navigation) {
+            return Ok(snapshot);
         }
         app.state::<gateway_ws::GatewayClient>()
             .clear_configuration(app);
         self.update_tray(&snapshot);
-        Ok(snapshot)
+        navigation.map(|_| snapshot)
     }
 
     fn show_cli_recovery_error(&self, app: &AppHandle, generation: u64, error: CliError) {
         let mut snapshot = GatewaySnapshot::missing_cli();
         snapshot.status = "CLI unavailable".to_string();
         snapshot.detail = Some(error.to_string());
-        if !matches!(
-            self.show_local(app, "error", false, Some(generation)),
-            Ok(false)
-        ) {
+        let navigation = self.show_local(app, "error", false, Some(generation));
+        if local_recovery_owns_gateway(&navigation) {
+            app.state::<gateway_ws::GatewayClient>()
+                .clear_configuration(app);
             self.update_tray(&snapshot);
         }
     }
@@ -1057,9 +1053,16 @@ fn local_mode(snapshot: &GatewaySnapshot) -> &'static str {
     }
 }
 
+fn local_recovery_owns_gateway(navigation: &Result<bool, String>) -> bool {
+    !matches!(navigation, Ok(false))
+}
+
 #[cfg(test)]
 mod navigation_tests {
-    use super::{is_active_onboarding_url, is_release_version, NavigationState, Url};
+    use super::{
+        is_active_onboarding_url, is_release_version, local_recovery_owns_gateway, NavigationState,
+        Url,
+    };
 
     #[test]
     fn only_active_onboarding_preserves_the_dashboard_during_reconnect() {
@@ -1141,6 +1144,15 @@ mod navigation_tests {
 
         assert!(!navigation.permit_local(false, None));
         assert!(navigation.remote_dashboard);
+    }
+
+    #[test]
+    fn local_recovery_clears_retained_gateway_unless_remote_navigation_won() {
+        assert!(local_recovery_owns_gateway(&Ok(true)));
+        assert!(local_recovery_owns_gateway(&Err(
+            "local navigation failed".to_string()
+        )));
+        assert!(!local_recovery_owns_gateway(&Ok(false)));
     }
 
     #[test]
