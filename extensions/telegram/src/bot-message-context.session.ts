@@ -330,12 +330,17 @@ export async function buildTelegramInboundContextPayload(params: {
     kind: "quote" | "forwarded";
     senderId?: string;
     senderUsername?: string;
+    /** Only the immediate reply target may use the bot-self allowlist bypass. */
+    allowBotSelfQuote?: boolean;
   }): boolean => {
     if (!isGroup) {
       return true;
     }
     const isBotSelfQuote =
-      paramsLocal.kind === "quote" && botSenderId != null && paramsLocal.senderId === botSenderId;
+      paramsLocal.allowBotSelfQuote === true &&
+      paramsLocal.kind === "quote" &&
+      botSenderId != null &&
+      paramsLocal.senderId === botSenderId;
     const senderAllowed = isBotSelfQuote
       ? true
       : effectiveGroupAllow?.hasEntries
@@ -363,6 +368,7 @@ export async function buildTelegramInboundContextPayload(params: {
         kind: "quote",
         senderId: target.senderId,
         senderUsername: target.senderUsername,
+        allowBotSelfQuote: true,
       })
     ) {
       return null;
@@ -441,6 +447,7 @@ export async function buildTelegramInboundContextPayload(params: {
         kind: "quote",
         senderId: visibleEntry.senderId,
         senderUsername: visibleEntry.senderUsername,
+        allowBotSelfQuote: entry.messageId === visibleReplyTargetEntry?.messageId,
       })
     ) {
       return [];

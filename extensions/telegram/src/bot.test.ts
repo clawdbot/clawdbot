@@ -5432,6 +5432,77 @@ describe("createTelegramBot", () => {
     expect(payload.Body).not.toContain("[Reply chain - nearest first]");
   });
 
+  it("does not expose deeper bot-self reply ancestors under allowlist visibility", async () => {
+    mockTelegramConfig({
+      groupPolicy: "allowlist",
+      contextVisibility: "allowlist",
+      groups: {
+        "-1012": {
+          requireMention: false,
+          allowFrom: ["1", "2"],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const chat = { id: -1012, type: "group", title: "Ops" };
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: getEmptyTelegramFile,
+    };
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat,
+        message_id: 9301,
+        text: "Why is there a 4th person?",
+        date: 1736380750,
+        from: { id: 2, first_name: "UserB", is_bot: false },
+        reply_to_message: {
+          chat,
+          message_id: 9300,
+          text: "Done, here is the cron notification",
+          date: 1736380700,
+          from: { id: 999, first_name: "OpenClaw", is_bot: true },
+        },
+      },
+    });
+
+    replySpy.mockClear();
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat,
+        message_id: 9302,
+        text: "what happened?",
+        date: 1736380800,
+        from: { id: 1, first_name: "Ada", username: "ada", is_bot: false },
+        reply_to_message: {
+          chat,
+          message_id: 9301,
+          text: "Why is there a 4th person?",
+          date: 1736380750,
+          from: { id: 2, first_name: "UserB", is_bot: false },
+        },
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call") as {
+      ReplyToId?: string;
+      ReplyToBody?: string;
+      ReplyChain?: Array<{ messageId?: string; body?: string }>;
+      Body?: string;
+    };
+    expect(payload.ReplyToId).toBe("9301");
+    expect(payload.ReplyToBody).toBe("Why is there a 4th person?");
+    expect(payload.ReplyChain?.map((entry) => entry.messageId)).toEqual(["9301"]);
+    expect(payload.Body).not.toContain("Done, here is the cron notification");
+  });
+
   it("hydrates bot-self reply media under allowlist visibility", async () => {
     mockTelegramConfig({
       groupPolicy: "allowlist",
