@@ -138,7 +138,7 @@ export function createProviderApiKeyResolver(
   config?: OpenClawConfig,
 ): ProviderApiKeyResolver {
   const getLookupCaches = createProviderAuthLookupCaches(env, config);
-  return (provider: string): { apiKey: string | undefined; discoveryApiKey?: string } => {
+  return (provider: string) => {
     const lookupCaches = getLookupCaches();
     const authProvider = resolveProviderIdForAuthFromCaches(provider, lookupCaches);
     const envVar = resolveEnvApiKeyVarName(authProvider, env, {
@@ -175,6 +175,7 @@ export function createProviderApiKeyResolver(
       ? {
           apiKey: fromProfiles.apiKey,
           discoveryApiKey: fromProfiles.discoveryApiKey,
+          profileId: fromProfiles.profileId,
         }
       : { apiKey: undefined, discoveryApiKey: undefined };
   };

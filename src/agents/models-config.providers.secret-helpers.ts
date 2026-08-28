@@ -28,11 +28,7 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 /** Default secret reference sources applied when config omits an explicit source. */
-export type SecretDefaults = {
-  env?: string;
-  file?: string;
-  exec?: string;
-};
+export type SecretDefaults = NonNullable<NonNullable<OpenClawConfig["secrets"]>["defaults"]>;
 
 /** Resolved API key value plus provenance for discovery and secret-marker handling. */
 type ProfileApiKeyResolution = {
@@ -45,6 +41,7 @@ type ProfileApiKeyResolution = {
 export type ProviderApiKeyResolver = (provider: string) => {
   apiKey: string | undefined;
   discoveryApiKey?: string;
+  profileId?: string;
 };
 
 /** Resolves full provider auth state for callers that need mode and profile provenance. */
@@ -206,12 +203,12 @@ export function resolveApiKeyFromProfiles(params: {
   provider: string;
   store: AuthProfileStore;
   env?: NodeJS.ProcessEnv;
-}): ProfileApiKeyResolution | undefined {
+}): (ProfileApiKeyResolution & { profileId: string }) | undefined {
   const ids = listProfilesForProvider(params.store, params.provider);
   for (const id of ids) {
     const resolved = resolveApiKeyFromCredential(params.store.profiles[id], params.env);
     if (resolved) {
-      return resolved;
+      return { ...resolved, profileId: id };
     }
   }
   return undefined;
