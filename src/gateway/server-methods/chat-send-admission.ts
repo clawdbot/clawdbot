@@ -277,7 +277,9 @@ export async function admitChatSend(params: {
       }
       return;
     }
-    const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry);
+    const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry, {
+      allowPendingWorkspace: true,
+    });
     if (archivedError) {
       throw new Error(archivedError);
     }
@@ -411,68 +413,63 @@ export async function admitChatSend(params: {
     });
     return { ok: false as const };
   }
-  let interruptedActiveRun = false;
-  let interruptionSettled = true;
-  if (runInterruptTarget) {
-    interruptedActiveRun = true;
-    interruptionSettled = (
-      await interruptReplyRunTarget(runInterruptTarget, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS)
-    ).settled;
-  } else if (p.queueMode === "interrupt") {
-    const identities = [sessionKey, backingSessionId, admittedSessionId];
-    // The fallback runs inside the new admission so the lifecycle owner excludes itself.
-    // A captured reply operation never falls through to this identity-scoped path.
-    const fallback = await gatewayWorkAdmission.run(async () => {
-      if (!isCompetingSessionWorkAdmissionActive(storePath, identities)) {
-        return { interrupted: false, settled: true };
-      }
-      return {
-        interrupted: true,
-        settled: await interruptSessionWorkAdmissions({
-          scope: storePath,
-          identities,
-          timeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-        }),
-      };
-    });
-    interruptedActiveRun = fallback.interrupted;
-    interruptionSettled = fallback.settled;
-  }
-  if (!interruptionSettled) {
+  let releaseGatewayRootContinuation = () => {};
+  // Until dispatch takes custody, interruption and callback failures own the same three resources.
+  const cleanupPreDispatchAdmission = () => {
     activeRunAbort.cleanup({ force: true });
     gatewayWorkAdmission.release();
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        "Previous run is still shutting down. Please try again in a moment.",
-        { retryable: true, retryAfterMs: 250 },
-      ),
-    );
-    return { ok: false as const };
-  }
-  // Reserved here, while the request's root is provably live, rather than after the ACK: the
-  // detached dispatch must keep that root until terminal persistence settles or restart drain
-  // completes early and loses the session's terminal state. Callers outside a Gateway request
-  // envelope (internal chat entries) hold no root, so there is nothing to extend for them.
-  const releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? (() => {});
-  if (params.onAdmissionOwned) {
-    let proceed: boolean;
-    try {
-      proceed = await gatewayWorkAdmission.run(params.onAdmissionOwned);
-    } catch (error) {
-      activeRunAbort.cleanup({ force: true });
-      gatewayWorkAdmission.release();
-      releaseGatewayRootContinuation();
-      throw error;
+    releaseGatewayRootContinuation();
+  };
+  let interruptedActiveRun = false;
+  try {
+    let interruptionSettled = true;
+    if (runInterruptTarget) {
+      interruptedActiveRun = true;
+      interruptionSettled = (
+        await interruptReplyRunTarget(runInterruptTarget, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS)
+      ).settled;
+    } else if (p.queueMode === "interrupt") {
+      const identities = [sessionKey, backingSessionId, admittedSessionId];
+      // The fallback runs inside the new admission so the lifecycle owner excludes itself.
+      // A captured reply operation never falls through to this identity-scoped path.
+      const fallback = await gatewayWorkAdmission.run(async () => {
+        if (!isCompetingSessionWorkAdmissionActive(storePath, identities)) {
+          return { interrupted: false, settled: true };
+        }
+        return {
+          interrupted: true,
+          settled: await interruptSessionWorkAdmissions({
+            scope: storePath,
+            identities,
+            timeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+          }),
+        };
+      });
+      interruptedActiveRun = fallback.interrupted;
+      interruptionSettled = fallback.settled;
     }
-    if (!proceed) {
-      activeRunAbort.cleanup({ force: true });
-      gatewayWorkAdmission.release();
-      releaseGatewayRootContinuation();
+    if (!interruptionSettled) {
+      cleanupPreDispatchAdmission();
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "Previous run is still shutting down. Please try again in a moment.",
+          { retryable: true, retryAfterMs: 250 },
+        ),
+      );
       return { ok: false as const };
     }
+    // Reserve while the request root is live: detached dispatch retains it until terminal persistence.
+    releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? (() => {});
+    if (params.onAdmissionOwned && !(await gatewayWorkAdmission.run(params.onAdmissionOwned))) {
+      cleanupPreDispatchAdmission();
+      return { ok: false as const };
+    }
+  } catch (error) {
+    cleanupPreDispatchAdmission();
+    throw error;
   }
 
   const acquiredGatewayWorkAdmission = gatewayWorkAdmission;

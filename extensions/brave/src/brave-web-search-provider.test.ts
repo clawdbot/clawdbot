@@ -228,6 +228,46 @@ describe("brave web search provider", () => {
     },
   );
 
+  it.each(["web", "llm-context"] as const)(
+    "does not cache a %s response completed after caller cancellation",
+    async (mode) => {
+      const controller = new AbortController();
+      const reason = new Error(`Brave ${mode} canceled after response`);
+      const payload =
+        mode === "web" ? { web: { results: [] } } : { grounding: { generic: [] }, sources: [] };
+      let firstRequest = true;
+      const fetchMock = vi.fn(async () => {
+        if (!firstRequest) {
+          return jsonResponse(payload);
+        }
+        firstRequest = false;
+        let emitted = false;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            pull(stream) {
+              if (!emitted) {
+                emitted = true;
+                stream.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
+                return;
+              }
+              stream.close();
+              controller.abort(reason);
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      });
+      global.fetch = fetchMock as typeof global.fetch;
+      const tool = createBraveTool({ webSearch: { apiKey: "brave-test-key", mode } });
+      const args = { query: `brave post-response cancellation ${mode}` };
+
+      await expect(tool.execute(args, { signal: controller.signal })).rejects.toBe(reason);
+      await tool.execute(args);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("normalizes brave language parameters and swaps reversed ui/search inputs", () => {
     expect(
       testing.normalizeBraveLanguageParams({

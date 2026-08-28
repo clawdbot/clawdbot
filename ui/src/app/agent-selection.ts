@@ -114,7 +114,10 @@ export function createAgentSelectionCapability(
       followsGatewayDefault = true;
     }
     if (followsGatewayDefault && assistantAgentId) {
-      publish({ selectedId: assistantAgentId, scopeId: assistantAgentId });
+      publish({
+        selectedId: assistantAgentId,
+        scopeId: state.selectedId === assistantAgentId ? state.scopeId : assistantAgentId,
+      });
     } else {
       publish(state);
     }

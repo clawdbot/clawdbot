@@ -43,6 +43,10 @@ type CookieSetOptions = {
   sameSite?: "Lax" | "None" | "Strict";
 };
 
+type PlaywrightStorageMutationContext = Parameters<
+  Parameters<typeof withPlaywrightRouteContext>[0]["run"]
+>[0];
+
 /** Parse the supported browser storage bucket names. */
 function parseStorageKind(raw: string): StorageKind | null {
   if (raw === "local" || raw === "session") {
@@ -178,6 +182,28 @@ export function registerBrowserAgentStorageRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
 ) {
+  const runMutation = async (
+    req: BrowserRequest,
+    res: BrowserResponse,
+    targetId: string | undefined,
+    feature: string,
+    run: (context: PlaywrightStorageMutationContext) => Promise<void | Record<string, unknown>>,
+  ) => {
+    // Mutations intentionally do not apply the tab-scoped read/export URL guard.
+    await withPlaywrightRouteContext({
+      req,
+      res,
+      ctx,
+      targetId,
+      feature,
+      run: async (context) => {
+        const result = await run(context);
+        context.signal.throwIfAborted();
+        res.json({ ok: true, targetId: context.tab.targetId, ...result });
+      },
+    });
+  };
+
   app.get("/cookies", async (req, res) => {
     const targetId = resolveTargetIdFromQuery(req.query);
     await withPlaywrightRouteContext({
@@ -212,22 +238,12 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, formatErrorMessage(err));
     }
 
-    // Intentional: mutation routes are outside the tab-scoped read/export guard scope.
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      feature: "cookies set",
-      run: async ({ cdpUrl, tab, pw, signal }) => {
-        await pw.cookiesSetViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          cookie: parsedCookie,
-        });
-        signal.throwIfAborted();
-        res.json({ ok: true, targetId: tab.targetId });
-      },
+    await runMutation(req, res, targetId, "cookies set", async ({ cdpUrl, tab, pw }) => {
+      await pw.cookiesSetViaPlaywright({
+        cdpUrl,
+        targetId: tab.targetId,
+        cookie: parsedCookie,
+      });
     });
   });
 
@@ -252,45 +268,32 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, formatErrorMessage(err));
     }
 
-    // Intentional: mutation routes are outside the tab-scoped read/export guard scope.
-    await withPlaywrightRouteContext({
+    await runMutation(
       req,
       res,
-      ctx,
       targetId,
-      feature: "cookies set-many",
-      run: async ({ cdpUrl, tab, pw, signal }) => {
-        const result = await pw.cookiesSetManyViaPlaywright({
+      "cookies set-many",
+      async ({ cdpUrl, tab, pw, signal }) => {
+        const { added } = await pw.cookiesSetManyViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
           cookies,
           signal,
         });
-        signal.throwIfAborted();
-        res.json({ ok: true, targetId: tab.targetId, added: result.added });
+        return { added };
       },
-    });
+    );
   });
 
   app.post("/cookies/clear", async (req, res) => {
     const body = readBody(req);
     const targetId = resolveTargetIdFromBody(body);
 
-    // Intentional: mutation routes are outside the tab-scoped read/export guard scope.
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      feature: "cookies clear",
-      run: async ({ cdpUrl, tab, pw, signal }) => {
-        await pw.cookiesClearViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-        });
-        signal.throwIfAborted();
-        res.json({ ok: true, targetId: tab.targetId });
-      },
+    await runMutation(req, res, targetId, "cookies clear", async ({ cdpUrl, tab, pw }) => {
+      await pw.cookiesClearViaPlaywright({
+        cdpUrl,
+        targetId: tab.targetId,
+      });
     });
   });
 
@@ -333,14 +336,12 @@ export function registerBrowserAgentStorageRoutes(
     }
     const value = typeof mutation.body.value === "string" ? mutation.body.value : "";
 
-    // Intentional: mutation routes are outside the tab-scoped read/export guard scope.
-    await withPlaywrightRouteContext({
+    await runMutation(
       req,
       res,
-      ctx,
-      targetId: mutation.parsed.targetId,
-      feature: "storage set",
-      run: async ({ cdpUrl, tab, pw, signal }) => {
+      mutation.parsed.targetId,
+      "storage set",
+      async ({ cdpUrl, tab, pw }) => {
         await pw.storageSetViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
@@ -348,10 +349,8 @@ export function registerBrowserAgentStorageRoutes(
           key,
           value,
         });
-        signal.throwIfAborted();
-        res.json({ ok: true, targetId: tab.targetId });
       },
-    });
+    );
   });
 
   app.post("/storage/:kind/clear", async (req, res) => {
@@ -360,23 +359,19 @@ export function registerBrowserAgentStorageRoutes(
       return;
     }
 
-    // Intentional: mutation routes are outside the tab-scoped read/export guard scope.
-    await withPlaywrightRouteContext({
+    await runMutation(
       req,
       res,
-      ctx,
-      targetId: mutation.parsed.targetId,
-      feature: "storage clear",
-      run: async ({ cdpUrl, tab, pw, signal }) => {
+      mutation.parsed.targetId,
+      "storage clear",
+      async ({ cdpUrl, tab, pw }) => {
         await pw.storageClearViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
           kind: mutation.parsed.kind,
         });
-        signal.throwIfAborted();
-        res.json({ ok: true, targetId: tab.targetId });
       },
-    });
+    );
   });
 
   app.post("/set/offline", async (req, res) => {
@@ -387,22 +382,12 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, "offline is required");
     }
 
-    // Intentional: mutation routes are outside the tab-scoped read/export guard scope.
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      feature: "offline",
-      run: async ({ cdpUrl, tab, pw, signal }) => {
-        await pw.setOfflineViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          offline,
-        });
-        signal.throwIfAborted();
-        res.json({ ok: true, targetId: tab.targetId });
-      },
+    await runMutation(req, res, targetId, "offline", async ({ cdpUrl, tab, pw }) => {
+      await pw.setOfflineViaPlaywright({
+        cdpUrl,
+        targetId: tab.targetId,
+        offline,
+      });
     });
   });
 
@@ -424,22 +409,12 @@ export function registerBrowserAgentStorageRoutes(
       }
     }
 
-    // Intentional: mutation routes are outside the tab-scoped read/export guard scope.
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      feature: "headers",
-      run: async ({ cdpUrl, tab, pw, signal }) => {
-        await pw.setExtraHTTPHeadersViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          headers: parsed,
-        });
-        signal.throwIfAborted();
-        res.json({ ok: true, targetId: tab.targetId });
-      },
+    await runMutation(req, res, targetId, "headers", async ({ cdpUrl, tab, pw }) => {
+      await pw.setExtraHTTPHeadersViaPlaywright({
+        cdpUrl,
+        targetId: tab.targetId,
+        headers: parsed,
+      });
     });
   });
 
@@ -450,23 +425,14 @@ export function registerBrowserAgentStorageRoutes(
     const username = toStringOrEmpty(body.username) || undefined;
     const password = readStringValue(body.password);
 
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      feature: "http credentials",
-      run: async ({ cdpUrl, tab, pw, signal }) => {
-        await pw.setHttpCredentialsViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          username,
-          password,
-          clear,
-        });
-        signal.throwIfAborted();
-        res.json({ ok: true, targetId: tab.targetId });
-      },
+    await runMutation(req, res, targetId, "http credentials", async ({ cdpUrl, tab, pw }) => {
+      await pw.setHttpCredentialsViaPlaywright({
+        cdpUrl,
+        targetId: tab.targetId,
+        username,
+        password,
+        clear,
+      });
     });
   });
 
@@ -480,21 +446,12 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, formatErrorMessage(err));
     }
 
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      feature: "geolocation",
-      run: async ({ cdpUrl, tab, pw, signal }) => {
-        await pw.setGeolocationViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          ...geolocation,
-        });
-        signal.throwIfAborted();
-        res.json({ ok: true, targetId: tab.targetId });
-      },
+    await runMutation(req, res, targetId, "geolocation", async ({ cdpUrl, tab, pw }) => {
+      await pw.setGeolocationViaPlaywright({
+        cdpUrl,
+        targetId: tab.targetId,
+        ...geolocation,
+      });
     });
   });
 
@@ -512,21 +469,12 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, "colorScheme must be dark|light|no-preference|none");
     }
 
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      feature: "media emulation",
-      run: async ({ cdpUrl, tab, pw, signal }) => {
-        await pw.emulateMediaViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          colorScheme,
-        });
-        signal.throwIfAborted();
-        res.json({ ok: true, targetId: tab.targetId });
-      },
+    await runMutation(req, res, targetId, "media emulation", async ({ cdpUrl, tab, pw }) => {
+      await pw.emulateMediaViaPlaywright({
+        cdpUrl,
+        targetId: tab.targetId,
+        colorScheme,
+      });
     });
   });
 
@@ -538,21 +486,12 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, "timezoneId is required");
     }
 
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      feature: "timezone",
-      run: async ({ cdpUrl, tab, pw, signal }) => {
-        await pw.setTimezoneViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          timezoneId,
-        });
-        signal.throwIfAborted();
-        res.json({ ok: true, targetId: tab.targetId });
-      },
+    await runMutation(req, res, targetId, "timezone", async ({ cdpUrl, tab, pw }) => {
+      await pw.setTimezoneViaPlaywright({
+        cdpUrl,
+        targetId: tab.targetId,
+        timezoneId,
+      });
     });
   });
 
@@ -564,21 +503,12 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, "locale is required");
     }
 
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      feature: "locale",
-      run: async ({ cdpUrl, tab, pw, signal }) => {
-        await pw.setLocaleViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          locale,
-        });
-        signal.throwIfAborted();
-        res.json({ ok: true, targetId: tab.targetId });
-      },
+    await runMutation(req, res, targetId, "locale", async ({ cdpUrl, tab, pw }) => {
+      await pw.setLocaleViaPlaywright({
+        cdpUrl,
+        targetId: tab.targetId,
+        locale,
+      });
     });
   });
 
@@ -590,22 +520,19 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, "name is required");
     }
 
-    await withPlaywrightRouteContext({
+    await runMutation(
       req,
       res,
-      ctx,
       targetId,
-      feature: "device emulation",
-      run: async ({ cdpUrl, tab, pw, signal }) => {
+      "device emulation",
+      async ({ cdpUrl, tab, pw, signal }) => {
         await pw.setDeviceViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
           name,
           signal,
         });
-        signal.throwIfAborted();
-        res.json({ ok: true, targetId: tab.targetId });
       },
-    });
+    );
   });
 }

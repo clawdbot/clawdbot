@@ -4,9 +4,15 @@
  * model catalogs without discarding existing credentials.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
+import {
+  modelKey,
+  normalizeConfiguredProviderCatalogModelId,
+  type ModelManifestNormalizationContext,
+} from "./model-ref-shared.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 export function normalizeProviderMapKeys<T>(
@@ -43,24 +49,6 @@ export type ExistingProviderConfig = ProviderConfig & {
   api?: string;
 };
 
-function isPositiveFiniteTokenLimit(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
-function resolvePreferredTokenLimit(params: {
-  explicitPresent: boolean;
-  explicitValue: unknown;
-  implicitValue: unknown;
-}): number | undefined {
-  if (params.explicitPresent && isPositiveFiniteTokenLimit(params.explicitValue)) {
-    return params.explicitValue;
-  }
-  if (isPositiveFiniteTokenLimit(params.implicitValue)) {
-    return params.implicitValue;
-  }
-  return isPositiveFiniteTokenLimit(params.explicitValue) ? params.explicitValue : undefined;
-}
-
 function getProviderModelId(model: unknown): string {
   if (!model || typeof model !== "object") {
     return "";
@@ -73,6 +61,12 @@ function getProviderModelId(model: unknown): string {
 export function mergeProviderModels(
   implicit: ProviderConfig,
   explicit: ProviderConfig,
+  options?: {
+    providerId: string;
+    sourceModelInputOmissions?: ReadonlySet<string>;
+    manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
+    preserveConfiguredModelMembership?: boolean;
+  },
 ): ProviderConfig {
   const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
   const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
@@ -116,22 +110,29 @@ export function mergeProviderModels(
     if (!implicitModel) {
       return explicitModel;
     }
+    const sourceOmittedInput =
+      options &&
+      options.sourceModelInputOmissions?.has(
+        modelKey(
+          normalizeProviderId(options.providerId),
+          normalizeConfiguredProviderCatalogModelId(options.providerId, id, options),
+        ),
+      ) === true;
+    if (options?.preserveConfiguredModelMembership) {
+      return sourceOmittedInput && implicitModel.input !== undefined
+        ? Object.assign({}, explicitModel, { input: implicitModel.input })
+        : explicitModel;
+    }
 
-    const contextWindow = resolvePreferredTokenLimit({
-      explicitPresent: "contextWindow" in explicitModel,
-      explicitValue: explicitModel.contextWindow,
-      implicitValue: implicitModel.contextWindow,
-    });
-    const contextTokens = resolvePreferredTokenLimit({
-      explicitPresent: "contextTokens" in explicitModel,
-      explicitValue: explicitModel.contextTokens,
-      implicitValue: implicitModel.contextTokens,
-    });
-    const maxTokens = resolvePreferredTokenLimit({
-      explicitPresent: "maxTokens" in explicitModel,
-      explicitValue: explicitModel.maxTokens,
-      implicitValue: implicitModel.maxTokens,
-    });
+    const contextWindow =
+      asPositiveFiniteNumber(explicitModel.contextWindow) ??
+      asPositiveFiniteNumber(implicitModel.contextWindow);
+    const contextTokens =
+      asPositiveFiniteNumber(explicitModel.contextTokens) ??
+      asPositiveFiniteNumber(implicitModel.contextTokens);
+    const maxTokens =
+      asPositiveFiniteNumber(explicitModel.maxTokens) ??
+      asPositiveFiniteNumber(implicitModel.maxTokens);
     const compat = resolveCatalogOwnedModelCompat({
       catalogRoute: {
         api: implicitModel.api ?? implicit.api,
@@ -150,7 +151,12 @@ export function mergeProviderModels(
       {},
       explicitModel,
       {
-        input: "input" in explicitModel ? explicitModel.input : implicitModel.input,
+        input:
+          sourceOmittedInput && implicitModel.input !== undefined
+            ? implicitModel.input
+            : "input" in explicitModel
+              ? explicitModel.input
+              : implicitModel.input,
         reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       },
       contextWindow === undefined ? {} : { contextWindow },
@@ -160,13 +166,15 @@ export function mergeProviderModels(
     );
   });
 
-  for (const implicitModel of implicitModels) {
-    const id = getProviderModelId(implicitModel);
-    if (!id || seen.has(id)) {
-      continue;
+  if (!options?.preserveConfiguredModelMembership) {
+    for (const implicitModel of implicitModels) {
+      const id = getProviderModelId(implicitModel);
+      if (!id || seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      mergedModels.push(implicitModel);
     }
-    seen.add(id);
-    mergedModels.push(implicitModel);
   }
 
   return {
@@ -188,11 +196,19 @@ export function mergeProviderModels(
 export function mergeProviders(params: {
   implicit?: Record<string, ProviderConfig> | null;
   explicit?: Record<string, ProviderConfig> | null;
+  sourceModelInputOmissions?: ReadonlySet<string>;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }): Record<string, ProviderConfig> {
   const out = normalizeProviderMapKeys(params.implicit);
   for (const [providerKey, explicit] of Object.entries(normalizeProviderMapKeys(params.explicit))) {
     const implicit = out[providerKey];
-    out[providerKey] = implicit ? mergeProviderModels(implicit, explicit) : explicit;
+    out[providerKey] = implicit
+      ? mergeProviderModels(implicit, explicit, {
+          providerId: providerKey,
+          sourceModelInputOmissions: params.sourceModelInputOmissions,
+          manifestPlugins: params.manifestPlugins,
+        })
+      : explicit;
   }
   return out;
 }

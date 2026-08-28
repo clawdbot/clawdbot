@@ -5,7 +5,10 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { resolveTerminalAssistantTranscriptRunId } from "../../sessions/transcript-events.js";
+import {
+  attachSessionTranscriptRunId,
+  resolveTerminalAssistantTranscriptRunId,
+} from "../../sessions/transcript-events.js";
 import { getRuntimeConfig } from "../io.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -232,6 +235,7 @@ async function appendTranscriptTurnMessages(
       },
       {
         ...appendOptions,
+        message: attachSessionTranscriptRunId(appendOptions.message, options.runId),
         ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
         ...((append.config ?? options.config) ? { config: append.config ?? options.config } : {}),
       },
@@ -348,7 +352,10 @@ async function persistExpectedSessionTranscriptTurn(
           expectedSessionState: options.expectedSessionState,
           expectedSessionId,
           atomicGroup: options.atomicGroup,
-          messages: options.messages,
+          messages: options.messages.map((append) => ({
+            ...append,
+            message: attachSessionTranscriptRunId(append.message, options.runId),
+          })),
           sessionLifecyclePatch: options.sessionLifecyclePatch,
           sessionFile: target.sessionKey!,
           touchSessionEntry: options.touchSessionEntry,

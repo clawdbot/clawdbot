@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 
@@ -63,7 +64,7 @@ describe("pending delivery notice", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("clears debt only after the stable notice is acknowledged", async () => {
+  it("retains acknowledgment after the stable notice is recorded", async () => {
     await deliverPendingDeliveryNotice(sessionKey, storePath);
 
     expect(sendRecoveryNotice).toHaveBeenCalledWith({
@@ -80,7 +81,10 @@ describe("pending delivery notice", () => {
         text: PENDING_DELIVERY_NOTICE,
       }),
     );
-    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toMatchObject({
+      state: "acknowledged",
+      intentId: "intent-1",
+    });
   });
 
   it("does not cross an account or thread route", async () => {
@@ -133,7 +137,7 @@ describe("pending delivery notice", () => {
     });
   });
 
-  it("records and clears debt when the stable notice receipt completed before an error", async () => {
+  it("records acknowledgment when the stable notice receipt completed before an error", async () => {
     sendRecoveryNotice.mockRejectedValue(new Error("post-ack failure"));
     findDeliveryIntentOwner.mockReturnValue({ status: "completed" });
 
@@ -145,7 +149,10 @@ describe("pending delivery notice", () => {
         text: PENDING_DELIVERY_NOTICE,
       }),
     );
-    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toMatchObject({
+      state: "acknowledged",
+      intentId: "intent-1",
+    });
   });
 
   it("retains owed debt while the durable notice remains pending", async () => {
@@ -158,5 +165,40 @@ describe("pending delivery notice", () => {
       intentId: "intent-1",
       state: "owed",
     });
+  });
+  it.each([false, true])(
+    "keeps acknowledgment when suppression finishes first=%s",
+    async (suppressedFirst) => {
+      const first = createDeferred<{ suppressed: boolean }>();
+      const second = createDeferred<{ suppressed: boolean }>();
+      sendRecoveryNotice.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+      const attempts = [
+        deliverPendingDeliveryNotice(sessionKey, storePath),
+        deliverPendingDeliveryNotice(sessionKey, storePath),
+      ];
+      first.resolve({ suppressed: suppressedFirst });
+      await attempts[0];
+      second.resolve({ suppressed: !suppressedFirst });
+      await attempts[1];
+      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
+        "acknowledged",
+      );
+      expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("leaves a replacement notice owed when an earlier send finishes", async () => {
+    const sent = createDeferred<{ suppressed: boolean }>();
+    sendRecoveryNotice.mockReturnValueOnce(sent.promise);
+    const attempt = deliverPendingDeliveryNotice(sessionKey, storePath);
+    const entry = loadSessionEntry({ sessionKey, storePath })!;
+    const replacement = { ...entry.pendingDeliveryNotice!, intentId: "intent-2" };
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      { ...entry, pendingDeliveryNotice: replacement },
+    );
+    sent.resolve({ suppressed: false });
+    await attempt;
+    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toEqual(replacement);
   });
 });

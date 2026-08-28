@@ -30,6 +30,7 @@ import {
   uninstallScheduledTask,
 } from "./schtasks.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
+import { resolveServiceEntrypoint } from "./service-layout.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -87,7 +88,10 @@ export type GatewayService = {
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   isEnabled?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   hasInstalledDefinition?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
-  readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
+  readCommand: (
+    env: GatewayServiceEnv,
+    opts?: GatewayServiceReadOptions,
+  ) => Promise<GatewayServiceCommandConfig | null>;
   readRuntime: (
     env: GatewayServiceEnv,
     opts?: GatewayServiceReadOptions,
@@ -139,7 +143,10 @@ function collectGatewayServiceStartRepairIssues(
       message: `service port ${servicePort} does not match current gateway config port ${expectedPort}`,
     });
   }
-  for (const candidate of command.programArguments.slice(0, 2)) {
+  for (const candidate of new Set([
+    command.programArguments[0],
+    resolveServiceEntrypoint(command),
+  ])) {
     if (isTemporaryProgramPath(candidate)) {
       issues.push({
         code: "temporary-program",
@@ -193,17 +200,19 @@ export async function readGatewayServiceState(
   args: ReadGatewayServiceStateArgs = {},
 ): Promise<GatewayServiceState> {
   const baseEnv = args.env ?? (process.env as GatewayServiceEnv);
-  const command = await service.readCommand(baseEnv).catch(() => null);
+  const { timeoutMs } = args;
+  // Keep command and status probes on the same fail-soft manager deadline.
+  const command = await service.readCommand(baseEnv, { timeoutMs }).catch(() => null);
   const env = mergeGatewayServiceEnv(baseEnv, command);
   // Callers that may mutate the selected service can reject persisted selector
   // drift before isLoaded/readRuntime invoke the native service manager.
   args.validateEnvBeforeStatusRead?.(env);
-  // Propagate the status read deadline so a wedged service manager fails soft
-  // instead of hanging both probes. readCommand parses local files and needs no
-  // bound; isLoaded/readRuntime can spawn service-manager subprocesses.
-  const [loadState, runtime] = await Promise.all([
-    readGatewayServiceLoadState(service, { env, timeoutMs: args.timeoutMs }),
-    service.readRuntime(env, { timeoutMs: args.timeoutMs }).catch(
+  const [installed, loadState, runtime] = await Promise.all([
+    command !== null
+      ? true
+      : (service.hasInstalledDefinition?.({ env, timeoutMs }).catch(() => false) ?? false),
+    readGatewayServiceLoadState(service, { env, timeoutMs }),
+    service.readRuntime(env, { timeoutMs }).catch(
       (error: unknown) =>
         ({
           status: "unknown",
@@ -212,7 +221,7 @@ export async function readGatewayServiceState(
     ),
   ]);
   return {
-    installed: command !== null,
+    installed,
     loadState,
     running: runtime?.status === "running",
     env,

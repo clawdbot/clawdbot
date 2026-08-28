@@ -24,11 +24,27 @@ describe("gateway concurrency benchmark script", () => {
         "/tmp/gateway-cpu-profiles",
         "--plugin-count",
         "50",
+        "--session-count",
+        "120",
+        "--history-clients",
+        "6",
+        "--history-burst",
+        "5",
+        "--session-updates",
+        "500",
+        "--session-update-clients",
+        "8",
+        "--subscribers",
+        "4",
+        "--stream-chunk-delay-ms",
+        "2000",
         "--max-control-ms",
         "2000",
         "--max-handshake-ms",
         "2000",
         "--tool-events",
+        "--no-diagnostics-timeline",
+        "--visible-observer",
         "--workspace-fanout",
         "--output",
         "concurrency.json",
@@ -38,14 +54,23 @@ describe("gateway concurrency benchmark script", () => {
       cadenceMs: 50,
       concurrency: 12,
       cpuProfDir: "/tmp/gateway-cpu-profiles",
+      diagnosticsTimeline: false,
       json: true,
+      historyBurst: 5,
+      historyClients: 6,
       maxControlMs: 2_000,
       maxHandshakeMs: 2_000,
       output: "concurrency.json",
       pluginCount: 50,
       runs: 2,
+      sessionCount: 120,
+      sessionUpdateClients: 8,
+      sessionUpdates: 500,
+      streamChunkDelayMs: 2_000,
+      subscribers: 4,
       timeoutMs: 90_000,
       toolEvents: true,
+      visibleObserver: true,
       warmup: 0,
       workspaceFanout: true,
     });
@@ -59,6 +84,17 @@ describe("gateway concurrency benchmark script", () => {
     expect(() => testing.parseOptions(["--plugin-count", "101"])).toThrow(
       "--plugin-count must be at most 100",
     );
+    expect(testing.parseOptions(["--session-count", "10000"]).sessionCount).toBe(10_000);
+    expect(() => testing.parseOptions(["--session-count", "10001"])).toThrow(
+      "--session-count must be at most 10000",
+    );
+    expect(() => testing.parseOptions(["--history-burst", "33"])).toThrow(
+      "--history-burst must be at most 32",
+    );
+    expect(() => testing.parseOptions(["--session-updates", "100001"])).toThrow(
+      "--session-updates must be at most 100000",
+    );
+    expect(testing.parseOptions([]).diagnosticsTimeline).toBe(true);
   });
 
   it("summarizes plugin metadata scans captured after startup warmup", () => {
@@ -80,6 +116,15 @@ describe("gateway concurrency benchmark script", () => {
       controlUi: [],
       durationMs: 10,
       freshConnection: { error: null, latencyMs: 25, ok: true },
+      history: [],
+      memory: {
+        after: { atMs: 10, heapTotalMb: 120, heapUsedMb: 80, rssMb: 200 },
+        before: { atMs: 0, heapTotalMb: 100, heapUsedMb: 60, rssMb: 180 },
+        peakRssMb: 210,
+      },
+      messageSubscriptions: [],
+      messageSubscriptionsDuringLoad: [],
+      modelRequestCount: 1,
       probeWarmup: { durationMs: 2, samples: [] },
       pluginMetadataScans: {
         count,
@@ -87,12 +132,19 @@ describe("gateway concurrency benchmark script", () => {
         totalDurationMs: durations.reduce((sum, value) => sum + value, 0),
       },
       readyz: [],
+      sessionSeedDurationMs: 2,
       sessionsList: [],
+      sessionUpdates: [],
+      setupDurationMs: 3,
       turnCount: 1,
       turnsDurationMs: 5,
     });
 
     expect(testing.summarizeRuns([createRun(2, [10, 20]), createRun(1, [30])])).toMatchObject({
+      gatewayHeapGrowthMb: { count: 2, max: 20, p50: 20, p95: 20, p99: 20 },
+      gatewayPeakRssMb: { count: 2, max: 210, p50: 210, p95: 210, p99: 210 },
+      gatewayRssGrowthMb: { count: 2, max: 20, p50: 20, p95: 20, p99: 20 },
+      modelRequestCount: 2,
       pluginMetadataScanCount: 3,
       pluginMetadataScanTotalDurationMs: 60,
     });
@@ -138,10 +190,22 @@ describe("gateway concurrency benchmark script", () => {
       controlUi: [],
       durationMs: 10,
       freshConnection: { error: null, latencyMs: 25, ok: true },
+      history: [],
+      memory: {
+        after: { atMs: 10, heapTotalMb: 120, heapUsedMb: 80, rssMb: 200 },
+        before: { atMs: 0, heapTotalMb: 100, heapUsedMb: 60, rssMb: 180 },
+        peakRssMb: 210,
+      },
+      messageSubscriptions: [],
+      messageSubscriptionsDuringLoad: [],
+      modelRequestCount: 1,
       pluginMetadataScans: { count: 0, durationMs: null, totalDurationMs: 0 },
       probeWarmup: { durationMs: 2, samples: [] },
       readyz: [],
+      sessionSeedDurationMs: 2,
       sessionsList: [],
+      sessionUpdates: [],
+      setupDurationMs: 3,
       turnCount: 8,
       turnsDurationMs: 5,
     };
@@ -200,6 +264,16 @@ describe("gateway concurrency benchmark script", () => {
         error: "sessions.list failed: unauthorized",
         ok: false,
       });
+      const unicodeSample = await testing.sampleGateway({
+        deadlineAt: performance.now() + 5_000,
+        port: address.port,
+        rpc: async () => {
+          throw new Error(`${"x".repeat(499)}😀`);
+        },
+        runStartedAt: performance.now(),
+        serial: true,
+      });
+      expect(unicodeSample.sessionsList.error).toBe("x".repeat(499));
       const failure = testing.formatRunFailure(
         new Error(testing.formatProbeFailure(sample)),
         {

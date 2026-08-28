@@ -1,5 +1,6 @@
 // Full-entry coverage for retrying an already-capped mid-turn transcript.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
   makeAttemptResult,
   makeCompactionSuccess,
@@ -12,6 +13,20 @@ import {
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+
+const settledExecAssistant = buildEmbeddedRunnerAssistant({
+  content: [{ type: "toolCall" as const, id: "call-exec", name: "exec", arguments: {} }],
+  stopReason: "toolUse" as const,
+  timestamp: 1,
+});
+const settledExecResult = {
+  role: "toolResult" as const,
+  toolCallId: "call-exec",
+  toolName: "exec",
+  content: [{ type: "text" as const, text: "command completed" }],
+  isError: false,
+  timestamp: 2,
+};
 
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
@@ -38,6 +53,47 @@ function expectRetryContinuesFromTranscript(): void {
   expect(retry.prompt).toContain("Continue from the current transcript");
   expect(retry.suppressNextUserMessagePersistence).toBe(true);
   expect(retry.prompt).not.toBe(overflowBaseRunParams.prompt);
+}
+
+function makeReplayUnsafeMidTurnOverflow(params?: {
+  activeCount?: number;
+  asyncStarted?: boolean;
+  resultRecorded?: boolean;
+  codeModeEngaged?: boolean;
+  codeModeSuspended?: boolean;
+}) {
+  const activeCount = params?.activeCount ?? 0;
+  const resultRecorded = params?.resultRecorded ?? true;
+  return makeAttemptResult({
+    ...(params?.codeModeEngaged ? { codeModeEngaged: true } : {}),
+    promptError: makeOverflowError("Context overflow: prompt too large (mid-turn precheck)."),
+    promptErrorSource: "precheck",
+    preflightRecovery: {
+      route: "compact_only",
+      source: "mid-turn",
+      estimatedPromptTokens: 201_000,
+    },
+    assistantTexts: [],
+    lastAssistant: settledExecAssistant,
+    currentAttemptAssistant: settledExecAssistant,
+    messagesSnapshot: resultRecorded
+      ? [settledExecAssistant, settledExecResult]
+      : [settledExecAssistant],
+    toolMetas: [
+      {
+        toolName: "exec",
+        toolCallId: "call-exec",
+        replaySafe: false,
+        asyncStarted: params?.asyncStarted ?? false,
+        ...(params?.codeModeSuspended ? { codeModeSuspended: true } : {}),
+      },
+    ],
+    itemLifecycle: {
+      startedCount: 1,
+      completedCount: activeCount === 0 ? 1 : 0,
+      activeCount,
+    },
+  });
 }
 
 describe("runEmbeddedAgent mid-turn precheck retry", () => {
@@ -114,5 +170,140 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
     expectRetryContinuesFromTranscript();
     expect(result.meta.error).toBeUndefined();
+  });
+
+  it("compacts settled replay-unsafe tools and continues from their recorded result", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow())
+      .mockResolvedValueOnce(makeAttemptResult());
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted after settled exec",
+        firstKeptEntryId: "entry-settled-exec",
+        tokensBefore: 201_000,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-midturn-settled-unsafe",
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expectRetryContinuesFromTranscript();
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("compacts while a code-mode exec still waits on nested tool work", async () => {
+    // exec returned status "waiting" (result persisted) but its nested call keeps
+    // a lifecycle item active; the run stays resumable through `wait`.
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeReplayUnsafeMidTurnOverflow({
+          activeCount: 1,
+          codeModeEngaged: true,
+          codeModeSuspended: true,
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult());
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted while exec waits",
+        firstKeptEntryId: "entry-waiting-exec",
+        tokensBefore: 201_000,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-midturn-waiting-exec",
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expectRetryContinuesFromTranscript();
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it.each([
+    ["with a nested tool item still active", 1],
+    // A local yield_control parks the exec without any nested lifecycle item.
+    ["parked by yield_control with no active item", 0],
+  ])(
+    "keeps a parked Code Mode run fail-closed when compaction rotates the session (%s)",
+    async (_label, activeCount) => {
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeReplayUnsafeMidTurnOverflow({
+          activeCount,
+          codeModeEngaged: true,
+          codeModeSuspended: true,
+        }),
+      );
+      mockedCompactDirect.mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted into a successor session",
+          firstKeptEntryId: "entry-rotated-exec",
+          tokensBefore: 201_000,
+          sessionId: "rotated-session",
+        }),
+      );
+
+      const result = await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        runId: `run-midturn-waiting-exec-rotated-${activeCount}`,
+      });
+
+      expect(mockedCompactDirect).toHaveBeenCalledOnce();
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+      expect(result.payloads?.[0]?.text).toContain("Try /reset (or /new)");
+    },
+  );
+
+  it.each([
+    ["a tool call without a recorded result", { resultRecorded: false }, true],
+    ["a generic tool with an active lifecycle item", { activeCount: 1 }, true],
+    [
+      "a direct tool active while Code Mode is merely enabled",
+      { activeCount: 1, codeModeEngaged: true },
+      true,
+    ],
+    ["asynchronous tool activity", { asyncStarted: true }, false],
+  ])("keeps %s fail-closed", async (_label, attemptParams, expectsWarning) => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow(attemptParams));
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: `run-midturn-fail-closed-${_label.replaceAll(" ", "-")}`,
+    });
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+    if (expectsWarning) {
+      expect(result.payloads?.[0]?.text).toContain(
+        "some tool actions may have already been executed",
+      );
+    } else {
+      expect(result.payloads).toBeUndefined();
+    }
+  });
+
+  it("preserves overflow recovery guidance when compaction fails after settled tools", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow());
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "compaction unavailable",
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-midturn-settled-compaction-failure",
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+    expect(result.payloads?.[0]?.text).toContain("Try /reset (or /new)");
+    expect(result.payloads?.[0]?.text).toContain("Completed tool actions were not replayed");
   });
 });

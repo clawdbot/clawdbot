@@ -511,6 +511,21 @@ describe("authorizeSlackSystemEventSender", () => {
 });
 
 describe("resolveSlackCommandIngress", () => {
+  it("matches a slugged allowlist entry against a spaced sender name", async () => {
+    const result = await resolveSlackCommandIngress({
+      ctx: makeAuthorizeCtx({ allowNameMatching: true }),
+      senderId: "U123",
+      senderName: "Alice Smith",
+      channelId: "D123",
+      channelType: "im",
+      ownerAllowFromLower: ["alice-smith"],
+      allowTextCommands: true,
+      hasControlCommand: true,
+    });
+
+    expect(result.commandAccess.authorized).toBe(true);
+  });
+
   it.each([
     ["allows the workspace-qualified user in its workspace", "T11111111", "allow", true],
     ["blocks the same bare user ID in another workspace", "T22222222", "block", false],

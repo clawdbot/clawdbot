@@ -263,7 +263,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isEnabled())
         .toBe(true);
-      expect(await page.locator(".chat-send-btn").count()).toBe(1);
+      expect(await page.locator(".new-session-page__start-submit").count()).toBe(1);
     } finally {
       await context.close();
     }
@@ -290,13 +290,22 @@ suite.define(() => {
       });
     });
     const worktreePath = "/home/peter/.openclaw/worktrees/terminal-e2e";
+    const config = { tools: { web: { search: { provider: "brave" } } } };
     const gateway = await installMockGateway(page, {
       cliAgentsEnabled: true,
       terminalEnabled: true,
+      operatorScopes: ["operator.read", "operator.write", "operator.admin"],
       workspace: WORKSPACE,
       workspaceGit: true,
       featureMethods: [...TERMINAL_START_FEATURE_METHODS],
       methodResponses: {
+        "config.get": {
+          raw: JSON.stringify(config),
+          hash: "terminal-capability-overrides",
+          sourceConfig: config,
+          runtimeConfig: config,
+          config,
+        },
         "agents.list": {
           agents: [
             {
@@ -363,6 +372,23 @@ suite.define(() => {
       await page.locator("#new-session-detail-trigger").click();
       await page.locator(".new-session-page__message").fill("  inspect the checkout  ");
 
+      const composer = page.locator(".new-session-page__composer");
+      const capabilityMenu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await composer.getByRole("button", { name: "Add attachment" }).click();
+      await capabilityMenu.getByRole("menuitemcheckbox", { name: "Web search" }).click();
+      await page.keyboard.press("Escape");
+      const terminalTrigger = page.getByRole("button", { name: "Start in terminal" });
+      await expect.poll(() => terminalTrigger.isDisabled()).toBe(true);
+      const terminalTooltip = page.locator("openclaw-tooltip").filter({ has: terminalTrigger });
+      await expect
+        .poll(() => terminalTooltip.evaluate((element) => element.getAttribute("content")))
+        .toBe("Clear session capability overrides before starting in a terminal.");
+      expect(await gateway.getRequests("sessions.catalog.startTerminal")).toHaveLength(0);
+      await composer.locator(".new-session-page__selection-status").click();
+      await capabilityMenu.getByRole("menuitemcheckbox", { name: "Web search" }).click();
+      await page.keyboard.press("Escape");
+      await expect.poll(() => terminalTrigger.isEnabled()).toBe(true);
+
       if (captureCliAgentsProof) {
         await page.screenshot({
           animations: "disabled",
@@ -372,7 +398,6 @@ suite.define(() => {
       }
 
       await page.getByRole("button", { name: "Start in terminal" }).click();
-      await page.getByRole("menuitem", { name: "Start in terminal" }).click();
 
       const worktreeRequest = await gateway.waitForRequest("worktrees.create");
       expect(worktreeRequest.params).toEqual({
@@ -409,7 +434,6 @@ suite.define(() => {
         .poll(() => page.getByRole("button", { name: "Start in terminal" }).isEnabled())
         .toBe(true);
       await page.getByRole("button", { name: "Start in terminal" }).click();
-      await page.getByRole("menuitem", { name: "Start in terminal" }).click();
       await expect
         .poll(async () => {
           const currentRequests = await gateway.getRequests();
@@ -464,7 +488,6 @@ suite.define(() => {
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await page.locator(".new-session-page__message").fill("keep this draft");
       await page.getByRole("button", { name: "Start in terminal" }).click();
-      await page.getByRole("menuitem", { name: "Start in terminal" }).click();
 
       await expect
         .poll(() => page.locator(".new-session-page__alert-message").textContent())

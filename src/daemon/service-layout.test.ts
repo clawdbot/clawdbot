@@ -2,7 +2,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { summarizeGatewayServiceLayout } from "./service-layout.js";
 
-describe("resolveGatewayServiceEntrypoint", () => {
+describe("summarizeGatewayServiceLayout", () => {
   it("resolves a relative entrypoint against an absolute working directory", async () => {
     expect(
       (

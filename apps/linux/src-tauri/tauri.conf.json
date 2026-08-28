@@ -25,6 +25,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "OpenClaw",
         "url": "index.html",
         "width": 1080,
@@ -48,6 +49,7 @@
             "allow-build-info",
             "allow-check-for-updates",
             "allow-connect-discovered-gateway",
+            "allow-connect-remote-gateway",
             "allow-discover-gateways",
             "allow-gateway-action",
             "allow-install-cli",

@@ -23,7 +23,6 @@ export {
   type SessionsDeleteResult,
   type WorktreePreservationReason,
 } from "./sessions-delete.js";
-export { SessionsResolveParamsSchema, type SessionsResolveParams } from "./sessions-resolve.js";
 export {
   SESSIONS_PATCH_MANY_MAX_TARGETS,
   SessionsPatchManyParamsSchema,
@@ -419,6 +418,8 @@ export const SessionsListParamsSchema = closedObject({
   creatorId: Type.Optional(NonEmptyString),
   /** Filter rows by their current assignable owner identity. */
   ownerId: Type.Optional(NonEmptyString),
+  /** Prepend the authenticated viewer's owned rows to the normal first page. */
+  ownerFirst: Type.Optional(Type.Boolean()),
   /** Limit rows to sessions owned by or previously prompted by the authenticated viewer. */
   involvingMe: Type.Optional(Type.Boolean()),
   spawnedBy: Type.Optional(NonEmptyString),
@@ -598,7 +599,7 @@ const SidebarSectionIdString = Type.String({ minLength: 1, maxLength: 512 });
 /** Custom session group catalog in display order. */
 export const SessionsGroupsListResultSchema = closedObject({
   groups: Type.Array(SessionGroupSchema),
-  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString, { maxItems: 232 })),
+  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString)),
 });
 
 /** Reads the New Session defaults for the custom group catalog. */
@@ -611,8 +612,8 @@ export const SessionsGroupsDefaultsResultSchema = closedObject({
 
 /** Replaces the ordered group catalog; creates listed names, keeps member categories untouched. */
 export const SessionsGroupsPutParamsSchema = closedObject({
-  names: Type.Array(SessionLabelString, { maxItems: 200 }),
-  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString, { maxItems: 232 })),
+  names: Type.Array(SessionLabelString),
+  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString)),
 });
 
 /** Renames a group and repoints every member session's category. */
@@ -641,7 +642,7 @@ export const SessionsGroupsDeleteParamsSchema = closedObject({ name: SessionLabe
 export const SessionsGroupsMutationResultSchema = closedObject({
   ok: Type.Literal(true),
   groups: Type.Array(SessionGroupSchema),
-  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString, { maxItems: 232 })),
+  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString)),
   updatedSessions: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 

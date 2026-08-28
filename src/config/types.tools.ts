@@ -182,7 +182,7 @@ export type CodeModeConfig =
   | boolean
   | "auto"
   | {
-      /** Enable generic OpenClaw code mode. Default: "auto", which engages it only for models whose catalog compat flags `codeMode: "preferred"`. */
+      /** Enable generic OpenClaw code mode. Default: false when Code Mode is otherwise unconfigured; an options object without this field preserves the "auto" tier. */
       enabled?: boolean | "auto";
       /** Guest runtime. Only quickjs-wasi is supported. */
       runtime?: "quickjs-wasi";
@@ -468,9 +468,9 @@ export type ToolsConfig = {
       provider?: string;
       /** Max characters to return from fetched content. */
       maxChars?: number;
-      /** Hard cap for maxChars (tool or config), defaults to 50000. */
+      /** Hard cap for maxChars (tool or config), defaults to 20000. */
       maxCharsCap?: number;
-      /** Max download size before truncation, defaults to 2000000. */
+      /** Max download size before truncation, defaults to 750000 bytes. */
       maxResponseBytes?: number;
       /** Timeout in seconds for fetch requests. */
       timeoutSeconds?: number;

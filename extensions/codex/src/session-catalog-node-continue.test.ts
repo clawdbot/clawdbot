@@ -222,15 +222,17 @@ describe("Codex supervision actions", () => {
   });
 
   it("adopts a paired-node session with bounded history and an executable binding", async () => {
-    let runtimeConfig = compatibilityOwnerConfig();
+    const remoteThreadId = "123e4567-e89b-12d3-a456-426614174001";
+    const sessionFamilyId = "123e4567-e89b-12d3-a456-426614174002";
+    let runtimeConfig = compatibilityOwnerConfig("beta");
     const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ command }) => {
       if (command === CODEX_APP_SERVER_THREADS_LIST_COMMAND) {
         return {
           payloadJSON: JSON.stringify({
             sessions: [
               {
-                threadId: "thread-remote",
-                sessionId: "cli-session-remote",
+                threadId: remoteThreadId,
+                sessionId: sessionFamilyId,
                 name: "Remote task",
                 cwd: "/remote/repo",
                 status: "idle",
@@ -282,7 +284,7 @@ describe("Codex supervision actions", () => {
     const first = await provider?.continueSession?.({
       agentId: "alpha",
       hostId: "node:devbox",
-      threadId: "thread-remote",
+      threadId: remoteThreadId,
       clientScopes: ["operator.admin"],
     });
     const pendingList = await provider?.list({ agentId: "alpha", hostIds: ["node:devbox"] });
@@ -294,7 +296,7 @@ describe("Codex supervision actions", () => {
     const second = await provider?.continueSession?.({
       agentId: "alpha",
       hostId: "node:devbox",
-      threadId: "thread-remote",
+      threadId: remoteThreadId,
       clientScopes: ["operator.admin"],
     });
     await second?.afterConversationBound?.();
@@ -306,8 +308,8 @@ describe("Codex supervision actions", () => {
           kind: "codex-cli-node-session",
           version: 1,
           nodeId: "devbox",
-          // codex exec resume needs the CLI session id, not the thread id.
-          sessionId: "cli-session-remote",
+          // Forks share a session family; resume must select the exact listed thread.
+          sessionId: remoteThreadId,
           agentId: "alpha",
           cwd: "/remote/repo",
         },
@@ -328,7 +330,7 @@ describe("Codex supervision actions", () => {
             codex: {
               sessionCatalog: expect.objectContaining({
                 sourceHostId: "node:devbox",
-                sourceThreadId: "thread-remote",
+                sourceThreadId: remoteThreadId,
                 nodeId: "devbox",
                 initializing: true,
               }),
@@ -341,7 +343,7 @@ describe("Codex supervision actions", () => {
     expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
         thread: expect.objectContaining({
-          id: "thread-remote",
+          id: remoteThreadId,
           turns: [expect.objectContaining({ id: "turn-1" })],
         }),
         throughTurnId: "turn-1",
@@ -353,7 +355,7 @@ describe("Codex supervision actions", () => {
 
     const listed = await provider?.list({ hostIds: ["node:devbox"] });
     expect(listed?.[0]?.sessions[0]).toMatchObject({
-      threadId: "thread-remote",
+      threadId: remoteThreadId,
       sessionKey: first?.sessionKey,
     });
   });

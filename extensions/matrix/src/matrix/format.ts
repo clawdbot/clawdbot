@@ -35,6 +35,7 @@ const md = new MarkdownIt({
   typographer: false,
 });
 
+md.linkify.set({ fuzzyLink: true });
 md.enable("strikethrough");
 
 const { escapeHtml } = md.utils;
@@ -113,7 +114,7 @@ function shouldSuppressAutoLink(
   if (token?.type !== "link_open" || token.info !== "auto") {
     return false;
   }
-  const href = token.attrGet("href") ?? "";
+  const href = String(token.attrGet("href") ?? "");
   const label = tokens[idx + 1]?.type === "text" ? (tokens[idx + 1]?.content ?? "") : "";
   return Boolean(href && label && isAutoLinkedFileRef(href, label));
 }

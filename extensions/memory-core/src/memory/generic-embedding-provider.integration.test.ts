@@ -130,8 +130,8 @@ afterEach(async () => {
   restoreRegisteredEmbeddingProviders(registeredEmbeddingProvidersSnapshot);
 });
 
-describe("memory-core generic embedding provider bridge", () => {
-  it("uses the core OpenAI-compatible provider through the generic registry and memory bridge", async () => {
+describe("memory-core generic embedding provider contract", () => {
+  it("uses the core OpenAI-compatible provider through the generic registry", async () => {
     const server = await startEmbeddingServer();
 
     expect(listRegisteredEmbeddingProviders()).toMatchObject([
@@ -167,18 +167,25 @@ describe("memory-core generic embedding provider bridge", () => {
     });
     expect(server.requests).toHaveLength(0);
 
-    await expect(result.provider?.embedQuery("hello")).resolves.toEqual([5, 0.5, 3]);
-    await expect(result.provider?.embedBatch(["a", "abcd"])).resolves.toEqual([
+    await expect(result.provider?.embed("hello", { inputType: "query" })).resolves.toEqual([
+      5, 0.5, 3,
+    ]);
+    await expect(
+      result.provider?.embedBatch(["a", "abcd"], { inputType: "document" }),
+    ).resolves.toEqual([
       [1, 0.5, 3],
       [4, 1.5, 3],
     ]);
     await expect(
-      result.provider?.embedBatchInputs?.([
-        {
-          text: "structured doc",
-          parts: [{ type: "text", text: "structured doc" }],
-        },
-      ]),
+      result.provider?.embedBatch(
+        [
+          {
+            text: "structured doc",
+            parts: [{ type: "text", text: "structured doc" }],
+          },
+        ],
+        { inputType: "document" },
+      ),
     ).resolves.toEqual([[14, 0.5, 3]]);
 
     expect(server.requests).toHaveLength(3);

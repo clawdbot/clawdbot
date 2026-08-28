@@ -620,6 +620,7 @@ async function handleDiscordModelPickerInteraction(params: {
       accountId: ctx.accountId,
       sessionPrefix: ctx.sessionPrefix,
       threadBindings: ctx.threadBindings,
+      dispatchReplyFromConfig: ctx.dispatchReplyFromConfig,
       route,
       resolvedModelRef,
       selectedRuntime,

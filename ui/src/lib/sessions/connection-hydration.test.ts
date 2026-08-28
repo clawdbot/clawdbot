@@ -1,10 +1,12 @@
-// @vitest-environment node
 import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   GatewayProtocolClient,
   type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   GatewayRequestError,
   type GatewayBrowserClient,
@@ -113,6 +115,100 @@ const targetedSessionReconciliationCases = [
 ];
 
 describe("session connection hydration", () => {
+  it("subscribes and hydrates the owner-first roster in one bootstrap request", async () => {
+    const roster: SessionsListResult = {
+      ...emptySessionsResult(),
+      count: 3,
+      sessions: [
+        {
+          key: "agent:main:mine-new",
+          kind: "direct",
+          updatedAt: 3,
+          createdActor: { type: "human", id: "operator" },
+        },
+        {
+          key: "agent:main:mine-old",
+          kind: "direct",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "operator" },
+        },
+        {
+          key: "agent:main:theirs",
+          kind: "direct",
+          updatedAt: 2,
+          createdActor: { type: "human", id: "collaborator" },
+        },
+      ],
+    };
+    const bootstrap = createDeferred<{ subscribed: true; list: SessionsListResult }>();
+    const queuedList = createDeferred<SessionsListResult>();
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "sessions.subscribe") {
+        return await bootstrap.promise;
+      }
+      if (method === "sessions.list") {
+        return params?.search === "queued" ? await queuedList.promise : emptySessionsResult();
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    let snapshot = {
+      client: null as GatewayBrowserClient | null,
+      phase: "reconnecting" as "connected" | "reconnecting",
+      sessionKey: "agent:main:mine-new",
+      assistantAgentId: "main" as string | null,
+      hello: null as GatewayHelloOk | null,
+      selfUser: { id: "operator", name: "Operator" },
+    };
+    let gatewayListener: ((next: typeof snapshot) => void) | undefined;
+    const sessions = createSessionCapability({
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener) {
+        gatewayListener = listener;
+        return () => undefined;
+      },
+      subscribeEvents: () => () => undefined,
+    });
+
+    snapshot = { ...snapshot, client, phase: "connected" };
+    gatewayListener?.(snapshot);
+
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith(
+        "sessions.subscribe",
+        expect.objectContaining({
+          agentId: "main",
+          ownerFirst: true,
+          limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+        }),
+        { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+      ),
+    );
+    expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(0);
+    expect(sessions.state.result).toBeNull();
+    const queuedRefresh = sessions.refresh({ agentId: "other", search: "queued", force: true });
+
+    bootstrap.resolve({ subscribed: true, list: roster });
+    await waitForFast(() =>
+      expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([
+        "agent:main:mine-new",
+        "agent:main:mine-old",
+        "agent:main:theirs",
+      ]),
+    );
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(1),
+    );
+    expect(request.mock.calls.at(-1)?.[1]).toEqual(
+      expect.objectContaining({ agentId: "other", search: "queued" }),
+    );
+    queuedList.resolve(emptySessionsResult());
+    await queuedRefresh;
+    sessions.dispose();
+  });
+
   it("uses the selected agent before a session key is available", async () => {
     const result: SessionsListResult = {
       ts: 1,
@@ -164,7 +260,7 @@ describe("session connection hydration", () => {
     sessions.dispose();
   });
 
-  it("ignores same-connection gateway metadata snapshots during hydration", async () => {
+  it("rehydrates owner sessions when identity arrives on the same connection", async () => {
     let resolveList: (result: SessionsListResult) => void = () => undefined;
     const pendingList = new Promise<SessionsListResult>((resolve) => {
       resolveList = resolve;
@@ -177,7 +273,7 @@ describe("session connection hydration", () => {
       defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions: [],
     };
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _params?: Record<string, unknown>) => {
       if (method === "sessions.subscribe") {
         return { subscribed: true };
       }
@@ -215,14 +311,24 @@ describe("session connection hydration", () => {
 
     snapshot = { ...snapshot, canvasPluginSurfaceUrl: "https://gateway.example.test/canvas" };
     gatewayListener?.(snapshot);
+    await Promise.resolve();
+    expect(listCalls).toBe(1);
+
     snapshot = { ...snapshot, selfUser: { id: "operator", name: "Operator" } };
     gatewayListener?.(snapshot);
     resolveList(result);
-    await waitForFast(() => expect(sessions.state.result).toBe(result));
-    await Promise.resolve();
-    await Promise.resolve();
+    await waitForFast(() => expect(listCalls).toBe(2));
 
-    expect(listCalls).toBe(1);
+    expect(
+      request.mock.calls
+        .filter(([method]) => method === "sessions.list")
+        .map(([, params]) => params),
+    ).toEqual([
+      expect.not.objectContaining({ ownerFirst: expect.anything() }),
+      expect.objectContaining({ ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
+    ]);
+    expect(sessions.state.result?.sessions).toEqual([]);
+    expect(sessions.state.agentId).toBe("main");
     sessions.dispose();
   });
 

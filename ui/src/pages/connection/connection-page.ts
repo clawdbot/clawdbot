@@ -13,9 +13,8 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { loadGatewaySessionSelection, loadSettings, type UiSettings } from "../../app/settings.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
@@ -278,8 +277,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("connection")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("connection")}
-            ${renderDocsLink(CONNECTION_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("connection")} ${renderLearnMoreLink(CONNECTION_DOCS_URL)}
           </div>
         </div>
       </section>

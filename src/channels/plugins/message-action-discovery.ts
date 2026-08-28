@@ -349,6 +349,15 @@ export function resolveChannelMessageToolSchemaProperties(
   const properties: Record<string, TSchema> = {};
   const currentChannel = resolveMessageActionDiscoveryChannelId(params.channel);
   const discoveryBase = createMessageActionDiscoveryContext(params);
+  // Account IDs belong to the current provider. Other plugins must discover
+  // schemas from their configured-account union, not a foreign account name.
+  const contextForPlugin = (pluginId: string) => ({
+    ...discoveryBase,
+    accountId:
+      !currentChannel || resolveMessageActionDiscoveryChannelId(pluginId) === currentChannel
+        ? params.accountId
+        : undefined,
+  });
   const seenPluginIds = new Set<string>();
 
   const channels = listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog);
@@ -360,7 +369,7 @@ export function resolveChannelMessageToolSchemaProperties(
     for (const contribution of resolveMessageActionDiscoveryForPlugin({
       pluginId: plugin.id,
       actions: plugin.actions,
-      context: discoveryBase,
+      context: contextForPlugin(plugin.id),
       includeSchema: true,
     }).schemaContributions) {
       const visibility = contribution.visibility ?? "current-channel";
@@ -384,7 +393,7 @@ export function resolveChannelMessageToolSchemaProperties(
       for (const contribution of resolveMessageActionDiscoveryForPlugin({
         pluginId: currentActions.pluginId,
         actions: currentActions.actions,
-        context: discoveryBase,
+        context: contextForPlugin(currentActions.pluginId),
         includeSchema: true,
       }).schemaContributions) {
         const visibility = contribution.visibility ?? "current-channel";

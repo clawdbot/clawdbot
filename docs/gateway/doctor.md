@@ -244,6 +244,8 @@ That stages grounded durable candidates into the short-term dreaming store while
 
     Doctor also warns when `plugins.allow` is non-empty and tool policy uses wildcard or plugin-owned tool entries. `tools.allow: ["*"]` only matches tools from plugins that actually load; it does not bypass the exclusive plugin allowlist.
 
+    `doctor --fix` removes `workspace: null` from `agents.entries.<id>` so normal workspace resolution can apply. It also removes invalid `heartbeat.activeHours` windows from agent entries and `agents.defaults`, preserving other heartbeat settings. Reconfigure a valid window if needed; without an explicit or inherited window, heartbeat hours are unrestricted. These repairs also apply after migrating a legacy `agents.list` roster.
+
   </Accordion>
   <Accordion title="2. Legacy config key migrations">
     When the config contains a deprecated key with an active migration, other commands refuse to run and ask you to run `openclaw doctor`. Doctor explains which legacy keys were found, shows the migration it applied, and rewrites `~/.openclaw/openclaw.json` with the updated schema. Gateway startup refuses legacy config formats and asks you to run `openclaw doctor --fix`; it does not rewrite `openclaw.json` on startup. Cron job store migrations are also handled by `openclaw doctor --fix`.
@@ -477,7 +479,7 @@ That stages grounded durable candidates into the short-term dreaming store while
 
     Doctor also reports auth profiles that are temporarily unusable due to short cooldowns (rate limits/timeouts/auth failures) or longer disables (billing/credit failures).
 
-    Legacy Codex OAuth profiles whose tokens live in macOS Keychain (older onboarding before the file-based sidecar layout) are repaired only by doctor. Run `openclaw doctor --fix` once from an interactive terminal to migrate Keychain-backed legacy tokens inline into `auth-profiles.json`; after that, embedded turns (Telegram, cron, sub-agent dispatch) resolve them as canonical OpenAI OAuth profiles.
+    Legacy Codex OAuth profiles with encrypted sidecar credentials are repaired only by doctor. Run `openclaw doctor --fix` from an interactive terminal on the original host so it can recover the legacy encryption key, including from macOS Keychain when needed, and import supported credentials into the SQLite auth store. If the legacy material cannot be recovered, sign in again with `openclaw models auth login --provider openai` on the Gateway host.
 
   </Accordion>
   <Accordion title="6. Hooks model validation">
@@ -496,6 +498,8 @@ That stages grounded durable candidates into the short-term dreaming store while
   </Accordion>
   <Accordion title="8. Gateway service migrations and cleanup hints">
     Doctor detects legacy gateway services (launchd/systemd/schtasks) and offers to remove them and install the OpenClaw service using the current gateway port. It can also scan for extra gateway-like services and print cleanup hints. Profile-named OpenClaw gateway services are considered first-class and are not flagged as "extra."
+
+    Linux user-service cleanup preserves the unit file if stopping or disabling the service fails. An interrupted status probe does not permit file-only removal; that fallback is reported only when `systemctl` is unavailable.
 
     On Linux, if the user-level gateway service is missing but a system-level OpenClaw gateway service exists, doctor does not install a second user-level service automatically. Inspect with `openclaw gateway status --deep` or `openclaw doctor --deep`, then remove the duplicate or set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when a system supervisor owns the gateway lifecycle.
 
@@ -598,10 +602,10 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `openclaw doctor` prompts before rewriting supervisor config.
     - `openclaw doctor --yes` accepts the default repair prompts.
     - `openclaw doctor --fix` applies recommended fixes without prompts (`--repair` is an alias).
-    - `openclaw doctor --fix --force` overwrites custom supervisor configs.
+    - `openclaw doctor --fix --force` can overwrite the managed supervisor config; operator-owned systemd drop-ins remain unchanged.
     - `OPENCLAW_SERVICE_REPAIR_POLICY=external` keeps doctor read-only for gateway service lifecycle. It still reports service health and runs non-service repairs, but skips service install/start/restart/bootstrap, supervisor config rewrites, and legacy service cleanup because an external supervisor owns that lifecycle.
     - On macOS, a same-label system LaunchDaemon blocks user LaunchAgent install, start, restart, and bootstrap repair. Doctor reports the system owner and stops service recovery; `--force` does not bypass this ownership boundary. See [Existing system LaunchDaemons](/gateway#existing-system-launchdaemons).
-    - On Linux, doctor does not rewrite command/entrypoint metadata while the matching systemd gateway unit is active. It also ignores inactive non-legacy extra gateway-like units during the duplicate-service scan so companion service files do not create cleanup noise.
+    - On Linux, doctor does not rewrite command/entrypoint metadata while the matching systemd gateway unit is active. If a stopped unit's command or working directory is overridden by an operator-owned systemd drop-in, inspect it with `systemctl --user cat <unit>.service`, then update or remove the drop-in; rewriting the managed base cannot change the effective launcher. `Environment=` drop-ins remain supported. Doctor also ignores inactive non-legacy extra gateway-like units during the duplicate-service scan so companion service files do not create cleanup noise.
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, doctor service install/repair validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.
     - Doctor detects managed `.env`/SecretRef-backed service environment values that older LaunchAgent, systemd, or Windows Scheduled Task installs embedded inline and rewrites the service metadata so those values load from the runtime source instead of the supervisor definition.
     - Doctor detects when the service command still pins an old `--port` after `gateway.port` changes and rewrites the service metadata to the current port.
@@ -609,14 +613,14 @@ That stages grounded durable candidates into the short-term dreaming store while
     - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, doctor blocks install/repair until mode is set explicitly.
     - For Linux user-systemd units, doctor token drift checks include both `Environment=` and `EnvironmentFile=` sources when comparing service auth metadata.
     - Doctor service repairs refuse to rewrite, stop, or restart a gateway service from an older OpenClaw binary when the config was last written by a newer version. See [Gateway troubleshooting](/gateway/troubleshooting#split-brain-installs-and-newer-config-guard).
-    - You can always force a full rewrite via `openclaw gateway install --force`.
+    - `openclaw gateway install --force` rewrites the managed base unit, but never removes operator-owned systemd drop-ins; it warns if a command or working-directory override remains effective.
 
   </Accordion>
   <Accordion title="16. Gateway runtime + port diagnostics">
     Doctor inspects the service runtime (PID, last exit status) and warns when the service is installed but not actually running. It also checks for port collisions on the gateway port (default `18789`) and reports likely causes (gateway already running, SSH tunnel).
   </Accordion>
   <Accordion title="17. Gateway runtime best practices">
-    Doctor warns when the gateway service runs on Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). Bun cannot open OpenClaw's `node:sqlite` state store, so repairs migrate legacy Bun services to Node. Version-manager paths can break after upgrades because the service does not load your shell init. Doctor offers to migrate to a system Node install when available (Homebrew/apt/choco).
+    Doctor accepts Bun 1.4+ runtimes that provide WAL-reset-safe `node:sqlite` and warns when the gateway service runs on an older or unsafe Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). Repairs migrate unsupported Bun services to Node. Version-manager paths can break after upgrades because the service does not load your shell init. Doctor offers to migrate to a system Node install when available (Homebrew/apt/choco).
 
     Newly installed or repaired macOS LaunchAgents use a canonical system PATH (`/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`) instead of copying the interactive shell PATH, so Homebrew-managed system binaries stay available while Volta, asdf, fnm, pnpm, and other version-manager directories do not change which Node child processes resolve. Linux services still keep explicit environment roots (`NVM_DIR`, `FNM_DIR`, `VOLTA_HOME`, `ASDF_DATA_DIR`, `BUN_INSTALL`, `PNPM_HOME`) and stable user-bin directories, but guessed version-manager fallback directories are only written to the service PATH when those directories exist on disk.
 

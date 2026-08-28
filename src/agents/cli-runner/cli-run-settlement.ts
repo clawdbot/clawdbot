@@ -28,7 +28,7 @@ import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
 
-/** Operator-visible reason recorded on trace attempts and agent_end when a live turn kept partial output. */
+/** Formats the visible terminal reason for an interrupted turn that retained partial output. */
 export function formatCliTerminalInterruption(interruption: CliTerminalInterruption): string {
   return `CLI turn ${interruption.reason} after partial output`;
 }
@@ -181,8 +181,8 @@ export async function settlePreparedCliRun(params: {
   };
   if (runParams.cleanupCliLiveSessionOnRunEnd === true) {
     try {
-      const { closeClaudeSession } = await import("./claude-live-registry.js");
-      await closeClaudeSession(context, "restart");
+      const { closeCliLiveSession } = await import("./cli-live-session-registry.js");
+      await closeCliLiveSession(context, "restart");
     } catch (error) {
       recordCleanupError(error);
     }
@@ -494,7 +494,7 @@ export function buildCliRunResult(params: {
       ? effectiveCliSessionId
       : undefined;
   const terminalInterruption = output.terminalInterruption;
-  // An interrupted live turn closed its process, so its native continuity is dead.
+  // An interrupted process cannot preserve its now-invalid native session binding.
   const cliSessionBindingCleared =
     terminalInterruption !== undefined ||
     sessionBindingDisabled ||

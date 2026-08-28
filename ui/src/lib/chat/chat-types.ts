@@ -43,7 +43,8 @@ export type ChatGuardianNotice = {
   key: string;
   runId: string;
   timestamp: number;
-  kind: "approved" | "denied" | "warning";
+  kind: "approved" | "denied" | "reviewing" | "strict-review-required" | "warning";
+  source?: "system";
   command?: string;
   riskLevel?: string;
   rationale?: string;
@@ -103,7 +104,10 @@ export type ChatItem =
       icon?: keyof typeof toolIcons;
       label?: string;
       startsTurn?: true;
+      boundaryId?: string;
       tone?: "danger";
+      /** Collapse the body behind a disclosure; the label line stays visible. */
+      collapsedBody?: true;
     }
   | {
       kind: "divider";
@@ -143,6 +147,8 @@ export type ChatStreamSegment = {
   boundaryRunId?: string;
   /** Ordering-only boundary with no renderable assistant text. */
   boundaryMarker?: true;
+  /** Hidden durable replacement; cumulative text still owns the prefix baseline. */
+  persisted?: true;
   toolCallId?: string;
   itemId?: string;
 };
@@ -178,6 +184,19 @@ export function trimAccumulatedStreamPrefix(text: string, previousText: string |
     return text;
   }
   return text.slice(previousText.length).trimStart();
+}
+
+export function accumulatedStreamText(
+  segments: readonly ChatStreamSegment[],
+  normalize: (text: string) => string = (text) => text,
+): string | null {
+  let accumulated: string | null = null;
+  for (const segment of segments) {
+    if (streamSegmentUsesAccumulatedText(segment)) {
+      accumulated = advanceAccumulatedStreamText(accumulated, normalize(segment.text));
+    }
+  }
+  return accumulated;
 }
 
 /** A group of consecutive messages from the same role (Slack-style layout) */

@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -46,6 +47,9 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const proofVideo = page.video();
     const firstKey = "agent:main:session-a";
     const secondKey = "agent:main:session-b";
@@ -138,6 +142,9 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const key = "agent:main:session-a";
     const runId = "run-sidebar-metadata";
     const running = chatSessionListResponse([
@@ -335,8 +342,24 @@ suite.define(() => {
     const busyKey = "agent:main:busy-session";
     const plainKey = "agent:main:plain-session";
     const longKey = "agent:main:long-title-session";
+    const homeKey = "agent:main:main";
     await installMockGateway(page, {
+      featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
       methodResponses: {
+        "board.get": {
+          cases: [homeKey, busyKey, plainKey, longKey].map((sessionKey) => ({
+            match: { sessionKey },
+            response: {
+              sessionKey,
+              revision: 1,
+              tabs:
+                sessionKey === homeKey || sessionKey === busyKey
+                  ? [{ tabId: "overview", title: "Overview", position: 0, chatDock: "right" }]
+                  : [],
+              widgets: [],
+            },
+          })),
+        },
         "sessions.list": chatSessionListResponse([
           {
             key: busyKey,
@@ -386,13 +409,109 @@ suite.define(() => {
       const busyRow = page.locator(`.sidebar-recent-session[data-session-key="${busyKey}"]`);
       const plainRow = page.locator(`.sidebar-recent-session[data-session-key="${plainKey}"]`);
       await busyRow.locator(".session-row-badges").waitFor();
+      expect(await busyRow.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
+      expect(await busyRow.getAttribute("class")).toContain("sidebar-recent-session--single-line");
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(sessionSecondRowProofDir, "01-second-row-endcap.png"),
+        await page.locator(".shell-nav").screenshot({
+          path: path.join(sessionSecondRowProofDir, "00-default-hidden-preview.png"),
         });
       }
+      await page.locator(".sidebar-session-toolbar .sidebar-session-sort").click();
+      const previewToggle = page.locator('wa-dropdown-item[value="show-preview"]');
+      expect(
+        await previewToggle.evaluate(
+          (item) => (item as HTMLElement & { checked: boolean }).checked,
+        ),
+      ).toBe(false);
+      await previewToggle.click();
+      await busyRow.locator(".sidebar-recent-session__subtitle").waitFor();
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const homeBoard = sidebar
+        .locator(".nav-item--home")
+        .getByRole("img", { name: "Dashboard available" })
+        .locator("svg");
+      const sessionBoard = busyRow.getByRole("img", { name: "Dashboard available" }).locator("svg");
+      const ordinaryBadge = busyRow.locator(".session-row-badge--incognito svg");
+      await homeBoard.waitFor({ state: "visible" });
+      await sessionBoard.waitFor({ state: "visible" });
+      const automationBadge = busyRow
+        .getByRole("img", { name: "Automation attached" })
+        .locator("svg");
+      for (const colorScheme of ["dark", "light"] as const) {
+        await page.emulateMedia({ colorScheme });
+        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(colorScheme);
+        const automationStyle = await automationBadge.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { color: style.color, strokeWidth: style.strokeWidth };
+        });
+        for (const board of [homeBoard, sessionBoard]) {
+          expect
+            .soft(
+              await board.evaluate((element) => {
+                const style = getComputedStyle(element);
+                return { color: style.color, strokeWidth: style.strokeWidth };
+              }),
+            )
+            .toEqual(automationStyle);
+        }
+        for (const reducedMotion of ["no-preference", "reduce"] as const) {
+          await page.emulateMedia({ reducedMotion });
+          const spinnerColors = await busyRow
+            .locator(".session-run-spinner")
+            .evaluate((element) => {
+              const style = getComputedStyle(element);
+              const accent = document.createElement("span").style;
+              accent.color = style.getPropertyValue("--accent").trim();
+              return { actual: style.borderTopColor, expected: accent.color };
+            });
+          expect.soft(spinnerColors.actual).toBe(spinnerColors.expected);
+        }
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        if (captureUiProofEnabled) {
+          await page.locator(".shell-nav").screenshot({
+            animations: "disabled",
+            path: path.join(sessionSecondRowProofDir, `indicators-${colorScheme}.png`),
+          });
+        }
+      }
+      const shellNav = page.locator(".shell-nav");
+      const sidebarResizer = page.getByRole("separator", { name: "Resize sidebar" });
+      const badgeSizes = [];
+      for (const sidebarWidth of [258, 240]) {
+        if (sidebarWidth === 240) {
+          await sidebarResizer.focus();
+          await page.keyboard.press("Home");
+        }
+        await expect
+          .poll(async () => Math.round((await shellNav.boundingBox())?.width ?? 0))
+          .toBe(sidebarWidth);
+        await page.mouse.move(900, 400);
+        if (captureUiProofEnabled) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(sessionSecondRowProofDir, `01-second-row-endcap-${sidebarWidth}.png`),
+          });
+          await shellNav.screenshot({
+            animations: "disabled",
+            path: path.join(sessionSecondRowProofDir, `01-sidebar-${sidebarWidth}.png`),
+          });
+        }
+        badgeSizes.push(
+          await Promise.all(
+            [homeBoard, sessionBoard, ordinaryBadge].map((icon) =>
+              icon.evaluate((element) => {
+                const { height, width } = element.getBoundingClientRect();
+                return { height, width };
+              }),
+            ),
+          ),
+        );
+      }
 
+      // Rotation expands the spinner element's square DOMRect even though its
+      // circular ink is unchanged; freeze it while asserting endcap geometry.
+      await page.addStyleTag({ content: ".session-run-spinner { animation: none !important; }" });
       const layout = await busyRow.evaluate((row) => {
         const rect = (selector: string) => {
           const element = row.querySelector<HTMLElement>(selector);
@@ -497,7 +616,7 @@ suite.define(() => {
             .locator(".sidebar-recent-session__details-endcap")
             .evaluate((element) => getComputedStyle(element).opacity),
         )
-        .toBe("0");
+        .toBe("1");
       await expect
         .poll(() =>
           busyRow
@@ -512,6 +631,13 @@ suite.define(() => {
         });
       }
       await plainRow.waitFor();
+      for (const sizes of badgeSizes) {
+        expect(sizes).toEqual([
+          { height: 12, width: 12 },
+          { height: 12, width: 12 },
+          { height: 12, width: 12 },
+        ]);
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }

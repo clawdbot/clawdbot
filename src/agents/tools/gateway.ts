@@ -231,6 +231,7 @@ const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "cron.remove",
   "cron.run",
   "cron.runs",
+  "secrets.store.delete",
 ]);
 
 const OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>(["node.invoke"]);

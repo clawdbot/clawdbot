@@ -462,9 +462,7 @@ async function runSetupWizardOnce(
     const { logConfigUpdated } = await loadConfigLoggingModule();
     let nextConfig = await promptRemoteGatewayConfig(remoteSeedConfig, prompter, {
       secretInputMode: opts.secretInputMode,
-      ...(opts.remoteUrl !== undefined && storedRemoteUrl
-        ? { edgeAuthOriginUrl: storedRemoteUrl }
-        : {}),
+      ...(opts.remoteUrl !== undefined ? { remoteOriginUrl: storedRemoteUrl } : {}),
     });
     nextConfig = opts.skipBootstrap ? applySkipBootstrapConfig(nextConfig) : nextConfig;
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });

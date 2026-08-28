@@ -800,6 +800,27 @@ describe("Mistral provider", () => {
       cacheWrite: 0,
       totalTokens: 110,
     });
+    expect(result.responseId).toBe("response-cache-usage");
+    expect(result.responseModel).toBe("mistral-small-latest");
+  });
+
+  it("omits responseModel when streamed model matches the requested id", async () => {
+    mistralMockState.streamResult = {
+      async *[Symbol.asyncIterator]() {
+        yield {
+          data: {
+            id: "response-same-model",
+            model: "mistral-large-latest",
+            choices: [{ finishReason: "stop", delta: { content: "ok" } }],
+          },
+        };
+      },
+    };
+
+    const result = await runMistralFixture(context, { apiKey: "fixture" });
+
+    expect(result.responseId).toBe("response-same-model");
+    expect(result).not.toHaveProperty("responseModel");
   });
 
   it("preserves tool-result boundary whitespace in the request payload", async () => {

@@ -74,6 +74,12 @@ export function rethrowChromeMcpDocumentError(error: unknown): never {
 
 export type ChromeMcpCallOptions = ChromeMcpOperationOptions & {
   ephemeral?: boolean;
+  pageProbe?: ChromeMcpPageProbe;
+};
+
+export type ChromeMcpPageProbe = {
+  timeoutMs?: () => number;
+  onResult: (tabCount: number | null) => void;
 };
 
 export const MCP_REQUEST_TIMEOUT_CODE: number = ErrorCode.RequestTimeout;

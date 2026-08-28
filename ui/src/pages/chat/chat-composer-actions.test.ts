@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
 import {
@@ -8,6 +9,11 @@ import {
   renderComposerFixture as renderComposer,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
+import {
+  renderChatPrimaryActions,
+  type ChatRunControlsProps,
+} from "./components/chat-composer-controls.ts";
+import type { ComposerDictationController } from "./composer-dictation.ts";
 
 afterEach(async () => {
   await resetComposerFixture();
@@ -32,6 +38,113 @@ function pressComposerEnter(
 }
 
 describe("renderChatComposer controls", () => {
+  function renderActiveDictationActions(overrides: {
+    finishActive: ReturnType<typeof vi.fn>;
+    onSend?: ChatRunControlsProps["onSend"];
+  }) {
+    const container = document.createElement("div");
+    const cancelActive = vi.fn();
+    const handleClick = vi.fn();
+    const onSend = overrides.onSend ?? vi.fn<ChatRunControlsProps["onSend"]>();
+    const dictation = {
+      active: true,
+      connecting: false,
+      finalizing: false,
+      locksComposer: true,
+      finishActive: overrides.finishActive,
+      cancelActive,
+      handleClick,
+    } as unknown as ComposerDictationController;
+    render(
+      renderChatPrimaryActions({
+        canAbort: false,
+        canSend: true,
+        connected: true,
+        draft: "preexisting draft",
+        isBusy: false,
+        sending: false,
+        dictation,
+        onSend,
+      }),
+      container,
+    );
+    return { cancelActive, container, handleClick, onSend };
+  }
+
+  it("stops dictation by keeping its text without sending", () => {
+    const finishActive = vi.fn().mockResolvedValue(true);
+    const { cancelActive, container, handleClick, onSend } = renderActiveDictationActions({
+      finishActive,
+    });
+    const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating");
+
+    expect(stop?.getAttribute("aria-label")).toBe("Stop and keep text");
+    stop?.click();
+
+    expect(finishActive).toHaveBeenCalledOnce();
+    expect(cancelActive).not.toHaveBeenCalled();
+    expect(handleClick).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("commits dictation before sending the complete composer draft", async () => {
+    const order: string[] = [];
+    const finishActive = vi.fn(async () => {
+      order.push("commit");
+      return true;
+    });
+    const onSend = vi.fn(() => order.push("send"));
+    const { cancelActive, container, handleClick } = renderActiveDictationActions({
+      finishActive,
+      onSend,
+    });
+    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
+
+    expect(send?.getAttribute("aria-label")).toBe("Send");
+    send?.click();
+    await vi.waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+
+    expect(finishActive).toHaveBeenCalledOnce();
+    expect(order).toEqual(["commit", "send"]);
+    expect(cancelActive).not.toHaveBeenCalled();
+    expect(handleClick).not.toHaveBeenCalled();
+  });
+
+  it("keeps Stop and Send visually stable while dictation finalizes", () => {
+    const container = document.createElement("div");
+    const dictation = {
+      active: true,
+      connecting: false,
+      finalizing: true,
+      locksComposer: true,
+      finishActive: vi.fn(),
+    } as unknown as ComposerDictationController;
+    render(
+      renderChatPrimaryActions({
+        canAbort: false,
+        canSend: true,
+        connected: true,
+        draft: "preexisting draft",
+        isBusy: false,
+        sending: false,
+        dictation,
+        onSend: vi.fn(),
+      }),
+      container,
+    );
+
+    const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating");
+    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
+    expect(stop?.getAttribute("aria-label")).toBe("Stop and keep text");
+    expect(stop?.disabled).toBe(false);
+    expect(stop?.getAttribute("aria-disabled")).toBe("true");
+    expect(stop?.querySelector("rect")).not.toBeNull();
+    expect(send?.classList.contains("chat-send-btn--send")).toBe(true);
+    expect(send?.disabled).toBe(false);
+    expect(send?.getAttribute("aria-disabled")).toBe("true");
+    expect(send?.querySelector("path")?.getAttribute("d")).toBe("M12 19V5m-7 7 7-7 7 7");
+  });
+
   it.each([
     {
       name: "empty idle",
@@ -93,7 +206,7 @@ describe("renderChatComposer controls", () => {
   );
 
   it.each([
-    [undefined, "Tap to talk · Hold to dictate"],
+    [undefined, t("chat.composer.voiceGestureHint")],
     [false, t("chat.composer.startVoiceInput")],
   ])(
     "uses the gesture hint only when hold-to-dictate is available",
@@ -129,11 +242,28 @@ describe("renderChatComposer controls", () => {
     expect(stopVoice.classList.contains("chat-send-btn--voice-live")).toBe(true);
     expect(stopVoice.classList.contains("chat-send-btn--stop")).toBe(false);
     expect(stopGeneration.classList.contains("chat-send-btn--stop")).toBe(true);
+    expect(stopGeneration.closest(".chat-mobile-primary-action")).not.toBeNull();
     expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
     stopVoice.click();
     stopGeneration.click();
     expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
     expect(onAbort).toHaveBeenCalledOnce();
+  });
+
+  it("keeps mobile voice controls disabled while the composer is busy", () => {
+    const { container } = renderComposer({
+      sending: true,
+      onToggleRealtimeTalk: vi.fn(),
+    });
+
+    const mobileDictation = container.querySelector<HTMLButtonElement>(
+      ".chat-mobile-dictation-action .chat-send-btn--voice",
+    );
+    expect(mobileDictation?.disabled).toBe(true);
+    expect(
+      container.querySelector<HTMLButtonElement>(".chat-mobile-talk-action .chat-send-btn")
+        ?.disabled,
+    ).toBe(true);
   });
 
   it("queues ordinary drafts offline but disables live voice", () => {
@@ -253,58 +383,73 @@ describe("renderChatComposer controls", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["Meta+Enter with a rendered draft", { metaKey: true }, "Steer this now", undefined, undefined],
-    [
-      "Control+Enter with a rendered draft",
-      { ctrlKey: true },
-      "Steer this now",
-      undefined,
-      undefined,
-    ],
-    [
-      "Control+Enter with attachment-only content",
-      { ctrlKey: true },
-      "",
-      () => [{ id: "image-1", mimeType: "image/png", fileName: "proof.png" }],
-      undefined,
-    ],
-    [
-      "Control+Enter with live textarea content before the draft prop rerenders",
-      { ctrlKey: true },
-      "",
-      undefined,
-      "Steer the live textarea value",
-    ],
-  ] as const)(
-    "uses %s to steer an active queued follow-up",
-    (_name, modifiers, draft, getAttachments, liveDraft) => {
-      const onSend = vi.fn();
-      const { container } = renderComposer({
-        canAbort: true,
-        draft,
-        followUpMode: "queue",
-        getAttachments,
-        onAbort: vi.fn(),
-        onSend,
-        sendShortcut: "enter",
-      });
-      const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-      if (textarea && liveDraft !== undefined) {
-        textarea.value = liveDraft;
-      }
+  describe.each([
+    ["queue", "steer"],
+    ["steer", "queue"],
+    ["collect", "steer"],
+    ["followup", "steer"],
+  ] as const)("alternate follow-up from %s to %s", (followUpMode, alternateMode) => {
+    it.each([
+      [
+        "Meta+Enter with a rendered draft",
+        { metaKey: true },
+        "Steer this now",
+        undefined,
+        undefined,
+      ],
+      [
+        "Control+Enter with a rendered draft",
+        { ctrlKey: true },
+        "Steer this now",
+        undefined,
+        undefined,
+      ],
+      [
+        "Control+Enter with attachment-only content",
+        { ctrlKey: true },
+        "",
+        () => [{ id: "image-1", mimeType: "image/png", fileName: "proof.png" }],
+        undefined,
+      ],
+      [
+        "Control+Enter with live textarea content before the draft prop rerenders",
+        { ctrlKey: true },
+        "",
+        undefined,
+        "Steer the live textarea value",
+      ],
+    ] as const)(
+      "uses %s to submit the alternate action",
+      (_name, modifiers, draft, getAttachments, liveDraft) => {
+        const onSend = vi.fn();
+        const { container } = renderComposer({
+          canAbort: true,
+          draft,
+          followUpMode,
+          getAttachments,
+          onAbort: vi.fn(),
+          onSend,
+          sendShortcut: "enter",
+        });
+        const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+        if (textarea && liveDraft !== undefined) {
+          textarea.value = liveDraft;
+        }
 
-      const action = pressComposerEnter(container, modifiers);
+        const action = pressComposerEnter(container, modifiers);
 
-      expect(onSend).toHaveBeenCalledOnce();
-      expect(onSend).toHaveBeenCalledWith("steer", action);
-    },
-  );
+        expect(onSend).toHaveBeenCalledOnce();
+        expect(onSend).toHaveBeenCalledWith(alternateMode, action);
+      },
+    );
+  });
 
   it.each([
     ["modifier-enter", true, "queue", false],
     ["enter", false, "queue", false],
-    ["enter", true, "steer", false],
+    ["modifier-enter", true, "steer", false],
+    ["enter", true, "interrupt", false],
+    ["enter", true, undefined, false],
     ["enter", true, "queue", true],
   ] as const)(
     "keeps ordinary send semantics for shortcut=%s active=%s mode=%s alt=%s",
@@ -376,21 +521,37 @@ describe("renderChatComposer controls", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("teaches the steer shortcut only when the force-steer action is available", () => {
-    const available = renderComposer({
-      canAbort: true,
-      draft: "Follow up now",
-      followUpMode: "queue",
-      onAbort: vi.fn(),
-      sendShortcut: "enter",
-    });
-    const availablePrimary = primaryButton(available.container);
-    const availableTooltip = availablePrimary.closest("openclaw-tooltip") as
-      | (HTMLElement & { content?: string })
-      | null;
-    expect(availablePrimary.getAttribute("aria-label")).toBe(t("chat.runControls.queueMessage"));
-    expect(availableTooltip?.content).toBe("Queue ⏎ · Steer ⌘/Ctrl+Enter");
+  it.each([
+    ["queue", "Queue ⏎ · Steer ⌘/Ctrl+Enter"],
+    ["steer", "Steer ⏎ · Queue ⌘/Ctrl+Enter"],
+    ["collect", "Queue ⏎ · Steer ⌘/Ctrl+Enter"],
+    ["followup", "Queue ⏎ · Steer ⌘/Ctrl+Enter"],
+  ] as const)(
+    "teaches both actions for %s without changing ordinary Enter",
+    (followUpMode, tooltip) => {
+      const onSend = vi.fn();
+      const available = renderComposer({
+        canAbort: true,
+        draft: "Follow up now",
+        followUpMode,
+        onAbort: vi.fn(),
+        onSend,
+        sendShortcut: "enter",
+      });
+      const availablePrimary = primaryButton(available.container);
+      const availableTooltip = availablePrimary.closest("openclaw-tooltip") as
+        | (HTMLElement & { content?: string })
+        | null;
+      expect(availablePrimary.getAttribute("aria-label")).toBe(
+        t(followUpMode === "steer" ? "chat.followUpModeSteer" : "chat.runControls.queueMessage"),
+      );
+      expect(availableTooltip?.content).toBe(tooltip);
+      const action = pressComposerEnter(available.container);
+      expect(onSend).toHaveBeenCalledWith(undefined, action);
+    },
+  );
 
+  it("does not advertise an unavailable alternate action", () => {
     const unavailable = [
       {
         overrides: {
@@ -413,12 +574,12 @@ describe("renderChatComposer controls", () => {
       {
         overrides: {
           canAbort: true,
-          draft: "Already steering",
-          followUpMode: "steer" as const,
+          draft: "Interrupt this run",
+          followUpMode: "interrupt" as const,
           onAbort: vi.fn(),
           sendShortcut: "enter" as const,
         },
-        tooltip: t("chat.queue.steer"),
+        tooltip: t("chat.runControls.send"),
       },
       {
         overrides: {
@@ -430,6 +591,16 @@ describe("renderChatComposer controls", () => {
           sendShortcut: "enter" as const,
         },
         tooltip: t("chat.runControls.queue"),
+      },
+      {
+        overrides: {
+          canAbort: true,
+          draft: "Suggest a follow-up",
+          followUpMode: "steer" as const,
+          onAbort: vi.fn(),
+          suggestionComposer: true,
+        },
+        tooltip: t("chat.sessionSuggestions.suggest"),
       },
     ];
     for (const testCase of unavailable) {
@@ -490,7 +661,7 @@ describe("renderChatComposer controls", () => {
     });
   });
 
-  it("renders reconnect waits as quiet status without the raw transport error", () => {
+  it("renders reconnect waits as compact badges without the raw transport error", () => {
     const { container } = renderComposer({
       queue: [
         {
@@ -504,12 +675,13 @@ describe("renderChatComposer controls", () => {
     });
     const item = container.querySelector(".chat-queue__item");
     expect(item?.classList.contains("chat-queue__item--reconnect")).toBe(true);
-    expect(item?.querySelector(".chat-queue__dot")).not.toBeNull();
-    expect(item?.querySelector(".chat-queue__icon")).toBeNull();
+    expect(
+      item?.querySelector('.chat-queue__icon path[d="M21 5v12a2 2 0 0 1-2 2h-6"]'),
+    ).not.toBeNull();
     expect(item?.querySelector(".chat-queue__error")).toBeNull();
-    const badge = item?.querySelector(".chat-queue__badge");
-    expect(badge?.textContent?.trim()).toBe("Waiting for reconnect");
-    expect(badge?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
+    const state = item?.querySelector(".chat-queue__badge--reconnect");
+    expect(state?.textContent?.trim()).toBe("Waiting for reconnect");
+    expect(state?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
   });
 
   it("renders failed sends as retryable and running commands as inert", () => {
@@ -545,7 +717,7 @@ describe("renderChatComposer controls", () => {
         },
       ],
     });
-    expect(view.container.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(
+    expect(view.container.querySelector(".chat-queue__state")?.textContent?.trim()).toBe(
       "Running command",
     );
     expect(view.container.querySelector(".chat-queue__retry")).toBeNull();

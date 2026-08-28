@@ -7,6 +7,7 @@ import type {
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = {
@@ -30,11 +31,10 @@ class IntervalSyncHarness extends MemoryManagerSyncOps {
     pollIntervalMs: 0,
     timeoutMs: 0,
   };
-  protected readonly vector = { enabled: false, available: false };
   protected readonly cache = { enabled: false };
   protected providerUnavailableReason?: string;
   protected providerLifecycle = { mode: "active" as const, providerId: "test" };
-  protected db = {} as DatabaseSync;
+  protected publishedDatabase = new MemoryIndexDatabase({} as DatabaseSync);
 
   constructor(params: { intervalMinutes?: number; batchTimeoutMinutes?: number }) {
     super();

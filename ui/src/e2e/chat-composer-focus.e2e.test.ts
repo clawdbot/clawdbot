@@ -122,8 +122,10 @@ suite.define(() => {
           };
         });
 
-        expect(focused.borderColor).not.toBe(unfocused.borderColor);
-        expect(focused.boxShadow).not.toBe(unfocused.boxShadow);
+        expect([focused.borderColor, focused.boxShadow]).not.toEqual([
+          unfocused.borderColor,
+          unfocused.boxShadow,
+        ]);
         expect(focused.neutralChannelSpread).toBeLessThanOrEqual(24);
         expect(focused.contrast).toBeGreaterThanOrEqual(3);
       }

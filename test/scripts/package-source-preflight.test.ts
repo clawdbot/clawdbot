@@ -369,7 +369,7 @@ describe("package source preflight", () => {
         rootManifestContent: rootManifest(),
       }),
     ).toThrow(
-      "package.json must declare openai@6.50.0 to bundle @openclaw/ai without duplicate dependencies",
+      "package.json must declare openai@6.50.0 to bundle packages/ai/package.json without duplicate dependencies",
     );
   });
 
@@ -421,7 +421,7 @@ describe("package source preflight", () => {
         rootManifestContent: JSON.stringify(root),
       }),
     ).toThrow(
-      "package.json must declare partial-json@0.1.7 to bundle @openclaw/ai without duplicate dependencies",
+      "package.json must declare partial-json@0.1.7 to bundle packages/ai/package.json without duplicate dependencies",
     );
   });
 

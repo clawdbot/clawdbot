@@ -673,7 +673,7 @@ export async function handleTelegramAction(
     // Optional threading parameters for forum topics and reply chains
     const replyToMessageId = readTelegramReplyToMessageId(params);
     const messageThreadId = readTelegramThreadId(params);
-    const quoteText = readStringParam(params, "quoteText");
+    const quoteText = readStringParam(params, "quoteText", { trim: false });
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
@@ -1039,7 +1039,9 @@ export async function handleTelegramAction(
       throw new Error("Telegram createForumTopic is disabled.");
     }
     const chatId = readTelegramChatId(params);
-    const name = readStringParam(params, "name", { required: true });
+    const name =
+      readStringParam(params, "name") ??
+      readStringParam(params, "threadName", { required: true, label: "name" });
     const iconColor = readTelegramForumTopicIconColor(params);
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
     const token = resolveTelegramToken(cfg, { accountId }).token;
@@ -1085,7 +1087,7 @@ export async function handleTelegramAction(
     if (typeof messageThreadId !== "number") {
       throw new Error("messageThreadId or threadId is required.");
     }
-    const name = readStringParam(params, "name");
+    const name = readStringParam(params, "name") ?? readStringParam(params, "threadName");
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {

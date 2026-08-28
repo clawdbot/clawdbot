@@ -65,7 +65,6 @@ type DraftGatewayCallbacks = {
 };
 
 export class DraftGatewayState {
-  private gatewayNameValue = "";
   private cloudProfilesValue: DraftCloudProfile[] = [];
   private environmentsValue: DraftEnvironment[] | null = null;
   private cloudProfilesReadyValue = false;
@@ -73,6 +72,7 @@ export class DraftGatewayState {
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayClientValue: ApplicationContext["gateway"]["snapshot"]["client"] = null;
   private gatewayUrlValue = "";
+  private gatewayBootIdValue = "";
   private gatewayRecoveryScopeValue = "";
   private gatewayRecoveryScopeReady = false;
   private gatewayConnectedValue = false;
@@ -109,10 +109,6 @@ export class DraftGatewayState {
         ] as const,
       task: ([client, advertised, _connectionEpoch], { signal }) =>
         discoverGatewayName(client, advertised, signal),
-      onComplete: (name) => {
-        this.gatewayNameValue = name;
-        this.callbacks.requestUpdate();
-      },
     });
     this.cloudProfileTask = new Task(host, {
       args: () =>
@@ -133,9 +129,7 @@ export class DraftGatewayState {
         this.callbacks.requestUpdate();
       },
       onError: () => {
-        // Keep the last environment catalog across a transient client refresh on this Gateway.
-        this.cloudProfilesValue = [];
-        this.cloudProfilesReadyValue = false;
+        // A failed refresh cannot invalidate this Gateway's last successful place catalog.
         this.scheduleCloudProfileRetry();
         this.callbacks.requestUpdate();
       },
@@ -143,7 +137,10 @@ export class DraftGatewayState {
   }
 
   get gatewayName(): string {
-    return this.gatewayNameValue;
+    // Recovery-scope discovery does not retire this connection's machine identity.
+    return this.gatewayNameTask.status === TaskStatus.COMPLETE
+      ? (this.gatewayNameTask.value ?? "")
+      : "";
   }
 
   get cloudProfiles(): readonly DraftCloudProfile[] {
@@ -162,6 +159,13 @@ export class DraftGatewayState {
     return this.cloudProfileTask.status === TaskStatus.PENDING;
   }
 
+  get deviceCatalogDisabledReason(): string | undefined {
+    // Cached cloud profiles survive refresh failures; live node capacity does not.
+    return this.cloudProfilesReadyValue && this.cloudProfileTask.status === TaskStatus.COMPLETE
+      ? undefined
+      : t("newSession.placementNotReady");
+  }
+
   get catalogRetrying(): boolean {
     return this.catalogRetryingValue;
   }
@@ -176,6 +180,11 @@ export class DraftGatewayState {
 
   get recoveryScope(): string {
     return this.gatewayRecoveryScopeValue;
+  }
+
+  get sessionCreateScope(): string {
+    const scope = [this.gatewayUrlValue, this.gatewayRecoveryScopeValue, this.gatewayBootIdValue];
+    return scope.every(Boolean) ? JSON.stringify(scope) : "";
   }
 
   get connected(): boolean {
@@ -208,6 +217,15 @@ export class DraftGatewayState {
     const snapshot = gateway.snapshot;
     const connected = snapshot.phase === "connected";
     const firstBind = this.gatewaySource === null;
+    // The Gateway's idempotency ledger is process-local; a new boot cannot safely replay a start.
+    const bootId = connected
+      ? (snapshot.hello?.server?.bootId?.trim() ?? "")
+      : this.gatewayBootIdValue;
+    const gatewayBootChanged =
+      !firstBind &&
+      connected &&
+      Boolean(this.gatewayBootIdValue) &&
+      bootId !== this.gatewayBootIdValue;
     const gatewayUrlChanged = !firstBind && this.gatewayUrlValue !== gateway.connection.gatewayUrl;
     const gatewaySourceChanged = !firstBind && this.gatewaySource !== gateway;
     const identityChanged =
@@ -224,13 +242,20 @@ export class DraftGatewayState {
     this.gatewaySource = gateway;
     this.gatewayClientValue = snapshot.client;
     this.gatewayUrlValue = gateway.connection.gatewayUrl;
+    this.gatewayBootIdValue = bootId;
     this.gatewayRecoveryScopeValue = recoveryScope.next;
     this.gatewayRecoveryScopeReady = snapshot.client?.recoveryScopeReady === true;
     this.gatewayConnectedValue = connected;
     if (this.read().visibility === "draft" && !this.read().canStartAsDraft) {
       this.callbacks.onVisibilityRetired();
     }
-    if (gatewayUrlChanged || identityChanged || connectionChanged || recoveryScope.changed) {
+    if (
+      gatewayUrlChanged ||
+      gatewayBootChanged ||
+      identityChanged ||
+      connectionChanged ||
+      recoveryScope.changed
+    ) {
       const ownerChanged = gatewaySourceChanged || gatewayUrlChanged || recoveryScope.changed;
       const gatewayIdentityChanged = gatewayUrlChanged || recoveryScope.changed;
       this.invalidateDiscovery(
@@ -269,7 +294,6 @@ export class DraftGatewayState {
   }
 
   invalidateDiscovery(resetHostSelection: boolean, submissionOutcome: SubmissionOutcomeReason) {
-    this.gatewayNameValue = "";
     this.cloudProfilesValue = [];
     this.cloudProfilesReadyValue = false;
     if (resetHostSelection) {
@@ -475,8 +499,10 @@ export class DraftGatewayState {
       return;
     }
     if (this.cloudProfileRetryAttempt >= CLOUD_PROFILE_RETRY_DELAYS_MS.length) {
-      this.applyCloudProfiles([]);
-      this.cloudProfilesReadyValue = true;
+      if (!this.cloudProfilesReadyValue) {
+        this.applyCloudProfiles([]);
+        this.cloudProfilesReadyValue = true;
+      }
       return;
     }
     const delayMs = CLOUD_PROFILE_RETRY_DELAYS_MS[this.cloudProfileRetryAttempt];

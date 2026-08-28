@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeSenderIdentity, type SenderIdentity } from "./sender-label.ts";
 
 type HelloWithPresence = {
@@ -8,7 +9,16 @@ type HelloWithPresence = {
 export function resolveCurrentUserIdentity(
   hello: HelloWithPresence | null | undefined,
   instanceId: string | null | undefined,
+  snapshotUser?: unknown,
 ): SenderIdentity | null {
+  const preparedUser = asOptionalRecord(snapshotUser);
+  if (preparedUser) {
+    return normalizeSenderIdentity({
+      id: preparedUser.id ?? preparedUser.email,
+      name: preparedUser.name,
+      profileAvatarUrl: preparedUser.avatarUrl,
+    });
+  }
   const normalizedInstanceId = instanceId?.trim();
   const snapshot = hello?.snapshot;
   if (!normalizedInstanceId || !snapshot || typeof snapshot !== "object") {

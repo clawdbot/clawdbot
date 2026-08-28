@@ -2,6 +2,7 @@ import OpenClawProtocol
 
 public enum GatewayServerCapability: String, CaseIterable, Sendable {
     case chatSendRoutingContract = "chat-send-routing-contract"
+    case sessionUnreadAckContract = "session-unread-ack-contract"
     case systemAgentSetupModelRef = "openclaw-setup-model-ref"
 }
 

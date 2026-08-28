@@ -103,7 +103,7 @@ const DEPRECATION_HYGIENE_PATH_RE =
 const WRAPPER_SHADOWING_PATH_RE =
   /^(?:package\.json$|src\/|scripts\/(?:check-(?:export-name-collisions|wrapper-shadowing)\.mts$|lib\/ts-guard-utils\.mts$))/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
-  /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/control-ui-i18n-[^/]+\.ts)$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
+  /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/(?:control-ui-i18n-[^/]+\.ts|control-ui-i18n-config\.json))$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
 const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
@@ -112,10 +112,10 @@ const TARGETED_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
-const LINTABLE_UI_STYLE_PATH_RE = /^ui\/src\/.+\.(?:css|ts)$/u;
+const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.(?:css|ts)|public\/themes\/[^/]+\.css)$/u;
 const MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE = /^(?:docs\/|README\.md$|.*\.mdx?$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
-  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/src\/.+\.css$/u;
+  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/(?:src\/.+|public\/themes\/[^/]+)\.css$/u;
 const EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
 const SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =

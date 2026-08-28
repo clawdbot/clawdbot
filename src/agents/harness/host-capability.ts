@@ -168,16 +168,18 @@ export function createAgentHarnessHostCapabilities(params: {
   // Lexical closure must also fence work already past its entry guard. The
   // result guards below cover exact authority loss that does not use close().
   const capabilityAbortController = new AbortController();
-  const assertActive = () => {
+  const callerIdentity = createBoundCallerIdentity(attempt, assertActive);
+  function assertActive() {
     if (
       !active ||
       attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance ||
-      getAdmittedRunDelegatedAuthority(attempt.admittedRunContext) !== delegatedAuthority
+      getAdmittedRunDelegatedAuthority(attempt.admittedRunContext) !== delegatedAuthority ||
+      (callerIdentity?.gatewayContextResolver !== undefined &&
+        callerIdentity.gatewayContextResolver() === undefined)
     ) {
       throw new Error("agent harness host capability is no longer active");
     }
-  };
-  const callerIdentity = createBoundCallerIdentity(attempt, assertActive);
+  }
   const requester = {
     ...((attempt.messageChannel ?? attempt.messageProvider)
       ? { channel: attempt.messageChannel ?? attempt.messageProvider ?? undefined }
@@ -276,7 +278,9 @@ export function createAgentHarnessHostCapabilities(params: {
     const assertRecoveryActive = () => {
       if (
         attempt.abortSignal?.aborted ||
-        attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance
+        attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance ||
+        (callerIdentity?.gatewayContextResolver !== undefined &&
+          callerIdentity.gatewayContextResolver() === undefined)
       ) {
         throw new Error("agent harness retained host policy is no longer active");
       }

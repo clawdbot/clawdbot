@@ -21,6 +21,7 @@ import { dispatchChannelMessageAction } from "../../channels/plugins/message-act
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
+import { isChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import {
   getRuntimeConfigSnapshot,
@@ -75,6 +76,10 @@ import {
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { selectMessageActionRequesterIdentity } from "../message-action-turn-capability.js";
+import {
+  authorizeGatewaySessionCreation,
+  resolveSandboxedSessionCreation,
+} from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
@@ -839,12 +844,29 @@ function createGatewayInflightUnavailableFailure(params: {
   channel: string;
   err: unknown;
 }): InflightResult {
+  // A channel partial-delivery error carries the receipt of the part that was
+  // already delivered (e.g. a caption sent before the media upload failed).
+  // Preserve it on the structured error and mark the result non-retryable so
+  // the agent does not resend an already-visible message; `String(err)` alone
+  // would drop the receipt and invite a duplicate delivery on retry.
+  const partialDelivery = isChannelPartialDeliveryError(params.err)
+    ? params.err.deliveryResult
+    : undefined;
+  // A recovery-owned OutboundDeliveryError means the delivery was queued for
+  // retry by the recovery layer (not lost); surface that as a structured detail
+  // so the agent does not treat it as an ordinary retryable failure.
+  const queuedDelivery =
+    !partialDelivery &&
+    params.err instanceof OutboundDeliveryError &&
+    params.err.recoveryOwnedRetry === true;
   const error = errorShape(
     ErrorCodes.UNAVAILABLE,
     String(params.err),
-    params.err instanceof OutboundDeliveryError && params.err.recoveryOwnedRetry === true
-      ? { details: { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED } }
-      : undefined,
+    partialDelivery
+      ? { details: { partialDelivery }, retryable: false }
+      : queuedDelivery
+        ? { details: { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED } }
+        : undefined,
   );
   return createGatewayInflightResult({
     ...params,
@@ -993,6 +1015,24 @@ export const sendHandlers: GatewayRequestHandlers = {
             : undefined;
           if (sourceReplyOwner && !sourceReplyOwner.ok) {
             return { ok: false, error: sourceReplyOwner.error, meta: { channel } };
+          }
+          // Default-agent resolution may fail, so role-free sends must not enter this policy path.
+          if (request.action === "send" && cfg.gateway?.roles) {
+            const actionAgent =
+              agentId ?? sourceReplyOwner?.agentId ?? resolveRequestedSessionAgentId(cfg, "main");
+            if (typeof actionAgent !== "string" && !actionAgent.ok) {
+              return { ok: false, error: actionAgent.error, meta: { channel } };
+            }
+            const actionAgentId =
+              typeof actionAgent === "string" ? actionAgent : actionAgent.agentId;
+            const agentAccessError = authorizeGatewaySessionCreation({
+              cfg,
+              client,
+              agentId: actionAgentId,
+            });
+            if (agentAccessError) {
+              return { ok: false, error: agentAccessError, meta: { channel } };
+            }
           }
           if (accountId) {
             request.params.accountId = accountId;
@@ -1360,6 +1400,16 @@ export const sendHandlers: GatewayRequestHandlers = {
               : derivedRoute
             : null;
           const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
+          if (outboundSessionKey) {
+            const agentAccessError = authorizeGatewaySessionCreation({
+              cfg,
+              client,
+              agentId: effectiveAgentId,
+            });
+            if (agentAccessError) {
+              return { ok: false, error: agentAccessError, meta: { channel } };
+            }
+          }
           if (outboundSessionKey && isAgentHarnessSessionKey(outboundSessionKey)) {
             const { canonicalKey, entry } = loadSessionEntry(outboundSessionKey);
             const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
@@ -1389,6 +1439,8 @@ export const sendHandlers: GatewayRequestHandlers = {
               channel,
               accountId,
               route: outboundRoute,
+              creation: resolveSandboxedSessionCreation(client, cfg),
+              sourceSessionKey: client?.internal?.agentRuntimeIdentity?.sessionKey,
             });
           };
           const outboundSession = buildOutboundSessionContext({

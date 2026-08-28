@@ -929,6 +929,7 @@ type PluginHookGatewayCronJobState = {
   lastDelivered?: boolean;
   lastDeliveryStatus?: PluginHookGatewayCronDeliveryStatus;
   lastDeliveryError?: string;
+  deliverySuppressionReason?: string;
   lastFailureNotificationDelivered?: boolean;
   lastFailureNotificationDeliveryStatus?: PluginHookGatewayCronDeliveryStatus;
   lastFailureNotificationDeliveryError?: string;
@@ -1008,6 +1009,7 @@ export type PluginHookCronChangedEvent = {
   delivered?: boolean;
   deliveryStatus?: PluginHookGatewayCronDeliveryStatus;
   deliveryError?: string;
+  deliverySuppressionReason?: string;
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
@@ -1096,6 +1098,7 @@ type PluginHookBeforeInstallSkillInstallSpec = {
   package?: string;
   module?: string;
   url?: string;
+  sha256?: string;
   archive?: string;
   extract?: boolean;
   stripComponents?: number;

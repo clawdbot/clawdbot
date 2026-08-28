@@ -1,7 +1,6 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
-import { runCrabboxCommand } from "./crabbox-worker-command.js";
 import {
   type CrabboxMachineShape,
   listCrabboxMachineOptions,
@@ -25,7 +24,11 @@ function parseCrabboxMachineShapes(stdout: string): CrabboxMachineShapes {
   }
   return new Map(
     parsed.flatMap<[string, readonly CrabboxMachineShape[]]>((entry) => {
-      if (!isRecord(entry)) {
+      // An explicit unmapped disposition overrides even a stray legacy summary.
+      if (
+        !isRecord(entry) ||
+        (isRecord(entry.classCatalog) && entry.classCatalog.disposition === "unmapped")
+      ) {
         return [];
       }
       const rawClasses = Array.isArray(entry.classes) ? entry.classes : [];
@@ -54,34 +57,35 @@ export function createCrabboxMachineOptionsResolver(
 ): NonNullable<WorkerProvider["listMachineOptions"]> {
   const machineShapesByBinary = new Map<string, Promise<CrabboxMachineShapes>>();
   const loadMachineShapes = async (binary: string): Promise<CrabboxMachineShapes> => {
-    try {
-      const result = await runCrabboxCommand({
-        action: "providers",
-        args: ["providers", "--json"],
-        binary,
-        runCommand: dependencies.runCommand,
-        timeoutMs: CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
-      });
-      if (result.termination !== "exit" || result.code !== 0) {
-        throw new Error("Crabbox providers command failed");
-      }
-      return parseCrabboxMachineShapes(result.stdout);
-    } catch (error) {
-      dependencies.warn(
-        `Crabbox machine shapes unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    // The full provider matrix exceeds the lifecycle command's 64 KiB log cap.
+    // Keep catalog JSON intact or every provider loses its machine shapes.
+    const result = await dependencies.runCommand([binary, "providers", "--json"], {
+      maxOutputBytes: 1024 * 1024,
+      killProcessTree: true,
+      timeoutMs: CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
+    });
+    if (result.termination !== "exit" || result.code !== 0) {
+      throw new Error(
+        `Crabbox providers command failed (${result.termination}, code ${result.code})`,
       );
-      return new Map();
     }
+    return parseCrabboxMachineShapes(result.stdout);
   };
 
   return async (profile) => {
     const parsed = parseCrabboxProfile(profile);
     const binary = dependencies.resolveBinary(parsed.binary);
-    // Provider metadata is process-stable, so one catalog read per resolved binary serves the
-    // lifecycle. A shared slot would hand profiles using different Crabbox builds stale sizes.
+    // Cache successful metadata per binary; different builds may advertise different sizes.
+    // One rejection handler per load runs after insertion, including synchronous runner throws.
     let shapes = machineShapesByBinary.get(binary);
     if (!shapes) {
-      shapes = loadMachineShapes(binary);
+      shapes = loadMachineShapes(binary).catch((error: unknown) => {
+        machineShapesByBinary.delete(binary);
+        dependencies.warn(
+          `Crabbox machine shapes unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return new Map();
+      });
       machineShapesByBinary.set(binary, shapes);
     }
     return listCrabboxMachineOptions(parsed.class, (await shapes).get(parsed.provider));

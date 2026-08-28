@@ -106,7 +106,13 @@ function appConfig(cfg: OpenClawConfig, fixture: HttpFixture): OpenClawConfig {
         },
       },
     },
-    tools: { ...cfg.tools, profile: "full", toolSearch: false, codeMode: false },
+    tools: {
+      ...cfg.tools,
+      profile: "full",
+      toolSearch: false,
+      codeMode: false,
+      exec: { ...cfg.tools?.exec, mode: "ask" },
+    },
     channels: {},
   };
 }
@@ -125,6 +131,23 @@ async function postStandalone(params: {
     body: JSON.stringify({
       method: "tools/call",
       params: { name: "parity_app", arguments: { marker: params.marker } },
+    }),
+  });
+}
+
+async function readStandaloneResource(params: {
+  gateway: GatewayHandle;
+  ticket: string;
+}): Promise<Response> {
+  return await fetch(new URL("/__openclaw__/mcp-app/view", params.gateway.baseUrl), {
+    method: "POST",
+    headers: {
+      Authorization: `MCP-App ${params.ticket}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      method: "resources/read",
+      params: { uri: "ui://parity/app" },
     }),
   });
 }
@@ -256,6 +279,11 @@ describe("Gateway MCP App board grant revalidation", () => {
         const ticket = standaloneUrl.hash.slice(1);
         expect(ticket).not.toBe("");
 
+        const allowedResource = await readStandaloneResource({ gateway, ticket });
+        const allowedResourceBody: unknown = await allowedResource.json();
+        expect(allowedResource.status).toBe(200);
+        expect(JSON.stringify(allowedResourceBody)).toContain("Parity MCP App");
+
         await fs.writeFile(armPath, "armed\n");
         const notificationCall = await postStandalone({
           gateway,
@@ -274,14 +302,22 @@ describe("Gateway MCP App board grant revalidation", () => {
 
         const denied = await pendingCall;
         const deniedBody: unknown = await denied.json();
+        const deniedResource = await readStandaloneResource({ gateway, ticket });
+        const deniedResourceBody: unknown = await deniedResource.json();
         const executedMarkers = await readExecutedMarkers(eventPath);
         expect({
           status: denied.status,
           error: isRecord(deniedBody) ? deniedBody.error : undefined,
+          resourceStatus: deniedResource.status,
+          resourceError: isRecord(deniedResourceBody) ? deniedResourceBody.error : undefined,
+          leakedResource: JSON.stringify(deniedResourceBody).includes("Parity MCP App"),
           postRevocationExecuted: executedMarkers.includes(POST_REVOCATION_MARKER),
         }).toEqual({
           status: 403,
           error: "MCP App widget grant is no longer active",
+          resourceStatus: 403,
+          resourceError: "MCP App widget grant is no longer active",
+          leakedResource: false,
           postRevocationExecuted: false,
         });
       } catch (error) {

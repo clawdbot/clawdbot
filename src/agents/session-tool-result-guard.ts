@@ -24,7 +24,10 @@ import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
-import { resolveTerminalAssistantTranscriptRunId } from "../sessions/transcript-events.js";
+import {
+  attachSessionTranscriptRunId,
+  resolveTerminalAssistantTranscriptRunId,
+} from "../sessions/transcript-events.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
@@ -678,22 +681,28 @@ export function installSessionToolResultGuard(
   ): {
     anchor?: TranscriptEntryAnchor;
     entryId: string;
+    message: AgentMessage;
     messageSeq?: number;
     sessionTarget?: ReturnType<SessionManager["getSessionTarget"]>;
   } => {
+    const runOwnedMessage = attachSessionTranscriptRunId(message, transcriptRunId);
     const parentEntryId = sessionManager.getLeafId();
     const appendParentEntryId = sessionManager.getAppendParentId();
-    const { entryId, anchor } = originalAppendWithTranscriptAnchor(message as never, options);
+    const { entryId, anchor } = originalAppendWithTranscriptAnchor(
+      runOwnedMessage as never,
+      options,
+    );
     if (sessionManager.getAppendParentId() === appendParentEntryId) {
-      return { entryId, ...(anchor ? { anchor } : {}) };
+      return { entryId, message: runOwnedMessage, ...(anchor ? { anchor } : {}) };
     }
-    void opts?.onMessagePersisted?.(message);
+    void opts?.onMessagePersisted?.(runOwnedMessage);
     const sessionTarget = sessionManager.getSessionTarget();
     if (!sessionTarget) {
-      return { entryId, ...(anchor ? { anchor } : {}) };
+      return { entryId, message: runOwnedMessage, ...(anchor ? { anchor } : {}) };
     }
     return {
       entryId,
+      message: runOwnedMessage,
       ...(anchor ? { anchor } : {}),
       sessionTarget,
       messageSeq: resolveAppendedMessageSeq({
@@ -907,6 +916,7 @@ export function installSessionToolResultGuard(
     const {
       anchor,
       entryId: result,
+      message: persistedMessage,
       messageSeq,
       sessionTarget,
     } = appendMessageAndCacheTranscriptSeq(finalMessage, {
@@ -914,9 +924,9 @@ export function installSessionToolResultGuard(
         callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
     });
     if (sessionTarget) {
-      const runId = resolveTerminalAssistantTranscriptRunId(finalMessage, transcriptRunId);
+      const runId = resolveTerminalAssistantTranscriptRunId(persistedMessage, transcriptRunId);
       void publishTranscriptUpdate(sessionTarget, {
-        message: finalMessage,
+        message: persistedMessage,
         messageId: typeof result === "string" ? result : undefined,
         ...(messageSeq !== undefined ? { messageSeq } : {}),
         ...(runId ? { runId } : {}),

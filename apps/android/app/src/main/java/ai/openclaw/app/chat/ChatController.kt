@@ -57,12 +57,14 @@ import java.util.concurrent.atomic.AtomicLong
 
 // Bounds one-shot search list fetches like the primary session list.
 internal const val SESSION_LIST_FETCH_LIMIT = 200
+internal const val SESSION_UNREAD_ACK_CAPABILITY = "session-unread-ack-contract"
 private val QUESTION_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private val SWARM_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private const val WEAR_AGENT_PULSE_SWARM_MAX_ROWS = 1_000
 private const val WEAR_AGENT_PULSE_SWARM_FETCH_LIMIT = WEAR_AGENT_PULSE_SWARM_MAX_ROWS + 1
 private const val WEAR_AGENT_PULSE_DIRECT_CHILDREN_GROUP = "__wear_agent_pulse_direct_children__"
 private const val SUBAGENT_ACTIVITY_RETENTION_MS = 60_000L
+private const val MAX_RETAINED_TERMINAL_SUBAGENT_TASKS = 100
 private const val SESSION_EDITOR_MAX_BASE64_CHARS = ((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 2) / 3) * 4
 private val MANAGED_MEDIA_PATH_REGEX =
   Regex("^/api/chat/media/outgoing/[^/]+/([0-9a-fA-F-]{36})/full(?:\\?.*)?$")
@@ -112,6 +114,7 @@ class ChatController internal constructor(
   private val requestGatewayForGateway: suspend (gatewayId: String, method: String, paramsJson: String?) -> String =
     { _, method, paramsJson -> requestGateway(method, paramsJson) },
   private val gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
+  private val gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null },
   private val captureSettingsRequestLease: (gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease? =
     { gatewayScope ->
       GatewaySession.RequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _ ->
@@ -155,6 +158,7 @@ class ChatController internal constructor(
     currentDefaultAgentId: () -> String? = { "main" },
     currentDefaultAgentRevision: () -> Long = { 0L },
     gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
+    gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null },
     commandOutbox: ChatCommandOutbox? = null,
     recordModelRecent: (String) -> Unit = {},
     onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
@@ -171,6 +175,7 @@ class ChatController internal constructor(
       session.requestForEndpoint(gatewayId, method, paramsJson)
     },
     gatewayAdvertisesMethod = gatewayAdvertisesMethod,
+    gatewayAdvertisesCapability = gatewayAdvertisesCapability,
     captureSettingsRequestLease = { gatewayScope ->
       session.captureRequestLease(gatewayScope?.gatewayId)
     },
@@ -343,7 +348,9 @@ class ChatController internal constructor(
   val pendingToolCalls: StateFlow<List<ChatPendingToolCall>> = _pendingToolCalls.asStateFlow()
 
   private val subagentActivityLock = Any()
-  private val subagentActivityExpiryJobs = mutableMapOf<String, Job>()
+
+  // A null job preserves an expired terminal observation without retaining its UI row.
+  private val subagentActivityExpiryJobs = mutableMapOf<String, Job?>()
   private val _subagentActivities = MutableStateFlow<Map<String, ChatSubagentActivity>>(emptyMap())
   val subagentActivities: StateFlow<Map<String, ChatSubagentActivity>> = _subagentActivities.asStateFlow()
 
@@ -616,6 +623,8 @@ class ChatController internal constructor(
   // server-confirmed read (unread=false) arrives, so fresh activity on the open
   // session re-acknowledges without patch loops (lastReadAt is stamped server-side).
   private var unreadPatchSessionKey: String? = null
+  private var unreadActivationObserved = false
+  private var unreadActivationMarkedUnreadAt: Long? = null
   private var unreadPatchRequested = false
 
   // Armed on disconnect so the next health event refetches history and re-adopts
@@ -830,6 +839,8 @@ class ChatController internal constructor(
       applyThinkingMetadata(null)
       sessionsListArchived = false
       unreadPatchSessionKey = null
+      unreadActivationObserved = false
+      unreadActivationMarkedUnreadAt = null
       unreadPatchRequested = false
       _commands.value = emptyList()
       _modelCatalog.value = emptyList()
@@ -1047,6 +1058,7 @@ class ChatController internal constructor(
     pinned: Boolean? = null,
     archived: Boolean? = null,
     unread: Boolean? = null,
+    unreadExpectation: ChatSessionUnreadExpectation? = null,
   ): Boolean {
     val sessionKey = key.trim().takeIf { it.isNotEmpty() } ?: return false
     val capturedOwnerAgentId =
@@ -1079,6 +1091,10 @@ class ChatController internal constructor(
           if (pinned != null) put("pinned", JsonPrimitive(pinned))
           if (archived != null) put("archived", JsonPrimitive(archived))
           if (unread != null) put("unread", JsonPrimitive(unread))
+          if (unreadExpectation != null) {
+            val marker = unreadExpectation.markedUnreadAt
+            put("expectedMarkedUnreadAt", marker?.let(::JsonPrimitive) ?: JsonNull)
+          }
         }
       if (archived == true) {
         requestGatewayWithTimeout("sessions.patch", params.toString(), 10 * 60_000L)
@@ -2345,6 +2361,8 @@ class ChatController internal constructor(
   private fun prepareSessionSelection(key: String) {
     if (key != unreadPatchSessionKey) {
       unreadPatchSessionKey = key
+      unreadActivationObserved = false
+      unreadActivationMarkedUnreadAt = null
       unreadPatchRequested = false
     }
     acknowledgeUnreadIfNeeded(key, _sessions.value.firstOrNull { it.key == key })
@@ -3288,24 +3306,42 @@ class ChatController internal constructor(
     }
   }
 
-  fun resolveQuestion(
-    id: String,
-    answers: Map<String, List<String>>,
-  ) = resolveQuestion(id = id, answers = answers, cancel = false)
+  fun updateQuestionDraft(
+    expected: ChatQuestionPrompt,
+    update: (ChatQuestionDraft) -> ChatQuestionDraft,
+  ) {
+    synchronized(questionStateLock) {
+      // Draft edits use the current value, but only the same live question may receive them.
+      // They do not invalidate an in-flight question.list reconciliation.
+      _questions.value =
+        _questions.value.map { prompt ->
+          if (prompt.promptOwner === expected.promptOwner && prompt.record == expected.record && prompt.status() == ChatQuestionStatus.Pending) {
+            prompt.copy(draft = update(prompt.draft))
+          } else {
+            prompt
+          }
+        }
+    }
+  }
 
-  fun skipQuestion(id: String) = resolveQuestion(id = id, answers = null, cancel = true)
+  fun resolveQuestion(
+    expected: ChatQuestionPrompt,
+    answers: Map<String, List<String>>,
+  ) = resolveQuestion(expected = expected, answers = answers, cancel = false)
+
+  fun skipQuestion(expected: ChatQuestionPrompt) = resolveQuestion(expected = expected, answers = null, cancel = true)
 
   private fun resolveQuestion(
-    id: String,
+    expected: ChatQuestionPrompt,
     answers: Map<String, List<String>>?,
     cancel: Boolean,
   ) {
     val gatewayId = currentCacheScope()?.gatewayId
-    var claimed = false
+    var claimedOwner: Any? = null
     updateQuestions { prompts ->
       prompts.map { prompt ->
-        if (prompt.record.id == id && prompt.status() == ChatQuestionStatus.Pending) {
-          claimed = true
+        if (prompt.promptOwner === expected.promptOwner && prompt.status() == ChatQuestionStatus.Pending) {
+          claimedOwner = prompt.promptOwner
           prompt.copy(submitting = true, skipping = cancel, errorText = null)
         } else {
           prompt
@@ -3314,12 +3350,13 @@ class ChatController internal constructor(
     }
     // updateQuestions owns the question-state lock, so competing answer/skip callbacks
     // observe the first claim as Submitting and cannot launch a second mutation.
-    if (!claimed) return
+    // Terminal fanout preserves this owner; replacement or gateway retirement does not.
+    val owner = claimedOwner ?: return
     scope.launch {
       try {
         val params =
           buildJsonObject {
-            put("id", JsonPrimitive(id))
+            put("id", JsonPrimitive(expected.record.id))
             if (cancel) {
               put("cancel", JsonPrimitive(true))
             } else {
@@ -3338,15 +3375,19 @@ class ChatController internal constructor(
               )
             }
           }
-        requestGatewayBound(gatewayId, "question.resolve", params.toString())
+        val result = json.parseToJsonElement(requestGatewayBound(gatewayId, "question.resolve", params.toString())).jsonObject
+        val status = if (cancel) "cancelled" else "answered"
+        check(result["status"].asStringOrNull() == status) { "Invalid question.resolve response" }
+        // The Gateway owns normalized answers, including secret-store markers; never retain submitted values as the outcome.
+        val resolvedAnswers = if (cancel) null else json.decodeFromJsonElement<QuestionAnswers>(result.getValue("answers"))
         updateQuestions { prompts ->
           prompts.map { prompt ->
-            if (prompt.record.id == id) {
+            if (prompt.promptOwner === owner) {
               prompt.copy(
                 record =
                   prompt.record.copy(
-                    status = if (cancel) "cancelled" else "answered",
-                    answers = answers?.let(::QuestionAnswers),
+                    status = status,
+                    answers = resolvedAnswers,
                   ),
                 submitting = false,
                 skipping = false,
@@ -3362,7 +3403,7 @@ class ChatController internal constructor(
       } catch (error: Throwable) {
         updateQuestions { prompts ->
           prompts.map { prompt ->
-            if (prompt.record.id == id) {
+            if (prompt.promptOwner === owner) {
               prompt.copy(submitting = false, skipping = false, errorText = error.message ?: "Question failed")
             } else {
               prompt
@@ -3434,11 +3475,7 @@ class ChatController internal constructor(
       if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) return false
       return synchronized(questionStateLock) {
         if (!questionRefreshIsCurrentLocked(refreshGeneration, stateRevision)) return@synchronized false
-        if (_questions.value.isNotEmpty()) {
-          _questions.value = emptyList()
-          questionStateRevision += 1
-        }
-        syncQuestionEvictionsLocked()
+        publishQuestionsLocked(emptyList())
         true
       }
     }
@@ -3521,11 +3558,7 @@ class ChatController internal constructor(
             terminalObservedAtMs = nowMs.takeIf { record.status != "pending" || nowMs >= record.expiresAtMs },
           )
         } + retainedPrompts
-      if (next != current) {
-        _questions.value = next
-        questionStateRevision += 1
-      }
-      syncQuestionEvictionsLocked()
+      publishQuestionsLocked(next)
       unresolvedIds.isEmpty()
     }
   }
@@ -3579,6 +3612,11 @@ class ChatController internal constructor(
     // Gateway terminal state is monotonic. A delayed requested/list replay must not
     // make an already resolved question actionable again.
     if ((prompt.record.status != "pending" || prompt.recoveryUnavailable) && record.status == "pending") return prompt
+    // Outcome fields can change within one request; a replaced definition or lifetime owns new input.
+    val sameQuestion = record.copy(status = prompt.record.status, answers = prompt.record.answers, resolvedBy = prompt.record.resolvedBy) == prompt.record
+    if (!sameQuestion) {
+      return ChatQuestionPrompt(record = record, terminalObservedAtMs = nowMs.takeIf { record.status != "pending" || nowMs >= record.expiresAtMs })
+    }
     return prompt.copy(
       record = record.copy(answers = record.answers ?: prompt.record.answers),
       submitting = prompt.submitting && record.status == "pending",
@@ -3620,13 +3658,26 @@ class ChatController internal constructor(
 
   private fun updateQuestions(transform: (List<ChatQuestionPrompt>) -> List<ChatQuestionPrompt>) {
     synchronized(questionStateLock) {
-      val current = _questions.value
-      val next = transform(current)
-      if (next == current) return
+      publishQuestionsLocked(transform(_questions.value))
+    }
+  }
+
+  private fun publishQuestionsLocked(prompts: List<ChatQuestionPrompt>): Boolean {
+    // Terminal cards remain in history, but must not retain unsent (possibly secret) input.
+    val next =
+      prompts.map { prompt ->
+        when (prompt.status()) {
+          ChatQuestionStatus.Pending, ChatQuestionStatus.Submitting -> prompt
+          else -> prompt.copy(draft = ChatQuestionDraft())
+        }
+      }
+    val changed = next != _questions.value
+    if (changed) {
       _questions.value = next
       questionStateRevision += 1
-      syncQuestionEvictionsLocked()
     }
+    syncQuestionEvictionsLocked()
+    return changed
   }
 
   private fun syncQuestionEvictionsLocked(nowMs: Long = System.currentTimeMillis()) {
@@ -3661,12 +3712,7 @@ class ChatController internal constructor(
                   it
                 }
               }
-            if (next != current) {
-              _questions.value = next
-              questionStateRevision += 1
-              shouldRefresh = true
-            }
-            syncQuestionEvictionsLocked()
+            shouldRefresh = publishQuestionsLocked(next)
           }
           // The local deadline is only a presentation fallback. Reconcile outside
           // the state lock in case another surface supplied the terminal outcome.
@@ -3680,10 +3726,7 @@ class ChatController internal constructor(
   private fun clearQuestions() {
     synchronized(questionStateLock) {
       questionRefreshGeneration += 1
-      if (_questions.value.isEmpty()) return
-      _questions.value = emptyList()
-      questionStateRevision += 1
-      syncQuestionEvictionsLocked()
+      publishQuestionsLocked(emptyList())
     }
   }
 
@@ -6030,6 +6073,7 @@ class ChatController internal constructor(
     val now = System.currentTimeMillis()
     synchronized(subagentActivityLock) {
       val existing = _subagentActivities.value[taskId]
+      if (terminal && existing == null && subagentActivityExpiryJobs.containsKey(taskId)) return@synchronized
       val lastActivity = task["lastActivity"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
       val fallback =
         task["progressSummary"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
@@ -6075,7 +6119,12 @@ class ChatController internal constructor(
             synchronized(subagentActivityLock) {
               if (subagentActivityExpiryJobs[taskId] !== coroutineContext[Job]) return@synchronized
               _subagentActivities.value = _subagentActivities.value - taskId
-              subagentActivityExpiryJobs.remove(taskId)
+              subagentActivityExpiryJobs[taskId] = null
+              if (subagentActivityExpiryJobs.count { it.value == null } > MAX_RETAINED_TERMINAL_SUBAGENT_TASKS) {
+                subagentActivityExpiryJobs.entries.firstOrNull { it.value == null }?.let {
+                  subagentActivityExpiryJobs.remove(it.key)
+                }
+              }
             }
           }
       }
@@ -6091,7 +6140,7 @@ class ChatController internal constructor(
 
   private fun clearSubagentActivities() {
     synchronized(subagentActivityLock) {
-      subagentActivityExpiryJobs.values.forEach(Job::cancel)
+      subagentActivityExpiryJobs.values.forEach { it?.cancel() }
       subagentActivityExpiryJobs.clear()
       _subagentActivities.value = emptyMap()
     }
@@ -6646,6 +6695,8 @@ class ChatController internal constructor(
       archived = obj["archived"].asBooleanOrNull(),
       unread = obj["unread"].asBooleanOrNull(),
       lastReadAt = obj["lastReadAt"].asLongOrNull(),
+      markedUnreadAt = obj["markedUnreadAt"].asLongOrNull(),
+      hasMarkedUnreadMetadata = "markedUnreadAt" in obj,
       agentStatus = parseSessionAgentStatus(obj["agentStatus"]),
       hasAgentStatusMetadata = "agentStatus" in obj,
       observerDigest =
@@ -6949,19 +7000,44 @@ class ChatController internal constructor(
     requireActive: Boolean = false,
   ) {
     if (key.isEmpty() || key != unreadPatchSessionKey) return
-    if (entry?.unread == false) {
+    if (entry == null) return
+    if (!unreadActivationObserved) {
+      unreadActivationObserved = true
+      unreadActivationMarkedUnreadAt = entry.markedUnreadAt
+    }
+    if (entry.unread == false) {
+      unreadActivationMarkedUnreadAt = null
       unreadPatchRequested = false
       return
     }
-    if (entry?.unread != true || unreadPatchRequested) return
+    val markedUnreadAt = entry.markedUnreadAt
+    if (markedUnreadAt != null && markedUnreadAt != unreadActivationMarkedUnreadAt) {
+      return
+    }
+    if (entry.unread != true || unreadPatchRequested) return
     // switchSession acknowledges before _sessionKey updates; background upserts only
     // re-acknowledge the session that is currently open.
     if (requireActive && key != _sessionKey.value) return
     unreadPatchRequested = true
-    _sessions.value = _sessions.value.map { if (it.key == key) it.copy(unread = false) else it }
+    // Native app and Gateway releases can skew. Only current Gateways accept
+    // the closed-schema conditional acknowledgement field.
+    val unreadExpectation =
+      if (gatewayAdvertisesCapability(SESSION_UNREAD_ACK_CAPABILITY) == true) {
+        ChatSessionUnreadExpectation(entry.markedUnreadAt)
+      } else {
+        null
+      }
     scope.launch {
       // A failed read patch must unlatch the episode so later snapshots retry.
-      if (!patchSession(key = key, ownerAgentId = entry.ownerAgentId, unread = false) && unreadPatchSessionKey == key) {
+      if (
+        !patchSession(
+          key = key,
+          ownerAgentId = entry.ownerAgentId,
+          unread = false,
+          unreadExpectation = unreadExpectation,
+        ) &&
+        unreadPatchSessionKey == key
+      ) {
         unreadPatchRequested = false
       }
     }
@@ -7121,20 +7197,21 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
       )
     }
 
-    "attachment" -> {
-      val attachment = obj["attachment"].asObjectOrNull() ?: return null
+    "attachment", "file" -> {
+      val attachment = obj["attachment"].asObjectOrNull() ?: obj
       val mimeType = attachment["mimeType"].asStringOrNull()
       val type =
         when {
           attachment["kind"].asStringOrNull() == "audio" || mimeType?.startsWith("audio/") == true -> "audio"
           attachment["kind"].asStringOrNull() == "video" || mimeType?.startsWith("video/") == true -> "video"
+          attachment["kind"].asStringOrNull() == "document" || !attachment.containsKey("kind") -> "file"
           else -> return null
         }
       val url = attachment["url"].asStringOrNull()
       ChatMessageContent(
         type = type,
         mimeType = mimeType,
-        fileName = attachment["fileName"].asStringOrNull() ?: attachment["label"].asStringOrNull(),
+        fileName = attachment["fileName"].asStringOrNull() ?: (attachment["label"] ?: attachment["name"]).asStringOrNull(),
         artifactId = attachment["artifactId"].asStringOrNull() ?: managedMediaArtifactId(url),
         url = url,
         openUrl = attachment["openUrl"].asStringOrNull(),
@@ -7584,6 +7661,10 @@ internal fun mergeChatSessionEntry(
     archived = next.archived ?: existing.archived,
     unread = next.unread ?: existing.unread,
     lastReadAt = next.lastReadAt ?: existing.lastReadAt,
+    markedUnreadAt =
+      if (next.hasMarkedUnreadMetadata) next.markedUnreadAt else existing.markedUnreadAt,
+    hasMarkedUnreadMetadata =
+      existing.hasMarkedUnreadMetadata || next.hasMarkedUnreadMetadata,
     agentStatus = if (next.hasAgentStatusMetadata) next.agentStatus else existing.agentStatus,
     hasAgentStatusMetadata = existing.hasAgentStatusMetadata || next.hasAgentStatusMetadata,
     observerDigest = observerDigest,

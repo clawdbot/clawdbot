@@ -4,9 +4,24 @@ import {
   buildUsageAggregateTail,
   mergeUsageDailyLatency,
   mergeUsageLatency,
+  usageDailyModelIdentity,
+  usageModelIdentity,
 } from "./usage-aggregates.js";
 
 describe("shared/usage-aggregates", () => {
+  it("builds collision-free model identities with legacy unknown grouping", () => {
+    expect(usageModelIdentity("fixture", "bedrock::arn")).not.toBe(
+      usageModelIdentity("fixture::bedrock", "arn"),
+    );
+    expect(usageDailyModelIdentity("2026-02-01", "fixture", "bedrock:arn")).not.toBe(
+      usageDailyModelIdentity("2026-02-01", "fixture:bedrock", "arn"),
+    );
+    expect(usageModelIdentity("fixture\0bedrock", "arn")).not.toBe(
+      usageModelIdentity("fixture", "bedrock\0arn"),
+    );
+    expect(usageModelIdentity()).toBe(usageModelIdentity("unknown", "unknown"));
+  });
+
   it("merges latency totals and ignores empty inputs", () => {
     const totals = {
       count: 1,

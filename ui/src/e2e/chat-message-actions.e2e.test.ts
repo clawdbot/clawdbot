@@ -166,6 +166,93 @@ describeControlUiE2e("Control UI chat message actions", () => {
     await server?.close();
   });
 
+  it("shares tooltip styling and dismissal across message metadata, actions, and file hints", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      hasTouch: true,
+      locale: "en-US",
+      recordVideo: captureUiProof
+        ? { dir: path.join(artifactDir, "tooltips-video"), size: { height: 900, width: 1440 } }
+        : undefined,
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Tooltip proof. See /workspace/tooltip-proof.txt." }],
+          timestamp: Date.now() - 5 * 60_000,
+          model: "openai/gpt-5.6-luna",
+          usage: { input: 12_000, output: 300, cost: { total: 0.12 } },
+          __openclaw: { id: "tooltip-proof", seq: 1 },
+        },
+      ],
+    });
+    const openTooltip = page.locator("wa-tooltip[open]");
+    const popupStyle = () =>
+      openTooltip.locator('[part="body"]').evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          background: style.backgroundColor,
+          border: style.border,
+          radius: style.borderRadius,
+          padding: style.padding,
+          fontSize: style.fontSize,
+        };
+      });
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const group = page.locator(".chat-group.assistant").filter({ hasText: "Tooltip proof." });
+      await group
+        .locator(".chat-text")
+        .first()
+        .tap({ position: { x: 4, y: 4 } });
+      const timestamp = group.locator(".msg-meta__summary");
+      await timestamp.hover();
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      await group.locator(".msg-meta__details").waitFor({ state: "visible" });
+      const metadataStyle = await popupStyle();
+      expect(await group.locator(".msg-meta__details").textContent()).toContain("gpt-5.6-luna");
+      expect(await group.locator(".msg-meta__cost").textContent()).toContain("$0.12");
+      await screenshot(page, "tooltip-metadata.png");
+
+      await timestamp.click();
+      await page.mouse.move(0, 0);
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      const reply = group.getByRole("button", { name: "Reply to message" });
+      await expectHoverTooltip(reply, "Reply");
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      expect(await popupStyle()).toEqual(metadataStyle);
+      await screenshot(page, "tooltip-reply.png");
+      await page.keyboard.press("Escape");
+      await expect.poll(() => openTooltip.count()).toBe(0);
+
+      const file = group.locator("a").filter({ hasText: "tooltip-proof.txt" });
+      await file.hover();
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      expect(await openTooltip.textContent()).toContain("/workspace/tooltip-proof.txt");
+      expect(await popupStyle()).toEqual(metadataStyle);
+      expect(await file.getAttribute("title")).toBe("");
+      await screenshot(page, "tooltip-file-hint.png");
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await timestamp.tap();
+      await expect.poll(() => openTooltip.count()).toBe(1);
+      await group.locator(".msg-meta__details").waitFor({ state: "visible" });
+      const bounds = await openTooltip.locator('[part="body"]').boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+      await screenshot(page, "tooltip-mobile.png");
+      await timestamp.tap();
+      await expect.poll(() => openTooltip.count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps oversized history notices consistent through recovery and message actions", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
@@ -261,7 +348,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const commandPaletteShortcut = applePlatform ? "⌘K" : "Ctrl+K";
       const sidebarShortcut = applePlatform ? "⌘B" : "Ctrl+B";
       await expectHoverTooltip(
-        page.locator(".sidebar-brand").getByRole("button", { name: "New session" }),
+        page.locator(".sidebar-brand").getByRole("link", { name: "New session" }),
         "New session",
       );
       await expectHoverTooltip(

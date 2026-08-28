@@ -7,7 +7,10 @@ import {
 } from "./openclaw-state-db.js";
 import { selectUserProfileGitHubIdentities } from "./user-profile-github-identity.js";
 import { normalizeUserProfileAvatarMime, userProfilesDb } from "./user-profiles-internal.js";
-import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
+import {
+  ensureUserProfilesSchema,
+  hasEnsuredUserProfileRoleSchema,
+} from "./user-profiles-schema.js";
 
 export function listProfiles(options: OpenClawStateDatabaseOptions = {}) {
   ensureUserProfilesSchema(options);
@@ -25,6 +28,7 @@ export function listProfiles(options: OpenClawStateDatabaseOptions = {}) {
             "display_name",
             "avatar_mime",
             "merged_into",
+            ...(hasEnsuredUserProfileRoleSchema(database.db) ? (["role"] as const) : []),
             "created_at",
             "updated_at",
             sql`CASE WHEN avatar IS NULL THEN 0 ELSE 1 END`.as("has_avatar"),
@@ -46,17 +50,22 @@ export function listProfiles(options: OpenClawStateDatabaseOptions = {}) {
         list.push(email.email);
         emailsByProfile.set(email.profile_id, list);
       }
-      return profiles.map((profile) => ({
-        id: profile.id,
-        displayName: profile.display_name,
-        avatarMime: normalizeUserProfileAvatarMime(profile.avatar_mime),
-        mergedInto: profile.merged_into,
-        createdAt: profile.created_at,
-        updatedAt: profile.updated_at,
-        emails: emailsByProfile.get(profile.id) ?? [],
-        githubIdentity: githubIdentities.get(profile.id) ?? null,
-        hasAvatar: profile.has_avatar === 1,
-      }));
+      return profiles.map((profile) =>
+        Object.assign(
+          {
+            id: profile.id,
+            displayName: profile.display_name,
+            avatarMime: normalizeUserProfileAvatarMime(profile.avatar_mime),
+            mergedInto: profile.merged_into,
+            createdAt: profile.created_at,
+            updatedAt: profile.updated_at,
+            emails: emailsByProfile.get(profile.id) ?? [],
+            githubIdentity: githubIdentities.get(profile.id) ?? null,
+            hasAvatar: profile.has_avatar === 1,
+          },
+          profile.role ? { role: profile.role } : {},
+        ),
+      );
     },
     { databaseLabel: database.path, operationLabel: "user-profiles.list" },
   );

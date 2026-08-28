@@ -1,7 +1,14 @@
 // Runs the interactive TUI loop and coordinates backend, input, and rendering.
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import { Container, Loader, matchesKey, ProcessTerminal, Text, TUI } from "@earendil-works/pi-tui";
+import {
+  Container,
+  Loader,
+  matchesKey,
+  ProcessTerminal,
+  Text,
+  TuiMainScreen,
+} from "@earendil-works/pi-tui";
 import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -286,7 +293,7 @@ export function resolveInitialTuiAgentId(params: {
       tryResolveLegacyCompatibilityAgentId(params.cfg) ??
       resolveDefaultAgentId(params.cfg, {
         surface: "TUI startup",
-        hint: "Pass an agent-scoped --session key.",
+        hint: `Pass an agent-scoped --session key (e.g., '${formatCliCommand("openclaw tui --session agent:agentname:main")}').`,
       }),
   );
 }
@@ -908,7 +915,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
   }
 
-  const tui = new TUI(new ProcessTerminal());
+  const tui = new TuiMainScreen(new ProcessTerminal());
   const dedupeBackspace = createBackspaceDeduper();
   tui.addInputListener((data) => {
     const next = dedupeBackspace(data);
@@ -1456,8 +1463,10 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   } = sessionActions;
   const loadHistory = async (reconcileReconnect = false) => {
     const activeRunAtStart = state.activeChatRunId;
+    const reconcileMembership = captureHistoryRunMembership();
     const result = await loadHistorySnapshot();
     if (result.loaded) {
+      reconcileMembership(result.activeRunIds);
       // History can adopt a newer run before returning; terminal outcomes
       // still belong only to the unchanged run captured before the request.
       const recoveredRunId =
@@ -1495,6 +1504,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
     isRunObserved,
+    captureHistoryRunMembership,
     reconcileHistoryAfterGap,
     flushPendingHistoryRefreshIfIdle,
     dispose: disposeEventHandlers,
@@ -1851,7 +1861,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       scheduleDynamicSlashCommandsRefresh();
       if (!state.autoMessageSent && autoMessage) {
         state.autoMessageSent = true;
-        await sendMessage(autoMessage);
+        await sendMessage(autoMessage, opts.initialMessageTimeoutMs);
         if (!ownsConnection()) {
           return;
         }

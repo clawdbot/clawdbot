@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import type { PresenceEntry } from "../api/types.ts";
+import { readPresenceEntries } from "../app/user-profile.ts";
 import {
   presenceViewerLabel,
   projectPresenceEntries,
@@ -20,14 +20,6 @@ import {
 } from "./person-activity-link.ts";
 import "./tooltip.ts";
 
-function readPresenceEntries(value: unknown): PresenceEntry[] {
-  if (!value || typeof value !== "object") {
-    return [];
-  }
-  const presence = (value as { presence?: unknown }).presence;
-  return Array.isArray(presence) ? (presence as PresenceEntry[]) : [];
-}
-
 function normalized(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -45,7 +37,7 @@ function renderViewerAvatar(view: IdentityAvatarView) {
   return html`${renderIdentityAvatarImage({ view, fallbackSelector: ".viewer-avatar" })}${fallback}`;
 }
 
-export type ViewerAvatarVariant = "session" | "footer" | "profile";
+type ViewerAvatarVariant = "session" | "footer" | "profile";
 
 class ViewerAvatar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) user: PresenceViewer | null = null;
@@ -92,7 +84,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
 
   override render() {
     const projection = projectPresenceEntries(
-      readPresenceEntries(this.presencePayload),
+      readPresenceEntries(this.presencePayload) ?? [],
       this.selfUserId,
       this.selfInstanceId,
     );

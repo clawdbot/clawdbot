@@ -30,6 +30,16 @@ type LatencyLike = {
 
 type DailyLatencyInput = LatencyLike & { date: string };
 
+/** Builds a collision-free identity while preserving legacy missing-as-unknown grouping. */
+export function usageModelIdentity(provider?: string, model?: string): string {
+  return JSON.stringify([provider ?? "unknown", model ?? "unknown"]);
+}
+
+/** Extends the model identity with its calendar bucket without delimiter ambiguity. */
+export function usageDailyModelIdentity(date: string, provider?: string, model?: string): string {
+  return JSON.stringify([date, provider ?? "unknown", model ?? "unknown"]);
+}
+
 /** Merges latency summaries by keeping weighted averages as sum/count accumulator state. */
 export function mergeUsageLatency(
   totals: LatencyTotalsLike,

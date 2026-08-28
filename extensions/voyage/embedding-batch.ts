@@ -7,9 +7,9 @@ import {
   extractBatchErrorMessage,
   formatBatchErrorDetail,
   formatUnavailableBatchError,
-  normalizeBatchBaseUrl,
   postJsonWithRetry,
   readEmbeddingBatchJsonl,
+  resolveEmbeddingEndpointUrl,
   resolveBatchCompletionFromStatus,
   resolveCompletedBatchResult,
   runEmbeddingBatchGroups,
@@ -24,7 +24,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   assertOkOrThrowProviderError,
+  createProviderOperationDeadline,
   readProviderJsonResponse,
+  resolveProviderOperationTimeoutMs,
+  waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -51,38 +54,14 @@ const VOYAGE_BATCH_MAX_REQUESTS = 50000;
 // them at 16 MiB; non-OK diagnostics use the shared bounded provider prefix.
 const VOYAGE_BATCH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
-type VoyageBatchDeps = {
-  now: () => number;
-  sleep: (ms: number) => Promise<void>;
-  postJsonWithRetry: typeof postJsonWithRetry<VoyageBatchStatus>;
-  uploadBatchJsonlFile: typeof uploadBatchJsonlFile;
-  withRemoteHttpResponse: typeof withRemoteHttpResponse;
-};
-
-function resolveVoyageBatchDeps(overrides: Partial<VoyageBatchDeps> | undefined): VoyageBatchDeps {
-  return {
-    now: overrides?.now ?? Date.now,
-    sleep:
-      overrides?.sleep ??
-      (async (ms: number) =>
-        await new Promise((resolve) => {
-          setTimeout(resolve, ms);
-        })),
-    postJsonWithRetry: overrides?.postJsonWithRetry ?? postJsonWithRetry,
-    uploadBatchJsonlFile: overrides?.uploadBatchJsonlFile ?? uploadBatchJsonlFile,
-    withRemoteHttpResponse: overrides?.withRemoteHttpResponse ?? withRemoteHttpResponse,
-  };
-}
-
 function buildVoyageBatchRequest<T>(params: {
   client: VoyageEmbeddingClient;
   path: string;
   signal?: AbortSignal;
   onResponse: (res: Response) => Promise<T>;
 }) {
-  const baseUrl = normalizeBatchBaseUrl(params.client);
   return {
-    url: `${baseUrl}/${params.path}`,
+    url: resolveEmbeddingEndpointUrl(params.client.baseUrl, params.path),
     ssrfPolicy: params.client.ssrfPolicy,
     signal: params.signal,
     init: {
@@ -96,18 +75,16 @@ async function submitVoyageBatch(params: {
   client: VoyageEmbeddingClient;
   requests: VoyageBatchRequest[];
   agentId: string;
-  deps: VoyageBatchDeps;
 }): Promise<VoyageBatchStatus> {
-  const baseUrl = normalizeBatchBaseUrl(params.client);
-  const inputFileId = await params.deps.uploadBatchJsonlFile({
+  const inputFileId = await uploadBatchJsonlFile({
     client: params.client,
     requests: params.requests,
     errorPrefix: "voyage batch file upload failed",
   });
 
   // 2. Create batch job using Voyage Batches API
-  return await params.deps.postJsonWithRetry({
-    url: `${baseUrl}/batches`,
+  return await postJsonWithRetry<VoyageBatchStatus>({
+    url: resolveEmbeddingEndpointUrl(params.client.baseUrl, "batches"),
     headers: buildBatchHeaders(params.client, { json: true }),
     ssrfPolicy: params.client.ssrfPolicy,
     body: {
@@ -130,10 +107,9 @@ async function submitVoyageBatch(params: {
 async function fetchVoyageBatchStatus(params: {
   client: VoyageEmbeddingClient;
   batchId: string;
-  deps: VoyageBatchDeps;
   signal?: AbortSignal;
 }): Promise<VoyageBatchStatus> {
-  return await params.deps.withRemoteHttpResponse(
+  return await withRemoteHttpResponse(
     buildVoyageBatchRequest({
       client: params.client,
       path: `batches/${params.batchId}`,
@@ -151,10 +127,9 @@ async function fetchVoyageBatchStatus(params: {
 async function readVoyageBatchError(params: {
   client: VoyageEmbeddingClient;
   errorFileId: string;
-  deps: VoyageBatchDeps;
 }): Promise<string | undefined> {
   try {
-    return await params.deps.withRemoteHttpResponse(
+    return await withRemoteHttpResponse(
       buildVoyageBatchRequest({
         client: params.client,
         path: `files/${params.errorFileId}/content`,
@@ -188,26 +163,27 @@ async function waitForVoyageBatch(params: {
   timeoutMs: number;
   debug?: (message: string, data?: Record<string, unknown>) => void;
   initial?: VoyageBatchStatus;
-  deps: VoyageBatchDeps;
 }): Promise<BatchCompletionResult> {
-  const start = params.deps.now();
-  const deadline = start + params.timeoutMs;
+  const deadline = createProviderOperationDeadline({
+    label: `voyage batch ${params.batchId}`,
+    timeoutMs: params.timeoutMs,
+  });
   let current: VoyageBatchStatus | undefined = params.initial;
   while (true) {
     let status: VoyageBatchStatus;
     if (current) {
       status = current;
     } else {
-      const remainingRequestMs = deadline - params.deps.now();
-      if (remainingRequestMs <= 0) {
-        throw new Error(`voyage batch ${params.batchId} timed out after ${params.timeoutMs}ms`);
-      }
-      const signal = AbortSignal.timeout(Math.max(1, remainingRequestMs));
+      const signal = AbortSignal.timeout(
+        resolveProviderOperationTimeoutMs({
+          deadline,
+          defaultTimeoutMs: params.timeoutMs,
+        }),
+      );
       try {
         status = await fetchVoyageBatchStatus({
           client: params.client,
           batchId: params.batchId,
-          deps: params.deps,
           signal,
         });
       } catch (error) {
@@ -227,7 +203,6 @@ async function waitForVoyageBatch(params: {
         await readVoyageBatchError({
           client: params.client,
           errorFileId,
-          deps: params.deps,
         }),
     });
     if (state === "completed") {
@@ -244,19 +219,21 @@ async function waitForVoyageBatch(params: {
         await readVoyageBatchError({
           client: params.client,
           errorFileId,
-          deps: params.deps,
         }),
     });
     if (!params.wait) {
       throw new Error(`voyage batch ${params.batchId} still ${state}; wait disabled`);
     }
-    const remainingMs = deadline - params.deps.now();
-    if (remainingMs <= 0) {
-      throw new Error(`voyage batch ${params.batchId} timed out after ${params.timeoutMs}ms`);
-    }
-    const waitMs = Math.min(params.pollIntervalMs, remainingMs);
+    const waitMs = Math.min(
+      params.pollIntervalMs,
+      resolveProviderOperationTimeoutMs({
+        deadline,
+        defaultTimeoutMs: params.timeoutMs,
+      }),
+    );
     params.debug?.(`voyage batch ${params.batchId} ${state}; waiting ${waitMs}ms`);
-    await params.deps.sleep(waitMs);
+    await waitProviderOperationPollInterval({ deadline, pollIntervalMs: waitMs });
+    resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: params.timeoutMs });
     current = undefined;
   }
 }
@@ -266,10 +243,8 @@ export async function runVoyageEmbeddingBatches(
     client: VoyageEmbeddingClient;
     agentId: string;
     requests: VoyageBatchRequest[];
-    deps?: Partial<VoyageBatchDeps>;
   } & EmbeddingBatchExecutionParams,
 ): Promise<Map<string, number[]>> {
-  const deps = resolveVoyageBatchDeps(params.deps);
   return await runEmbeddingBatchGroups({
     ...buildEmbeddingBatchGroupOptions(params, {
       maxRequests: VOYAGE_BATCH_MAX_REQUESTS,
@@ -280,7 +255,6 @@ export async function runVoyageEmbeddingBatches(
         client: params.client,
         requests: group,
         agentId: params.agentId,
-        deps,
       });
       if (!batchInfo.id) {
         throw new Error("voyage batch create failed: missing batch id");
@@ -299,7 +273,7 @@ export async function runVoyageEmbeddingBatches(
         provider: "voyage",
         status: batchInfo,
         readError: async (errorFileId) =>
-          await readVoyageBatchError({ client: params.client, errorFileId, deps }),
+          await readVoyageBatchError({ client: params.client, errorFileId }),
       });
 
       const completed = await resolveCompletedBatchResult({
@@ -315,16 +289,17 @@ export async function runVoyageEmbeddingBatches(
             timeoutMs,
             debug: params.debug,
             initial: batchInfo,
-            deps,
           }),
       });
 
-      const baseUrl = normalizeBatchBaseUrl(params.client);
       const errors: string[] = [];
       const remaining = new Set(group.map((request) => request.custom_id));
 
-      await deps.withRemoteHttpResponse({
-        url: `${baseUrl}/files/${completed.outputFileId}/content`,
+      await withRemoteHttpResponse({
+        url: resolveEmbeddingEndpointUrl(
+          params.client.baseUrl,
+          `files/${completed.outputFileId}/content`,
+        ),
         ssrfPolicy: params.client.ssrfPolicy,
         init: {
           headers: buildBatchHeaders(params.client, { json: true }),

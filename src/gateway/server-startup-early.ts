@@ -202,7 +202,6 @@ export async function startGatewayEarlyRuntime(params: {
         nodeSendToSession: params.nodeSendToSession,
         isNixMode,
         getRuntimeConfig: params.getRuntimeConfig,
-        enableSkillCurator: true,
         ...(typeof params.mediaCleanupTtlMs === "number"
           ? { mediaCleanupTtlMs: params.mediaCleanupTtlMs }
           : {}),

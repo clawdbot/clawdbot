@@ -14,6 +14,7 @@ import {
   useAutoCleanupTempDirTracker,
 } from "../../test/helpers/temp-dir.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
+import { runWithSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
   createBundleMcpJsonSchemaValidator,
@@ -2235,6 +2236,67 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
+  it.each(["managed", "combined"] as const)(
+    "cancels a %s catalog waiter without cancelling the shared producer",
+    async (kind) => {
+      const tempDir = tempDirTracker.make("bundle-mcp-catalog-cancel-");
+      const serverPath = path.join(tempDir, "server.mjs");
+      const logPath = path.join(tempDir, "server.log");
+      const releasePath = path.join(tempDir, "release-list");
+      await writeListToolsMcpServer({
+        filePath: serverPath,
+        logPath,
+        listToolsReleasePath: releasePath,
+      });
+      const managed = createSessionMcpRuntime({
+        sessionId: `catalog-cancel-${kind}`,
+        workspaceDir: tempDir,
+        cfg: { mcp: { servers: { shared: { command: process.execPath, args: [serverPath] } } } },
+      });
+      const runtime =
+        kind === "managed"
+          ? managed
+          : createCombinedSessionMcpRuntime({
+              sessionId: "combined-catalog-cancel",
+              workspaceDir: tempDir,
+              parts: [managed, makeRuntime([], "other")],
+            });
+      const controller = new AbortController();
+      let cancelled = false;
+      let failure: unknown;
+      const reason = new Error("cancelled one catalog waiter");
+      const first = runWithSessionMcpRequestSignal(controller.signal, () =>
+        runtime.callTool("shared", "slow_tool", {}),
+      ).catch((error: unknown) => {
+        cancelled = true;
+        failure = error;
+        return error;
+      });
+      let other: Promise<CallToolResult> | undefined;
+      try {
+        await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+        expect(cancelled).toBe(false);
+        other = runtime.callTool("shared", "slow_tool", {});
+        controller.abort(reason);
+        await vi.waitFor(() => expect(cancelled).toBe(true));
+        expect(failure).toMatchObject({ name: "AbortError", cause: reason });
+        expect(await fs.readFile(logPath, "utf8")).not.toContain("recv notifications/cancelled");
+        await fs.writeFile(releasePath, "release");
+        await expect(other).resolves.toMatchObject({ isError: false });
+        await first;
+        const log = await fs.readFile(logPath, "utf8");
+        expect(log.match(/recv tools\/list/g)).toHaveLength(1);
+        expect(log.match(/recv tools\/call/g)).toHaveLength(1);
+        expect(log).not.toContain("recv notifications/cancelled");
+        expect(managed.peekCatalog()?.tools.map((tool) => tool.toolName)).toContain("slow_tool");
+      } finally {
+        await fs.writeFile(releasePath, "release");
+        await Promise.allSettled([first, other]);
+        await runtime.dispose();
+      }
+    },
+  );
+
   it("cancels materialized MCP calls without pausing the healthy server", async () => {
     const tempDir = tempDirTracker.make("bundle-mcp-caller-cancel-");
     const serverPath = path.join(tempDir, "caller-cancel.mjs");
@@ -3314,6 +3376,99 @@ describe("requester-scoped MCP connection resolution", () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    ["static", 1],
+    ["full", 2],
+    ["requester-only", 1],
+  ] as const)(
+    "expires %s runtimes at ten idle minutes while preserving reuse and active leases",
+    async (entrypoint, expectedExpired) => {
+      let nowMs = 100_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+      const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+      resolverTesting.setMcpServerConnectionResolversForTest([
+        {
+          serverName: "user-mail",
+          resolve: async () => ({ url: "https://mcp.example.test/user" }),
+        },
+      ]);
+      const manager = testing.createSessionMcpRuntimeManager({ enableIdleSweepTimer: false });
+      const sessionKey = "agent:test:session-fixed-idle";
+      const params: RuntimeParams = {
+        sessionId: "session-fixed-idle",
+        sessionKey,
+        workspaceDir: "/workspace",
+        ...(entrypoint === "static" ? {} : { requesterSenderId: "sender-a" }),
+        cfg: {
+          mcp: {
+            servers: {
+              shared: { command: "true" },
+              ...(entrypoint === "static"
+                ? {}
+                : { "user-mail": { transport: "streamable-http" as const } }),
+            },
+          },
+        },
+      };
+      const getRuntime = () =>
+        entrypoint === "requester-only"
+          ? manager.getOrCreateRequesterScoped(params)
+          : manager.getOrCreate(params);
+      try {
+        await getRuntime();
+        nowMs += 10 * 60 * 1000 - 1;
+        expect(await manager.sweepIdleRuntimes()).toBe(0);
+
+        const reused = expectDefined(await getRuntime(), "admitted MCP runtime");
+        expect(reused.lastUsedAt).toBe(nowMs);
+        nowMs += 10 * 60 * 1000 - 1;
+        expect(await manager.sweepIdleRuntimes()).toBe(0);
+        const release = expectDefined(reused.acquireLease, "MCP runtime lease")();
+        nowMs += 1;
+        expect(await manager.sweepIdleRuntimes()).toBe(0);
+        expect(manager.listSessionIds()).toContain(params.sessionId);
+
+        release();
+        expect(await manager.sweepIdleRuntimes()).toBe(expectedExpired);
+        expect(manager.listRuntimeKeys()).toEqual([]);
+        expect(manager.resolveSessionId(sessionKey)).toBeUndefined();
+      } finally {
+        await manager.disposeAll();
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it("sweeps admitted runtimes on the fixed idle timer and stops maintenance after disposal", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+    const now = vi.fn(() => Date.now());
+    const manager = testing.createSessionMcpRuntimeManager({ now });
+    const params: RuntimeParams = {
+      sessionId: "session-idle-timer",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {} } },
+    };
+    try {
+      await manager.getOrCreate(params);
+      await manager.getOrCreate(params);
+      now.mockClear();
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000 - 1);
+      expect(manager.listSessionIds()).toEqual([params.sessionId]);
+      expect(now).toHaveBeenCalledTimes(9);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(manager.listSessionIds()).toEqual([]);
+      expect(now).toHaveBeenCalledTimes(10);
+
+      await manager.disposeAll();
+      now.mockClear();
+      await vi.advanceTimersByTimeAsync(60 * 1000);
+      expect(now).not.toHaveBeenCalled();
+    } finally {
+      await manager.disposeAll();
+    }
+  });
+
   it("keys requester-scoped runtimes per sender while sharing static servers", async () => {
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
     resolverTesting.setMcpServerConnectionResolversForTest([
@@ -4144,7 +4299,6 @@ describe("requester-scoped MCP connection resolution", () => {
       createInFlight: 0,
       requesterWorkChains: 0,
       sessionKeys: 0,
-      idleTtl: 0,
       deferredRetirement: 0,
       advertisedScopedCatalogs: 0,
     });
@@ -4568,11 +4722,10 @@ describe("requester-scoped MCP connection resolution", () => {
       connectionMeta: 1,
       requesterWorkChains: 0,
       sessionKeys: 1,
-      idleTtl: 1,
     });
 
     now.mockClear();
-    nowMs += testing.resolveSessionMcpRuntimeIdleTtlMs() + 1;
+    nowMs += 10 * 60 * 1000 + 1;
     for (const [requesterSenderId, attemptedSessionId] of [
       [undefined, "session-missing"],
       ["  ", "session-blank"],

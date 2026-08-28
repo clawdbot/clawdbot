@@ -58,6 +58,7 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   return { ...actual, listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly };
 });
 vi.mock("../../state/user-profiles.js", () => ({
+  getUserProfileRole: vi.fn(() => null),
   hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
 }));
 const { resolveRegisteredCatalogCreateTarget, sessionCatalogHandlers } =

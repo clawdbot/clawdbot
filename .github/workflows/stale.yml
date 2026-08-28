@@ -65,7 +65,7 @@ jobs:
       - name: Mark stale unassigned issues and pull requests (primary)
         id: stale-primary
         continue-on-error: true
-        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 14
@@ -98,7 +98,7 @@ jobs:
       - name: Mark stale assigned issues (primary)
         id: assigned-issue-stale-primary
         continue-on-error: true
-        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 30
@@ -122,7 +122,7 @@ jobs:
       - name: Mark stale assigned pull requests (primary)
         id: assigned-stale-primary
         continue-on-error: true
-        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: -1
@@ -169,7 +169,7 @@ jobs:
             }
       - name: Mark stale unassigned issues and pull requests (fallback)
         if: (steps.stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
-        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 14
@@ -201,7 +201,7 @@ jobs:
             That channel is the escape hatch for high-quality PRs that get auto-closed.
       - name: Mark stale assigned issues (fallback)
         if: (steps.assigned-issue-stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
-        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 30
@@ -224,7 +224,7 @@ jobs:
           close-issue-reason: not_planned
       - name: Mark stale assigned pull requests (fallback)
         if: (steps.assigned-stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
-        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: -1

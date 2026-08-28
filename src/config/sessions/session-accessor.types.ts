@@ -403,7 +403,7 @@ export type SessionTranscriptTurnPersistOptions = {
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   /** Message rows to append under one transcript write lock. */
   messages: readonly SessionTranscriptTurnMessageAppend[];
-  /** Exact run provenance emitted only for terminal assistant message updates. */
+  /** Exact run provenance persisted on output rows and emitted on terminal assistant updates. */
   runId?: string;
   /** Publish each appended message inline, one file-only invalidation, or nothing. */
   updateMode?: SessionTranscriptTurnUpdateMode;
@@ -710,6 +710,7 @@ export type SessionMessageCutMutationParams = {
   creation?: {
     via: import("./session-entry-provenance.js").SessionCreatedVia;
     actor?: import("./session-entry-provenance.js").SessionCreatedActor;
+    sandbox?: "required";
   };
   entryId: string;
   env?: NodeJS.ProcessEnv;

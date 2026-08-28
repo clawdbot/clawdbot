@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { createPluginRuntimeStore } from "../../plugin-sdk/runtime-store.js";
 
 const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
@@ -269,6 +270,44 @@ describe("resolveInstallableChannelPlugin", () => {
     expect(snapshotRequest?.workspaceDir).toBe("/tmp/workspace");
   });
 
+  it("initializes a cold bundled plugin through the scoped snapshot before logout", async () => {
+    const runtimeStore = createPluginRuntimeStore<{ cleared: boolean; loggedOut: boolean }>(
+      "runtime not initialized",
+    );
+    const plugin: ChannelPlugin = {
+      ...createPlugin("telegram"),
+      gateway: { logoutAccount: async () => runtimeStore.getRuntime() },
+    };
+    mocks.getChannelPlugin.mockReturnValue(plugin);
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createCatalogEntry({ id: "telegram", pluginId: "telegram", origin: "bundled" }),
+    ]);
+    mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mockImplementation(() => {
+      runtimeStore.setRuntime({ cleared: true, loggedOut: true });
+      return { channels: [{ plugin }], channelSetups: [] };
+    });
+
+    const result = await resolveInstallableChannelPlugin({
+      cfg: {},
+      runtime: {} as never,
+      rawChannel: "telegram",
+      allowInstall: false,
+      supports: (candidate) => Boolean(candidate.gateway?.logoutAccount),
+    });
+
+    await expect(
+      result.plugin?.gateway?.logoutAccount?.({
+        cfg: result.cfg,
+        accountId: "default",
+        account: {},
+        runtime: {} as never,
+      }),
+    ).resolves.toEqual({ cleared: true, loggedOut: true });
+    expect(result.configChanged).toBe(false);
+    expect(result.pluginInstalled).toBe(false);
+    expect(result.supportsRequestedCapability).toBe(true);
+  });
+
   it("returns an existing plugin that lacks the requested capability without reinstalling", async () => {
     const catalogEntry = createCatalogEntry({
       id: "openclaw-weixin",
@@ -278,7 +317,7 @@ describe("resolveInstallableChannelPlugin", () => {
     const installedPlugin = createPlugin("openclaw-weixin");
 
     mocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
-    mocks.getChannelPlugin.mockReturnValue(installedPlugin);
+    mocks.getLoadedChannelPlugin.mockReturnValue(installedPlugin);
 
     const result = await resolveInstallableChannelPlugin({
       cfg: { plugins: { enabled: true } },

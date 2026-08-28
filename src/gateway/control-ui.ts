@@ -44,6 +44,7 @@ import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistan
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import {
   buildControlUiResourcePath,
   buildControlUiRootAssetPath,
@@ -71,6 +72,7 @@ import {
 } from "./control-ui-routing.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
+  isControlUiFileUnmodified,
   isControlUiPrecompressedAssetExtension,
   isControlUiStaticAssetExtension,
   readAndCloseControlUiFile,
@@ -78,6 +80,7 @@ import {
   resolveControlUiHtmlEncoding,
   resolveOpenedControlUiRepresentation,
   respondControlUiNotAcceptable,
+  respondControlUiNotModified,
   respondHeadForControlUiFile,
   sendControlUiHtmlBody,
   serveControlUiAsset,
@@ -111,7 +114,12 @@ type ControlUiRequestOptions = {
 };
 
 export type ControlUiRootState =
-  | { kind: "bundled"; path: string; realPath?: string }
+  | {
+      kind: "bundled";
+      path: string;
+      realPath?: string;
+      retainedAssets?: ControlUiAssetRetention;
+    }
   | { kind: "resolved"; path: string; realPath?: string }
   | { kind: "invalid"; path: string }
   | { kind: "preparing" }
@@ -220,7 +228,7 @@ function normalizeAssistantMediaSource(source: string): string | null {
   if (!trimmed) {
     return null;
   }
-  if (trimmed.startsWith("file://")) {
+  if (/^file:/iu.test(trimmed)) {
     try {
       return safeFileURLToPath(trimmed);
     } catch {
@@ -703,7 +711,7 @@ function resolveSafeControlUiFile(
   rootReal: string,
   filePath: string,
   rejectHardlinks: boolean,
-): { path: string; fd: number; size: number } | null {
+): { path: string; fd: number; size: number; mtimeMs: number } | null {
   const opened = openRootFileSync({
     absolutePath: filePath,
     rootPath: rootReal,
@@ -723,7 +731,7 @@ function resolveSafeControlUiFile(
       fallback: () => null,
     });
   }
-  return { path: opened.path, fd: opened.fd, size: opened.stat.size };
+  return { path: opened.path, fd: opened.fd, size: opened.stat.size, mtimeMs: opened.stat.mtimeMs };
 }
 
 function isSafeRelativePath(relPath: string) {
@@ -1007,7 +1015,17 @@ export async function handleControlUiHttpRequest(
   // Vite fingerprints every file emitted under the bundled assets directory.
   // Configured roots remain revalidated because their naming is not our contract.
   const immutableAsset = isBundledRoot && fileRel.startsWith("assets/");
-  const safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
+  let servingRootReal = rootReal;
+  let rejectRepresentationHardlinks = rejectHardlinks;
+  let safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
+  if (!safeFile && immutableAsset && rootState.kind === "bundled") {
+    const retained = rootState.retainedAssets?.resolveAsset(fileRel);
+    if (retained) {
+      servingRootReal = retained.rootRealPath;
+      rejectRepresentationHardlinks = true;
+      safeFile = resolveSafeControlUiFile(retained.rootRealPath, retained.filePath, true);
+    }
+  }
   if (safeFile) {
     if (path.basename(safeFile.path) === "index.html") {
       if (req.method === "HEAD") {
@@ -1036,12 +1054,21 @@ export async function handleControlUiHttpRequest(
       );
       return true;
     }
+    // Filesystem clocks may lead this host; validators cannot postdate message
+    // origination or a future date would 304 later replacements (mirrors
+    // resolveByteResponse in http-byte-range.ts).
+    const lastModifiedMs = Math.floor(Math.min(safeFile.mtimeMs, Date.now()) / 1_000) * 1_000;
+    if (isControlUiFileUnmodified(req, lastModifiedMs)) {
+      fs.closeSync(safeFile.fd);
+      respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
+      return true;
+    }
     const representation = resolveOpenedControlUiRepresentation({
       req,
       sourceFile: safeFile,
       precompressed: immutableAsset,
       openPrecompressedFile: (compressedPath) =>
-        resolveSafeControlUiFile(rootReal, compressedPath, false),
+        resolveSafeControlUiFile(servingRootReal, compressedPath, rejectRepresentationHardlinks),
     });
     if (!representation) {
       respondControlUiNotAcceptable(res);
@@ -1053,6 +1080,7 @@ export async function handleControlUiHttpRequest(
           immutable: immutableAsset,
           encoding: representation.encoding,
           contentLength: representation.bodyFile.size,
+          lastModifiedMs,
         });
         return true;
       } finally {
@@ -1063,6 +1091,7 @@ export async function handleControlUiHttpRequest(
     await serveControlUiAsset(res, representation.contentPath, body, {
       immutable: immutableAsset,
       encoding: representation.encoding,
+      lastModifiedMs,
     });
     return true;
   }

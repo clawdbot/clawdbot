@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { renderSessionActivityView } from "./session-activity-view.ts";
 
@@ -47,6 +48,10 @@ function props(overrides: Partial<Parameters<typeof renderSessionActivityView>[0
 }
 
 describe("session activity semantics", () => {
+  afterEach(() => {
+    setAvatarGatewayOrigin(null);
+    vi.restoreAllMocks();
+  });
   beforeEach(() => {
     document.body.innerHTML = "";
   });
@@ -58,6 +63,71 @@ describe("session activity semantics", () => {
     render(renderSessionActivityView(props()), container);
 
     expect(container.querySelectorAll("main")).toHaveLength(0);
+  });
+
+  it("renders agent-owned session and people images without replacing human pictures", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: {
+          "content-type": url.endsWith("/avatar/research") ? "image/jpeg" : "image/png",
+        },
+      });
+    });
+    // Identify each image by its content type, not the order concurrent fetches finish.
+    vi.spyOn(URL, "createObjectURL").mockImplementation((blob) =>
+      "type" in blob && blob.type === "image/png" ? "blob:human" : "blob:agent",
+    );
+    const agent = {
+      type: "agent" as const,
+      id: "research",
+      label: "Research",
+      avatarUrl: "/avatar/research",
+    };
+    const human = {
+      type: "human" as const,
+      id: "person",
+      label: "Person",
+      avatarUrl: "/api/users/person/avatar",
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderSessionActivityView(
+        props({
+          rows: [
+            row("Human session", human, Date.now(), { owner: { actor: human } }),
+            row("Agent session", agent, Date.now() - 1, {
+              owner: { actor: agent },
+              createdActor: agent,
+            }),
+            row("Unattributed session", agent, Date.now() - 2, {
+              owner: undefined,
+              createdActor: undefined,
+              agentId: "research",
+            }),
+          ],
+        }),
+      ),
+      container,
+    );
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector('[data-activity-session="Human session"] img')?.getAttribute("src"),
+      ).toBe("blob:human");
+      expect(
+        container.querySelector('[data-activity-session="Agent session"] img')?.getAttribute("src"),
+      ).toBe("blob:agent");
+      expect(
+        container.querySelector('[data-activity-person="research"] img')?.getAttribute("src"),
+      ).toBe("blob:agent");
+      expect(
+        container
+          .querySelector('[data-activity-session="Unattributed session"] img')
+          ?.getAttribute("src"),
+      ).toBe("blob:agent");
+    });
   });
 });
 
@@ -235,6 +305,40 @@ describe("session activity automation grouping", () => {
       expect(container.querySelector("[data-activity-automation-group]")).toBeNull();
       expect(container.querySelectorAll("[data-activity-session]")).toHaveLength(2);
     }
+  });
+
+  it("labels only cron-origin sessions from their recorded creation provenance", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderSessionActivityView(
+        props({
+          rows: [
+            row("Scheduled report", { id: "owner", label: "Owner" }, Date.now(), {
+              createdVia: "cron",
+            }),
+            row("Automation-bound chat", { id: "owner", label: "Owner" }, Date.now() - 1, {
+              hasAutomation: true,
+            }),
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(
+      container
+        .querySelector(
+          '[data-activity-session="Scheduled report"] [data-activity-created-via="cron"]',
+        )
+        ?.textContent?.trim(),
+    ).toContain("Automation");
+    expect(
+      container.querySelector(
+        '[data-activity-session="Automation-bound chat"] [data-activity-created-via]',
+      ),
+    ).toBeNull();
   });
 });
 

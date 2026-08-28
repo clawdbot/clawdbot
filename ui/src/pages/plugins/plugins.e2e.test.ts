@@ -4,12 +4,14 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type {
   PluginCatalogItem,
   PluginListResult,
   PluginMutationResult,
+  PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import {
   canRunPlaywrightChromium,
@@ -31,6 +33,7 @@ const desktopViewport = { height: 1000, width: 1440 };
 const mobileViewport = { height: 852, width: 393 };
 const pluginMethods = [
   "plugins.list",
+  "plugins.inspect",
   "plugins.search",
   "plugins.install",
   "plugins.setEnabled",
@@ -215,6 +218,58 @@ const enableWorkboardResult = {
   restartRequired: false,
 } satisfies PluginMutationResult;
 
+const workboardInspection = {
+  ok: true,
+  reviewToken: "a".repeat(64),
+  plugin: {
+    id: workboardDisabled.id,
+    name: workboardDisabled.name,
+    origin: workboardDisabled.origin,
+    installed: true,
+    enabled: false,
+  },
+  source: { kind: "npm", packageName: workboardDisabled.packageName },
+  declared: {
+    channels: [],
+    providers: [],
+    tools: [],
+    contracts: [],
+    hooks: [],
+    mcpServers: [],
+    cliCommands: [],
+    cliBackends: [],
+    skills: [],
+    dangerousConfigFlags: [],
+  },
+  grants: {
+    hooks: {
+      allowPromptInjection: { effective: true },
+      allowConversationAccess: { effective: true },
+    },
+  },
+} satisfies PluginsInspectResult;
+
+const lobsterInspection = {
+  ...workboardInspection,
+  reviewToken: "b".repeat(64),
+  plugin: {
+    id: lobsterPlugin.id,
+    name: lobsterPlugin.name,
+    origin: lobsterPlugin.origin,
+    installed: false,
+    enabled: false,
+  },
+  source: { kind: "npm", packageName: "@openclaw/lobster" },
+} satisfies PluginsInspectResult;
+
+const calendarInspection = {
+  ...workboardInspection,
+  reviewToken: "c".repeat(64),
+  plugin: { ...calendarPlugin, installed: false, enabled: false },
+  source: { kind: "clawhub", packageName: "calendar-plus" },
+  declared: { ...workboardInspection.declared, tools: ["calendar_create"] },
+} satisfies PluginsInspectResult;
+
 let browser: Browser;
 let server: ControlUiE2eServer;
 
@@ -341,6 +396,13 @@ function pluginMethodResponses() {
   return {
     "config.get": configSnapshot(false),
     "plugins.list": initialInventory,
+    "plugins.inspect": {
+      cases: [
+        { match: { pluginId: "workboard" }, response: workboardInspection },
+        { match: { pluginId: "lobster" }, response: lobsterInspection },
+        { match: { pluginId: "calendar-plus" }, response: calendarInspection },
+      ],
+    },
     "plugins.search": {
       cases: [
         {
@@ -355,8 +417,7 @@ function pluginMethodResponses() {
           match: {
             source: "clawhub",
             packageName: "calendar-plus",
-            version: "1.2.3",
-            acknowledgeClawHubRisk: true,
+            acknowledgeCapabilities: { reviewToken: calendarInspection.reviewToken },
           },
           response: installResult,
         },
@@ -533,43 +594,39 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await gateway.deferNext("plugins.install");
       await searchRow.getByRole("button", { name: "Install Calendar Plus", exact: true }).click();
       const firstInstallRequest = await gateway.waitForRequest("plugins.install");
+      expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
       expect(requestParams(firstInstallRequest)).toEqual({
         source: "clawhub",
         packageName: "calendar-plus",
       });
       await gateway.rejectDeferred("plugins.install", {
         code: "INVALID_REQUEST",
-        message: "ClawHub requires acknowledgement before installing this release.",
-        details: {
-          clawhubTrustCode: "clawhub_risk_acknowledgement_required",
-          version: "1.2.3",
-          warning: "REVIEW REQUIRED - ClawHub found behavior that needs operator review.",
-        },
+        message: "Capability consent required",
+        details: buildCapabilityConsentErrorDetails({
+          pluginId: "calendar-plus",
+          reviewToken: calendarInspection.reviewToken,
+        }),
       });
-
-      const acknowledgeButton = searchRow.getByRole("button", {
-        name: "Acknowledge risk and install",
-      });
-      await acknowledgeButton.waitFor({ state: "visible" });
-      expect(await searchRow.getByRole("alert").textContent()).toContain("REVIEW REQUIRED");
-
+      const consent = page.locator('[data-plugin-consent="install"]');
+      await consent.getByText("calendar_create", { exact: true }).waitFor();
+      await captureScreenshot(page, "artifact-consent-desktop.png");
       const listCountBeforeInstall = (await gateway.getRequests("plugins.list")).length;
       const configCountBeforeInstall = (await gateway.getRequests("config.get")).length;
-      const installCountBeforeRetry = (await gateway.getRequests("plugins.install")).length;
       await gateway.deferNext("plugins.list");
       await gateway.deferNext("config.get");
-      await acknowledgeButton.click();
-
-      const retryInstallRequest = await waitForNextRequest(
-        gateway,
-        "plugins.install",
-        installCountBeforeRetry,
-      );
-      expect(requestParams(retryInstallRequest)).toEqual({
+      await gateway.setMethodResponse("plugins.install", installResult);
+      const installCountBeforeConsent = (await gateway.getRequests("plugins.install")).length;
+      const confirm = consent.getByRole("button", { name: "Install Calendar Plus", exact: true });
+      await expect.poll(() => confirm.isEnabled()).toBe(true);
+      await confirm.click();
+      expect(
+        requestParams(
+          await waitForNextRequest(gateway, "plugins.install", installCountBeforeConsent),
+        ),
+      ).toEqual({
         source: "clawhub",
         packageName: "calendar-plus",
-        version: "1.2.3",
-        acknowledgeClawHubRisk: true,
+        acknowledgeCapabilities: { reviewToken: calendarInspection.reviewToken },
       });
       // The mutation boundary refreshes config before the page refreshes the
       // plugin catalog; release the deferred requests in that contract order.

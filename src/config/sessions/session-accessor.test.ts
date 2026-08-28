@@ -402,6 +402,30 @@ describe("session accessor seam", () => {
     ).toEqual(transcriptTimes);
   });
 
+  it("retains email hook transcript provenance using the existing untrusted storage class", async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:email-hook",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: "email-hook-session",
+      updatedAt: 10,
+      hookExternalContentSource: "email",
+    });
+    await appendTranscriptMessage(
+      { ...scope, sessionId: "email-hook-session" },
+      { message: { role: "assistant", content: "email transcript" } },
+    );
+
+    expect(listSessionTranscriptInstances({ agentId: "main", storePath })).toEqual([
+      expect.objectContaining({
+        entry: expect.objectContaining({ hookExternalContentSource: "webhook" }),
+        provenanceKnown: true,
+      }),
+    ]);
+  });
+
   it("marks transcript-only rows as unknown provenance", async () => {
     const scope = {
       agentId: "main",
@@ -2359,6 +2383,17 @@ describe("session accessor seam", () => {
       { sessionKey: previousKey, storePath },
       { sessionId: "rekeyed", updatedAt: 20 },
     );
+    for (const [sessionKey, count] of [
+      [canonicalKey, 2],
+      [previousKey, 3],
+    ] as const) {
+      for (let promptedAt = 0; promptedAt < count; promptedAt += 1) {
+        recordSessionParticipant(
+          { sessionKey, storePath },
+          { actor: { type: "human", id: "profile-shared" }, promptedAt, source: "profile" },
+        );
+      }
+    }
     const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
       agentId: "main",
     }).path;
@@ -2403,6 +2438,11 @@ describe("session accessor seam", () => {
         .prepare("SELECT session_key, identity_id FROM session_members WHERE identity_id = ?")
         .get("member-1"),
     ).toEqual({ session_key: canonicalKey, identity_id: "member-1" });
+    expect(
+      database.db
+        .prepare("SELECT contribution_count FROM session_participants WHERE actor_id = ?")
+        .get("profile-shared"),
+    ).toEqual({ contribution_count: 5 });
     expect(identityListener.mock.calls.map(([event]) => event.kind)).toEqual(["move", "replace"]);
   });
 
@@ -3357,6 +3397,7 @@ describe("session accessor seam", () => {
             content: "second committed message",
             idempotencyKey: "ordered-turn-second",
             timestamp: 3,
+            __openclaw: { runId: "run-ordered-turn" },
           },
           messageId: result.messages[1]?.messageId,
           messageSeq: 3,

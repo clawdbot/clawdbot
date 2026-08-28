@@ -1,10 +1,8 @@
 // Control UI chat module owns Chat thread item derivation and thread-local caches.
 import {
-  streamSegmentHasItemId,
-  streamSegmentUsesAccumulatedText,
+  accumulatedStreamText,
   trimAccumulatedStreamPrefix,
   type ChatItem,
-  type ChatStreamSegment,
   type MessageGroup,
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
@@ -21,7 +19,11 @@ import {
   setSessionCacheValue,
 } from "./session-cache.ts";
 
-export { isPendingSendMessage, persistedMessageEntryId } from "./chat-thread-items.ts";
+export {
+  isPendingSendMessage,
+  persistedMessageEntryId,
+  readPendingSendFailure,
+} from "./chat-thread-items.ts";
 export {
   assistantGroupCanOwnActiveRunStatus,
   coalesceActivityRuns,
@@ -273,20 +275,6 @@ function sameChatItemsInputExceptStream(
   );
 }
 
-function accumulatedIndexedStreamText(segments: readonly ChatStreamSegment[]): string | null {
-  let accumulated: string | null = null;
-  for (const segment of segments) {
-    if (streamSegmentHasItemId(segment) || !streamSegmentUsesAccumulatedText(segment)) {
-      continue;
-    }
-    const text = sanitizeStreamText(segment.text);
-    if (text.length > 0) {
-      accumulated = text;
-    }
-  }
-  return accumulated;
-}
-
 function liveStreamIdentity(input: BuildChatItemsProps): string {
   return JSON.stringify([input.sessionKey, input.runId ?? null, input.streamStartedAt]);
 }
@@ -359,7 +347,7 @@ export function buildCachedChatItems(
   cached.items = items;
   cached.liveStreamIndex = findLiveStreamIndex(items);
   cached.liveStreamIdentity = cached.liveStreamIndex === -1 ? null : liveStreamIdentity(input);
-  cached.liveStreamPrefix = accumulatedIndexedStreamText(input.streamSegments);
+  cached.liveStreamPrefix = accumulatedStreamText(input.streamSegments, sanitizeStreamText);
   return items;
 }
 

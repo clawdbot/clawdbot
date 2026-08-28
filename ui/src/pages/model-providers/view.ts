@@ -20,7 +20,7 @@ import { t } from "../../i18n/index.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/format.ts";
-import { MODEL_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
+import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
 import type {
@@ -61,6 +61,8 @@ type ModelProvidersViewProps = {
   unconfiguredProviders: ProviderOption[];
   canMutate: boolean;
   mutationBlockedReason: string | null;
+  /** Usage never converged before the retry budget ran out; cards lack usage. */
+  providerUsageStalled: boolean;
   probeAvailable: boolean;
   busy: Record<string, boolean>;
   messages: Record<string, ModelProviderRowMessage>;
@@ -650,6 +652,9 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
       providerRows,
     )}
     ${props.quickAddSupported ? renderAddProvider(props) : nothing}
+    ${props.providerUsageStalled
+      ? html`<div class="callout warning" role="status">${t("usage.providerUsage.stalled")}</div>`
+      : nothing}
     ${props.mutationBlockedReason
       ? html`<div class="callout warning">${props.mutationBlockedReason}</div>`
       : nothing}

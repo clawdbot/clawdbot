@@ -9,12 +9,13 @@ export npm_config_fund=false
 export npm_config_audit=false
 export OPENCLAW_DISABLE_BUNDLED_PLUGINS=1
 
-# Stub systemd/loginctl so doctor + daemon flows work in Docker.
+# Stub the systemd manager and loginctl so doctor + daemon flows work in Docker.
 export PATH="/tmp/openclaw-bin:$PATH"
 mkdir -p /tmp/openclaw-bin
 cp scripts/e2e/lib/doctor-install-switch/shims/systemctl /tmp/openclaw-bin/systemctl
 cp scripts/e2e/lib/doctor-install-switch/shims/loginctl /tmp/openclaw-bin/loginctl
-chmod +x /tmp/openclaw-bin/systemctl /tmp/openclaw-bin/loginctl
+cp scripts/e2e/lib/doctor-install-switch/shims/busctl /tmp/openclaw-bin/busctl
+chmod +x /tmp/openclaw-bin/systemctl /tmp/openclaw-bin/loginctl /tmp/openclaw-bin/busctl
 
 package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 git_root="/tmp/openclaw-git"
@@ -101,6 +102,9 @@ assert_entrypoint() {
   entrypoint="${entrypoint#\"}"
   if [ "$entrypoint" != "$expected" ]; then
     echo "Expected entrypoint $expected, got $entrypoint"
+    if [ -n "${doctor_log:-}" ] && [ -f "$doctor_log" ]; then
+      grep -E "Gateway service entrypoint|operator-owned systemd drop-in|managed externally" "$doctor_log" || true
+    fi
     exit 1
   fi
 }

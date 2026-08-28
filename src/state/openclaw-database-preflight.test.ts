@@ -15,9 +15,9 @@ import {
   preflightOpenClawStateDatabasePath,
   preflightOpenClawDatabaseSchemas,
 } from "./openclaw-database-preflight.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";

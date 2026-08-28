@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
@@ -23,7 +24,6 @@ import {
   rejectPendingPreparedModelRuntimeReplacement,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
-import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 
@@ -294,7 +294,7 @@ describe("prepared model runtime snapshots", () => {
       env,
     });
 
-    expect(getPreparedPluginRuntimeLoadContext(snapshot.pluginRegistry)).toMatchObject({
+    expect(getPluginRuntimeLoadContext(snapshot.pluginRegistry)).toMatchObject({
       rawConfig: config,
       env,
     });
@@ -333,6 +333,46 @@ describe("prepared model runtime snapshots", () => {
     expect(snapshot.modelCatalog.providerOutcomes).toEqual([
       { provider: "openai", status: "auth-rejected" },
     ]);
+  });
+
+  it("limits live discovery to the selected agent's models and authenticated providers", async () => {
+    const config = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.6" } },
+        list: [
+          {
+            id: "selected",
+            model: { primary: "anthropic/claude-sonnet-5" },
+            modelPolicy: { allow: ["vllm/*"] },
+          },
+          {
+            id: "sibling",
+            model: { primary: "ollama/sibling" },
+            modelPolicy: { allow: ["sibling-only/*"] },
+          },
+        ],
+      },
+      models: {
+        providers: {
+          unrelated: { baseUrl: "https://unrelated.example/v1", models: [] },
+          vllm: { baseUrl: "https://vllm.example/v1", models: [] },
+        },
+      },
+    } as OpenClawConfig;
+
+    await publishPreparedModelRuntimeSnapshot({
+      agentId: "selected",
+      config,
+      agentDir: "/tmp/prepared-model-runtime-selected-provider-scope",
+    });
+
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledWith(
+      config,
+      "/tmp/prepared-model-runtime-selected-provider-scope",
+      expect.objectContaining({
+        providerDiscoveryProviderIds: ["anthropic", "custom", "openai", "vllm"],
+      }),
+    );
   });
 
   it("captures static provider-hook rows in the same lifecycle generation", async () => {

@@ -39,10 +39,11 @@ if [ "${1-}" = "--dev-wrapper" ]; then
 fi
 requested_subcommand="${1-}"
 
-# If invoked from a linked worktree copy of this script, re-exec the canonical
-# script from the repository root so behavior stays consistent across worktrees.
+# Select trusted wrapper code independently from the canonical repository root;
+# a linked wrapper may be removed by merge-run or gc before supervision ends.
 script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 script_parent_dir="$(dirname "$script_self")"
+canonical_repo_root="$script_parent_dir/.."
 pr_wrapper_components=(
   scripts/pr
   scripts/pr-lib
@@ -50,10 +51,15 @@ pr_wrapper_components=(
   scripts/lib/plain-gh.mjs
   scripts/lib/direct-run.mjs
   scripts/lib/tsx-cli-shim.mjs
+  scripts/lib/local-check-runtime.mts
+  scripts/tsx.mjs
+  scripts/crabbox-untrusted-bootstrap.sh
+  scripts/pr-crabbox-gate-publisher.mjs
   scripts/verify-pr-hosted-gates.mjs
   scripts/verify-pr-hosted-gates.mts
   scripts/watch-pr-ci.mjs
   scripts/watch-pr-ci.mts
+  .github/workflows/pr-crabbox-gate-publisher.yml
 )
 if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
   canonical_repo_root="$(dirname "$common_git_dir")"
@@ -173,7 +179,7 @@ if [ "${1-}" = "gc" ] || is_locked_pr_command "${1-}"; then
     unset OPENCLAW_PR_LOCK_NOTIFY_FD
     unset OPENCLAW_PR_LOCK_SUPERVISOR_PID
     command -v node >/dev/null 2>&1 || { echo "Missing required command: node" >&2; exit 1; }
-    exec node "$script_parent_dir/pr-lib/process-group-runner.mjs" "$script_parent_dir/.." "$script_self" "$@"
+    exec node "$script_parent_dir/pr-lib/process-group-runner.mjs" "$canonical_repo_root" "$script_self" "$@"
   fi
 fi
 
@@ -201,7 +207,7 @@ Usage:
   scripts/pr prepare-push <PR>
   scripts/pr prepare-sync-head <PR>
   scripts/pr prepare-run <PR>
-  scripts/pr ci-dispatch <PR>
+  scripts/pr ci-dispatch <PR> [--backend crabbox --run-id <id> --lease-id <id> --bootstrap-sha256 <hash>]
   scripts/pr merge-verify <PR>
   scripts/pr merge-run <PR> [--auto-merge]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
@@ -417,7 +423,8 @@ main() {
     ci-dispatch)
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
-      ci_dispatch "$pr"
+      shift
+      ci_dispatch "$pr" "$@"
       ;;
     merge-verify)
       local pr="${1-}"

@@ -71,20 +71,10 @@ export function toggleUsageRangeSelection<T>(
 export function selectUsageSessionKeys(
   selected: string[],
   key: string,
-  sessions: UsageSessionQueryTarget[],
-  tokenMode: boolean,
+  orderedKeys: string[],
   shiftKey: boolean,
 ): string[] {
   if (shiftKey && selected.length > 0) {
-    const orderedKeys = [...sessions]
-      .toSorted((left, right) => {
-        const leftValue = tokenMode ? (left.usage?.totalTokens ?? 0) : (left.usage?.totalCost ?? 0);
-        const rightValue = tokenMode
-          ? (right.usage?.totalTokens ?? 0)
-          : (right.usage?.totalCost ?? 0);
-        return rightValue - leftValue;
-      })
-      .map((session) => session.key);
     const lastIndex = orderedKeys.indexOf(selected.at(-1) ?? "");
     const nextIndex = orderedKeys.indexOf(key);
     if (lastIndex !== -1 && nextIndex !== -1) {
@@ -133,17 +123,16 @@ const parseQueryNumber = (value: string): number | null => {
 };
 
 export const extractQueryTerms = (query: string): UsageQueryTerm[] => {
-  // Tokenize by whitespace, but allow quoted values with spaces.
-  const rawTokens = query.match(/"[^"]+"|\S+/g) ?? [];
+  const rawTokens = query.match(/(?:[^\s"]|"[^"]*")+/g) ?? [];
   return rawTokens.map((token) => {
-    const cleaned = token.replace(/^"|"$/g, "");
+    const cleaned = token.replace(/^"(.*)"$/u, "$1");
     const idx = cleaned.indexOf(":");
     if (idx > 0) {
       const key = cleaned.slice(0, idx);
-      const value = cleaned.slice(idx + 1);
+      const value = cleaned.slice(idx + 1).replace(/^"(.*)"$/u, "$1");
       return { key, value, raw: cleaned };
     }
-    return { value: cleaned, raw: cleaned };
+    return { value: cleaned, raw: token };
   });
 };
 
@@ -230,6 +219,7 @@ const QUERY_KEYS = new Set([
   "has",
   ...Object.keys(NUMERIC_QUERY_SPECS),
 ]);
+const MULTI_VALUE_QUERY_KEYS = new Set(["channel", "provider", "model", "tool"]);
 
 const matchesUsageQuery = (session: UsageSessionQueryTarget, term: UsageQueryTerm): boolean => {
   const value = normalizeQueryText(term.value ?? "");
@@ -296,6 +286,7 @@ export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
   }
 
   const warnings: string[] = [];
+  const categoricalTerms = new Map<string, UsageQueryTerm[]>();
   for (const term of terms) {
     if (!term.key) {
       continue;
@@ -304,6 +295,11 @@ export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
     if (!QUERY_KEYS.has(normalizedKey)) {
       warnings.push(`Unknown filter: ${term.key}`);
       continue;
+    }
+    if (term.value && MULTI_VALUE_QUERY_KEYS.has(normalizedKey)) {
+      const alternatives = categoricalTerms.get(normalizedKey) ?? [];
+      alternatives.push(term);
+      categoricalTerms.set(normalizedKey, alternatives);
     }
     if (term.value === "") {
       warnings.push(`Missing value for ${term.key}`);
@@ -325,7 +321,14 @@ export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
   }
 
   const filtered = sessions.filter((session) =>
-    terms.every((term) => matchesUsageQuery(session, term)),
+    terms.every((term) => {
+      const alternatives = term.key
+        ? categoricalTerms.get(normalizeQueryText(term.key))
+        : undefined;
+      return alternatives
+        ? alternatives.some((alternative) => matchesUsageQuery(session, alternative))
+        : matchesUsageQuery(session, term);
+    }),
   );
   return { sessions: filtered, warnings };
 };

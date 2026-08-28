@@ -279,6 +279,11 @@ describe("session placement recovery", () => {
         category: "Client work",
         projectId: "openclaw",
         thinkingLevel: "high",
+        toolOverrides: {
+          mcpServers: { github: false },
+          skills: { release: false },
+          webSearch: false,
+        },
         visibility: "draft" as const,
         worktree: true as const,
       },
@@ -314,6 +319,7 @@ describe("session placement recovery", () => {
       value: { projectId: "openclaw", execNode: "macbook" },
     },
     { name: "an unsupported visibility", value: { visibility: "shared" } },
+    { name: "malformed tool overrides", value: { toolOverrides: { webSearch: "yes" } } },
     { name: "an unknown field", value: { unknown: true } },
   ])("rejects $name in creating parameters", ({ value }) => {
     expect(

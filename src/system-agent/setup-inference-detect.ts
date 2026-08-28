@@ -6,7 +6,8 @@ import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
+import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
@@ -191,29 +192,38 @@ export async function detectSetupInference(
       choice.appGuidedDiscovery === true && supportsSetupTextInference(choice.onboardingScopes),
   );
   if (discoveryChoices.length > 0) {
-    let discoveryConfig = cfg;
-    const enabledChoices: ProviderAuthChoiceMetadata[] = [];
-    for (const choice of discoveryChoices) {
-      const enabled = (deps.enablePluginInConfig ?? enablePluginInConfig)(
-        discoveryConfig,
-        choice.pluginId,
-      );
-      if (!enabled.enabled) {
-        continue;
+    // Resolve the reviewed generation before releasing the lease for remote probes.
+    const discovery = await withPluginLifecycleLease({}, async () => {
+      let discoveryConfig = cfg;
+      const enabledChoices: ProviderAuthChoiceMetadata[] = [];
+      for (const choice of discoveryChoices) {
+        // Keep unaccepted choices visible, but do not import their runtime during discovery.
+        const enabled = await enablePluginWithCapabilityConsent(cfg, choice.pluginId, {
+          workspaceDir: workspace,
+        });
+        if (!enabled.enabled) {
+          continue;
+        }
+        discoveryConfig = (deps.enablePluginInConfig ?? enablePluginInConfig)(
+          discoveryConfig,
+          choice.pluginId,
+        ).config;
+        enabledChoices.push(choice);
       }
-      discoveryConfig = enabled.config;
-      enabledChoices.push(choice);
-    }
-    const providers = (deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
-      config: discoveryConfig,
-      workspaceDir: workspace,
-      mode: "setup",
-      includeUntrustedWorkspacePlugins: false,
-      onlyPluginIds: [...new Set(enabledChoices.map((choice) => choice.pluginId))],
+      const providers = enabledChoices.length
+        ? (deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
+            config: discoveryConfig,
+            workspaceDir: workspace,
+            mode: "setup",
+            includeUntrustedWorkspacePlugins: false,
+            onlyPluginIds: [...new Set(enabledChoices.map((choice) => choice.pluginId))],
+          })
+        : [];
+      return { discoveryConfig, enabledChoices, providers };
     });
     const discovered = await Promise.all(
-      enabledChoices.map(async (choice): Promise<SetupInferenceCandidate | null> => {
-        const provider = providers.find(
+      discovery.enabledChoices.map(async (choice): Promise<SetupInferenceCandidate | null> => {
+        const provider = discovery.providers.find(
           (candidate) =>
             candidate.pluginId === choice.pluginId &&
             normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
@@ -224,7 +234,7 @@ export async function detectSetupInference(
         }
         try {
           const candidate = await method.appGuidedSetup.detect({
-            config: discoveryConfig,
+            config: discovery.discoveryConfig,
             env: process.env,
             workspaceDir: workspace,
           });

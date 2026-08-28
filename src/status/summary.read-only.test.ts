@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -14,6 +15,7 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getStatusSummary } from "./summary.js";
 
 describe("getStatusSummary read-only session access", () => {
@@ -132,5 +134,31 @@ describe("getStatusSummary read-only session access", () => {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
     }
+  });
+
+  it("does not reread ambient config while projecting prepared session runtime state", async () => {
+    await withOpenClawTestState(
+      { prefix: "openclaw-status-prepared-config-", layout: "split" },
+      async (state) => {
+        const storePath = state.path("sessions.json");
+        const config = { session: { store: storePath } };
+        await state.writeConfig({ session: {} });
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: "agent:main:main", storePath },
+          { sessionId: "prepared-config", updatedAt: 10 },
+        );
+        closeOpenClawAgentDatabasesForTest();
+        clearRuntimeConfigSnapshot();
+        const readFileSync = vi.spyOn(fs, "readFileSync");
+        try {
+          await getStatusSummary({ includeChannelSummary: false, config });
+          expect(
+            readFileSync.mock.calls.filter(([file]) => file === state.configPath),
+          ).toHaveLength(0);
+        } finally {
+          readFileSync.mockRestore();
+        }
+      },
+    );
   });
 });

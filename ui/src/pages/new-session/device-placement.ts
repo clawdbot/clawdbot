@@ -58,6 +58,7 @@ function unavailableReason(
 export function projectDevicePlacements(
   environments: readonly DraftEnvironment[] | null,
   requirement: DevicePlacementRequirement = DEFAULT_DEVICE_PLACEMENT,
+  placementDisabledReason?: string,
 ): DevicePlacementOption[] {
   const devices = (environments ?? [])
     .flatMap<DevicePlacementOption>((environment) => {
@@ -68,7 +69,7 @@ export function projectDevicePlacements(
       if (!deviceId) {
         return [];
       }
-      const disabledReason = unavailableReason(environment, requirement);
+      const disabledReason = placementDisabledReason ?? unavailableReason(environment, requirement);
       const facts = environmentMenuFacts(environment, {
         connected: environment.status === "available",
       });
@@ -84,7 +85,7 @@ export function projectDevicePlacements(
         {
           deviceId,
           label: environment.label ?? deviceId,
-          facts: visibleFacts,
+          facts: placementDisabledReason ? [placementDisabledReason] : visibleFacts,
           selectable: disabledReason === undefined,
           ...(disabledReason ? { disabledReason } : {}),
         },
@@ -119,7 +120,12 @@ export function resolveAutomaticDevicePlacementDisabledReason(
       .map((environment) => environment.id),
   );
   if (sessionHostIds.size === 0) {
-    return t("newSession.noSessionHosts");
+    const outdated = (environments ?? []).find((environment) =>
+      environment.issues?.some((issue) => issue.code === "update-required"),
+    );
+    return outdated
+      ? unavailableReason(outdated, DEFAULT_DEVICE_PLACEMENT)
+      : t("newSession.noSessionHosts");
   }
   return devices.some((device) => device.selectable)
     ? undefined

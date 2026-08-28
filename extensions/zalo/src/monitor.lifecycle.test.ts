@@ -2,11 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   createEmptyPluginRegistry,
   createRuntimeEnv,

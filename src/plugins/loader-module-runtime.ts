@@ -4,11 +4,7 @@ import { attachPluginApiFacades } from "./api-facades.js";
 import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import { withProfile } from "./plugin-load-profile.js";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
-} from "./plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRegistrationContext } from "./runtime.js";
@@ -106,7 +102,6 @@ export function createPluginModuleLoader(options: {
   loaderFilename?: string;
   installNativeSdkResolver?: boolean;
 }) {
-  const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
   const createLoaderForModule = (modulePath: string) => {
     if (options.installNativeSdkResolver !== false && options.tryNative !== false) {
       installOpenClawPluginSdkNativeResolver({
@@ -125,7 +120,6 @@ export function createPluginModuleLoader(options: {
       options.devSourceRoot,
     );
     return getCachedPluginModuleLoader({
-      cache: moduleLoaders,
       modulePath,
       importerUrl: import.meta.url,
       loaderFilename: options.loaderFilename ?? modulePath,

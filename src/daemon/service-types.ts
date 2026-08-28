@@ -91,14 +91,128 @@ export type GatewayServiceLoadState =
   | { status: "not-loaded" }
   | { status: "unknown"; detail: string };
 
-/** Parsed command and env metadata from an installed platform service. */
-export type GatewayServiceCommandConfig = {
+export type GatewayServiceCommandSnapshot = {
   programArguments: string[];
   workingDirectory?: string;
   environment?: Record<string, string>;
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
-  sourcePath?: string;
 };
+
+export type GatewayServiceManagedOverrides = {
+  launcher?: "command" | "working-directory";
+  environment?: true | { keys?: string[]; resetInline?: true; resetFiles?: true };
+};
+
+/** Effective platform service command and, when externally owned, its managed base definition. */
+export type GatewayServiceCommandConfig = GatewayServiceCommandSnapshot & {
+  sourcePath?: string;
+  managedDefinition?: GatewayServiceCommandSnapshot;
+  managedOverrides?: GatewayServiceManagedOverrides;
+  reloadPending?: true;
+};
+
+export function resolveManagedGatewayServiceCommand(
+  command: GatewayServiceCommandConfig | null | undefined,
+): GatewayServiceCommandSnapshot | null {
+  return command?.managedDefinition ?? command ?? null;
+}
+
+/** Operator-owned launcher overrides cannot be repaired by rewriting the managed base. */
+export function hasGatewayServiceLauncherOverride(
+  command: GatewayServiceCommandConfig | null | undefined,
+  options?: { includeWorkingDirectory?: boolean },
+): boolean {
+  const managedOverrides = command?.managedOverrides;
+  const includeWorkingDirectory = options?.includeWorkingDirectory !== false;
+  if (managedOverrides) {
+    return Boolean(
+      managedOverrides.launcher &&
+      (includeWorkingDirectory || managedOverrides.launcher !== "working-directory"),
+    );
+  }
+  const managedDefinition = command?.managedDefinition;
+  return Boolean(
+    managedDefinition &&
+    ((includeWorkingDirectory && managedDefinition.workingDirectory !== command.workingDirectory) ||
+      managedDefinition.programArguments.join("\0") !== command.programArguments.join("\0")),
+  );
+}
+
+export function hasGatewayServiceEnvironmentOverride(
+  command: GatewayServiceCommandConfig | null | undefined,
+  keys: readonly string[],
+  options?: {
+    normalizeKey?: (key: string) => string | null;
+    environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
+    ignoreResets?: boolean;
+  },
+): boolean {
+  const managedOverrides = command?.managedOverrides;
+  if (!managedOverrides) {
+    return hasGatewayServiceEnvironmentDifference(command, keys);
+  }
+  const environment = managedOverrides.environment;
+  if (environment === true || !environment) {
+    return environment === true && keys.length > 0;
+  }
+  const normalize = options?.normalizeKey ?? ((key: string) => key);
+  const ownedKeys = new Set(environment.keys?.map(normalize));
+  const sources =
+    options?.environmentValueSources ?? command.managedDefinition?.environmentValueSources;
+  return keys.some((key) => {
+    const normalized = normalize(key);
+    if (normalized !== null && ownedKeys.has(normalized)) {
+      return true;
+    }
+    if (options?.ignoreResets) {
+      return false;
+    }
+    const source =
+      sources?.[key] ??
+      (options?.normalizeKey &&
+        Object.entries(sources ?? {}).find(([rawKey]) => normalize(rawKey) === normalized)?.[1]) ??
+      "inline";
+    return Boolean(
+      (environment.resetInline && source !== "file") ||
+      (environment.resetFiles && source !== "inline"),
+    );
+  });
+}
+
+export function hasGatewayServiceEnvironmentDifference(
+  command: GatewayServiceCommandConfig | null | undefined,
+  keys: readonly string[],
+): boolean {
+  const managedDefinition = command?.managedDefinition;
+  return Boolean(
+    managedDefinition &&
+    keys.some(
+      (key) =>
+        command.environment?.[key] !== managedDefinition.environment?.[key] ||
+        (command.environmentValueSources?.[key] ?? "inline") !==
+          (managedDefinition.environmentValueSources?.[key] ?? "inline"),
+    ),
+  );
+}
+
+/** Remove inherited operator overrides before a managed definition is rewritten. */
+export function resolveManagedGatewayServiceProcessEnv(
+  command: GatewayServiceCommandConfig | null | undefined,
+  processEnv: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv | null {
+  const overrides = command?.managedOverrides?.environment;
+  if (overrides === true || overrides?.resetInline || overrides?.resetFiles) {
+    return null;
+  }
+  const managedEnvironment = resolveManagedGatewayServiceCommand(command)?.environment;
+  const environment = { ...processEnv, ...managedEnvironment };
+  for (const key of [...Object.keys(command?.environment ?? {}), ...(overrides?.keys ?? [])]) {
+    if (!Object.hasOwn(managedEnvironment ?? {}, key)) {
+      delete environment[key];
+    }
+  }
+  return environment;
+}
 
 export type GatewayServiceState = {
   installed: boolean;

@@ -106,6 +106,66 @@ suite.define(() => {
     }
   });
 
+  it("creates a Full-access session when the connected operator has admin scope", async () => {
+    const { context, gateway, page } = await openDraft([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+    ]);
+    try {
+      const permission = page.locator('[data-chat-permission-select="true"]');
+      await permission.click();
+      await page.locator('[data-chat-permission-option="full"]').click();
+      await expect.poll(() => permission.getAttribute("data-chat-select-value")).toBe("full");
+      await page.getByRole("button", { name: "Start session" }).click();
+
+      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
+        params: { agentId: "main", message: "scope proof", permissionMode: "full" },
+      });
+      await expect.poll(() => page.url()).toContain("/chat/");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("rejects a retained Full-access selection after reconnecting without admin scope", async () => {
+    const { context, gateway, page } = await openDraft([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+    ]);
+    try {
+      const permission = page.locator('[data-chat-permission-select="true"]');
+      await permission.click();
+      await page.locator('[data-chat-permission-option="full"]').click();
+      await expect.poll(() => permission.getAttribute("data-chat-select-value")).toBe("full");
+
+      await gateway.setOperatorScopes(["operator.read", "operator.write"]);
+      await gateway.closeLatest(1001, "permission scope downgraded");
+      await expect.poll(async () => (await gateway.getRequests("connect")).length).toBe(2);
+
+      const submit = page.getByRole("button", { name: "Start session" });
+      await expect.poll(() => submit.isDisabled()).toBe(true);
+      expect(await permission.getAttribute("data-chat-select-value")).toBe("full");
+      await permission.click();
+      const fullAccess = page.locator('[data-chat-permission-option="full"]');
+      await expect.poll(() => fullAccess.getAttribute("disabled")).not.toBeNull();
+      expect(await fullAccess.getAttribute("title")).toBe(
+        "Full access requires operator.admin access.",
+      );
+      await page.keyboard.press("Escape");
+      await page.locator(".new-session-page__message").press("Enter");
+
+      await pollLocatorText(
+        page.locator('.new-session-page__blocked-submit[role="status"]'),
+      ).toContain("This action requires operator.admin access.");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows paired devices, cloud profiles, and Connect to admins", async () => {
     const { context, page } = await openDraft([
       "operator.read",
@@ -267,7 +327,7 @@ suite.define(() => {
       await pollLocatorText(
         page.locator(".new-session-page__browser .new-session-page__error"),
       ).toContain(
-        "To browse outside agent workspaces, open the access status, request admin, then approve in Devices.",
+        "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
       );
     } finally {
       await context.close();

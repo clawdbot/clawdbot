@@ -337,9 +337,11 @@ export function installContextEngineLoopHook(params: {
   const transcriptProjectionCache = new WeakMap<AgentMessage, AgentMessage>();
 
   mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
+    signal?.throwIfAborted();
     const transformed = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
+    signal?.throwIfAborted();
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
     const transcriptMessages = projectTranscriptPromptMessages(
       sourceMessages,
@@ -413,10 +415,12 @@ export function installContextEngineLoopHook(params: {
                 message,
                 isHeartbeat: params.isHeartbeat,
               });
+              signal?.throwIfAborted();
             }
           }
         }
       }
+      signal?.throwIfAborted();
       lastSeenLength = transcriptMessages.length;
       params.onAfterTurnCheckpoint?.(lastSeenLength);
       lastSourceMessages = transcriptMessages;
@@ -428,6 +432,7 @@ export function installContextEngineLoopHook(params: {
         model: modelId,
         runtimeSettings: params.runtimeSettings,
       });
+      signal?.throwIfAborted();
       if (assembled && Array.isArray(assembled.messages)) {
         const repairedMessages =
           params.repairAssembledMessages?.(assembled.messages) ?? assembled.messages;
@@ -438,6 +443,7 @@ export function installContextEngineLoopHook(params: {
       }
       lastAssembledView = null;
     } catch {
+      signal?.throwIfAborted();
       // Best-effort: any engine failure falls through to the raw source
       // messages so the tool loop still makes forward progress.
       lastSeenLength = prePromptMessageCount;

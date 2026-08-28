@@ -34,6 +34,7 @@ import { findCachedShortSession, sessionKeyUuid } from "./route-loader-short-cac
 import {
   resolveShortSessionReference,
   type SessionReferenceResolution,
+  type SessionRoutePresentation,
 } from "./route-loader-short-resolve.ts";
 
 const SESSION_REF_SEARCH_LIMIT = 20;
@@ -341,7 +342,7 @@ function canonicalSessionLocation(params: {
   context: ApplicationContext;
   location: RouteLocation;
   face: BoardFace;
-  row: GatewaySessionRow;
+  row: SessionRoutePresentation;
   shortIdLength?: number;
 }): RouteLocation | null | undefined {
   const face = params.face;
@@ -433,7 +434,7 @@ function resolvedSessionRouteData(params: {
   context: ApplicationContext;
   location: RouteLocation;
   face: BoardFace;
-  row: GatewaySessionRow;
+  row: SessionRoutePresentation;
   preferenceDerived: boolean;
   shortId?: string;
 }): Extract<ChatRouteData, { kind: "session" }> | null {
@@ -465,7 +466,7 @@ function resolvedMainSessionRouteData(params: {
   context: ApplicationContext;
   location: RouteLocation;
   face: BoardFace;
-  row: GatewaySessionRow;
+  row: SessionRoutePresentation;
   target: Extract<SessionPathTarget, { kind: "main" }>;
   preferenceDerived: boolean;
 }): Extract<ChatRouteData, { kind: "session" }> | null {

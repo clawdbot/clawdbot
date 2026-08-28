@@ -220,7 +220,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
       return false;
     }
     const entry = block as { type?: unknown; textSignature?: unknown };
-    return entry.type === "text" && Boolean(parseAssistantTextSignature(entry)?.phase);
+    return isAssistantTextContentType(entry.type) && parseAssistantTextSignature(entry)?.phase;
   });
   if (!hasExplicitPhasedText) {
     return { content, changed: false };
@@ -230,7 +230,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
       return true;
     }
     const entry = block as { type?: unknown; textSignature?: unknown };
-    if (entry.type !== "text") {
+    if (!isAssistantTextContentType(entry.type)) {
       return true;
     }
     return parseAssistantTextSignature(entry)?.phase === "final_answer";
@@ -261,9 +261,12 @@ function projectAssistantMixedToolContent(
     if (!block || typeof block !== "object") {
       continue;
     }
-    const entry = block as { type?: unknown; text?: unknown };
+    const entry = block as { type?: unknown; text?: unknown; textSignature?: unknown };
     if (!isAssistantTextContentType(entry.type)) {
       projectedContent.push(block);
+      continue;
+    }
+    if (parseAssistantTextSignature(entry)?.phase === "commentary") {
       continue;
     }
     if (typeof entry.text !== "string" || !entry.text.trim()) {
@@ -279,6 +282,64 @@ function projectAssistantMixedToolContent(
   // Mixed messages supply both the visible bubble and its reasoning/tool trace.
   // Keep structured siblings or a history reload loses activity shown while live.
   return hasVisibleText ? { content: projectedContent, changed: true } : null;
+}
+
+function projectAssistantCommentaryFallbacks(message: unknown, maxChars: number): unknown[] {
+  if (!message || typeof message !== "object") {
+    return [];
+  }
+  const entry = readRecord(message);
+  if (
+    !entry ||
+    entry.role !== "assistant" ||
+    !Array.isArray(entry.content) ||
+    entry.stopReason === "error" ||
+    typeof entry.errorMessage === "string"
+  ) {
+    return [];
+  }
+  const transcriptMeta = readRecord(entry["__openclaw"]);
+  return entry.content.flatMap((block) => {
+    const content = readRecord(block);
+    if (!content) {
+      return [];
+    }
+    const signature = parseAssistantTextSignature(content);
+    const text = typeof content.text === "string" ? content.text : "";
+    const itemId = signature?.id?.trim();
+    if (
+      !isAssistantTextContentType(content.type) ||
+      signature?.phase !== "commentary" ||
+      !itemId ||
+      !text.trim()
+    ) {
+      return [];
+    }
+    const projected = truncateChatHistoryText(text, maxChars);
+    const projectedMeta = projected.truncated
+      ? {
+          ...transcriptMeta,
+          truncated: true,
+          reason:
+            typeof transcriptMeta?.reason === "string" ? transcriptMeta.reason : "display-cap",
+        }
+      : transcriptMeta
+        ? { ...transcriptMeta }
+        : undefined;
+    return [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: projected.text }],
+        ...(typeof entry.timestamp === "number" ? { timestamp: entry.timestamp } : {}),
+        openclawStreamFallback: {
+          replacementText: projected.text,
+          source: "segment",
+          itemId,
+        },
+        ...(projectedMeta ? { __openclaw: projectedMeta } : {}),
+      },
+    ];
+  });
 }
 
 function sanitizeCost(raw: unknown): Record<string, number> | undefined {
@@ -609,6 +670,7 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  opts?: { includeCommentaryFallbacks?: boolean },
 ): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -616,6 +678,13 @@ export function sanitizeChatHistoryMessages(
   let changed = false;
   const next: unknown[] = [];
   for (const message of messages) {
+    if (opts?.includeCommentaryFallbacks === true) {
+      for (const commentary of projectAssistantCommentaryFallbacks(message, maxChars)) {
+        const projected = sanitizeChatHistoryMessage(commentary, maxChars);
+        next.push(projected.message);
+        changed = true;
+      }
+    }
     if (shouldDropAssistantHistoryMessage(message)) {
       changed = true;
       continue;

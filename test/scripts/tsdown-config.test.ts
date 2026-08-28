@@ -1,7 +1,8 @@
 // Tsdown config tests protect package artifact build contracts.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { build } from "tsdown";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
@@ -9,9 +10,12 @@ import {
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worker-deploy-build-plugin.mts";
-import config from "../../tsdown.config.ts";
+import buildConfigs from "../../tsdown.config.ts";
+import { createScriptTestHarness } from "./test-helpers.js";
 
-const configs = Array.isArray(config) ? config : [config];
+const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
+const { createTempDir } = createScriptTestHarness();
+afterEach(() => vi.unstubAllEnvs());
 
 type TsdownConfig = (typeof configs)[number];
 type OutExtensions = NonNullable<TsdownConfig["outExtensions"]>;
@@ -36,6 +40,115 @@ const isWorkerBuildConfig = (config: TsdownConfig) =>
   isWorkerDeployConfig(config) || isWorkerRsyncReceiverConfig(config);
 
 describe("tsdown config", () => {
+  it.each(
+    ["runtime", "declarations", "worker", "receiver"].flatMap((target) =>
+      [false, true].map((verbose) => ({ target, verbose })),
+    ),
+  )(
+    "preserves dependency package boundaries for $target (verbose=$verbose)",
+    async ({ target, verbose }) => {
+      vi.stubEnv("OPENCLAW_BUILD_VERBOSE", verbose ? "1" : "0");
+      const root = fs.realpathSync(createTempDir("openclaw-tsdown-dependencies-"));
+      const declarations = target === "declarations";
+      const bundleAll = target === "worker" || target === "receiver";
+      const selected = configs.find(
+        target === "worker"
+          ? isWorkerDeployConfig
+          : target === "receiver"
+            ? isWorkerRsyncReceiverConfig
+            : (entry) =>
+                entry.name ===
+                (declarations ? TSDOWN_UNIFIED_DTS_CONFIG_GROUPS[0] : TSDOWN_UNIFIED_CONFIG_GROUP),
+      );
+      expect(selected).toBeDefined();
+      const packages = [
+        "@anthropic-ai/claude-agent-sdk",
+        "@anthropic-ai/vertex-sdk",
+        "@slack/bolt",
+        "@slack/web-api",
+        "@discordjs/voice",
+        "@lancedb/lancedb",
+        "@larksuiteoapi/node-sdk",
+        "@matrix-org/matrix-sdk-crypto-nodejs",
+        "@openclaw/ai",
+        "@vitest/expect",
+        "jimp",
+        "matrix-js-sdk",
+        "prism-media",
+        "sharp",
+        "typescript",
+        "vitest",
+        "zod",
+      ];
+      // No manifest dependencies: only phantom/transitive copies are resolvable.
+      // Automatic manifest externalization must not hide a missing build boundary.
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
+      const specifiers: string[] = [];
+      const expectedImports: string[] = [];
+      for (const name of packages) {
+        for (const packageName of [name, `${name}-extra`]) {
+          const packageRoot = path.join(root, "node_modules", packageName);
+          fs.mkdirSync(packageRoot, { recursive: true });
+          fs.writeFileSync(
+            path.join(packageRoot, "package.json"),
+            JSON.stringify({
+              name: packageName,
+              version: "1.0.0",
+              type: "module",
+              exports: {
+                ".": { types: "./index.d.ts", default: "./index.js" },
+                "./subpath": { types: "./index.d.ts", default: "./index.js" },
+              },
+            }),
+          );
+          fs.writeFileSync(
+            path.join(packageRoot, "index.js"),
+            "export const identity = import.meta.url;\n",
+          );
+          fs.writeFileSync(
+            path.join(packageRoot, "index.d.ts"),
+            "export interface Identity { value: string }\n",
+          );
+          const imports = [packageName, `${packageName}/subpath`];
+          specifiers.push(...imports);
+          if (!bundleAll && packageName === name && (name !== "zod" || declarations)) {
+            expectedImports.push(...imports);
+          }
+        }
+      }
+      const entry = path.join(root, declarations ? "entry.d.ts" : "entry.ts");
+      fs.writeFileSync(
+        entry,
+        specifiers
+          .map(
+            (specifier, index) =>
+              `export { ${declarations ? "type Identity" : "identity"} as value${index} } from ${JSON.stringify(specifier)};`,
+          )
+          .join("\n"),
+      );
+      const bundles = await build({
+        ...selected,
+        config: false,
+        cwd: root,
+        entry: [entry],
+        outDir: path.join(root, "dist"),
+        tsconfig: false,
+        dts: declarations ? { emitDtsOnly: true } : false,
+        logLevel: "silent",
+      });
+      try {
+        const imports = bundles.flatMap((bundle) =>
+          bundle.chunks.flatMap((chunk) => (chunk.type === "chunk" ? chunk.imports : [])),
+        );
+        expect(imports.toSorted()).toEqual(expectedImports.toSorted());
+      } finally {
+        for (const bundle of bundles) {
+          await bundle[Symbol.asyncDispose]();
+        }
+      }
+    },
+  );
+
   it.each(["tsdown.config.ts", "tsdown.ai.config.ts"])(
     "keeps %s free of runtime imports from tsdown",
     (configPath) => {

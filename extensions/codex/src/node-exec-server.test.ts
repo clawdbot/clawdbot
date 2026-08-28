@@ -1,4 +1,4 @@
-/** Protects paired-node policy, real pinned Codex stdio framing, and child cleanup. */
+/** Protects node policy, real pinned Codex stdio framing, and child cleanup. */
 import { once } from "node:events";
 import { access, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -136,8 +136,11 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("Codex paired-node exec-server", () => {
-  it("requires exact one-time approval before the dangerous explicit-allowlist command runs", async () => {
+describe("Codex node exec-server", () => {
+  it.each([
+    { host: "paired device", nodeId: "paired-node" },
+    { host: "cloud worker", nodeId: "cloud-worker-node" },
+  ])("requires critical one-time approval on a $host", async ({ nodeId }) => {
     const policy = createCodexNodeExecServerInvokePolicy();
     expect(policy.commands).toEqual([CODEX_NODE_EXEC_SERVER_COMMAND]);
     expect(policy.dangerous).toBe(true);
@@ -151,7 +154,7 @@ describe("Codex paired-node exec-server", () => {
     const request = vi.fn();
     const { placement } = createManagedWorkspaceInvocation(process.cwd());
     const context = {
-      nodeId: "paired-node",
+      nodeId,
       command: CODEX_NODE_EXEC_SERVER_COMMAND,
       params: placement,
       config: {},
@@ -195,14 +198,14 @@ describe("Codex paired-node exec-server", () => {
     expect(invokeNode).toHaveBeenCalledWith({ params: approvedPlacement });
     expect(request).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Run Codex execution on paired device",
-        description: expect.stringContaining(`paired-node: ${approvedPlacement.cwd}`),
+        title: "Run Codex execution on node",
+        description: expect.stringContaining(`${nodeId}: ${approvedPlacement.cwd}`),
         severity: "critical",
         allowedDecisions: ["allow-once"],
       }),
     );
     expect(request.mock.lastCall?.[0].description).toContain(
-      "arbitrary processes and filesystem access across the paired-device account",
+      "arbitrary processes and filesystem access across the node account",
     );
   });
 

@@ -281,11 +281,15 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`,
     `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`, or
     `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune the run.
-    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` selects the Telegram QA scenario to
-    sample; the supported RTT target is `channel-canary`. The package runner
-    promotes that portable canary once to the first position, making
-    canary+RTT the preflight before the remaining taxonomy-backed fail-fast
-    release scenarios.
+    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts zero or exactly one canonical
+    Telegram QA scenario id. When omitted, the normal lane samples
+    `channel-canary`; focused non-RTT scenario runs stay probe-free. An explicit
+    RTT scenario is included in scenario selection automatically, so callers do
+    not need to repeat it in `OPENCLAW_NPM_TELEGRAM_SCENARIOS`. Multiple ids
+    fail immediately, while unknown or inapplicable ids fail canonical scenario
+    validation. The package runner promotes the selected RTT scenario once to
+    the first position before the remaining taxonomy-backed fail-fast release
+    scenarios.
   - Uses the same Telegram env credentials or Convex credential source as
     `pnpm openclaw qa telegram`. For CI/release automation, set
     `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus
@@ -302,7 +306,11 @@ inside every shard.
     and `maintainer` outside CI.
   - GitHub Actions exposes this lane as the manual maintainer workflow
     `NPM Telegram Beta E2E`. It does not run on merge. The workflow uses the
-    `qa-live-shared` environment and Convex CI credential leases.
+    `qa-live-shared` environment and Convex CI credential leases. Set its
+    optional `rtt_scenario` input to select the repeated RTT scenario, or leave
+    it empty for the default behavior above. Enable
+    `allow_older_binary_destructive_actions` only for intentional historical
+    downgrade or recovery proof; it remains false by default.
 - GitHub Actions also exposes `Package Acceptance` for side-run product proof
   against one candidate package. It accepts a Git ref, published npm spec,
   HTTPS tarball URL plus SHA-256, trusted-URL policy, or tarball artifact
@@ -832,7 +840,9 @@ Native dependency policy:
 - Scope:
   - Reuses an active local OpenShell gateway
   - Creates a sandbox from a temporary local Dockerfile
-  - Exercises OpenClaw's OpenShell backend over real `sandbox ssh-config` + SSH exec
+  - Exercises remote and default mirrored OpenShell backends over real SSH
+  - Creates an isolated non-default OpenShell workspace and custom workspace roots
+  - Verifies nested mirrored file writes and excludes host Git metadata and hooks
   - Verifies remote-canonical filesystem behavior through the sandbox fs bridge
 - Expectations:
   - Opt-in only; not part of the default `pnpm test:e2e` run
@@ -843,7 +853,7 @@ Native dependency policy:
   - `OPENCLAW_E2E_OPENSHELL=1` to enable the test when running the broader e2e suite manually
   - `OPENCLAW_E2E_OPENSHELL_COMMAND=/path/to/openshell` to point at a non-default CLI binary or wrapper script
   - `OPENCLAW_E2E_OPENSHELL_CONFIG_HOME=/path/to/config` to expose the registered gateway config to the isolated test
-  - `OPENCLAW_E2E_OPENSHELL_HOST_IP=172.18.0.1` to override the Docker gateway IP used by the host policy fixture
+  - `OPENCLAW_E2E_OPENSHELL_HOST_IP=172.18.0.1` to override the sandbox-visible `host.openshell.internal` address used by the network policy fixture; Docker Desktop may resolve this differently from the bridge gateway
 
 ### Live (real providers + real models)
 
@@ -931,7 +941,7 @@ without mutating the host auth store:
 - Upgrade survivor smoke: `pnpm test:docker:upgrade-survivor` installs the packed OpenClaw tarball over a dirty old-user fixture with agents, channel config, plugin allowlists, stale plugin dependency state, and existing workspace/session files. It runs package update plus non-interactive doctor without live provider or channel keys, then starts a loopback Gateway and checks config/state preservation plus startup/status budgets.
 - Published upgrade survivor smoke: `pnpm test:docker:published-upgrade-survivor` installs `openclaw@latest` by default, seeds realistic existing-user files, configures that baseline with a baked command recipe, validates the resulting config, updates that published install to the candidate tarball, runs non-interactive doctor, writes `.artifacts/upgrade-survivor/summary.json`, then starts a loopback Gateway and checks configured intents, state preservation, startup, `/healthz`, `/readyz`, and RPC status budgets. Override one baseline with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, ask the aggregate scheduler to expand exact local baselines with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS` such as `openclaw@2026.5.2 openclaw@2026.4.23 openclaw@2026.4.15`, and expand issue-shaped fixtures with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` such as `reported-issues`; the reported-issues set includes `configured-plugin-installs` for automatic external OpenClaw plugin install repair. Package Acceptance exposes those as `published_upgrade_survivor_baseline`, `published_upgrade_survivor_baselines`, and `published_upgrade_survivor_scenarios`, resolves meta baseline tokens such as `last-stable-4` or `all-since-2026.4.23`, and Full Release Validation expands the release-soak package gate to `last-stable-4 2026.4.23 2026.5.2 2026.4.15` plus `reported-issues`.
 - Session runtime context smoke: `pnpm test:docker:session-runtime-context` verifies hidden runtime context transcript persistence plus doctor repair of affected duplicated prompt-rewrite branches.
-- Bun global install smoke: `bash scripts/e2e/bun-global-install-smoke.sh` packs the current tree, installs it with `bun install -g` in an isolated home, and verifies `openclaw infer image providers --json` returns bundled image providers instead of hanging. Reuse a prebuilt tarball with `OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host build with `OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0`, or copy `dist/` from a built Docker image with `OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE=openclaw-dockerfile-smoke:local`.
+- Bun global install and runtime smoke: `bash scripts/e2e/bun-global-install-smoke.sh` packs the current tree, installs it with `bun install -g --trust` in an isolated home, verifies OpenClaw's lifecycle scripts ran, and executes the installed package with Bun 1.4 or newer. It checks representative CLI state, bundled image providers, a mocked local agent turn, Gateway readiness and health, and a mocked agent turn through the Bun-hosted Gateway. Reuse a prebuilt tarball with `OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host build with `OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0`, or copy `dist/` from a built Docker image with `OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE=openclaw-dockerfile-smoke:local`.
 - Installer Docker smoke: `bash scripts/test-install-sh-docker.sh` shares one npm cache across its root, update, and direct-npm containers. Update smoke defaults to npm `latest` as the stable baseline before upgrading to the candidate tarball. Override with `OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE=2026.4.22` locally, or with the Install Smoke workflow's `update_baseline_version` input on GitHub. Non-root installer checks keep an isolated npm cache so root-owned cache entries do not mask user-local install behavior. Set `OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR=/path/to/cache` to reuse the root/update/direct-npm cache across local reruns.
 - Install Smoke CI skips the duplicate direct-npm global update with `OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL=1`; run the script locally without that env when direct `npm install -g` coverage is needed.
 - Agents delete shared workspace CLI smoke: `pnpm test:docker:agents-delete-shared-workspace` (script: `scripts/e2e/agents-delete-shared-workspace-docker.sh`) builds the root Dockerfile image by default, seeds two agents with one workspace in an isolated container home, runs `agents delete --json`, and verifies valid JSON plus retained workspace behavior. Reuse the install-smoke image with `OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE=openclaw-dockerfile-smoke:local OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD=1`.

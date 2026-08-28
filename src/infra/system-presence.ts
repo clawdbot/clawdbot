@@ -34,7 +34,11 @@ export type SystemPresence = {
     avatarUrl?: string;
   };
   watchedSessions?: string[];
+  /** Server-owned timing for the person's current continuous live interval. */
+  onlineSince?: number;
+  lastActivityAt?: number;
   text: string;
+  /** Heartbeat freshness, independent of person activity and online duration. */
   ts: number;
 };
 

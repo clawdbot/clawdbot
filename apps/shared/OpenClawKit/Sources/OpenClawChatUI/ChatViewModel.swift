@@ -1126,7 +1126,7 @@ extension OpenClawChatViewModel {
             self.hasAppliedLiveSessions = true
             self.syncSelectedModel()
             syncThinkingLevelOptions()
-            persistSessionsToCache(organized)
+            persistSessionsToCache(organized, agentID: session.deliveryAgentID)
             self.readySessionMetadataGeneration = metadataGeneration
             if self.healthOK {
                 reconcilePendingOutboxBranchScopes()

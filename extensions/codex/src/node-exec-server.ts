@@ -1,4 +1,4 @@
-/** Declares the explicitly approved, lazily loaded paired-node Codex exec-server. */
+/** Declares the explicitly approved, lazily loaded node-backed Codex exec-server. */
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
@@ -104,7 +104,7 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
   };
 }
 
-/** Keeps paired-device exec-server launch behind explicit arming and one-time approval. */
+/** Keeps node exec-server launch behind explicit arming and one-time approval. */
 export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvokePolicy {
   return {
     commands: [CODEX_NODE_EXEC_SERVER_COMMAND],
@@ -115,7 +115,7 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
         return {
           ok: false,
           code: "CODEX_NODE_EXEC_APPROVAL_REQUIRED",
-          message: "Codex paired-device execution requires an available approval reviewer.",
+          message: "Codex node execution requires an available approval reviewer.",
         };
       }
       let placement: ReturnType<typeof parseCodexNodePlacementWorkspace>;
@@ -125,13 +125,13 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
         return {
           ok: false,
           code: "CODEX_NODE_EXEC_WORKSPACE_INVALID",
-          message: "Codex paired-device execution requires an exact managed placement workspace.",
+          message: "Codex node execution requires an exact managed placement workspace.",
         };
       }
-      const deviceName = context.node?.displayName ?? context.nodeId;
+      const nodeName = context.node?.displayName ?? context.nodeId;
       const approval = await context.approvals.request({
-        title: "Run Codex execution on paired device",
-        description: `${deviceName}: ${placement.cwd}; allows arbitrary processes and filesystem access across the paired-device account, not only this workspace.`,
+        title: "Run Codex execution on node",
+        description: `${nodeName}: ${placement.cwd}; allows arbitrary processes and filesystem access across the node account, not only this workspace.`,
         severity: "critical",
         allowedDecisions: ["allow-once"],
       });
@@ -139,7 +139,7 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
         return {
           ok: false,
           code: "CODEX_NODE_EXEC_APPROVAL_DENIED",
-          message: "Codex paired-device execution requires one-time approval.",
+          message: "Codex node execution requires one-time approval.",
         };
       }
       return await context.invokeNode({ params: placement });

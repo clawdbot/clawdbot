@@ -14,8 +14,11 @@ private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category:
 actor GatewayConnection {
     static let shared = GatewayConnection(
         endpointProvider: GatewayConnection.defaultEndpointProvider)
-    nonisolated static let operatorClientCaps =
-        [OpenClawGatewayClientCapability.agentKind, OpenClawGatewayClientCapability.inlineWidgets]
+    nonisolated static let operatorClientCaps = [
+        OpenClawGatewayClientCapability.agentKind,
+        OpenClawGatewayClientCapability.inlineWidgets,
+        OpenClawGatewayClientCapability.usageRefreshing,
+    ]
 
     typealias Config = (url: URL, token: String?, password: String?)
 
@@ -114,6 +117,7 @@ actor GatewayConnection {
         case devicePairList = "device.pair.list"
         case devicePairApprove = "device.pair.approve"
         case devicePairReject = "device.pair.reject"
+        case execApprovalList = "exec.approval.list"
         case execApprovalResolve = "exec.approval.resolve"
         case approvalResolve = "approval.resolve"
         case cronList = "cron.list"
@@ -1518,7 +1522,9 @@ extension GatewayConnection {
         if let phase {
             params["phase"] = AnyCodable(phase)
         }
-        try? await self.requestVoid(method: .talkMode, params: params)
+        // Phase broadcasts report UI state; a failed notification must not start
+        // the Gateway or restart its tunnel. Talk startup owns that recovery.
+        _ = try? await self.request(method: Method.talkMode.rawValue, params: params, retryTransportFailures: false)
     }
 
     // MARK: - VoiceWake

@@ -116,6 +116,8 @@ type AttemptControl = {
 
 export async function dispatchEmbeddedRunAttempt(input: {
   params: InternalRunParams;
+  /** Run-owned start timestamp captured before admission; projected on recovery. */
+  runStartedAtMs: number;
   runtime: AttemptRuntime;
   transcriptOwnership: AttemptTranscriptOwnership;
   control: AttemptControl;
@@ -246,12 +248,11 @@ export async function dispatchEmbeddedRunAttempt(input: {
   if (!params.admittedRunContext) {
     throw new Error("embedded attempt reached dispatch without an admitted run context");
   }
-  const execOverrides = params.permissionMode
-    ? {
-        ...params.execOverrides,
-        mode: resolveSessionPermissionExecMode({ mode: params.permissionMode }),
-      }
-    : params.execOverrides;
+  if (params.permissionMode) {
+    // Attempts narrow this shared run-owned policy before recovery can reuse it.
+    params.execOverrides ??= {};
+    params.execOverrides.mode = resolveSessionPermissionExecMode({ mode: params.permissionMode });
+  }
   const incognitoSystemPrompt = appendIncognitoSystemPrompt({
     agentId: runtime.agentId,
     extraSystemPrompt: params.extraSystemPrompt,
@@ -270,6 +271,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
   });
   const attemptParams: EmbeddedRunAttemptParams = {
     admittedRunContext: params.admittedRunContext,
+    startedAtMs: input.runStartedAtMs,
     contextEngineAgentId: runtime.contextEngineAgentId,
     ...(control.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
     operation: "attempt",
@@ -284,6 +286,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
     toolBindings: params.toolBindings,
+    // Preserve the Gateway's tri-state capability; undefined hides both GitHub tools.
+    githubPublicationAvailable: params.githubPublicationAvailable,
     chatType: params.chatType,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
@@ -421,7 +425,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     reasoningLevel: params.reasoningLevel,
     toolResultFormat: runtime.toolResultFormat,
     toolProgressDetail: params.toolProgressDetail,
-    execOverrides,
+    execOverrides: params.execOverrides,
     bashElevated: params.bashElevated,
     timeoutMs: params.timeoutMs,
     runTimeoutOverrideMs: params.runTimeoutOverrideMs,
@@ -483,6 +487,10 @@ export async function dispatchEmbeddedRunAttempt(input: {
     scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
     scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
     toolsAllow: params.toolsAllow,
+    toolExecutionAllow: params.toolExecutionAllow,
+    // Authorized prompt enrichment needs the exact prepared turn policy identity.
+    toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+    sessionPersistence: params.sessionPersistence,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     disableMessageTool: params.disableMessageTool,

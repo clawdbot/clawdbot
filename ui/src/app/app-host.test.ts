@@ -22,6 +22,7 @@ import {
   resetAppHostTestGlobals,
   type ShellKeyboardState,
   type TestOptionalCustomElement,
+  stubRenderedWhenDefined,
 } from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
 import type {
@@ -29,8 +30,8 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
-import "./app-host.ts";
 import type { LazyCustomElementRequestController } from "./lazy-custom-element.ts";
+import "./app-host.ts";
 import {
   persistLazyShellAction,
   readLazyShellAction,
@@ -741,21 +742,6 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     ).toBe(false);
   });
 
-  it("wires merged header window events for the shell lifecycle", () => {
-    const addEventListener = vi.spyOn(window, "addEventListener");
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
-
-    shell.connectedCallback();
-
-    expect(addEventListener).toHaveBeenCalledWith(COMMAND_PALETTE_OPEN_EVENT, expect.any(Function));
-    expect(addEventListener).toHaveBeenCalledWith(
-      SHELL_NAV_DRAWER_TOGGLE_EVENT,
-      expect.any(Function),
-    );
-    shell.disconnectedCallback();
-    addEventListener.mockRestore();
-  });
-
   it("prevents unhandled window file drops without overriding accepted targets", () => {
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
     const acceptedDropTarget = document.createElement("div");
@@ -796,24 +782,23 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     }
   });
 
-  it("suppresses modal focus restoration when the navigation drawer closes without restoring focus", () => {
+  it("keeps focus in place when the navigation drawer closes without restoration", () => {
     const shell = document.createElement("openclaw-app-shell") as ShellNavDrawerCloseState;
-    const modal = document.createElement("openclaw-modal-dialog");
-    const setReturnFocusTarget = vi.fn();
-    modal.className = "drawer nav-drawer";
-    Object.defineProperty(modal, "setReturnFocusTarget", { value: setReturnFocusTarget });
-    shell.append(modal);
+    const trigger = document.body.appendChild(document.createElement("button"));
+    const restoreTriggerFocus = vi.spyOn(trigger, "focus");
     shell.navDrawerOpen = true;
-    shell.navDrawerTrigger = document.createElement("button");
+    shell.navDrawerTrigger = trigger;
 
     shell.closeNavDrawer();
 
-    expect(setReturnFocusTarget).toHaveBeenCalledExactlyOnceWith(null);
+    expect(restoreTriggerFocus).not.toHaveBeenCalled();
     expect(shell.navDrawerOpen).toBe(false);
     expect(shell.navDrawerTrigger).toBeNull();
+    trigger.remove();
   });
 
-  it("closes an open navigation drawer before moving its sidebar into desktop layout", () => {
+  it("closes an open navigation drawer before moving its sidebar into desktop layout", async () => {
+    await import("../components/app-sidebar.ts");
     vi.stubGlobal("matchMedia", () => ({ matches: false }));
     const shell = document.createElement("openclaw-app-shell") as ShellNavDrawerCloseState;
     const updateNavigation = vi.fn();
@@ -825,14 +810,11 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         },
       } as unknown as ApplicationContext,
     };
-    const sidebar = document.createElement("openclaw-app-sidebar");
-    const dismissTransientMenus = vi.fn(() => true);
-    Object.defineProperty(sidebar, "dismissTransientMenus", { value: dismissTransientMenus });
-    const modal = document.createElement("openclaw-modal-dialog");
-    const setReturnFocusTarget = vi.fn();
-    modal.className = "drawer nav-drawer";
-    Object.defineProperty(modal, "setReturnFocusTarget", { value: setReturnFocusTarget });
-    shell.append(sidebar, modal);
+    const sidebar = document.createElement("openclaw-app-sidebar") as HTMLElement & {
+      dismissTransientMenus: () => boolean;
+    };
+    const dismissTransientMenus = vi.spyOn(sidebar, "dismissTransientMenus").mockReturnValue(true);
+    shell.append(sidebar);
     const trigger = document.body.appendChild(document.createElement("button"));
     const restoreTriggerFocus = vi.spyOn(trigger, "focus");
     const closeNavDrawer = vi.spyOn(shell, "closeNavDrawer");
@@ -843,7 +825,6 @@ describe("OpenClaw shell keyboard shortcuts", () => {
 
     expect(closeNavDrawer).toHaveBeenCalledExactlyOnceWith({ restoreFocus: false });
     expect(dismissTransientMenus).toHaveBeenCalledOnce();
-    expect(setReturnFocusTarget).toHaveBeenCalledExactlyOnceWith(null);
     expect(restoreTriggerFocus).not.toHaveBeenCalled();
     expect(shell.navDrawerOpen).toBe(false);
     expect(shell.navDrawerTrigger).toBeNull();
@@ -890,16 +871,9 @@ describe("OpenClaw shell keyboard shortcuts", () => {
 
   it("normalizes an unloaded palette toggle shortcut to open", async () => {
     const element = createLazyElementSpec("command palette");
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
-    shell.commandPaletteElement = element;
     const openPalette = vi.fn();
-    Object.defineProperty(shell, "updateComplete", { get: () => Promise.resolve(true) });
-    Object.defineProperty(shell, "commandPalette", {
-      get: () =>
-        customElements.get(element.tagName)
-          ? { isOpen: false, openPalette, togglePalette: vi.fn() }
-          : undefined,
-    });
+    const shell = configureLazyPaletteShell(element, openPalette);
+    stubRenderedWhenDefined(shell);
     const event = new KeyboardEvent("keydown", {
       key: "л",
       code: "KeyK",

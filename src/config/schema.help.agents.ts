@@ -1,16 +1,10 @@
 // Defines user-facing config field help text for docs and UI surfaces.
 export const AGENT_FIELD_HELP: Record<string, string> = {
-  ui: "UI presentation settings for accenting and assistant identity shown in control surfaces. Use this for branding and readability customization without changing runtime behavior.",
+  ui: "UI presentation settings for accenting and operator display preferences. Use this for readability customization without changing runtime behavior.",
   "ui.seamColor":
     "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
   "ui.prefs.accent":
     "User-selected Control UI accent color in #RRGGBB format. Overrides ui.seamColor; clear it to restore the configured seam color or theme default.",
-  "ui.assistant":
-    "Assistant display identity settings for name and avatar shown in UI surfaces. Keep these values aligned with your operator-facing persona and support expectations.",
-  "ui.assistant.name":
-    "Display name shown for the assistant in UI views, chat chrome, and status contexts. Keep this stable so operators can reliably identify which assistant persona is active.",
-  "ui.assistant.avatar":
-    "Assistant avatar image source used in UI surfaces (URL, path, or data URI depending on runtime support). Use trusted assets and consistent branding dimensions for clean rendering.",
   tui: "Terminal UI display settings. Use this section for terminal-only presentation preferences without changing Gateway or other UI behavior.",
   "tui.footer":
     "Terminal UI footer display settings. Keep optional context compact so session, model, goal, and token information stay readable.",
@@ -157,7 +151,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.model":
     "Optional provider/model or configured bare alias used only for compaction summarization. Bare aliases resolve before dispatch; a configured literal model ID wins if it collides with an alias. Leave unset to keep using the primary agent model.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
-    'Byte threshold that triggers normal preflight local compaction when the active session transcript reaches this size (bytes or strings like "20mb"). Set to 0 or leave unset to disable. Also caps Codex app-server native rollout transcripts; oversized native threads restart fresh.',
+    'Byte threshold that triggers normal preflight local compaction when the transcript window the model sees (since the latest compaction or reset) reaches this size (bytes or strings like "20mb"). Set to 0 or leave unset to disable. Also caps Codex app-server native rollout transcripts; oversized native threads restart fresh.',
   "agents.defaults.compaction.notifyUser":
     "When enabled, sends brief context-maintenance notices to the user: when compaction starts and completes (for example, '🧹 Compacting context...' and '🧹 Compaction complete'), and when a pre-compaction memory flush is exhausted so the reply continues in a degraded state (for example, '⚠️ Memory maintenance temporarily failed; continuing your reply.'). Disabled by default to keep context maintenance silent and non-intrusive.",
   "agents.defaults.compaction.memoryFlush":
@@ -169,7 +163,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
-    'Forces pre-compaction memory flush when active transcript size reaches this threshold (bytes or strings like "2mb"). Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
+    'Forces pre-compaction memory flush when the model-visible transcript window reaches this threshold (bytes or strings like "2mb"). After compaction, this includes the retained tail and subsequent turns rather than discarded history. Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
   "agents.defaults.embeddedAgent":
     "Embedded OpenClaw runner hardening controls for how workspace-local agent settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":

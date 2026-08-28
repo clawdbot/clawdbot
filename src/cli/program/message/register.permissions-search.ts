@@ -11,9 +11,7 @@ export function registerMessagePermissionsCommand(message: Command, helpers: Mes
         message.command("permissions").description("Fetch channel permissions"),
       ),
     )
-    .action(async (opts) => {
-      await helpers.runMessageAction("permissions", opts);
-    });
+    .action((opts) => helpers.runMessageAction("permissions", opts));
 }
 
 /** Register Discord message search command and repeatable filters. */
@@ -27,7 +25,5 @@ export function registerMessageSearchCommand(message: Command, helpers: MessageC
     .option("--author-id <id>", "Author id")
     .option("--author-ids <id>", "Author id (repeat)", collectOption, [] as string[])
     .option("--limit <n>", "Result limit")
-    .action(async (opts) => {
-      await helpers.runMessageAction("search", opts);
-    });
+    .action((opts) => helpers.runMessageAction("search", opts));
 }

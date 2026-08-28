@@ -5,6 +5,7 @@ import fsp from "node:fs/promises";
 import type { ClientRequest, IncomingMessage } from "node:http";
 import path from "node:path";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
+import type { WorkspaceHashMemo } from "../gateway/worker-environments/workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_MANIFEST_BYTES,
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
@@ -19,7 +20,7 @@ import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/wor
 import { isPathInside } from "../infra/path-guards.js";
 import { tempWorkspace } from "../infra/private-temp-workspace.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { runCommandWithTimeout, runExec } from "../process/exec.js";
+import { runExec } from "../process/exec.js";
 import {
   nodeWorkspaceTransferBlobPath,
   NodeWorkerWorkspaceTransferError,
@@ -33,8 +34,13 @@ import {
   openNodeWorkerTransferHttpRequest,
   type NodeWorkerTransferHttpRequest,
 } from "./node-worker-transfer-http.js";
+import {
+  captureManifest,
+  runWorkspaceCommand,
+  TRANSFER_TIMEOUT_MS,
+  workspaceCommandEnv,
+} from "./node-worker-workspace-commands.js";
 
-const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const TRANSFER_RESULT_MAX_BYTES = 64 * 1024;
 const transferLog = createSubsystemLogger("node-host/worker-workspace");
 
@@ -88,7 +94,10 @@ async function downloadFile(params: {
 }): Promise<void> {
   const response = await openNodeWorkerTransferHttpRequest(params.request);
   await requireOk(response);
-  const output = fs.createWriteStream(params.destination, { flags: "wx", mode: 0o600 });
+  const output = fs.createWriteStream(params.destination, {
+    flags: "wx",
+    mode: 0o600,
+  });
   const hash = createHash("sha256");
   let bytes = 0;
   try {
@@ -129,67 +138,6 @@ function workspacePath(root: string, relative: string): string {
     throw new Error("workspace transfer manifest escaped its workspace");
   }
   return candidate;
-}
-
-function workspaceCommandEnv(homeDir: string): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    HOME: homeDir,
-    ...(process.platform === "win32" ? { USERPROFILE: homeDir } : {}),
-    GCM_INTERACTIVE: "Never",
-    GIT_ASKPASS: "",
-    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-    SSH_ASKPASS: "",
-  };
-}
-
-async function runWorkspaceCommand(params: {
-  workspaceDir: string;
-  homeDir: string;
-  argv: string[];
-  input?: string | Uint8Array;
-  signal?: AbortSignal;
-  maxOutputBytes?: number;
-}): Promise<string> {
-  const maxOutputBytes = params.maxOutputBytes ?? 128 * 1024;
-  const result = await runCommandWithTimeout(params.argv, {
-    cwd: params.workspaceDir,
-    baseEnv: workspaceCommandEnv(params.homeDir),
-    ...(params.input === undefined ? {} : { input: params.input }),
-    timeoutMs: TRANSFER_TIMEOUT_MS,
-    signal: params.signal,
-    maxOutputBytes,
-    maxCombinedOutputBytes: maxOutputBytes + 128 * 1024,
-  });
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw new Error(`workspace transfer apply failed: ${(result.stderr || result.stdout).trim()}`);
-  }
-  return result.stdout;
-}
-
-async function captureManifest(params: {
-  workspaceDir: string;
-  manifestHome: string;
-  baseCommit: string | null;
-  signal?: AbortSignal;
-}): Promise<string> {
-  return (
-    await runWorkspaceCommand({
-      workspaceDir: params.workspaceDir,
-      homeDir: params.manifestHome,
-      argv: [
-        "node",
-        "-e",
-        REMOTE_WORKSPACE_MANIFEST_JS,
-        params.workspaceDir,
-        params.baseCommit ?? "",
-        ...(params.baseCommit ? ["eligible"] : []),
-      ],
-      signal: params.signal,
-    })
-  ).trim();
 }
 
 async function initializeGitWorkspace(params: {
@@ -371,7 +319,9 @@ async function replaceWorkspace(workspaceDir: string, staging: string): Promise<
         const recoveryError = new Error(`workspace transfer rollback failed; recover ${backup}`, {
           cause: error,
         });
-        Object.defineProperty(recoveryError, "rollbackError", { value: rollbackError });
+        Object.defineProperty(recoveryError, "rollbackError", {
+          value: rollbackError,
+        });
         throw recoveryError;
       }
     }
@@ -391,6 +341,7 @@ async function downloadWorkspace(params: {
   workspaceDir: string;
   manifestHome: string;
   transfer: Extract<NodeWorkerWorkspaceTransferInput, { direction: "download" }>;
+  hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
 }): Promise<string> {
   const startedAt = performance.now();
@@ -417,6 +368,26 @@ async function downloadWorkspace(params: {
   });
   const staging = stagingWorkspace.dir;
   try {
+    if (process.platform === "win32") {
+      const published = await runWorkspaceCommand({
+        workspaceDir: staging,
+        homeDir: params.manifestHome,
+        argv: [
+          "node",
+          "-e",
+          REMOTE_WORKSPACE_MANIFEST_JS,
+          staging,
+          manifest.baseCommit ?? "",
+          "publish",
+          params.transfer.manifestRef.slice("sha256:".length),
+        ],
+        input: raw,
+        signal: params.signal,
+      });
+      if (published.trim() !== params.transfer.manifestRef) {
+        throw new Error("workspace transfer manifest publication acknowledgement is invalid");
+      }
+    }
     if (manifest.baseCommit) {
       const packPath = path.join(staging, ".openclaw-base.pack");
       const packStartedAt = performance.now();
@@ -447,14 +418,24 @@ async function downloadWorkspace(params: {
     }
     const blobApplyStartedAt = performance.now();
     for (const directory of manifest.directories ?? []) {
-      await fsp.mkdir(workspacePath(staging, directory), { recursive: true, mode: 0o700 });
+      await fsp.mkdir(workspacePath(staging, directory), {
+        recursive: true,
+        mode: 0o700,
+      });
     }
     for (const entry of manifest.entries) {
       const destination = workspacePath(staging, entry.path);
-      if (manifest.baseCommit && (await absoluteEntryMatches(destination, entry))) {
+      const materializedEntry =
+        process.platform === "win32" && entry.type === "file" && entry.mode === 0o755
+          ? { ...entry, mode: 0o644 }
+          : entry;
+      if (manifest.baseCommit && (await absoluteEntryMatches(destination, materializedEntry))) {
         continue;
       }
-      await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+      await fsp.mkdir(path.dirname(destination), {
+        recursive: true,
+        mode: 0o700,
+      });
       await fsp.rm(destination, { recursive: true, force: true });
       if (entry.type === "symlink") {
         await fsp.symlink(entry.target, destination);
@@ -477,10 +458,14 @@ async function downloadWorkspace(params: {
       await fsp.chmod(destination, entry.mode);
     }
     const blobApplyMs = performance.now() - blobApplyStartedAt;
+    // Staging identities are fresh, so this capture re-hashes; its memo output
+    // survives the rename into workspaceDir and seeds the next upload capture.
     const observed = await captureManifest({
       workspaceDir: staging,
       manifestHome: params.manifestHome,
       baseCommit: manifest.baseCommit,
+      referenceManifestRef: params.transfer.manifestRef,
+      ...(params.hashMemo === undefined ? {} : { hashMemo: params.hashMemo }),
       signal: params.signal,
     });
     if (observed !== params.transfer.manifestRef) {
@@ -524,6 +509,7 @@ async function uploadWorkspace(params: {
   workspaceDir: string;
   manifestHome: string;
   transfer: Extract<NodeWorkerWorkspaceTransferInput, { direction: "upload" }>;
+  hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
 }): Promise<string> {
   const baseRaw = await fsp.readFile(
@@ -540,6 +526,8 @@ async function uploadWorkspace(params: {
     workspaceDir: params.workspaceDir,
     manifestHome: params.manifestHome,
     baseCommit: base.baseCommit,
+    referenceManifestRef: params.transfer.baseManifestRef,
+    ...(params.hashMemo === undefined ? {} : { hashMemo: params.hashMemo }),
     signal: params.signal,
   });
   const currentRaw = await fsp.readFile(
@@ -612,6 +600,7 @@ export async function runNodeWorkerWorkspaceTransfer(params: {
   workspaceDir: string;
   manifestHome: string;
   transfer: NodeWorkerWorkspaceTransferInput;
+  hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
 }): Promise<string> {
   try {

@@ -91,7 +91,8 @@ describe("CodexAppServerEventProjector assistant projection", () => {
   });
 
   it("projects a current-turn model reroute onto the terminal assistant", async () => {
-    const projector = await createProjector();
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
     await projector.handleNotification(
       forCurrentTurn("model/rerouted", {
         fromModel: "gpt-5.4-codex",
@@ -109,6 +110,14 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     expect(result.lastAssistant?.responseModel).toBe("gpt-5.4-codex-mini");
     expect(result).toMatchObject({
       terminalTurnId: "turn-1",
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "fallback",
+      data: {
+        fromModel: "gpt-5.4-codex",
+        toModel: "gpt-5.4-codex-mini",
+        reason: "high_risk_cyber_activity",
+      },
     });
   });
 
@@ -373,6 +382,23 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     expect(result.assistantTexts).toEqual(["Replacement draft"]);
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("NO_REPLY");
+  });
+
+  it("omits a silent completed answer from the steering transcript boundary", async () => {
+    const projector = await createProjector(await createParams());
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "silent-before-steer",
+          phase: "final_answer",
+          text: "NO_REPLY",
+        },
+      }),
+    );
+
+    expect(projector.buildSteeringTranscriptPrefix()).toEqual([]);
   });
 
   it("drops a pre-sleep final after a later sleep handoff", async () => {

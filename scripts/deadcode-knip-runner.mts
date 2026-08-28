@@ -1,7 +1,7 @@
 import { spawn, type SpawnOptions } from "node:child_process";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 
-const KNIP_VERSION = "6.8.0";
+const KNIP_VERSION = "6.32.2";
 const KNIP_TIMEOUT_MS = 10 * 60 * 1000;
 const KNIP_KILL_GRACE_MS = 5_000;
 const KNIP_PROCESS_TREE_EXIT_POLL_MS = 25;

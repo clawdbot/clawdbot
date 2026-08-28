@@ -34,7 +34,8 @@ inputs:
     required: true
   invalidation-paths:
     description: Newline-delimited generator input paths that make an older run stale.
-    required: true
+    required: false
+    default: ""
   working-directory:
     description: Repository root containing the generated files.
     required: false
@@ -123,10 +124,6 @@ runs:
             invalidation_paths+=("${invalidation_path}")
           fi
         done <<< "${INVALIDATION_PATHS}"
-        if [[ "${#invalidation_paths[@]}" -eq 0 ]]; then
-          echo "Generated PR publication requires at least one invalidation path." >&2
-          exit 1
-        fi
 
         find_open_pr() {
           timeout --signal=TERM --kill-after=10s 60s \
@@ -143,7 +140,8 @@ runs:
             echo "::error::Resolved workflow source is not an ancestor of latest ${BASE_BRANCH}."
             return 1
           fi
-          if ! git diff --quiet "${source_commit}" "${base_ref}" -- "${invalidation_paths[@]}"; then
+          if [[ "${#invalidation_paths[@]}" -gt 0 ]] &&
+            ! git diff --quiet "${source_commit}" "${base_ref}" -- "${invalidation_paths[@]}"; then
             neutralize_outcome=stale-input
           elif find_owned_path_overlap; then
             neutralize_outcome=overlap
@@ -274,7 +272,8 @@ runs:
 
           # A completed older run must never publish output after a newer base changed generator
           # inputs. The caller chooses whether a guaranteed successor can own reconciliation.
-          if ! git diff --quiet "${source_commit}" "${base_ref}" -- "${invalidation_paths[@]}"; then
+          if [[ "${#invalidation_paths[@]}" -gt 0 ]] &&
+            ! git diff --quiet "${source_commit}" "${base_ref}" -- "${invalidation_paths[@]}"; then
             echo "::notice::Stale generated output detected because generator inputs changed on ${BASE_BRANCH}."
             prepare_outcome=stale-input
             return 0

@@ -918,7 +918,9 @@ describe("gateway agent handler", () => {
     ["data", "data:image/png;base64,aaaa"],
     ["text", "PS"],
   ] as const)("preserves %s avatar values in agent.identity.get", async (_kind, avatar) => {
-    mocks.loadConfigReturn = { ui: { assistant: { avatar } } };
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main", identity: { avatar } }] },
+    };
 
     const respond = await invokeAgentIdentityGet(
       { sessionKey: "agent:main:main" },
@@ -931,7 +933,7 @@ describe("gateway agent handler", () => {
   it("prefixes same-origin avatar routes in agent.identity.get when Control UI has a base path", async () => {
     mocks.loadConfigReturn = {
       gateway: { controlUi: { basePath: "/openclaw" } },
-      ui: { assistant: { avatar: "/avatar/main" } },
+      agents: { list: [{ id: "main", identity: { avatar: "/avatar/main" } }] },
     };
 
     const respond = await invokeAgentIdentityGet(

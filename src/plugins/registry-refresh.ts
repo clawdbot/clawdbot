@@ -4,7 +4,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import type { InstalledPluginIndexRefreshReason } from "./installed-plugin-index.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
-import { refreshPluginRegistry } from "./plugin-registry.js";
+import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 
 /** Optional warning sink for best-effort registry/cache refresh failures. */
 export type PluginRegistryRefreshLogger = {

@@ -152,6 +152,7 @@ struct OnboardingViewSmokeTests {
 
         #expect(view.selectedConnectionMode == .local)
         #expect(view.isConnectionSelectionBlocking)
+        #expect(view.pageOrder == [0, 1, 2, 3])
         #expect(state.connectionMode == .unconfigured)
     }
 
@@ -163,6 +164,7 @@ struct OnboardingViewSmokeTests {
 
         #expect(view.selectedConnectionMode == .unconfigured)
         #expect(!view.isConnectionSelectionBlocking)
+        #expect(view.pageOrder == [0, 1, 9])
         #expect(state.connectionMode == .unconfigured)
     }
 
@@ -175,6 +177,22 @@ struct OnboardingViewSmokeTests {
         view.commitRecommendedConnectionIfNeeded(for: view.connectionPageIndex)
 
         #expect(state.connectionMode == .local)
+    }
+
+    @Test func `choosing another computer never commits the recommended local gateway`() {
+        let state = AppState(preview: true)
+        state.onboardingSeen = false
+        state.connectionMode = .unconfigured
+        let view = OnboardingView(state: state)
+
+        view.handleRemoteSelection()
+
+        #expect(view.selectedConnectionMode == .remote)
+        #expect(state.connectionMode == .remote)
+
+        view.commitRecommendedConnectionIfNeeded(for: view.connectionPageIndex)
+
+        #expect(state.connectionMode == .remote)
     }
 
     @Test func `automatic CLI setup waits for the initial status probe`() {
@@ -230,6 +248,36 @@ struct OnboardingViewSmokeTests {
             executableReady: false,
             installing: false) == nil)
         #expect(!OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .remote))
+    }
+
+    @Test func `paused gateway keeps CLI setup and recovery visible after every install path`() {
+        for afterFreshInstall in [false, true] {
+            let outcome = OnboardingView.localGatewayActivationOutcome(
+                .deferred,
+                afterFreshInstall: afterFreshInstall)
+
+            #expect(!outcome.ready)
+            #expect(OnboardingView.pageOrder(for: .local, requiresCLIInstall: !outcome.ready) == [0, 1, 2, 3])
+            #expect(outcome.status == "OpenClaw is paused. Resume it, then retry setup to start the Gateway.")
+        }
+    }
+
+    @Test func `local gateway activation preserves readiness and concrete failure reasons`() {
+        for afterFreshInstall in [false, true] {
+            let ready = OnboardingView.localGatewayActivationOutcome(
+                .ready,
+                afterFreshInstall: afterFreshInstall)
+            #expect(ready.ready)
+            #expect(ready.status == "OpenClaw Gateway is ready.")
+
+            let failure = OnboardingView.localGatewayActivationOutcome(
+                .failed(reason: "launchd disabled"),
+                afterFreshInstall: afterFreshInstall)
+            #expect(!failure.ready)
+            #expect(failure.status == (afterFreshInstall
+                    ? "OpenClaw was installed, but the Gateway did not start. Retry setup. (launchd disabled)"
+                    : "OpenClaw is installed, but the Gateway did not start. Retry setup. (launchd disabled)"))
+        }
     }
 
     @Test func `later gateway readiness revises a pinned CLI activation failure`() {

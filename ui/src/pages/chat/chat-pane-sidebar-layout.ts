@@ -24,6 +24,7 @@ import {
   reorderPanel,
   setSidebarDock,
   setSidebarExpanded,
+  setSidebarOpen,
   sidebarDock,
   type SidebarLayout,
   type SidebarSlotId,
@@ -101,6 +102,7 @@ function ensureLazyElement(key: LazyElementKey, requestUpdate: () => void) {
  */
 export function sidebarRegionCallbacks(params: {
   state: ChatPageHost;
+  layout: SidebarLayout;
   closePanelSlot: (slot: SidebarSlotId) => void;
   openPanelSlot: (slot: SidebarSlotId) => void;
   hideBoard: () => void;
@@ -108,10 +110,10 @@ export function sidebarRegionCallbacks(params: {
   resizePanel: (columnId: string, size: number) => void;
   setPanelOpen: (open: boolean) => void;
 }): SidebarRegionCallbacks {
-  const { state } = params;
+  const { layout, state } = params;
   return {
     activatePanel: (panelId) => {
-      state.updateSidebarLayout(activatePanel(state.sidebarLayout, panelId));
+      state.updateSidebarLayout(activatePanel(layout, panelId));
       state.updateSidebarActivePanel(panelId);
     },
     closeSlot: (slot) => {
@@ -126,13 +128,10 @@ export function sidebarRegionCallbacks(params: {
     },
     openSlot: params.openPanelSlot,
     reorderPanel: (panelId, targetPanelId, placement) =>
-      state.updateSidebarLayout(
-        reorderPanel(state.sidebarLayout, panelId, targetPanelId, placement),
-      ),
+      state.updateSidebarLayout(reorderPanel(layout, panelId, targetPanelId, placement)),
     resizePanel: params.resizePanel,
-    setDock: (dock) => state.updateSidebarLayout(setSidebarDock(state.sidebarLayout, dock)),
-    setExpanded: (expanded) =>
-      state.updateSidebarLayout(setSidebarExpanded(state.sidebarLayout, expanded)),
+    setDock: (dock) => state.updateSidebarLayout(setSidebarDock(layout, dock)),
+    setExpanded: (expanded) => state.updateSidebarLayout(setSidebarExpanded(layout, expanded)),
     setOpen: params.setPanelOpen,
   };
 }
@@ -199,6 +198,16 @@ export function resolveSidebarLayoutForBoard(params: {
       : null;
   if (!chatSide) {
     layout = closeSlot(layout, "chat");
+    if (
+      params.board.hasBoard &&
+      params.board.face === "dashboard" &&
+      params.board.dock === "hidden" &&
+      params.board.provider.canMutate
+    ) {
+      // Dashboard is the board-only mode. Preserve the stored tabs for the
+      // next explicit Split transition, but never render them over the board.
+      layout = setSidebarOpen(layout, false);
+    }
     return fitSidebarLayout(layout, params.paneWidth) ?? layout;
   }
   const explicitlyClosed = layout.columns.length > 0 && layout.open === false;

@@ -82,10 +82,16 @@ describe("worker placement dispatch coordinator", () => {
     const modeConflict = expect(
       coordinated.dispatch({ ...REQUEST, executionMode: "remote-exec" }),
     ).rejects.toThrow(`Session ${REQUEST.sessionKey} is already dispatching another request`);
+    const devicePlacementConflict = expect(
+      coordinated.dispatch({
+        ...REQUEST,
+        devicePlacement: { requiredNodeCommands: ["system.run"], consumesWorkerSlot: true },
+      }),
+    ).rejects.toThrow(`Session ${REQUEST.sessionKey} is already dispatching another request`);
     const retry = coordinated.dispatch(REQUEST);
     releaseDispatch.resolve();
 
-    await modeConflict;
+    await Promise.all([modeConflict, devicePlacementConflict]);
     const [firstResult, retryResult] = await Promise.all([first, retry]);
     expect(retryResult).toBe(firstResult);
     expect(dispatch).toHaveBeenCalledOnce();
@@ -93,6 +99,60 @@ describe("worker placement dispatch coordinator", () => {
     await coordinated.dispatch({ ...REQUEST, profileId: "another-profile" });
     expect(dispatch).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    { kind: "dispatch", revokedBeforeJoining: true },
+    { kind: "dispatch", revokedBeforeJoining: false },
+    { kind: "move", revokedBeforeJoining: true },
+    { kind: "move", revokedBeforeJoining: false },
+  ] as const)(
+    "rejects a joined $kind when its authority is revoked (before joining: $revokedBeforeJoining)",
+    async ({ kind, revokedBeforeJoining }) => {
+      const ownerStarted = createDeferredCore();
+      const releaseOwner = createDeferredCore();
+      const expectedResult = { state: kind === "dispatch" ? "active" : "local" };
+      const operation = vi.fn(async () => {
+        ownerStarted.resolve();
+        await releaseOwner.promise;
+        return expectedResult;
+      });
+      const service = {
+        dispatch: kind === "dispatch" ? operation : vi.fn(),
+        forceDestroyEnvironment: vi.fn(),
+        move: kind === "move" ? operation : vi.fn(),
+        reclaim: vi.fn(),
+        reconcile: vi.fn(),
+        reconcileActive: vi.fn(),
+      } as unknown as DispatchService;
+      const coordinated = coordinateWorkerPlacementDispatch(service);
+      const invoke = (authorize?: () => void) =>
+        kind === "dispatch"
+          ? coordinated.dispatch(REQUEST, undefined, authorize)
+          : coordinated.move(MOVE_REQUEST, undefined, authorize);
+      const owner = invoke();
+      await ownerStarted.promise;
+
+      let revoked = revokedBeforeJoining;
+      const observedAuthorizationStates: boolean[] = [];
+      const authorize = () => {
+        observedAuthorizationStates.push(revoked);
+        if (revoked) {
+          throw new Error("session access revoked");
+        }
+      };
+      const joined = invoke(authorize);
+      revoked = true;
+      const outcomes = Promise.allSettled([owner, joined]);
+      releaseOwner.resolve();
+
+      await expect(outcomes).resolves.toEqual([
+        { status: "fulfilled", value: expectedResult },
+        { status: "rejected", reason: new Error("session access revoked") },
+      ]);
+      expect(observedAuthorizationStates).toEqual(revokedBeforeJoining ? [true] : [false, true]);
+      expect(operation).toHaveBeenCalledOnce();
+    },
+  );
 
   it("joins a retry before a queued reconciliation after dispatch failure", async () => {
     const dispatchStarted = createDeferredCore();

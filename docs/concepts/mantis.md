@@ -392,8 +392,10 @@ reacts with 👀 when it accepts the request, then posts the active run link in
 its evidence comment and replaces that same comment with the result. ClawSweeper's
 `mantis: telegram-visible-proof` label starts the proof automatically for
 branches in `openclaw/openclaw`; fork PRs still require an explicit maintainer
-comment. Manual runs first inspect the diff and stop before desktop setup when
-there is no Telegram-visible behavior to test.
+comment. Proof requests queue serially because they share one Telegram user;
+queued runs do not allocate a runner or start their proof timeout. Manual runs
+first inspect the diff and stop before desktop setup when there is no
+Telegram-visible behavior to test.
 
 The other scenario workflows remain available through manual Actions dispatch.
 
@@ -417,6 +419,12 @@ VM baseline: Linux with a desktop-capable Chrome/Chromium, CDP access, VNC/
 noVNC, Node 22.22.3+, 24.15+, or 25.9+ and pnpm, an OpenClaw checkout, and
 outbound access to the target transport, GitHub, model providers, and the
 credential broker.
+
+The Telegram Desktop proof workflow runs on Ubuntu. Its lease fence requires
+Bash, util-linux `setsid`, and coreutils; the agent wrapper also uses GNU
+`timeout` and configured `sudo`. Setup uses Linux account tools, and cleanup
+inspects `/proc`. See the [focused Linux fence tests](/reference/test#linux-shell-integrations)
+for prerequisites and the local proof command.
 
 Credential and environment names used across Mantis commands and workflows:
 

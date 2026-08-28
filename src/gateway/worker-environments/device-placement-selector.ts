@@ -5,13 +5,8 @@ import type { NodeRegistry } from "../node-registry.js";
 import { resolveDevicePlacementEligibility } from "./device-placement-eligibility.js";
 import { deviceUnavailableText } from "./device-provider.js";
 
-type DevicePlacementCandidate = {
-  deviceId: string;
-  availableSlots: number;
-};
-
 type DevicePlacementSelection =
-  | { ok: true; candidates: DevicePlacementCandidate[] }
+  | { ok: true; candidates: { deviceId: string; availableSlots: number }[] }
   | { ok: false; error: string };
 
 export async function selectDevicePlacementCandidates(params: {
@@ -36,20 +31,18 @@ export async function selectDevicePlacementCandidates(params: {
   const outdated = nodes.find((node) =>
     node.issues?.some((issue) => issue.code === "update-required"),
   );
+  const outdatedError =
+    outdated &&
+    deviceUnavailableText(outdated.id.slice("node:".length), {
+      available: false,
+      issue: outdated.issues?.[0],
+    });
   const hosts = nodes.filter((node) => node.sessionHost === true);
   if (hosts.length === 0) {
-    if (outdated) {
-      return {
-        ok: false,
-        error: deviceUnavailableText(outdated.id.slice("node:".length), {
-          available: false,
-          issue: outdated.issues?.[0],
-        }),
-      };
-    }
     return {
       ok: false,
       error:
+        outdatedError ??
         "no paired session-host nodes are available; pair a node, enable session hosting, then retry",
     };
   }
@@ -81,7 +74,9 @@ export async function selectDevicePlacementCandidates(params: {
         });
         return {
           deviceId,
-          availableSlots: node.workerSlots?.available ?? 0,
+          availableSlots: eligibility.ok
+            ? eligibility.availableSlots
+            : (node.workerSlots?.available ?? 0),
           eligibility,
         };
       }),
@@ -98,14 +93,8 @@ export async function selectDevicePlacementCandidates(params: {
   if (candidates.length > 0) {
     return { ok: true, candidates };
   }
-  if (attempts.length === 0 && outdated) {
-    return {
-      ok: false,
-      error: deviceUnavailableText(outdated.id.slice("node:".length), {
-        available: false,
-        issue: outdated.issues?.[0],
-      }),
-    };
+  if (attempts.length === 0 && outdatedError) {
+    return { ok: false, error: outdatedError };
   }
   const atCapacity =
     requirement.consumesWorkerSlot && attempts.every(({ availableSlots }) => availableSlots === 0);

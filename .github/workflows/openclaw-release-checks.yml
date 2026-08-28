@@ -132,7 +132,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "24.19.0"
   OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}
 
 jobs:
@@ -285,7 +285,7 @@ jobs:
           echo "eligible=true" >> "$GITHUB_OUTPUT"
 
       - name: Checkout trusted workflow helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -306,7 +306,7 @@ jobs:
 
       - name: Checkout selected ref for reachability fallback
         if: steps.fast_ref.outputs.fallback == 'true'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ inputs.ref }}
@@ -809,7 +809,7 @@ jobs:
       source_sha: ${{ steps.package.outputs.source_sha || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageSourceSha }}
     steps:
       - name: Checkout trusted workflow ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -1197,6 +1197,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -1307,6 +1308,7 @@ jobs:
       package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.package_mode != 'published') && needs.prepare_release_package.outputs.package_sha256 || '' }}
       package_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
       package_version: ${{ needs.prepare_release_package.outputs.package_version }}
+      prepublish_plugin_registry_json: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_json }}
       suite_profile: custom
       docker_lanes: release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
@@ -1326,6 +1328,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -1412,7 +1415,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1420,7 +1423,7 @@ jobs:
 
       - name: Checkout trusted QA Anthropic mock tooling
         if: needs.resolve_target.outputs.trusted_qa_tooling_eligible == 'true'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-qa-tooling-trusted
@@ -1566,14 +1569,14 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
       - name: Checkout trusted release artifact resolver
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -1704,7 +1707,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1758,7 +1761,7 @@ jobs:
 
       - name: Checkout trusted validator after candidate suite
         if: always()
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -1828,7 +1831,7 @@ jobs:
 
       - name: Checkout trusted validator after candidate report
         if: always()
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -1906,7 +1909,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout trusted release artifact resolver
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -2025,14 +2028,14 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
       - name: Checkout trusted release artifact resolver
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -2131,6 +2134,7 @@ jobs:
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
       expected_sha: ${{ needs.resolve_target.outputs.revision }}
+      lock_scope: matrix
       run_matrix: true
       fail_fast: ${{ fromJSON(needs.resolve_target.outputs.fail_fast) }}
     secrets:
@@ -2149,6 +2153,7 @@ jobs:
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
       expected_sha: ${{ needs.resolve_target.outputs.revision }}
+      lock_scope: buzz
       run_buzz: true
       buzz_scenario: channel-canary,channel-mention-gating
     secrets:
@@ -2290,7 +2295,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -2409,7 +2414,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -2506,7 +2511,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -2616,7 +2621,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout trusted release artifact resolver
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}

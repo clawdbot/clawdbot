@@ -32,18 +32,17 @@ function digestTtsSupplementText(text: string): string {
 function readTtsSupplementMarker(
   message: Record<string, unknown>,
 ): { textSha256?: string; spokenText?: string } | undefined {
-  const marker = message.openclawTtsSupplement;
-  if (!marker || typeof marker !== "object" || Array.isArray(marker)) {
+  const marker = readRecord(message.openclawTtsSupplement);
+  if (!marker) {
     return undefined;
   }
-  const entry = marker as { textSha256?: unknown; spokenText?: unknown };
   const textSha256 =
-    typeof entry.textSha256 === "string" && entry.textSha256.trim()
-      ? entry.textSha256.trim()
+    typeof marker.textSha256 === "string" && marker.textSha256.trim()
+      ? marker.textSha256.trim()
       : undefined;
   const spokenText =
-    typeof entry.spokenText === "string" && entry.spokenText.trim()
-      ? entry.spokenText.trim()
+    typeof marker.spokenText === "string" && marker.spokenText.trim()
+      ? marker.spokenText.trim()
       : undefined;
   return textSha256 || spokenText ? { textSha256, spokenText } : undefined;
 }
@@ -61,18 +60,15 @@ function isAssistantTtsSupplementMessage(message: Record<string, unknown>): bool
   }
   let hasSupplementBlock = false;
   for (const block of content) {
-    if (!block || typeof block !== "object") {
+    const record = readRecord(block);
+    if (!record) {
       continue;
     }
-    const type = (block as { type?: unknown }).type;
-    if (type !== "text") {
+    if (record.type !== "text") {
       hasSupplementBlock = true;
       continue;
     }
-    const text =
-      typeof (block as { text?: unknown }).text === "string"
-        ? (block as { text: string }).text.trim()
-        : "";
+    const text = typeof record.text === "string" ? record.text.trim() : "";
     if (text && text !== "Audio reply") {
       return false;
     }
@@ -108,12 +104,10 @@ function mergeTtsSupplementContent(
   supplement: Record<string, unknown>,
 ): Record<string, unknown> {
   const supplementBlocks = Array.isArray(supplement.content)
-    ? supplement.content.filter(
-        (block) =>
-          Boolean(block) &&
-          typeof block === "object" &&
-          (block as { type?: unknown }).type !== "text",
-      )
+    ? supplement.content.filter((block) => {
+        const record = readRecord(block);
+        return record !== undefined && record.type !== "text";
+      })
     : [];
   if (supplementBlocks.length === 0) {
     return target;
@@ -411,7 +405,7 @@ export function filterVisibleProjectedHistoryMessages(
       continue;
     }
     if (
-      isDuplicateAcpGatewayInjectedMessage(current, visible.at(-1)) ||
+      isDuplicateAcpGatewayInjectedMessage(current, messages[i - 1]) ||
       isDuplicateChannelFinalDeliveryMirror(current, messages[i - 1])
     ) {
       changed = true;

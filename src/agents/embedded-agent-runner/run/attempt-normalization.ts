@@ -264,6 +264,9 @@ export async function normalizeEmbeddedRunAttempt(input: {
         (retryingFromTranscript ? "retrying from current transcript" : "retrying prompt"),
     );
     if (retryingFromTranscript) {
+      if ((preflightRecovery.truncatedCount ?? 0) > 0) {
+        sessionPromptState.markOwnedTranscriptRetry();
+      }
       sessionPromptState.continueFromCurrentTranscript();
     }
     const retryKind = resolveRunRetryKind({

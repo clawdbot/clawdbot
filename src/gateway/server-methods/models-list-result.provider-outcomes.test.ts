@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   type PreparedGatewayModelCatalogSnapshot,
@@ -74,7 +75,7 @@ describe("models.list provider catalog outcomes", () => {
       api: "openai-chatgpt-responses" as const,
       baseUrl: "https://chatgpt.com/backend-api/codex",
     };
-    const snapshot = {
+    const snapshot = markPreparedModelCatalogFull({
       entries: [model],
       routeVariants: [model],
       providerOutcomes: [
@@ -84,7 +85,7 @@ describe("models.list provider catalog outcomes", () => {
           status: "auth-rejected" as const,
         },
       ],
-    };
+    });
     const projector = createGatewayAgentModelCatalogProjector({
       cfg: config,
       agentId: "main",
@@ -122,7 +123,7 @@ describe("models.list provider catalog outcomes", () => {
         context,
         agentId: "main",
         params: { view: "configured" },
-        preloadedCatalog: { agentId: "main", config, snapshot, fullyDiscovered: true },
+        preloadedCatalog: { agentId: "main", config, snapshot },
         preloadedOnly: true,
         catalogProjector: projector,
       }),

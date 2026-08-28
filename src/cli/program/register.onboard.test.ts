@@ -69,7 +69,7 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
 
 describe("registerOnboardCommand", () => {
   async function runCli(args: string[]) {
-    const program = new Command();
+    const program = new Command().enablePositionalOptions();
     registerOnboardCommand(program);
     await program.parseAsync(args, { from: "user" });
   }
@@ -144,6 +144,7 @@ describe("registerOnboardCommand", () => {
     const unsupportedFlag = args.includes("--reset") ? "--reset" : "--json";
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(unsupportedFlag));
     expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
     expect(mocks.onboardRecommendationsCommand).not.toHaveBeenCalled();
     expect(mocks.acknowledgeOnboardRecommendationsCommand).not.toHaveBeenCalled();
     expect(mocks.refreshOnboardRecommendationsCommand).not.toHaveBeenCalled();
@@ -154,6 +155,36 @@ describe("registerOnboardCommand", () => {
     await runCli(["onboard", "--json", "recommendations"]);
 
     expect(mocks.onboardRecommendationsCommand).toHaveBeenCalledWith({ json: true }, runtime);
+  });
+
+  it.each(
+    [
+      { flag: "--reset", option: ["--reset"] },
+      { flag: "--workspace", option: ["--workspace", "/tmp/recommendations"] },
+      { flag: "--classic", option: ["--classic"] },
+      { flag: "--flow", option: ["--flow", "advanced"] },
+      { flag: "--mode", option: ["--mode", "remote"] },
+      { flag: "--gateway-port", option: ["--gateway-port", "18789"] },
+      { flag: "--install-daemon", option: ["--install-daemon"] },
+      { flag: "--skip-skills", option: ["--skip-skills"] },
+      { flag: "--import-from", option: ["--import-from", "hermes"] },
+    ].flatMap(({ flag, option }) => [
+      { flag, placement: "parent", args: ["--json", ...option, "recommendations"] },
+      { flag, placement: "leaf", args: [...option, "recommendations", "--json"] },
+    ]),
+  )("reports rejected $flag as one $placement JSON error", async ({ flag, args }) => {
+    await runCli(["onboard", ...args]);
+
+    const message = `This recommendations command does not support parent option(s): ${flag}.`;
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+      JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+    );
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(mocks.onboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.refreshOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
   it("defaults installDaemon to undefined when no daemon flags are provided", async () => {
@@ -275,6 +306,33 @@ describe("registerOnboardCommand", () => {
       expect(setupWizardCommandMock).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    {
+      rejection: "modern onboarding without risk acknowledgement",
+      args: ["--modern", "--non-interactive"],
+      message: "Non-interactive setup requires explicit risk acknowledgement.",
+    },
+    {
+      rejection: "modern onboarding with unsupported setup flags",
+      args: ["--modern", "--classic"],
+      message: "--modern cannot be combined with: --classic.",
+    },
+  ])("emits one options JSON object for $rejection", async ({ args, message }) => {
+    await runCli(["onboard", "--json", ...args]);
+
+    expect(runtime.log).toHaveBeenCalledOnce();
+    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    expect(payload).toEqual({
+      ok: false,
+      phase: "options",
+      message: expect.stringContaining(message),
+    });
+    expect(runtime.error).toHaveBeenCalledWith(payload.message);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runSystemAgentWithInference).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
 
   it("parses --mistral-api-key and forwards mistralApiKey", async () => {
     await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);

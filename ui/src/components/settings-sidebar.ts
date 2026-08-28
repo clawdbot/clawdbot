@@ -25,7 +25,7 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
-import { renderOfflineSidebarStatus } from "./session-row-badges.ts";
+import { renderSidebarConnectionStatus } from "./session-row-badges.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
 import "./settings-save-indicator.ts";
 import "./sidebar-build-chip.ts";
@@ -37,6 +37,7 @@ type SettingsSidebarProps = {
   activeSearch?: string;
   activeHash?: string;
   offline: boolean;
+  restartPending?: boolean;
   queuedOutboxCount?: number;
   lastError: string | null;
   gatewayVersion: string;
@@ -171,8 +172,7 @@ function filterSettingsNavigationGroups(
 }
 
 function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: string) {
-  const active =
-    !props.searchQuery && settingsNavigationOwnerRoute(props.activeRouteId) === routeId;
+  const active = settingsNavigationOwnerRoute(props.activeRouteId) === routeId;
   return html`
     <a
       href=${pathForRoute(routeId, props.basePath)}
@@ -333,10 +333,10 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
             )}
       </nav>
       <footer class="settings-sidebar__footer">
-        ${props.offline
-          ? renderOfflineSidebarStatus({
+        ${props.restartPending || props.offline
+          ? renderSidebarConnectionStatus({
+              kind: props.restartPending ? "restarting" : "offline",
               queuedOutboxCount: props.queuedOutboxCount ?? 0,
-              reconnecting,
               title: props.lastError ? redactLoginFailureError(props.lastError) : reconnecting,
               onRetry: props.onRetryConnect,
             })

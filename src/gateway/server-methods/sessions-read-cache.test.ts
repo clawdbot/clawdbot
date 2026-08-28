@@ -28,12 +28,19 @@ import {
   readOpenIncognitoAgentDatabaseGeneration,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { bumpSessionAutomationVersion } from "../session-automation-index.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
-import type { GatewaySessionRow } from "../session-utils.types.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import {
+  identifiedClient,
+  listSessions,
+  requestContext,
+  sessionReadHandlers,
+} from "./sessions-read-cache.test-support.js";
+import type { GatewayRequestContext } from "./types.js";
 
 const loader = vi.hoisted(() => ({
   calls: vi.fn(),
@@ -66,101 +73,30 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   };
 });
 
-const { sessionReadHandlers } = await import("./sessions-read.js");
 const { emitSessionsChanged } = await import("./session-change-event.js");
 const { emitSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js");
-
-function identifiedClient(profileId: string): GatewayClient {
-  return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-    },
-    authenticatedUserProfile: {
-      profileId,
-      displayName: profileId,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-  };
-}
-
-function requestContext(config: OpenClawConfig): GatewayRequestContext {
-  return {
-    chatAbortControllers: new Map(),
-    getRuntimeConfig: () => config,
-    getSessionEventSubscriberConnIds: () => new Set(),
-    loadGatewayModelCatalog: async () => [],
-    logGateway: { debug: vi.fn() },
-  } as unknown as GatewayRequestContext;
-}
-
-async function listSessions(params: {
-  client: GatewayClient;
-  context: GatewayRequestContext;
-  request: SessionsListParams;
-}) {
-  const responses: Parameters<RespondFn>[] = [];
-  await sessionReadHandlers["sessions.list"]?.({
-    params: params.request,
-    client: params.client,
-    context: params.context,
-    respond: (...response: Parameters<RespondFn>) => responses.push(response),
-  } as never);
-  expect(responses).toHaveLength(1);
-  expect(responses[0]?.[0]).toBe(true);
-  return responses[0]?.[1] as {
-    count: number;
-    nextOffset: number | null;
-    sessions: GatewaySessionRow[];
-    totalCount: number;
-  };
-}
 
 async function seedSessions(): Promise<OpenClawConfig> {
   const config: OpenClawConfig = {
     agents: { list: [{ id: "main", default: true }, { id: "work" }] },
   };
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey: "agent:main:active" },
-    {
-      sessionId: "main-active",
-      updatedAt: 400,
-      createdActor: { type: "human", id: "owner@example.com" },
-      visibility: "shared",
-    },
-  );
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey: "agent:main:draft" },
-    {
-      sessionId: "main-draft",
-      updatedAt: 300,
-      createdActor: { type: "human", id: "owner@example.com" },
-      visibility: "draft",
-    },
-  );
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey: "agent:main:archived" },
-    {
-      sessionId: "main-archived",
-      updatedAt: 200,
-      archivedAt: 200,
-      createdActor: { type: "human", id: "viewer@example.com" },
-      visibility: "shared",
-    },
-  );
-  await upsertSessionEntryCore(
-    { agentId: "work", sessionKey: "agent:work:active" },
-    {
-      sessionId: "work-active",
-      updatedAt: 100,
-      createdActor: { type: "human", id: "viewer@example.com" },
-      visibility: "shared",
-    },
-  );
+  for (const [agentId, name, updatedAt, owner, overrides] of [
+    ["main", "active", 400, "owner@example.com", {}],
+    ["main", "draft", 300, "owner@example.com", { visibility: "draft" }],
+    ["main", "archived", 200, "viewer@example.com", { archivedAt: 200 }],
+    ["work", "active", 100, "viewer@example.com", {}],
+  ] as const) {
+    await upsertSessionEntryCore(
+      { agentId, sessionKey: `agent:${agentId}:${name}` },
+      {
+        sessionId: `${agentId}-${name}`,
+        updatedAt,
+        createdActor: { type: "human", id: owner },
+        visibility: "shared",
+        ...overrides,
+      },
+    );
+  }
   return config;
 }
 
@@ -956,7 +892,43 @@ describe("sessions.list single-flight", () => {
     });
   });
 
-  it("does not share filtered results across client identities", async () => {
+  it.each(["ownerFirst", "involvingMe"] as const)(
+    "keeps administrator %s projections scoped to their authenticated profiles",
+    async (projection) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const config: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+        const context = requestContext(config);
+        const clients = ["ada@example.com", "bob@example.com"].map((email) => {
+          const client = identifiedClient(ensureProfileForEmail(email).id);
+          client.connect.scopes = ["operator.admin"];
+          return client;
+        });
+        for (const [index, client] of clients.entries()) {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: `agent:main:profile-${index}` },
+            {
+              sessionId: `profile-${index}`,
+              updatedAt: index + 1,
+              createdActor: { type: "human", id: client.authenticatedUserProfile!.profileId },
+            },
+          );
+        }
+        const request: SessionsListParams = { agentId: "main", limit: 1, [projection]: true };
+
+        const results = await Promise.all(
+          clients.map((client) => listSessions({ client, context, request })),
+        );
+
+        for (const [index, client] of clients.entries()) {
+          expect(results[index]?.sessions[0]?.key).toBe(`agent:main:profile-${index}`);
+          expect(await listSessions({ client, context, request })).toBe(results[index]);
+        }
+        expect(loader.calls).toHaveBeenCalledTimes(2);
+      });
+    },
+  );
+
+  it("fences cached rows across client identities and operator-role changes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config = await seedSessions();
       const context = requestContext(config);
@@ -977,6 +949,32 @@ describe("sessions.list single-flight", () => {
       expect(owner.sessions.map((session) => session.key)).toContain("agent:main:draft");
       expect(viewer.sessions.map((session) => session.key)).not.toContain("agent:main:draft");
       expect(loader.calls).toHaveBeenCalledTimes(2);
+      const scopes: Array<"operator.read" | "operator.write"> = ["operator.read", "operator.write"];
+      const defineRole = (others: "write" | "none") => ({
+        sessions: { others },
+        agents: "*" as const,
+        scopes,
+      });
+      config.gateway = {
+        roles: {
+          default: "maintainer",
+          definitions: {
+            maintainer: defineRole("write"),
+            guest: defineRole("none"),
+          },
+        },
+      };
+      const profile = ensureProfileForEmail("cache-role@example.com");
+      const request = { agentId: "main", archived: "all" as const, limit: 100 };
+      const listProfileSessions = () =>
+        listSessions({ client: identifiedClient(profile.id), context, request });
+      const privileged = await listProfileSessions();
+      expect(privileged.sessions.map((session) => session.key)).toContain("agent:main:active");
+      setUserProfileRole(profile.id, "guest");
+      invalidateOperatorRolePolicy(profile.id);
+      const restricted = await listProfileSessions();
+      expect(restricted.sessions.map((session) => session.key)).not.toContain("agent:main:active");
+      expect(loader.calls).toHaveBeenCalledTimes(4);
     });
   });
 

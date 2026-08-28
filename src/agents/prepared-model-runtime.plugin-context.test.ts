@@ -7,10 +7,8 @@ import * as currentPluginMetadata from "../plugins/current-plugin-metadata-snaps
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  getPreparedPluginRuntimeLoadContext,
-  prepareOwnedPluginLoadContext,
-} from "./prepared-model-runtime.plugin-context.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { withPreparedPluginGenerationScope } from "./prepared-model-runtime.plugin-generation.js";
 
 describe("prepared model runtime plugin metadata ownership", () => {
@@ -45,7 +43,7 @@ describe("prepared model runtime plugin metadata ownership", () => {
         expect(
           prepareOwnedPluginLoadContext(input, process.env, registry, gatewaySnapshot, true),
         ).toBe(gatewaySnapshot);
-        expect(getPreparedPluginRuntimeLoadContext(registry)).toMatchObject({
+        expect(getPluginRuntimeLoadContext(registry)).toMatchObject({
           metadataSnapshot: gatewaySnapshot,
           preferBuiltPluginArtifacts: true,
         });
@@ -78,7 +76,6 @@ describe("prepared model runtime plugin metadata ownership", () => {
       expect(
         prepareOwnedPluginLoadContext(
           {
-            agentDir: "/tmp/direct-agent",
             config,
             workspaceDir,
           },
@@ -86,7 +83,7 @@ describe("prepared model runtime plugin metadata ownership", () => {
           registry,
         ),
       ).toBe(directSnapshot);
-      expect(getPreparedPluginRuntimeLoadContext(registry)).toMatchObject({
+      expect(getPluginRuntimeLoadContext(registry)).toMatchObject({
         metadataSnapshot: directSnapshot,
         preferBuiltPluginArtifacts: false,
       });
@@ -116,7 +113,6 @@ describe("prepared model runtime plugin metadata ownership", () => {
     try {
       prepareOwnedPluginLoadContext(
         {
-          agentDir: "/tmp/selected-runtime-agent",
           config,
           loadRuntimePlugins: true,
           runtimePluginSelections: [{ provider: "selected", modelId: "model" }],

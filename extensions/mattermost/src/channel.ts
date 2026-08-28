@@ -2,6 +2,7 @@
 import {
   jsonResult,
   readPositiveIntegerParam,
+  readStringArrayParam,
   readStringParam,
   withNormalizedTimestamp,
 } from "openclaw/plugin-sdk/channel-actions";
@@ -15,6 +16,7 @@ import type {
   ChannelToolSend,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
@@ -28,10 +30,7 @@ import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-run
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import {
   type MessagePresentation,
-  normalizeMessagePresentation,
-  renderMessagePresentationFallbackText,
   resolveMessagePresentationButtonAction,
-  resolveMessagePresentationControlValue,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolvePayloadMediaUrls, sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -68,8 +67,15 @@ import {
   resolveMattermostReplyToMode,
   type ResolvedMattermostAccount,
 } from "./mattermost/accounts.js";
+import { normalizeMattermostEmojiName } from "./mattermost/emoji.js";
+import { mattermostIngressIdentity } from "./mattermost/ingress-identity.js";
 import type { MattermostSendResult } from "./mattermost/send.js";
-import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
+import {
+  looksLikeMattermostTargetId,
+  normalizeMattermostMessagingTarget,
+  resolveMattermostPresentation,
+  requiresMattermostMediaUpload,
+} from "./normalize.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 import { mattermostSetupContract } from "./setup-core.js";
@@ -77,33 +83,6 @@ import { mattermostSetupWizard } from "./setup-surface.js";
 import type { MattermostConfig } from "./types.js";
 
 const loadMattermostChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
-
-function buildMattermostPresentationButtons(presentation: MessagePresentation) {
-  return presentation.blocks
-    .filter((block) => block.type === "buttons")
-    .map((block) =>
-      block.buttons.flatMap((button) => {
-        if (button.action) {
-          return [];
-        }
-        const value = resolveMessagePresentationControlValue(button);
-        return value
-          ? [
-              {
-                id: value,
-                text: button.label,
-                callback_data: value,
-                context: {
-                  callback_data: value,
-                },
-                style: button.style,
-              },
-            ]
-          : [];
-      }),
-    )
-    .filter((row) => row.length > 0);
-}
 
 const MATTERMOST_PRESENTATION_CAPABILITIES = {
   supported: true,
@@ -160,6 +139,7 @@ const mattermostSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedM
   groupAllowFromPath: "channels.mattermost.groupAllowFrom",
   findingTitle: "Mattermost security warning",
   policyPathSuffix: "dmPolicy",
+  classifyEntryAuthentication: identityEntryAuthenticationClassifier(mattermostIngressIdentity),
   normalizeDmEntry: (raw) => normalizeAllowEntry(raw),
 });
 
@@ -567,15 +547,10 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       throw new Error("Mattermost send requires a target (to).");
     }
 
-    const presentation = normalizeMessagePresentation(params.presentation);
-    const message = presentation
-      ? renderMessagePresentationFallbackText({
-          text: typeof params.message === "string" ? params.message : "",
-          presentation,
-        })
-      : typeof params.message === "string"
-        ? params.message
-        : "";
+    const { text: message, buttons } = resolveMattermostPresentation({
+      text: typeof params.message === "string" ? params.message : undefined,
+      presentation: params.presentation,
+    });
     // Mattermost post root_id is the thread root. A generic replyTo can name
     // the current child post, so prefer threadId unless the caller supplied the
     // Mattermost-specific replyToId root directly.
@@ -586,8 +561,6 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     const resolvedAccountId = accountId || undefined;
 
     const mediaUrl = resolveMattermostSendAttachmentMedia(params);
-    const buttons = presentation ? buildMattermostPresentationButtons(presentation) : [];
-
     const result = await (
       await loadMattermostChannelRuntime()
     ).sendMessageMattermost(to, message, {
@@ -636,7 +609,7 @@ function parseMattermostReactActionParams(params: Record<string, unknown>): {
     throw new Error("Mattermost react requires messageId (post id)");
   }
 
-  const emojiName = normalizeOptionalString(params.emoji)?.replace(/^:+|:+$/g, "");
+  const emojiName = normalizeMattermostEmojiName(normalizeOptionalString(params.emoji));
   if (!emojiName) {
     throw new Error("Mattermost react requires emoji");
   }
@@ -648,79 +621,13 @@ function parseMattermostReactActionParams(params: Record<string, unknown>): {
   };
 }
 
-function collectNonBlankStrings(values: Array<string | undefined>): string[] {
-  const collected: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    const trimmed = value?.trim();
-    if (trimmed && !seen.has(trimmed)) {
-      seen.add(trimmed);
-      collected.push(trimmed);
-    }
-  }
-  return collected;
-}
-
-function toSnakeCaseKey(key: string): string {
-  return key
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .toLowerCase();
-}
-
-function readMattermostParam(params: Record<string, unknown>, key: string): unknown {
-  if (Object.hasOwn(params, key)) {
-    return params[key];
-  }
-  const snakeKey = toSnakeCaseKey(key);
-  return snakeKey === key || !Object.hasOwn(params, snakeKey) ? undefined : params[snakeKey];
-}
-
-function readMattermostStringParam(
-  params: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  const raw = readMattermostParam(params, key);
-  return typeof raw === "string" ? normalizeOptionalString(raw) : undefined;
-}
-
-function readMattermostStringArrayParam(params: Record<string, unknown>, key: string): string[] {
-  const raw = readMattermostParam(params, key);
-  if (Array.isArray(raw)) {
-    return raw
-      .filter((entry): entry is string => typeof entry === "string")
-      .flatMap((entry) => {
-        const normalized = normalizeOptionalString(entry);
-        return normalized ? [normalized] : [];
-      });
-  }
-  if (typeof raw === "string") {
-    const normalized = normalizeOptionalString(raw);
-    return normalized ? [normalized] : [];
-  }
-  return [];
-}
-
-function requiresMattermostMediaUpload(mediaUrl: string | undefined): boolean {
-  const normalized = normalizeOptionalString(mediaUrl);
-  return Boolean(normalized && !/^https?:\/\//i.test(normalized));
-}
-
-function collectMattermostAttachmentMedia(params: Record<string, unknown>): {
-  mediaUrls: string[];
-  hasUnsupportedAttachmentPayload: boolean;
-} {
-  const mediaUrlCandidates: Array<string | undefined> = [
-    readMattermostStringParam(params, "media"),
-    readMattermostStringParam(params, "mediaUrl"),
-    readMattermostStringParam(params, "path"),
-    readMattermostStringParam(params, "filePath"),
-    readMattermostStringParam(params, "fileUrl"),
-  ];
-  mediaUrlCandidates.push(...readMattermostStringArrayParam(params, "mediaUrls"));
+function resolveMattermostSendAttachmentMedia(params: Record<string, unknown>): string | undefined {
+  const sourceKeys = ["media", "mediaUrl", "path", "filePath", "fileUrl"];
+  const candidates = sourceKeys.map((key) => readStringParam(params, key));
+  candidates.push(...(readStringArrayParam(params, "mediaUrls") ?? []));
 
   let hasUnsupportedAttachmentPayload = Boolean(
-    readMattermostStringParam(params, "buffer") ?? readMattermostStringParam(params, "base64"),
+    readStringParam(params, "buffer") ?? readStringParam(params, "base64"),
   );
   if (Array.isArray(params.attachments)) {
     for (const attachment of params.attachments) {
@@ -728,39 +635,26 @@ function collectMattermostAttachmentMedia(params: Record<string, unknown>): {
         continue;
       }
       const record = attachment as Record<string, unknown>;
-      mediaUrlCandidates.push(
-        readMattermostStringParam(record, "media"),
-        readMattermostStringParam(record, "mediaUrl"),
-        readMattermostStringParam(record, "path"),
-        readMattermostStringParam(record, "filePath"),
-        readMattermostStringParam(record, "fileUrl"),
-        readMattermostStringParam(record, "url"),
-      );
+      candidates.push(...sourceKeys.map((key) => readStringParam(record, key)));
+      candidates.push(readStringParam(record, "url"));
       hasUnsupportedAttachmentPayload ||= Boolean(
-        readMattermostStringParam(record, "buffer") ?? readMattermostStringParam(record, "base64"),
+        readStringParam(record, "buffer") ?? readStringParam(record, "base64"),
       );
     }
   }
 
-  return {
-    mediaUrls: collectNonBlankStrings(mediaUrlCandidates),
-    hasUnsupportedAttachmentPayload,
-  };
-}
-
-function resolveMattermostSendAttachmentMedia(params: Record<string, unknown>): string | undefined {
-  const attachmentMedia = collectMattermostAttachmentMedia(params);
-  if (attachmentMedia.hasUnsupportedAttachmentPayload) {
+  if (hasUnsupportedAttachmentPayload) {
     throw new Error(
       "Mattermost send attachments require media, mediaUrl, path, filePath, fileUrl, mediaUrls, or attachments[] with one of those fields; buffer/base64 payloads are not supported.",
     );
   }
-  if (attachmentMedia.mediaUrls.length > 1) {
+  const mediaUrls = [...new Set(candidates.filter((candidate) => Boolean(candidate)))];
+  if (mediaUrls.length > 1) {
     throw new Error(
       "Mattermost send supports one attachment per message; split multiple mediaUrls or attachments[] entries into separate sends.",
     );
   }
-  return attachmentMedia.mediaUrls[0];
+  return mediaUrls[0];
 }
 
 type MattermostOutboundContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
@@ -803,15 +697,14 @@ const mattermostOutbound: ChannelOutboundAdapter = {
     if (payload.mediaUrls && payload.mediaUrls.length > 1) {
       return null;
     }
-    const buttons = buildMattermostPresentationButtons(presentation);
-    const hasButtons = buttons.some((row) => row.length > 0);
-    if (!hasButtons && !hasMattermostPresentationNavigation(presentation)) {
+    const { text, buttons } = resolveMattermostPresentation({ text: payload.text, presentation });
+    if (!buttons.length && !hasMattermostPresentationNavigation(presentation)) {
       return null;
     }
     return {
       ...payload,
-      text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
-      ...(hasButtons
+      text,
+      ...(buttons.length
         ? {
             channelData: {
               ...payload.channelData,

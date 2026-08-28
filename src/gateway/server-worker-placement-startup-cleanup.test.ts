@@ -1,4 +1,6 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { collectSessionMaintenancePreserveKeys } from "../config/sessions/store-maintenance-preserve.js";
 import { createDeferredCore } from "../shared/deferred.js";
 
 const runtimeFactoryMocks = vi.hoisted(() => ({
@@ -20,12 +22,89 @@ vi.mock("./worker-environments/placement-disk-space.js", async (importOriginal) 
 });
 
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
+import { createPlacementFailureActions } from "./worker-environments/placement-dispatch-failure.js";
+import { createPlacementRecoveryActions } from "./worker-environments/placement-dispatch-recovery.js";
 import { seedActivePlacement } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import * as workerEnvironmentSupport from "./worker-environments/service.test-support.js";
+import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 
 describe("worker placement startup cleanup ownership", () => {
   workerEnvironmentSupport.setupWorkerEnvironmentServiceSuite();
+
+  it("defers workspace cleanup for 50 failed placements until the first background sweep", async () => {
+    const placements = createWorkerSessionPlacementStore({
+      database: workerEnvironmentSupport.testState.stateDb,
+      now: () => workerEnvironmentSupport.testState.nowMs,
+    });
+    for (let index = 0; index < 50; index += 1) {
+      const requested = placements.startDispatch({
+        sessionId: `session-debris-${index}`,
+        sessionKey: `agent:main:debris-${index}`,
+        agentId: "main",
+        executionMode: "worker-turn",
+      });
+      const provisioning = placements.transition({
+        sessionId: requested.sessionId,
+        from: "requested",
+        to: "provisioning",
+        expectedGeneration: requested.generation,
+        patch: { environmentId: `worker-debris-${index}` },
+      });
+      placements.fail({
+        sessionId: requested.sessionId,
+        expectedGeneration: provisioning.generation,
+        recoveryError: "worker admission deadline exceeded",
+      });
+    }
+    const before = placements.list();
+    const environments = workerEnvironmentSupport.createService(
+      workerEnvironmentSupport.createProvider(),
+    );
+    const cleanupStarted = createDeferredCore();
+    const releaseCleanup = createDeferredCore();
+    const resolveWorkspacePath = vi.fn(async ({ sessionId }: { sessionId: string }) => {
+      cleanupStarted.resolve();
+      await releaseCleanup.promise;
+      return path.join(workerEnvironmentSupport.testState.root, sessionId);
+    });
+    const recovery = createPlacementRecoveryActions({
+      placements,
+      environments,
+      failure: createPlacementFailureActions({ placements, environments }),
+      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+      resolveWorkspacePath,
+      reportWorkspaceResultConflict: async () => {},
+      resolveWorkspaceResultConflict: async () => undefined,
+    });
+    const starting = recovery.reconcile("startup");
+    let sweeping: Promise<void> | undefined;
+    try {
+      expect(
+        await Promise.race([
+          starting.then(() => "ready"),
+          cleanupStarted.promise.then(() => "cleanup"),
+        ]),
+      ).toBe("ready");
+      expect(resolveWorkspacePath).not.toHaveBeenCalled();
+      await recovery.reconcileActive("worker-debris-0");
+      expect(resolveWorkspacePath).not.toHaveBeenCalled();
+
+      sweeping = recovery.reconcileActive();
+      await cleanupStarted.promise;
+      expect(resolveWorkspacePath).toHaveBeenCalledOnce();
+      releaseCleanup.resolve();
+      await sweeping;
+      expect(resolveWorkspacePath).toHaveBeenCalledTimes(50);
+      await recovery.reconcileActive();
+      expect(resolveWorkspacePath).toHaveBeenCalledTimes(50);
+      expect(placements.list()).toEqual(before);
+    } finally {
+      releaseCleanup.resolve();
+      await starting;
+      await sweeping;
+    }
+  });
 
   it.each([
     { retainedAuthority: "a local turn claim", claimLocalTurn: true },
@@ -121,6 +200,10 @@ describe("worker placement startup cleanup ownership", () => {
         activeOwnerEpoch: claimLocalTurn ? null : 1,
         turnClaim: claimLocalTurn ? expect.objectContaining({ owner: "local" }) : null,
       });
+      const failedSessionKey = failed?.sessionKey;
+      if (!failedSessionKey) {
+        throw new Error("failed placement fixture is missing its session key");
+      }
       runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => "current");
       runtimeFactoryMocks.createDiskSpace.mockReturnValue({
         read: vi.fn(),
@@ -141,6 +224,7 @@ describe("worker placement startup cleanup ownership", () => {
       });
       try {
         expect(sidecar).not.toBeNull();
+        expect(collectSessionMaintenancePreserveKeys()?.has(failedSessionKey)).toBe(true);
         await environments.reconcileOnce();
         expect(provision).not.toHaveBeenCalled();
         expect(inspect).not.toHaveBeenCalled();
@@ -150,9 +234,16 @@ describe("worker placement startup cleanup ownership", () => {
           leaseId: null,
           destroyRequestedAtMs: expect.any(Number),
         });
+        workerEnvironmentSupport.testState.store.transition({
+          environmentId,
+          from: "provisioning",
+          to: "failed",
+        });
+        expect(collectSessionMaintenancePreserveKeys()?.has(failedSessionKey)).not.toBe(true);
       } finally {
         await sidecar?.stop();
       }
+      expect(collectSessionMaintenancePreserveKeys()?.has(failedSessionKey)).not.toBe(true);
     },
   );
 

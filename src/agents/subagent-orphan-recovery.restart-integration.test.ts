@@ -74,6 +74,7 @@ async function acceptRecoveryDispatch(payload: Record<string, unknown>) {
 
 const dispatchAgent = vi.fn(acceptRecoveryDispatch);
 const gatewayRuntime: GatewayRecoveryRuntime = {
+  abortAgent: vi.fn(),
   dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
   waitForAgent: vi.fn(async () => ({
     status: "pending",

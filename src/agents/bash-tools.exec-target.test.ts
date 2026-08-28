@@ -265,4 +265,60 @@ describe("resolveExecTarget", () => {
       "exec host not allowed (requested gateway; configured host is node; set tools.exec.host=gateway or auto to allow this override).",
     );
   });
+
+  describe("required session sandbox", () => {
+    it.each(["gateway", "node"] as const)(
+      "rejects explicit host=%s even when the configured host matches",
+      (host) => {
+        expect(() =>
+          resolveExecTarget({
+            configuredTarget: host,
+            requestedTarget: host,
+            elevatedRequested: false,
+            sandboxAvailable: true,
+            sandboxRequired: true,
+          }),
+        ).toThrow(/sandbox|required|not allowed/i);
+      },
+    );
+
+    it.each(["gateway", "node"] as const)(
+      "keeps an implicit request sandboxed despite configured host=%s",
+      (host) => {
+        expect(
+          resolveExecTarget({
+            configuredTarget: host,
+            elevatedRequested: false,
+            sandboxAvailable: true,
+            sandboxRequired: true,
+          }),
+        ).toMatchObject({
+          configuredTarget: "auto",
+          effectiveHost: "sandbox",
+        });
+      },
+    );
+
+    it("rejects elevated requests before they can select the gateway", () => {
+      expect(() =>
+        resolveExecTarget({
+          configuredTarget: "auto",
+          elevatedRequested: true,
+          sandboxAvailable: true,
+          sandboxRequired: true,
+        }),
+      ).toThrow(/sandbox|required|elevated/i);
+    });
+
+    it("fails closed when the required sandbox runtime is unavailable", () => {
+      expect(() =>
+        resolveExecTarget({
+          configuredTarget: "auto",
+          elevatedRequested: false,
+          sandboxAvailable: false,
+          sandboxRequired: true,
+        }),
+      ).toThrow(/sandbox|required|unavailable/i);
+    });
+  });
 });

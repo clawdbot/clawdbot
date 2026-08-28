@@ -130,17 +130,13 @@ export async function downloadVerifiedFile(params: {
         (Number.isFinite(contentLength) && contentLength > 0 ? contentLength : 0);
       const handle = await fsp.open(partialPath, "wx", 0o600);
       const hash = createHash("sha256");
-      const reader = response.body.getReader();
       let downloadedSize = 0;
       let previousSize = 0;
       let previousAt = Date.now();
       let rollingBytesPerSecond = 0;
       try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) {
-            break;
-          }
+        // Unlock on every exit; the guard owns aborting an unfinished download.
+        for await (const value of response.body.values({ preventCancel: true })) {
           const chunk = Buffer.from(value);
           await handle.writeFile(chunk);
           hash.update(chunk);
@@ -249,10 +245,11 @@ async function validateInstalledServer(command: string): Promise<void> {
   } catch (error) {
     throw formatRuntimeDependencyError(error);
   }
-  if (
-    !version.includes(`version: ${LLAMA_SERVER_BUILD}`) ||
-    !version.includes(LLAMA_SERVER_COMMIT.slice(0, 9))
-  ) {
+  const versionLine = version.split(/\r?\n/u, 1)[0]?.trim() ?? "";
+  const match = versionLine.match(/^version: .+ \(build (\d+), commit ([a-f\d]{9})\)$/u);
+  const build = match?.[1] ? Number(match[1]) : undefined;
+  const commit = match?.[2];
+  if (build !== LLAMA_SERVER_BUILD || commit !== LLAMA_SERVER_COMMIT.slice(0, 9)) {
     throw new Error(
       `Unexpected llama-server build at ${command}: expected ${LLAMA_SERVER_RELEASE} (${LLAMA_SERVER_COMMIT.slice(0, 9)}), got ${version || "no version output"}`,
     );

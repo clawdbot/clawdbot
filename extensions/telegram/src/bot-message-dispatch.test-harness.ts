@@ -110,6 +110,7 @@ const resolveAgentWorkspaceDirHoisted = vi.hoisted(() => vi.fn(() => "/tmp/works
 const resolveDefaultModelForAgentHoisted = vi.hoisted(() =>
   vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
 );
+const resolveHumanDelayConfigHoisted = vi.hoisted(() => vi.fn());
 const getAgentScopedMediaLocalRootsHoisted = vi.hoisted(() =>
   vi.fn((_cfg: unknown, agentId: string) => [`/tmp/.openclaw/workspace-${agentId}`]),
 );
@@ -154,6 +155,7 @@ const findModelInCatalog = findModelInCatalogHoisted;
 const modelSupportsVision = modelSupportsVisionHoisted;
 const resolveAgentDir = resolveAgentDirHoisted;
 const resolveDefaultModelForAgent = resolveDefaultModelForAgentHoisted;
+export const resolveHumanDelayConfig = resolveHumanDelayConfigHoisted;
 const getAgentScopedMediaLocalRoots = getAgentScopedMediaLocalRootsHoisted;
 const resolveChunkMode = resolveChunkModeHoisted;
 export const resolveMarkdownTableMode = resolveMarkdownTableModeHoisted;
@@ -301,6 +303,7 @@ vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
   resolveAgentDir: resolveAgentDirHoisted,
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirHoisted,
   resolveDefaultModelForAgent: resolveDefaultModelForAgentHoisted,
+  resolveHumanDelayConfig: resolveHumanDelayConfigHoisted,
 }));
 
 vi.mock("./sticker-cache.js", () => ({
@@ -411,6 +414,7 @@ function resetTelegramDispatchTestState() {
   modelSupportsVision.mockReset();
   resolveAgentDir.mockReset();
   resolveDefaultModelForAgent.mockReset();
+  resolveHumanDelayConfig.mockReset();
   loadConfig.mockReturnValue({});
   dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
     queuedFinal: false,
@@ -473,6 +477,7 @@ function resetTelegramDispatchTestState() {
     provider: "openai",
     model: "gpt-test",
   });
+  resolveHumanDelayConfig.mockReturnValue(undefined);
   getGlobalHookRunner.mockReturnValue(null);
 }
 

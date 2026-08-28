@@ -35,16 +35,17 @@ import {
   claimDeliveryPlatformSendAttempt,
   enqueueDelivery,
   enqueueDeliveryOnce,
-  loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
   reserveDeliveryAttempt,
 } from "./delivery-queue-storage.js";
 import {
+  loadPendingDeliveries,
   asDeliverFn,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
+  readQueuedEntry,
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 const RECOVERY_REPLAY_SPACING_MS = 250;
@@ -688,7 +689,7 @@ describe("delivery-queue recovery", () => {
       const { result } = await runRecovery({ deliver: vi.fn(), log });
       expect(result.skippedMaxRetries).toBe(1);
       expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
-      expectMockMessageContaining(log.warn, "owner state could not be marked unknown");
+      expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("settlement");
     } finally {
       closeOpenClawAgentDatabasesForTest();
     }
@@ -762,6 +763,36 @@ describe("delivery-queue recovery", () => {
     expect(replay).not.toHaveBeenCalled();
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(readOutboundQueueStatus(tmpDir(), id)).toBeUndefined();
+  });
+  it("keeps a partially sent batch unknown when a later send has a permanent rejection", async () => {
+    const id = await enqueueDemoRecoveryDelivery(["first", "second"]);
+    const rejection = new PlatformMessageNotDispatchedError(
+      "Slack outbound delivery rejected: messages_tab_disabled",
+      { cause: new Error("messages_tab_disabled"), retryable: false },
+    );
+    const partialFailure = new OutboundDeliveryError("second send failed", {
+      cause: rejection,
+      results: [{ channel: "demo-channel-c", messageId: "m1" }],
+      payloadOutcomes: [
+        { index: 0, status: "sent", results: [{ channel: "demo-channel-c", messageId: "m1" }] },
+        {
+          index: 1,
+          status: "failed",
+          error: rejection,
+          sentBeforeError: false,
+          stage: "platform_send",
+        },
+      ],
+      stage: "platform_send",
+    });
+
+    const { result } = await runRecovery({
+      deliver: vi.fn().mockRejectedValue(partialFailure),
+    });
+
+    expect(result).toMatchObject({ recovered: 0, failed: 1 });
+    await expectPendingEntry({ id, recoveryState: "unknown_after_send", retryCount: 0 });
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
   });
   it("keeps a best-effort recovery failure retryable when no payload was sent", async () => {
     await enqueueDemoRecoveryDelivery(["first"], { bestEffort: true });
@@ -1268,6 +1299,57 @@ describe("delivery-queue recovery", () => {
     const typedRejection = error instanceof PlatformMessageNotDispatchedError;
     await runIf(typedRejection, () => expect(deliver).toHaveBeenCalledOnce());
     await runIf(!typedRejection, () => expectMockMessageContaining(log.warn, "permanent error"));
+  });
+  it("persists a nested channel rejection as the only terminal across recovery restart", async () => {
+    const operationId = "operation-channel-permanent-rejection";
+    const scope = await createConversationRecoveryFixture(operationId);
+    const rejection = new PlatformMessageNotDispatchedError(
+      "Slack chat.postMessage rejected: messages_tab_disabled",
+      {
+        cause: new Error("messages_tab_disabled"),
+        retryable: false,
+      },
+    );
+    const deliver = vi.fn().mockRejectedValue(
+      new OutboundDeliveryError("Slack delivery failed", {
+        cause: rejection,
+        payloadOutcomes: [
+          {
+            index: 0,
+            status: "failed",
+            error: rejection,
+            sentBeforeError: false,
+            stage: "platform_send",
+          },
+        ],
+        stage: "platform_send",
+      }),
+    );
+
+    try {
+      const first = await runRecovery({ deliver });
+      expect(first.result).toEqual(RECOVERY_SUMMARY.failed);
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+        status: "rejected",
+        rejectionError: "Slack chat.postMessage rejected: messages_tab_disabled",
+      });
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+      expect(readOutboundQueueStatus(tmpDir(), operationId)).toBe("failed");
+
+      closeOpenClawAgentDatabasesForTest();
+      const replay = vi.fn();
+      const second = await runRecovery({ deliver: replay });
+      expect(second.result).toEqual(RECOVERY_SUMMARY.empty);
+      expect(replay).not.toHaveBeenCalled();
+      expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+        status: "rejected",
+        rejectionError: "Slack chat.postMessage rejected: messages_tab_disabled",
+      });
+      expect(readOutboundQueueStatus(tmpDir(), operationId)).toBe("failed");
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+    }
   });
   it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
     await enqueueRecoveryDelivery();

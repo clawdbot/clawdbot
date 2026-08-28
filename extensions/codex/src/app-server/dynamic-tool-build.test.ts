@@ -11,6 +11,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
@@ -157,6 +158,22 @@ async function buildDynamicToolsForTest(
     effectiveWorkspace: workspaceDir,
     sandboxSessionKey,
     sandbox: { enabled: false, backendId: "docker" } as never,
+    ...(params.permissionMode && params.sessionRoot
+      ? {
+          sessionPermissionPolicy: {
+            mode: params.permissionMode,
+            root: params.sessionRoot,
+            execMode:
+              params.permissionMode === "read-only"
+                ? "deny"
+                : params.permissionMode === "guarded"
+                  ? "ask"
+                  : params.permissionMode === "workspace"
+                    ? "auto"
+                    : "full",
+          },
+        }
+      : {}),
     nativeToolSurfaceEnabled: true,
     runAbortController: new AbortController(),
     sessionAgentId: "main",
@@ -554,6 +571,114 @@ describe("Codex app-server dynamic tool build", () => {
     },
   );
 
+  it("never lets raw full bypass a requirements-clamped workspace dynamic policy", async () => {
+    const workspaceDir = path.join(tempDir, "clamped-workspace");
+    const params = createParams(path.join(tempDir, "clamped-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.permissionMode = "full";
+    params.sessionRoot = workspaceDir;
+    params.execOverrides = { host: "gateway", mode: "full" };
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const factoryOptions: unknown[] = [];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox: null as never,
+      sessionPermissionPolicy: { mode: "workspace", root: workspaceDir, execMode: "auto" },
+    });
+
+    expect(factoryOptions[0]).toMatchObject({
+      exec: { host: "gateway", mode: "auto" },
+      sessionPermissionPolicy: { mode: "workspace", root: workspaceDir },
+    });
+  });
+
+  it("pins guarded Gateway shell calls to human approval after stripping model policy", async () => {
+    const workspaceDir = path.join(tempDir, "guarded-gateway-workspace");
+    const params = createParams(path.join(tempDir, "guarded-gateway.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.permissionMode = "guarded";
+    params.sessionRoot = workspaceDir;
+    params.execOverrides = { host: "gateway", mode: "ask" };
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const execTool = createRuntimeDynamicTool("exec");
+    setOpenClawCodingToolsFactoryForTests(() => [execTool]);
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sessionPermissionPolicy: { mode: "guarded", root: workspaceDir, execMode: "ask" },
+    });
+    const gatewayExec = expectDefined(
+      tools.find((tool) => tool.name === "gateway_exec"),
+      "guarded Gateway shell alias",
+    );
+    await gatewayExec.execute("guarded-call", {
+      command: "echo approved",
+      host: "node",
+      security: "full",
+      ask: "off",
+    });
+
+    expect(execTool.execute).toHaveBeenCalledWith(
+      "guarded-call",
+      { command: "echo approved", host: "gateway", ask: "always" },
+      undefined,
+      undefined,
+    );
+  });
+
+  it.each([
+    {
+      mode: "guarded" as const,
+      execMode: "ask" as const,
+      expected: { status: "failed", failureKind: "approval_required" },
+    },
+    { mode: "full" as const, execMode: "full" as const, expected: { status: "completed" } },
+  ])("enforces the final $mode policy for an allowlisted Gateway command", async (testCase) => {
+    const workspaceDir = path.join(tempDir, `${testCase.mode}-allowlisted-workspace`);
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const params = createParams(
+      path.join(tempDir, `${testCase.mode}-allowlisted.jsonl`),
+      workspaceDir,
+    );
+    params.disableTools = false;
+    params.permissionMode = testCase.mode;
+    params.sessionRoot = workspaceDir;
+    params.execOverrides = { host: "gateway", mode: testCase.execMode };
+    params.config = {
+      tools: { exec: { safeBins: ["echo"], safeBinProfiles: { echo: { maxPositional: 1 } } } },
+    };
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setOpenClawCodingToolsFactoryForTests((options) =>
+      createOpenClawCodingTools({
+        ...options,
+        swarmCollector: true,
+        wrapBeforeToolCallHook: false,
+      }).filter((tool) => ["exec", "process"].includes(tool.name)),
+    );
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sessionPermissionPolicy: {
+        mode: testCase.mode,
+        root: workspaceDir,
+        execMode: testCase.execMode,
+      },
+    });
+    const gatewayExec = expectDefined(
+      tools.find((tool) => tool.name === "gateway_exec"),
+      `${testCase.mode} Gateway shell alias`,
+    );
+    const result = await gatewayExec.execute(`${testCase.mode}-allowlisted`, {
+      command: `echo ${testCase.mode}`,
+      ask: "off",
+      security: "full",
+    });
+
+    expect(result.details).toMatchObject(testCase.expected);
+  });
+
   it("removes managed web_search when domain-restricted Codex hosted search is active", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
@@ -625,6 +750,58 @@ describe("Codex app-server dynamic tool build", () => {
       (receivedOptions?.webFetchHostnameAllowlistRef as { value?: string[] } | undefined)?.value,
     ).toBeUndefined();
   });
+
+  it.each([
+    {
+      name: "publication capability is unavailable",
+      githubPublicationAvailable: undefined,
+      profile: "coding",
+      expectedTools: [],
+    },
+    {
+      name: "publication is unavailable for a prepared session",
+      githubPublicationAvailable: false,
+      profile: "coding",
+      expectedTools: ["github_identity_status"],
+    },
+    {
+      name: "publication is available for a prepared session",
+      githubPublicationAvailable: true,
+      profile: "coding",
+      expectedTools: ["github_identity_status", "github_publish"],
+    },
+    {
+      name: "the active profile excludes coding tools",
+      githubPublicationAvailable: true,
+      profile: "messaging",
+      expectedTools: [],
+    },
+  ] as const)(
+    "exposes prepared GitHub tools when $name",
+    async ({ githubPublicationAvailable, profile, expectedTools }) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      params.disableTools = false;
+      params.githubPublicationAvailable = githubPublicationAvailable;
+      params.config = { tools: { profile } };
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      const { hostCapabilities: _hostCapabilities, ...attempt } = params;
+      const host = await createAgentHarnessHostCapabilitiesForTest({ attempt, pluginId: "codex" });
+      params.hostCapabilities = host.capabilities;
+
+      try {
+        const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+          sandbox: null as never,
+        });
+
+        expect(tools.map((tool) => tool.name).filter((name) => name.startsWith("github_"))).toEqual(
+          expectedTools,
+        );
+      } finally {
+        host.close();
+      }
+    },
+  );
 
   it("forwards client caps alongside channel authority context", async () => {
     // Regression: capability-gated tools (requiredClientCaps) vanished on the

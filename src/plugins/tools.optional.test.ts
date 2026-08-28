@@ -61,7 +61,7 @@ let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegist
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
-let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
+let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata.test-support.js").setCurrentPluginMetadataSnapshot;
 let getPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").getPluginRuntimeGatewayRequestScope;
 let withPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").withPluginRuntimeGatewayRequestScope;
 
@@ -551,7 +551,8 @@ describe("resolvePluginTools optional tools", () => {
     ({ getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
       await import("./runtime/gateway-request-scope.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
-    ({ setCurrentPluginMetadataSnapshot } = await import("./current-plugin-metadata-snapshot.js"));
+    ({ setCurrentPluginMetadataSnapshot } =
+      await import("./current-plugin-metadata.test-support.js"));
     ({ resetPluginToolDescriptorCacheForTest } = await import("./tools.test-fixtures.js"));
   });
 
@@ -3089,7 +3090,7 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("does not widen active registry reuse to non-matching plugin tool owners", () => {
+  it("filters non-matching plugin tool owners while reusing the active registry", () => {
     installToolManifestSnapshot({
       config: createContext().config,
       plugin: createToolManifest("optional-demo", ["optional_tool"]),
@@ -3126,7 +3127,7 @@ describe("resolvePluginTools optional tools", () => {
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(heavyFactory).not.toHaveBeenCalled();
     expect(resolveCompatibleRuntimePluginRegistryMock).toHaveBeenCalledOnce();
-    expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("does not let disabled bundled tool owners poison explicit runtime allowlists", () => {
@@ -3186,7 +3187,7 @@ describe("resolvePluginTools optional tools", () => {
     expectResolvedToolNames(tools, ["memory_search", "memory_get"]);
     expect(memorySearchFactory).toHaveBeenCalledTimes(1);
     expect(resolveCompatibleRuntimePluginRegistryMock).toHaveBeenCalledOnce();
-    expectLoaderSelectedOnlyPluginIds(["memory-core"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("keeps a cold-loaded standalone registry scoped through tool callbacks", async () => {

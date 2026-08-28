@@ -182,6 +182,20 @@ Opt into automatic resets globally, then override them per chat type or channel:
 
 `resetByType` supports `direct`, `group`, and `thread`. Doctor migrates legacy `dm` entries to `direct` and `session.idleMinutes` to `session.reset.idleMinutes`; the schema rejects both retired forms.
 
+## Gateway restart recovery
+
+When a Gateway restart interrupts an active turn, OpenClaw tries to continue
+the existing session automatically. Three attempts that fail to start a backend
+turn exhaust the recovery budget. Once a real backend turn starts,
+the budget refreshes, so a later Gateway restart does not consume the old allowance.
+Accepting, queueing, or preparing a resume request alone does not refresh it.
+CLI backends that do not report turn acceptance refresh the budget only after
+observed assistant output or tool activity; silent startup does not refresh it.
+
+If automatic recovery is exhausted, the transcript remains available. Use
+**Resume in new session** in WebChat, or `/new` or `/reset` in other channels,
+to start a replacement session.
+
 ## Where state lives
 
 - **Runtime session rows:** `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`

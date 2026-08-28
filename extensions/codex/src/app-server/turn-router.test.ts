@@ -4,16 +4,9 @@ import type { CodexAppServerClient } from "./client.js";
 import type { JsonValue } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 import { getCodexAppServerTurnRouter, type CodexAppServerServerRequest } from "./turn-router.js";
+import { settleInput, waitForResponse, type WireResponse } from "./turn-router.test-support.js";
 
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
-
-type ClientHarness = ReturnType<typeof createClientHarness>;
-
-type WireResponse = {
-  id: number | string;
-  result?: unknown;
-  error?: unknown;
-};
 
 describe("CodexAppServerTurnRouter", () => {
   const clients: CodexAppServerClient[] = [];
@@ -27,7 +20,7 @@ describe("CodexAppServerTurnRouter", () => {
     vi.restoreAllMocks();
   });
 
-  function createHarness(): ClientHarness {
+  function createHarness(): ReturnType<typeof createClientHarness> {
     const harness = createClientHarness();
     clients.push(harness.client);
     return harness;
@@ -46,6 +39,27 @@ describe("CodexAppServerTurnRouter", () => {
     expect(addNotificationHandler).toHaveBeenCalledTimes(1);
     expect(addRequestHandler).toHaveBeenCalledTimes(1);
     expect(addCloseHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers global startup warnings to the next reserved thread", async () => {
+    const harness = createHarness();
+    const warning = {
+      method: "configWarning",
+      params: { summary: "Custom execution rules were not applied." },
+    };
+    harness.send(warning);
+    const notifications = vi.fn();
+
+    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
+      threadId: "thread-warnings",
+      onNotification: notifications,
+    });
+    route.armTurn();
+    await route.bindTurn("turn-warnings");
+
+    await vi.waitFor(() =>
+      expect(notifications).toHaveBeenCalledWith(warning, { threadId: "thread-warnings" }),
+    );
   });
 
   it("does not dispatch a request that times out before route activation", async () => {
@@ -171,12 +185,16 @@ describe("CodexAppServerTurnRouter", () => {
     harness.send({ method: "configWarning", params: { message: "global" } });
     await settleInput();
 
-    expect(notifications).toHaveBeenCalledOnce();
+    expect(notifications).toHaveBeenCalledTimes(2);
     expect(notifications).toHaveBeenCalledWith(
       {
         method: "thread/status/changed",
         params: { threadId: "thread-1", status: { type: "active" } },
       },
+      { threadId: "thread-1" },
+    );
+    expect(notifications).toHaveBeenCalledWith(
+      { method: "configWarning", params: { message: "global" } },
       { threadId: "thread-1" },
     );
     expect(warn).toHaveBeenCalledTimes(1);
@@ -1074,23 +1092,3 @@ describe("CodexAppServerTurnRouter", () => {
     ).not.toThrow();
   });
 });
-
-async function waitForResponse(harness: ClientHarness, id: number | string): Promise<WireResponse> {
-  let response: WireResponse | undefined;
-  await vi.waitFor(() => {
-    response = harness.writes
-      .map((write) => JSON.parse(write) as WireResponse)
-      .find((candidate) => candidate.id === id);
-    expect(response).toBeDefined();
-  });
-  if (!response) {
-    throw new Error(`missing app-server response for ${id}`);
-  }
-  return response;
-}
-
-async function settleInput(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}

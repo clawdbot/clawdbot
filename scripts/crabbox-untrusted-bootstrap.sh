@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-node_version="24.15.0"
-pnpm_spec="pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065"
+node_version="24.19.0"
+pnpm_spec="pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621"
 
 if [[ $# -lt 2 ]]; then
   echo "usage: $0 <expected-head-sha> <command> [args...]" >&2
@@ -67,19 +67,28 @@ trap cleanup EXIT
   /usr/bin/grep "  ${archive}\$" SHASUMS256.txt | /usr/bin/sha256sum -c -
 )
 
-sudo /bin/rm -rf -- "$install_root" "$corepack_home"
-sudo /usr/bin/mkdir -p "$install_root" "$corepack_home"
-sudo /usr/bin/tar -xJf "$tmp_dir/$archive" -C "$install_root" --strip-components=1
-sudo /usr/bin/env \
+# Only public toolchain artifacts need shared access; keep caller state private.
+sudo /bin/bash -s -- "$install_root" "$corepack_home" "$tmp_dir/$archive" "$pnpm_spec" <<'INSTALL'
+set -euo pipefail
+umask 022
+install_root="$1"
+corepack_home="$2"
+archive_path="$3"
+pnpm_spec="$4"
+/bin/rm -rf -- "$install_root" "$corepack_home"
+/usr/bin/mkdir -p "$install_root" "$corepack_home"
+/usr/bin/tar -xJf "$archive_path" -C "$install_root" --strip-components=1
+/usr/bin/env \
   COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   COREPACK_HOME="$corepack_home" \
   PATH="$install_root/bin:/usr/bin:/bin" \
   "$install_root/bin/corepack" enable --install-directory "$install_root/bin"
-sudo /usr/bin/env \
+/usr/bin/env \
   COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   COREPACK_HOME="$corepack_home" \
   PATH="$install_root/bin:/usr/bin:/bin" \
   "$install_root/bin/corepack" prepare "$pnpm_spec" --activate
+INSTALL
 
 for tool in node npm npx corepack pnpm pnpx; do
   if [[ -e "$install_root/bin/$tool" ]]; then

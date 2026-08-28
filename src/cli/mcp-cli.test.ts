@@ -21,6 +21,17 @@ import {
 import { writeProbeMcpServer } from "./mcp-cli.test-support.js";
 import { runCliWithExitFinalization } from "./one-shot-exit.js";
 
+async function writeMcpDoctorServers(
+  home: string,
+  servers: Record<string, unknown>,
+): Promise<void> {
+  await fs.writeFile(
+    path.join(home, ".openclaw", "openclaw.json"),
+    `${JSON.stringify({ mcp: { servers } })}\n`,
+    "utf8",
+  );
+}
+
 describe("mcp cli", () => {
   beforeEach(() => {
     resetMcpCliTestState();
@@ -426,6 +437,57 @@ describe("mcp cli", () => {
     });
   });
 
+  it.each([
+    {
+      command: "configure",
+      flag: "--include",
+      value: "search,read_*",
+      expected: { include: ["search", "read_*"], exclude: ["admin_*"] },
+    },
+    {
+      command: "configure",
+      flag: "--exclude",
+      value: "write_*",
+      expected: { include: ["old_*"], exclude: ["write_*"] },
+    },
+    {
+      command: "tools",
+      flag: "--include",
+      value: "search,read_*",
+      expected: { include: ["read_*", "search"], exclude: ["admin_*"] },
+    },
+    {
+      command: "tools",
+      flag: "--exclude",
+      value: "write_*",
+      expected: { include: ["old_*"], exclude: ["write_*"] },
+    },
+  ])(
+    "preserves sibling tool filters for $command $flag",
+    async ({ command, flag, value, expected }) => {
+      await withTempHome("openclaw-cli-mcp-home-", async () => {
+        const workspaceDir = await createWorkspace();
+        vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+        await runMcpCommand([
+          "mcp",
+          "set",
+          "docs",
+          JSON.stringify({
+            command: "node",
+            args: ["server.mjs"],
+            toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
+          }),
+        ]);
+        await runMcpCommand(["mcp", command, "docs", flag, value]);
+
+        mockLog.mockClear();
+        await runMcpCommand(["mcp", "show", "docs", "--json"]);
+        expect(JSON.parse(lastLogLine()).toolFilter).toEqual(expected);
+      });
+    },
+  );
+
   it("requires an explicit MCP tool filter operation", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
@@ -438,14 +500,17 @@ describe("mcp cli", () => {
     });
   });
 
-  it("clears per-server MCP tool filters only when requested", async () => {
+  it.each([
+    ["tools", "--clear"],
+    ["configure", "--clear-tools"],
+  ])("clears per-server MCP tool filters with %s %s", async (command, clearFlag) => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
       await runMcpCommand(["mcp", "set", "docs", '{"command":"node","args":["server.mjs"]}']);
       await runMcpCommand(["mcp", "tools", "docs", "--include", "search"]);
-      await runMcpCommand(["mcp", "tools", "docs", "--clear"]);
+      await runMcpCommand(["mcp", command, "docs", clearFlag]);
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "show", "docs", "--json"]);
@@ -554,22 +619,77 @@ describe("mcp cli", () => {
     });
   });
 
-  it("bounds concurrent MCP doctor server checks", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
+  it("reports ignored OAuth Authorization headers regardless of casing", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
       const workspaceDir = await createWorkspace();
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      for (let index = 0; index < 6; index += 1) {
-        await runMcpCommand([
-          "mcp",
-          "set",
-          `server-${index}`,
-          JSON.stringify({
-            url: `https://mcp-${index}.example.com`,
-            transport: "streamable-http",
-            auth: "oauth",
-          }),
-        ]);
-      }
+      readMcpOAuthCredentialsStatus.mockResolvedValue({ state: "authorized" });
+
+      await writeMcpDoctorServers(
+        home,
+        Object.fromEntries(
+          [
+            { name: "lowercase", header: "authorization", oauth: true },
+            { name: "titlecase", header: "Authorization", oauth: true },
+            { name: "uppercase", header: "AUTHORIZATION", oauth: true },
+            { name: "proxy", header: "Proxy-Authorization", oauth: true },
+            { name: "unrelated", header: "X-Tenant", oauth: true },
+            { name: "without-oauth", header: "AUTHORIZATION", oauth: false },
+          ].map(({ name, header, oauth }) => [
+            name,
+            {
+              url: "https://mcp.example.com/mcp",
+              headers: { [header]: "$MCP_HEADER" },
+              ...(oauth ? { auth: "oauth" } : {}),
+            },
+          ]),
+        ),
+      );
+      mockLog.mockClear();
+
+      await runMcpCommand(["mcp", "doctor", "--json"]);
+
+      const { servers } = JSON.parse(lastLogLine()) as {
+        servers: Array<{ name: string; issues: Array<{ message: string }> }>;
+      };
+      expect(
+        Object.fromEntries(
+          servers.map(({ name, issues }) => [
+            name,
+            issues.some(
+              ({ message }) =>
+                message === "OAuth is enabled and the static Authorization header is ignored",
+            ),
+          ]),
+        ),
+      ).toEqual({
+        lowercase: true,
+        titlecase: true,
+        uppercase: true,
+        proxy: false,
+        unrelated: false,
+        "without-oauth": false,
+      });
+    });
+  });
+
+  it("bounds concurrent MCP doctor server checks", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await writeMcpDoctorServers(
+        home,
+        Object.fromEntries(
+          Array.from({ length: 6 }, (_, index) => [
+            `server-${index}`,
+            {
+              url: `https://mcp-${index}.example.com`,
+              transport: "streamable-http",
+              auth: "oauth",
+            },
+          ]),
+        ),
+      );
 
       const checksBlocked = createDeferred();
       readMcpOAuthCredentialsStatus.mockImplementation(async () => {

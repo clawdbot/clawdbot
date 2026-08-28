@@ -267,6 +267,7 @@ async function readNodeCodexHistory(params: {
     id: params.record.threadId,
     createdAt: params.record.createdAt ?? 0,
     modelProvider: params.record.modelProvider ?? "openai",
+    projectId: null,
     turns: page.data.toReversed(),
   };
   return {
@@ -352,9 +353,8 @@ async function continueNodeCodexSessionInner(params: {
       detachHint: "Start a new chat to leave the paired-node Codex session.",
       data: createCodexCliNodeConversationBindingData({
         nodeId,
-        // codex exec resume takes the CLI session id; forked threads share a
-        // session tree where the thread id and session id differ.
-        sessionId: record.sessionId?.trim() || params.threadId,
+        // CLI resume resolves a UUID as its exact thread; family session IDs can select a sibling.
+        sessionId: params.threadId,
         agentId: adopted.agentId,
         cwd: record.cwd,
       }),
@@ -385,7 +385,7 @@ export async function continueNodeCodexSession(params: {
   const agentId = resolveSessionAgentIds({
     config: params.config,
     agentId: params.agentId,
-  }).defaultAgentId;
+  }).sessionAgentId;
   const sourceKey = sessionCatalogAdoptedSourceKey(`node:${nodeId}`, params.threadId);
   const operationKey = sessionCatalogAdoptedSourceKey(agentId, sourceKey);
   // Memoization is agent-qualified while the native action lock is source-qualified,

@@ -128,7 +128,8 @@ function useRegistrySetupPlugin(id: string, origin: string, provider: MockSetupP
   useRegistryPlugins(setupPlugin(id, origin, provider));
 }
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: pluginRegistryMocks.getCurrentPluginMetadataSnapshot,
 }));
 
@@ -804,7 +805,9 @@ describe("provider env vars dynamic manifest metadata", () => {
       },
     });
 
-    const lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
+    const lookupMaps = resolveProviderAuthLookupMaps({
+      config: { plugins: { entries: { "disabled-setup-owner": { enabled: false } } } },
+    });
 
     expect(lookupMaps.setupProviderFallbackRefs).toEqual([]);
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);

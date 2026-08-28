@@ -76,10 +76,11 @@ available to that process (for example, in `~/.openclaw/.env` or via
 
 ## Built-in catalog
 
-| Model ref                    | Name              | Input | Context   | Max output | Notes                            |
-| ---------------------------- | ----------------- | ----- | --------- | ---------- | -------------------------------- |
-| `deepseek/deepseek-v4-flash` | DeepSeek V4 Flash | text  | 1,000,000 | 384,000    | Fast V4 thinking-capable surface |
-| `deepseek/deepseek-v4-pro`   | DeepSeek V4 Pro   | text  | 1,000,000 | 384,000    | Default; strongest V4 model      |
+| Model ref                               | Name                                    | Input       | Context   | Max output | Notes                            |
+| --------------------------------------- | --------------------------------------- | ----------- | --------- | ---------- | -------------------------------- |
+| `deepseek/deepseek-v4-flash`            | DeepSeek V4 Flash                       | text        | 1,000,000 | 384,000    | Fast V4 thinking-capable surface |
+| `deepseek/deepseek-v4-pro`              | DeepSeek V4 Pro                         | text        | 1,000,000 | 384,000    | Default; strongest V4 model      |
+| `deepseek/deepseek-v4-flash-vision-exp` | DeepSeek V4 Flash Vision (Experimental) | text, image | 1,000,000 | 384,000    | Experimental image understanding |
 
 <Warning>
 DeepSeek retired `deepseek-chat` and `deepseek-reasoner` on July 24, 2026 at
@@ -87,10 +88,16 @@ DeepSeek retired `deepseek-chat` and `deepseek-reasoner` on July 24, 2026 at
 to `deepseek/deepseek-v4-flash` or `deepseek/deepseek-v4-pro`.
 </Warning>
 
-OpenClaw's local cost estimates follow DeepSeek's published cache-hit,
-cache-miss, and output rates. DeepSeek can change those rates; its
+OpenClaw's local costs are estimates. The vision model's bundled estimate uses
+DeepSeek's peak rates; its published off-peak rates are half those amounts.
+DeepSeek can change rates; its
 [Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/) page is
 authoritative for billing.
+
+For image inputs, select `deepseek/deepseek-v4-flash-vision-exp`. The regular
+Flash and Pro models are text-only. DeepSeek's experimental vision model accepts
+PNG, JPEG, GIF, and WebP images through the same API and API key. See
+[DeepSeek vision](https://api-docs.deepseek.com/guides/vision) for image limits.
 
 <Tip>
 V4 models support DeepSeek's `thinking` control. OpenClaw also replays
@@ -105,8 +112,8 @@ maximum `reasoning_effort`; both map to `"max"`.
 DeepSeek V4 thinking sessions require replayed assistant messages from a
 thinking-enabled turn to include `reasoning_content` on follow-up requests.
 OpenClaw's DeepSeek plugin backfills that field automatically, so normal
-multi-turn tool use works on `deepseek/deepseek-v4-flash` and
-`deepseek/deepseek-v4-pro` even when history came from another
+multi-turn tool use works on `deepseek/deepseek-v4-flash`,
+`deepseek/deepseek-v4-flash-vision-exp`, and `deepseek/deepseek-v4-pro` even when history came from another
 OpenAI-compatible provider (no native `reasoning_content`) or from a plain
 assistant message. No `/new` required after switching providers mid-session.
 
@@ -130,6 +137,16 @@ pnpm test:live src/agents/models.profiles.live.test.ts
 
 Verifies both V4 models complete and that thinking/tool follow-up turns
 preserve the replay payload DeepSeek requires.
+
+To check the experimental vision model with the same `DEEPSEEK_API_KEY`:
+
+```bash
+OPENCLAW_LIVE_DEEPSEEK_MODEL=deepseek-v4-flash-vision-exp \
+pnpm test:live extensions/deepseek/deepseek.live.test.ts
+```
+
+This runs text, generated-image recognition, and thinking replay checks against
+the selected model.
 
 ## Config example
 

@@ -614,7 +614,6 @@ describe("runCli exit behavior", () => {
   });
 
   it("does not load inactive provider cleanup modules for cold help", async () => {
-    tryRouteCliMock.mockResolvedValueOnce(false);
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
     buildProgramMock.mockReturnValueOnce({
       commands: [{ name: () => "nodes", aliases: () => [] }],
@@ -791,6 +790,33 @@ describe("runCli exit behavior", () => {
       "--json",
       "--limit",
       "all",
+    ]);
+    expect(progressDoneMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses startup progress for plain model output before full CLI parsing", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "models", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "models", "aliases", "list", "--plain"]);
+
+    expect(createCliProgressMock).toHaveBeenCalledWith({
+      label: "Loading OpenClaw CLI…",
+      indeterminate: true,
+      delayMs: 0,
+      enabled: false,
+    });
+    expect(parseAsync).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "models",
+      "aliases",
+      "list",
+      "--plain",
     ]);
     expect(progressDoneMock).toHaveBeenCalledTimes(1);
   });
@@ -2279,6 +2305,26 @@ describe("runCli exit behavior", () => {
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["plugins install", ["plugins", "install", "--help"]],
+    ["plugins list", ["plugins", "list", "--help"]],
+    ["gateway status", ["gateway", "status", "--help"]],
+  ])("renders %s help without importing the command router", async (_name, args) => {
+    const argv = ["node", "openclaw", ...args];
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const program = {
+      commands: [{ name: () => args[0], aliases: () => [] }],
+      parseAsync,
+    };
+    buildProgramMock.mockReturnValueOnce(program);
+
+    await runCli(argv);
+
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(program, args[0], argv);
+    expect(parseAsync).toHaveBeenCalledWith(argv);
+  });
+
   it("propagates precomputed help metadata failures", async () => {
     outputPrecomputedSecretsHelpTextMock.mockImplementationOnce(() => {
       throw new Error("startup metadata failed");
@@ -3458,13 +3504,15 @@ describe("runCli exit behavior", () => {
     const processOnceSpy = vi.spyOn(process, "once");
     try {
       const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
+      // Only the managed-proxy kill hook registers here: the debug-capture
+      // finalize hook stays unloaded unless the capture env requests it.
       await vi.waitFor(() => {
         expect(
           processOnceSpy.mock.calls.reduce(
             (count, [event]) => count + (event === "exit" ? 1 : 0),
             0,
           ),
-        ).toBe(2);
+        ).toBe(1);
       });
 
       const exitHandler = processOnceSpy.mock.calls.find(([event]) => event === "exit")?.[1];

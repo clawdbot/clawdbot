@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 345049,
-  "reason": "streamed-markdown highlighting changes (#127749, #127754) consumed the ratchet",
-  "updatedAt": "2026-08-22"
+  "startupJsGzipBytes": 345524,
+  "reason": "typography picker module on the boot path (+301 B) plus unpinned boot growth from #131335 tooltips and #131336 new-session tab controls (~1.2 KiB) that predates this branch; measured on main 515c3d8ff3f",
+  "updatedAt": "2026-08-28"
 }

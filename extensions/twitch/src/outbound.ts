@@ -5,12 +5,7 @@
  * Supports text and media (URL) sending with markdown stripping and chunking.
  */
 
-import {
-  createMessageReceiptFromOutboundResults,
-  defineChannelMessageAdapter,
-  type ChannelMessageSendResult,
-  type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveTwitchAccountContext } from "./config.js";
@@ -204,65 +199,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
   },
 };
 
-function toTwitchMessageSendResult(
-  result: OutboundDeliveryResult,
-  kind: MessageReceiptPartKind,
-): ChannelMessageSendResult {
-  const receipt =
-    result.receipt ??
-    createMessageReceiptFromOutboundResults({
-      results: result.messageId ? [{ channel: "twitch", messageId: result.messageId }] : [],
-      kind,
-    });
-  return {
-    messageId: result.messageId || receipt.primaryPlatformMessageId,
-    receipt,
-  };
-}
-
-export const twitchMessageAdapter = defineChannelMessageAdapter({
+export const twitchMessageAdapter = createChannelMessageAdapterFromOutbound({
   id: "twitch",
-  durableFinal: {
-    capabilities: {
-      text: true,
-      media: true,
-      messageSendingHooks: true,
-    },
-  },
-  send: {
-    text: async (ctx) => {
-      if (!twitchOutbound.sendText) {
-        throw new Error("Twitch text sending is not available.");
-      }
-      const { onDeliveryResult, ...outboundCtx } = ctx;
-      const result = await twitchOutbound.sendText({
-        ...outboundCtx,
-        ...(onDeliveryResult
-          ? {
-              onDeliveryResult: async (progress) => {
-                await onDeliveryResult(toTwitchMessageSendResult(progress, "text"));
-              },
-            }
-          : {}),
-      });
-      return toTwitchMessageSendResult(result, "text");
-    },
-    media: async (ctx) => {
-      if (!twitchOutbound.sendMedia) {
-        throw new Error("Twitch media sending is not available.");
-      }
-      const { onDeliveryResult, ...outboundCtx } = ctx;
-      const result = await twitchOutbound.sendMedia({
-        ...outboundCtx,
-        ...(onDeliveryResult
-          ? {
-              onDeliveryResult: async (progress) => {
-                await onDeliveryResult(toTwitchMessageSendResult(progress, "media"));
-              },
-            }
-          : {}),
-      });
-      return toTwitchMessageSendResult(result, "media");
-    },
-  },
+  outbound: twitchOutbound,
 });

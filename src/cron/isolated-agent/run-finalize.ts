@@ -60,7 +60,7 @@ export async function finalizeCronRun(params: {
   execution: CronExecutionResult;
   abortReason: () => string;
   isAborted: () => boolean;
-  markCronRunSessionCleanupAttempted: () => void;
+  markCronRunSessionCleanupHandled: () => void;
   beforeSessionDelete: () => void;
 }): Promise<RunCronAgentTurnResult> {
   const { prepared, execution } = params;
@@ -77,7 +77,7 @@ export async function finalizeCronRun(params: {
       beforeDelete: params.beforeSessionDelete,
       reason,
     });
-    params.markCronRunSessionCleanupAttempted();
+    params.markCronRunSessionCleanupHandled();
   };
 
   // Late aborted results may still contain billable usage. Recheck before each
@@ -201,10 +201,6 @@ export async function finalizeCronRun(params: {
     );
     prepared.cronSession.sessionEntry.inputTokens = input;
     prepared.cronSession.sessionEntry.outputTokens = output;
-    const telemetryUsage: NonNullable<CronRunTelemetry["usage"]> = {
-      input_tokens: input,
-      output_tokens: output,
-    };
     const bucketTotalTokens = input + output + cacheRead + cacheWrite;
     // Keep telemetry totals consistent when a provider reports only a partial
     // aggregate alongside the normalized billing buckets.
@@ -212,9 +208,13 @@ export async function finalizeCronRun(params: {
       typeof usage.total === "number" && Number.isFinite(usage.total)
         ? Math.max(bucketTotalTokens, usage.total)
         : bucketTotalTokens;
-    if (aggregateTotalTokens > 0) {
-      telemetryUsage.total_tokens = aggregateTotalTokens;
-    }
+    const telemetryUsage: NonNullable<CronRunTelemetry["usage"]> = {
+      input_tokens: input,
+      output_tokens: output,
+      ...(aggregateTotalTokens > 0 ? { total_tokens: aggregateTotalTokens } : {}),
+      ...(cacheRead > 0 ? { cache_read_tokens: cacheRead } : {}),
+      ...(cacheWrite > 0 ? { cache_write_tokens: cacheWrite } : {}),
+    };
     if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
       prepared.cronSession.sessionEntry.totalTokens = totalTokens;
       prepared.cronSession.sessionEntry.totalTokensFresh = true;
@@ -363,9 +363,11 @@ export async function finalizeCronRun(params: {
   });
   const runDiagnostics = mergeCronRunDiagnostics(prepared.preflightDiagnostics, agentDiagnostics);
   const resolveRunOutcome = (result?: {
+    deliveryState?: RunCronAgentTurnResult["deliveryState"];
     delivered?: boolean;
     deliveryAttempted?: boolean;
     deliveryError?: string;
+    deliverySuppressionReason?: RunCronAgentTurnResult["deliverySuppressionReason"];
     delivery?: CronDeliveryTrace;
   }) =>
     prepared.withRunSession({
@@ -375,9 +377,11 @@ export async function finalizeCronRun(params: {
         : {}),
       summary,
       outputText,
+      deliveryState: result?.deliveryState,
       delivered: result?.delivered,
       deliveryAttempted: result?.deliveryAttempted,
       deliveryError: result?.deliveryError,
+      deliverySuppressionReason: result?.deliverySuppressionReason,
       delivery: result?.delivery,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
@@ -429,6 +433,7 @@ export async function finalizeCronRun(params: {
     const { queueCronMessageToolDeliveryAwareness } = await loadCronDeliveryRuntime();
     queueSourceSessionMessageToolAwareness = await queueCronMessageToolDeliveryAwareness({
       cfg: prepared.cfgWithAgentDefaults,
+      runSessionKey: prepared.runSessionKey,
       job: prepared.input.job,
       agentId: prepared.agentId,
       agentSessionKey: prepared.agentSessionKey,
@@ -492,6 +497,8 @@ export async function finalizeCronRun(params: {
       delivery: deliveryTrace,
     });
   }
+  // Dispatch owns transcript cleanup from here; a thrown delivery error must retain it too.
+  params.markCronRunSessionCleanupHandled();
   const { dispatchCronDelivery, resolveCronDeliveryBestEffort } = await loadCronDeliveryRuntime();
   const deliveryResult = await dispatchCronDelivery({
     cfg: prepared.input.cfg,
@@ -511,7 +518,12 @@ export async function finalizeCronRun(params: {
     timeoutMs: prepared.timeoutMs,
     resolvedDelivery: prepared.resolvedDelivery,
     deliveryRequested: prepared.deliveryRequested,
-    skipHeartbeatDelivery,
+    undeliveredRunStatus: hasFatalErrorPayload || pendingPresentationWarningError ? "error" : "ok",
+    skipDelivery: skipHeartbeatDelivery
+      ? hasIntentionalSilentReply
+        ? "silent"
+        : deliveryDisposition.kind
+      : undefined,
     spawnOnlyHandoff,
     sourceDeliveryOutcome,
     queueSourceSessionMessageToolAwareness,
@@ -528,9 +540,6 @@ export async function finalizeCronRun(params: {
     abortReason: params.abortReason,
     withRunSession: prepared.withRunSession,
   });
-  if (deliveryResult.cronRunSessionCleanupAttempted) {
-    params.markCronRunSessionCleanupAttempted();
-  }
   const deliveryTrace = buildCronDeliveryTrace({
     deliveryPlan: prepared.deliveryPlan,
     resolvedDelivery: prepared.resolvedDelivery,
@@ -548,6 +557,7 @@ export async function finalizeCronRun(params: {
       (deliveryResult.result.status === "error" ? deliveryResult.result.error : undefined);
     const resultWithDeliveryMeta: RunCronAgentTurnResult = {
       ...deliveryResult.result,
+      deliveryState: deliveryResult.deliveryState,
       delivered: deliveryResult.result.delivered ?? deliveryResult.delivered,
       deliveryAttempted:
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
@@ -565,43 +575,16 @@ export async function finalizeCronRun(params: {
       resultWithDeliveryMeta.delivered ?? deliveryResult.delivered,
     );
     if (!hasFatalErrorPayload) {
-      // Spawn-only turns are incomplete until a child produces output; keeping
-      // their failure visible prevents a one-shot job from being retired.
-      const incompleteSpawnOnlyHandoff =
-        spawnOnlyHandoff && normalizeOptionalString(deliveryResult.synthesizedText) === undefined;
-      // A successful isolated agent turn must keep `status: "ok"` even when the
-      // post-run delivery phase fails. Collapsing the delivery error into the
-      // execution status made the outer scheduled run report `status=error`
-      // for a session that actually ended successfully (#94058). Delivery
-      // failure is recorded separately via `delivered`/`deliveryAttempted` and
-      // delivery diagnostics, while deliberate target-guard refusals stay errors.
-      if (
-        deliveryResult.result.status === "error" &&
-        deliveryResult.result.errorKind !== "delivery-target" &&
-        !incompleteSpawnOnlyHandoff &&
-        !params.isAborted()
-      ) {
-        const failedDeliveryError = resultWithDeliveryMeta.error;
-        const successfulResult: RunCronAgentTurnResult = {
-          ...resultWithDeliveryMeta,
-          status: "ok",
-          delivered: resultWithDeliveryMeta.delivered ?? deliveryResult.delivered,
-          ...(failedDeliveryError ? { deliveryError: failedDeliveryError } : {}),
-        };
-        // Preserve the dispatcher's final summary and diagnostics, but keep the
-        // downstream send failure out of execution-only status and error fields.
-        delete successfulResult.error;
-        delete successfulResult.errorKind;
-        return successfulResult;
-      }
       return resultWithDeliveryMeta;
     }
     if (deliveryResult.result.status !== "ok") {
       return resultWithDeliveryMeta;
     }
     return resolveRunOutcome({
+      deliveryState: deliveryResult.deliveryState,
       delivered: deliveryResult.result.delivered,
       deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
+      deliverySuppressionReason: resultWithDeliveryMeta.deliverySuppressionReason,
       delivery: deliveryTrace,
     });
   }
@@ -609,9 +592,11 @@ export async function finalizeCronRun(params: {
   outputText = deliveryResult.outputText;
   failPendingPresentationWarningUnlessDelivered(deliveryResult.delivered);
   return resolveRunOutcome({
+    deliveryState: deliveryResult.deliveryState,
     delivered: deliveryResult.delivered,
     deliveryAttempted: deliveryResult.deliveryAttempted,
     deliveryError: deliveryResult.deliveryError,
+    deliverySuppressionReason: deliveryResult.deliverySuppressionReason,
     delivery: deliveryTrace,
   });
 }

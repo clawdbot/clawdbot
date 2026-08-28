@@ -8,6 +8,7 @@ import { resolveGatewayService, type GatewayService } from "../daemon/service.js
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { formatStatusServiceValue } from "./status-all/format.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
 
 function createService(overrides: Partial<GatewayService>): GatewayService {
@@ -58,14 +59,62 @@ describe("readServiceStatusSummary", () => {
     expect(summary.loadedText).toBe("running (externally managed)");
   });
 
-  it("keeps missing services as not installed when nothing is running", async () => {
-    const summary = await readServiceStatusSummary(createService({}), "Daemon");
+  it.each([{ status: "stopped" }, { status: "unknown", missingUnit: true }])(
+    "keeps missing services as not installed with runtime $status",
+    async (runtime) => {
+      const summary = await readServiceStatusSummary(
+        createService({ readRuntime: vi.fn(async () => runtime) }),
+        "Daemon",
+      );
 
-    expect(summary.installed).toBe(false);
-    expect(summary.managedByOpenClaw).toBe(false);
-    expect(summary.externallyManaged).toBe(false);
-    expect(summary.loadedText).toBe("disabled");
-  });
+      expect(summary.installed).toBe(false);
+      expect(summary.managedByOpenClaw).toBe(false);
+      expect(summary.externallyManaged).toBe(false);
+      expect(summary.loadedText).toBe("disabled");
+      expect(formatStatusServiceValue(summary)).toBe("systemd not installed");
+    },
+  );
+
+  it.each(["load", "runtime", "runtime with missing unit"])(
+    "reports %s inspection failures without a readable definition",
+    async (probe) => {
+      const failInspection = vi.fn(async () => {
+        throw new Error("service manager permission denied");
+      });
+      const summary = await readServiceStatusSummary(
+        createService(
+          probe === "load"
+            ? { isLoaded: failInspection }
+            : {
+                readRuntime:
+                  probe === "runtime"
+                    ? failInspection
+                    : vi.fn(async () => ({
+                        status: "unknown",
+                        detail: "Error: service manager permission denied",
+                        missingUnit: true,
+                      })),
+              },
+        ),
+        "Daemon",
+      );
+
+      expect(summary.installed).toBe(false);
+      expect(summary.loadState).toEqual(
+        probe === "load"
+          ? {
+              status: "unknown",
+              detail: "Error: service manager permission denied",
+            }
+          : { status: "not-loaded" },
+      );
+      expect(formatStatusServiceValue(summary)).toBe(
+        probe === "load"
+          ? "systemd unknown (inspection failed: Error: service manager permission denied) · stopped"
+          : "systemd disabled (inspection failed: Error: service manager permission denied) · unknown",
+      );
+    },
+  );
 
   it("preserves running service state when optional layout diagnostics fail", async () => {
     const layoutSpy = vi

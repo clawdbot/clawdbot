@@ -352,7 +352,10 @@ export async function setConversationModel(
         ? (currentSession.modelOverride ?? currentSession.model)
         : undefined;
     const binding = await deps.bindingStore.read(target.identity);
-    const activeModel = selectedModel ?? binding?.model;
+    // Direct sessions report their desired selection; bound conversations
+    // must never mistake an ambient outer-session model for native ownership.
+    const activeModel =
+      target.identity.kind === "conversation" ? binding?.model : (selectedModel ?? binding?.model);
     return activeModel
       ? `Codex model: ${formatCodexDisplayText(activeModel)}`
       : "Usage: /codex model <model>";
@@ -364,15 +367,6 @@ export async function setConversationModel(
     model: normalized,
     agentDir: target.agentDir,
     config: ctx.config,
-    ...(ctx.sessionId && ctx.sessionKey
-      ? {
-          session: {
-            agentId: target.agentId,
-            sessionId: ctx.sessionId,
-            sessionKey: ctx.sessionKey,
-          },
-        }
-      : {}),
   });
 }
 

@@ -1,17 +1,22 @@
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import {
   runOpenClawAgentWriteTransaction,
+  resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import {
+  withSqliteSessionImportStage,
+  type SqliteSessionImportStage,
+} from "./session-accessor.sqlite-import-stage.js";
 import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
-import { readTranscriptEventJsonSetInTransaction } from "./session-accessor.sqlite-read.js";
 import {
   formatSqliteSessionReferenceForScope,
   getSessionKysely,
@@ -42,7 +47,7 @@ type SqliteSessionImportRowsParams = {
   storePath?: string;
   sessionKey: string;
   entry: SessionEntry;
-  readTranscriptEvents?: (append: (event: TranscriptEvent) => void) => void;
+  readTranscriptEvents?: (append: (event: TranscriptEvent) => void) => void | (() => void);
   transcriptMtimeMs?: number;
 };
 
@@ -54,7 +59,7 @@ type SqliteSessionImportRowsResult = {
   transcriptEvents: number;
 };
 
-function prepareSqliteSessionImport(params: SqliteSessionImportRowsParams) {
+function resolveSqliteSessionImport(params: SqliteSessionImportRowsParams) {
   if (params.readExactTranscriptRows && params.readTranscriptEvents) {
     throw new Error("SQLite session import accepts only one transcript row source");
   }
@@ -68,18 +73,14 @@ function prepareSqliteSessionImport(params: SqliteSessionImportRowsParams) {
   const resolved = params.preserveExactStoredKey
     ? { ...resolvedScope, sessionKey: params.sessionKey }
     : resolvedScope;
-  const exactTranscriptRows = params.readExactTranscriptRows
-    ? new Array<{ createdAt: number; eventJson: string }>()
-    : undefined;
-  params.readExactTranscriptRows?.((row) => exactTranscriptRows?.push(row));
-  const transcriptEvents = params.readTranscriptEvents ? new Array<TranscriptEvent>() : undefined;
-  params.readTranscriptEvents?.((event) => transcriptEvents?.push(event));
-  return { exactTranscriptRows, params, resolved, transcriptEvents };
+  return { params, resolved };
 }
 
 function importSqliteSessionRowsInTransaction(
   database: OpenClawAgentDatabase,
-  prepared: ReturnType<typeof prepareSqliteSessionImport>,
+  prepared: ReturnType<typeof resolveSqliteSessionImport>,
+  stage: SqliteSessionImportStage,
+  source: number,
 ): SqliteSessionImportRowsResult {
   const { params, resolved } = prepared;
   let transcriptEvents = 0;
@@ -119,8 +120,7 @@ function importSqliteSessionRowsInTransaction(
   });
   // Only trusted SQLite handoffs can transfer ownership and hash exact ordered rows;
   // parsing, deduping, or trusting JSON ownership would break the migration boundary.
-  const exactTranscriptRows = prepared.exactTranscriptRows;
-  if (exactTranscriptRows) {
+  if (params.readExactTranscriptRows) {
     replaceSessionOwnerInTransaction(database, resolved.sessionKey, params.entry.owner);
     const transcriptScope = {
       ...resolved,
@@ -135,40 +135,50 @@ function importSqliteSessionRowsInTransaction(
         .where("session_id", "=", params.entry.sessionId)
         .limit(1),
     );
-    if (!existing && exactTranscriptRows.length > 0) {
-      ensureTranscriptSessionRoot(database, transcriptScope, exactTranscriptRows[0]!.createdAt, {
-        allowStoredAlias: true,
-      });
-      ensureTranscriptGenerationInTransaction(database, params.entry.sessionId);
-      for (const [seq, row] of exactTranscriptRows.entries()) {
+    if (!existing) {
+      for (const row of stage.rows(source)) {
+        if (row.seq === 0) {
+          ensureTranscriptSessionRoot(database, transcriptScope, row.createdAt!, {
+            allowStoredAlias: true,
+          });
+          ensureTranscriptGenerationInTransaction(database, params.entry.sessionId);
+        }
         executeSqliteQuerySync(
           database.db,
           db.insertInto("transcript_events").values({
             session_id: params.entry.sessionId,
-            seq,
+            seq: row.seq,
             event_json: row.eventJson,
-            created_at: row.createdAt,
+            created_at: row.createdAt!,
           }),
         );
+        transcriptEvents += 1;
       }
-      transcriptEvents = exactTranscriptRows.length;
+      // Doctor imports run outside gateway requests and must finish with a complete projection.
       reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
       publishSessionEntryCacheInvalidation(database);
     }
-  } else if (prepared.transcriptEvents) {
+  } else if (params.readTranscriptEvents) {
     const transcriptScope = {
       ...resolved,
       sessionId: params.entry.sessionId,
     };
-    const existingEventJson = readTranscriptEventJsonSetInTransaction(
-      database,
-      params.entry.sessionId,
-    );
-    for (const event of prepared.transcriptEvents) {
-      const eventJson = JSON.stringify(event);
-      if (existingEventJson.has(eventJson)) {
+    stage.resetSeen();
+    for (const row of iterateSqliteQuerySync(
+      database.db,
+      getSessionKysely(database.db)
+        .selectFrom("transcript_events")
+        .select("event_json")
+        .where("session_id", "=", params.entry.sessionId),
+    )) {
+      stage.addSeen(row.event_json);
+    }
+    for (const row of stage.rows(source)) {
+      if (stage.hasSeen(row.eventJson)) {
         continue;
       }
+      // SAFETY: staging serialized the caller's TranscriptEvent without transforming its contents.
+      const event = JSON.parse(row.eventJson) as TranscriptEvent;
       if (
         appendTranscriptEventInTransaction(database, transcriptScope, event, {
           allowStoredAlias: true,
@@ -176,10 +186,11 @@ function importSqliteSessionRowsInTransaction(
           touchMutation: false,
         })
       ) {
-        existingEventJson.add(eventJson);
+        stage.addSeen(row.eventJson);
         transcriptEvents += 1;
       }
     }
+    // Doctor imports run outside gateway requests and must finish with a complete projection.
     reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
     publishSessionEntryCacheInvalidation(database);
   }
@@ -206,16 +217,44 @@ export async function importSqliteSessionRowsBatch(
   if (params.length === 0) {
     return [];
   }
-  const prepared = params.map(prepareSqliteSessionImport);
+  const prepared = params.map(resolveSqliteSessionImport);
   const resolved = prepared[0]!.resolved;
-  if (prepared.some((row) => row.resolved.path !== resolved.path)) {
+  const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
+  if (
+    prepared.some(
+      (row) => resolveOpenClawAgentSqlitePath(toDatabaseOptions(row.resolved)) !== databasePath,
+    )
+  ) {
     throw new Error("SQLite session import batch spans multiple stores");
   }
   return await runExclusiveSqliteSessionWrite(resolved, async () =>
-    runOpenClawAgentWriteTransaction(
-      (database) => prepared.map((row) => importSqliteSessionRowsInTransaction(database, row)),
-      toDatabaseOptions(resolved),
-    ),
+    withSqliteSessionImportStage((stage) => {
+      const validators: Array<() => void> = [];
+      for (const [source, { params: importParams }] of prepared.entries()) {
+        let seq = 0;
+        importParams.readExactTranscriptRows?.((row) =>
+          stage.append(source, seq++, row.eventJson, row.createdAt),
+        );
+        const validate = importParams.readTranscriptEvents?.((event) =>
+          stage.append(source, seq++, JSON.stringify(event), null),
+        );
+        if (validate) {
+          validators.push(validate);
+        }
+      }
+      // Recheck every source after the last reader, before any canonical transaction.
+      // No filesystem readers or callbacks cross the synchronous SQLite commit boundary.
+      for (const validate of validators) {
+        validate();
+      }
+      return runOpenClawAgentWriteTransaction(
+        (database) =>
+          prepared.map((row, source) =>
+            importSqliteSessionRowsInTransaction(database, row, stage, source),
+          ),
+        toDatabaseOptions(resolved),
+      );
+    }),
   );
 }
 

@@ -592,7 +592,7 @@ struct RealtimeTalkRelaySessionTests {
         #expect(audioCapture.isStarted)
     }
 
-    @Test func `output playback finish clears barge in start time`() {
+    @Test func `output playback finish is idempotent and clears barge in start time`() {
         var speakingStates: [Bool] = []
         let session = RealtimeTalkRelaySession(
             transport: unusedRealtimeRelayTransport(),
@@ -607,12 +607,18 @@ struct RealtimeTalkRelaySessionTests {
         #expect(session._test_outputStartedAtMs() == 100)
 
         session._test_markOutputPlaybackFinished()
+        session._test_markOutputPlaybackFinished()
         #expect(!session._test_isOutputPlaying())
         #expect(session._test_outputStartedAtMs() == nil)
         #expect(speakingStates == [false])
 
         session._test_markOutputAudioStarted(nowMs: 500)
+        #expect(session._test_isOutputPlaying())
         #expect(session._test_outputStartedAtMs() == 500)
+        session._test_markOutputPlaybackFinished()
+        #expect(!session._test_isOutputPlaying())
+        #expect(session._test_outputStartedAtMs() == nil)
+        #expect(speakingStates == [false, false])
     }
 
     @Test func `playback mark is acknowledged after output finishes`() async throws {

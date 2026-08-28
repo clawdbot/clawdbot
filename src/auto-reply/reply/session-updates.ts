@@ -368,6 +368,7 @@ export async function incrementCompactionCount(params: {
   const updates: Partial<SessionEntry> = {
     compactionCount: nextCount,
     updatedAt: now,
+    ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),
   };
   if (compactionKind === "context-engine") {
     clearAllCliSessions(updates);

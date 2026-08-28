@@ -9,12 +9,12 @@ import type {
   LobsterRunOutcome,
 } from "./lobster-pet-contract.ts";
 import {
-  LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
   lobsterPetName,
   mulberry32,
   SPOT_ZONES,
 } from "./lobster-pet-look.ts";
+import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 
 export { SPOT_ZONES };
 

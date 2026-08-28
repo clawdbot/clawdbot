@@ -10,7 +10,7 @@ scenario:
       - session-memory.active-memory-memory-recall
     secondary:
       - session-memory.memory-recall
-  objective: Verify one ordered Active Memory search/get chain injects a memory-only preference into the agent-runtime turn and records the resulting reply in agent history, while the same turn stays unresolved when the plugin is off.
+  objective: Verify one ordered Active Memory search/get chain injects a memory-only preference into a persistent chat turn and records the resulting reply in chat history, while the same turn stays unresolved when the plugin is off.
   plugins:
     - active-memory
   gatewayConfigPatch:
@@ -33,10 +33,10 @@ scenario:
             timeoutMs: 15000
             setupGraceTimeoutMs: 30000
   successCriteria:
-    - With Active Memory off after doctor migrates the legacy session toggle, agent history excludes the recalled fact and the exact one-request trace has no helper, injected context, or planned tool.
+    - With Active Memory off after doctor migrates the legacy session toggle, chat history excludes the recalled fact and the exact one-request trace has no helper, injected context, or planned tool.
     - With Active Memory on, the exact four-request trace links memory_search and memory_get call IDs to the expected memory path and text before one main request.
     - The main request follows the helper chain, contains the user marker, Active Memory envelope, and recalled fact, and plans no tool.
-    - Agent history records the recalled preference, Active Memory debug evidence, and no transient helper session remains.
+    - Chat history records the recalled preference, Active Memory debug evidence, and no transient helper session remains.
   docsRefs:
     - docs/concepts/active-memory.md
     - docs/concepts/memory-search.md
@@ -47,7 +47,7 @@ scenario:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
-    summary: Verify agent-runtime history and an exact mock request trace distinguish a disabled Active Memory turn from one complete memory_search and memory_get recall chain.
+    summary: Verify persistent-chat history and an exact mock request trace distinguish a disabled Active Memory turn from one complete memory_search and memory_get recall chain.
     channel: qa-channel
     providerMode: mock-openai
     suiteIsolation: isolated
@@ -153,6 +153,7 @@ flow:
             - ref: env
             - sessionKey:
                 ref: baselineSessionKey
+              taskTracking: false
               to:
                 expr: "`dm:${config.baselineConversationId}`"
               message:
@@ -204,6 +205,7 @@ flow:
             - ref: env
             - sessionKey:
                 ref: activeSessionKey
+              taskTracking: false
               to:
                 expr: "`dm:${config.activeConversationId}`"
               message:
@@ -226,7 +228,7 @@ flow:
         - assert:
             expr: "activeLower.includes(normalizeLowercaseStringOrEmpty(config.expectedFact))"
             message:
-              expr: "`active agent history missed the hidden preference: ${activeReply.text}`"
+              expr: "`active chat history missed the hidden preference: ${activeReply.text}`"
         - call: waitForCondition
           saveAs: activeSessionEntry
           args:

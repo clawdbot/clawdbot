@@ -68,12 +68,12 @@ describe("tasks command filter validation", () => {
     {
       options: { status: "bogus" },
       message:
-        "--status must be queued, running, succeeded, failed, timed_out, cancelled, or lost.",
+        "--status must be queued, running, succeeded, failed, timed_out, cancelled, lost, or blocked.",
     },
     {
       options: { status: "RUNNING" },
       message:
-        "--status must be queued, running, succeeded, failed, timed_out, cancelled, or lost.",
+        "--status must be queued, running, succeeded, failed, timed_out, cancelled, lost, or blocked.",
     },
   ])("rejects invalid task list filters before querying", async ({ options, message }) => {
     const query = vi

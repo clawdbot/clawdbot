@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { renderModelPicker, type ModelPickerOption } from "../../components/model-picker.ts";
-import { renderSettingsSection } from "../../components/settings-ui.ts";
+import { renderSettingsHelpTrigger, renderSettingsSection } from "../../components/settings-ui.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
@@ -91,16 +91,13 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           <span class="model-providers__utility-label">
             <label for=${UTILITY_MODEL_PICKER_ID}>${t("modelProviders.defaults.utility")}</label>
             <span class="settings-section__docs">
-              <button
-                id=${UTILITY_MODEL_HELP_ID}
-                type="button"
-                class="settings-section__help-button"
-                aria-label=${t("modelProviders.defaults.utilityHelpLabel")}
-                aria-controls=${UTILITY_MODEL_HELP_POPOVER_ID}
-                aria-haspopup="dialog"
-              >
-                <span aria-hidden="true">i</span>
-              </button>
+              ${renderSettingsHelpTrigger({
+                id: UTILITY_MODEL_HELP_ID,
+                label: t("modelProviders.defaults.utilityHelpLabel"),
+                tooltip: t("modelProviders.defaults.utilityHelpPurpose"),
+                icon: "info",
+                popoverId: UTILITY_MODEL_HELP_POPOVER_ID,
+              })}
               <wa-popover
                 id=${UTILITY_MODEL_HELP_POPOVER_ID}
                 class="settings-section__help-popover model-providers__utility-help-popover"

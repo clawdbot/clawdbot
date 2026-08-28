@@ -20,6 +20,7 @@ import {
   notifyDiscordActiveTurnThreadCreated,
   notifyDiscordActiveTurnThreadReplyDelivered,
 } from "../active-turn-thread-route.js";
+import { coerceDiscordComponentParam } from "../components.js";
 import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
 import {
   DISCORD_PRESENTATION_CAPABILITIES,
@@ -193,8 +194,9 @@ export async function handleDiscordMessageAction(
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "filePath", { trim: false });
     const requestedContent = readStringParam(params, "message", { allowEmpty: true });
+    const explicitComponents = coerceDiscordComponentParam(params.components);
     const presentation =
-      params.components == null ? normalizeMessagePresentation(params.presentation) : undefined;
+      explicitComponents == null ? normalizeMessagePresentation(params.presentation) : undefined;
     const adaptedPresentation = presentation
       ? adaptMessagePresentationForChannel({
           presentation,
@@ -216,7 +218,7 @@ export async function handleDiscordMessageAction(
     );
     const rawComponents = presentationFellBack
       ? undefined
-      : (params.components ??
+      : (explicitComponents ??
         presentationComponents ??
         buildDiscordInteractiveComponents(normalizeLegacyInteractiveReply(params.interactive)));
     const hasComponents =
@@ -230,10 +232,10 @@ export async function handleDiscordMessageAction(
       allowEmpty: true,
     });
     const deliveryContent =
-      presentationFellBack && adaptedPresentation
+      presentationFellBack && presentation
         ? renderMessagePresentationFallbackText({
             text: content,
-            presentation: adaptedPresentation,
+            presentation,
           })
         : content;
     const filename = readStringParam(params, "filename");
@@ -483,6 +485,7 @@ export async function handleDiscordMessageAction(
         to,
         stickerIds,
         content: readStringParam(params, "message"),
+        ...(readBooleanParam(params, "silent") === true ? { silent: true } : {}),
       },
       cfg,
       actionOptions,

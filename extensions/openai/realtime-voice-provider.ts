@@ -320,6 +320,7 @@ async function createOpenAIRealtimeBrowserSession(
     transport: "webrtc",
     clientSecret: clientSecret.value,
     offerUrl: "https://api.openai.com/v1/realtime/calls",
+    offerResponseMaxBytes: 256 * 1024,
     ...(offerHeaders ? { offerHeaders } : {}),
     model,
     voice,

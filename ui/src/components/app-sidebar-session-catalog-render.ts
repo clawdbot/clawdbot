@@ -1,4 +1,7 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
+import { repeat } from "lit/directives/repeat.js";
 import type {
   SessionCatalog,
   SessionCatalogHost,
@@ -6,9 +9,15 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
+import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import {
+  restartHoverMarqueeIfHovered,
+  startHoverMarqueeFromEvent,
+  stopHoverMarqueeFromEvent,
+} from "../lib/hover-marquee.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
@@ -31,6 +40,7 @@ import {
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
 import { sidebarSessionStateId } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import { renderNewSessionLink } from "./new-session-link.ts";
 import { hasProviderBrandIcon, renderProviderBrandIcon } from "./provider-icon.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 
@@ -76,8 +86,54 @@ type SessionCatalogGroupsParams = {
     y: number,
     trigger?: HTMLElement,
   ) => void;
+  onCatalogMenuTriggerRendered: (key: CatalogSessionKey, element: Element | undefined) => void;
   isMenuOpen: (key: CatalogSessionKey) => boolean;
 };
+
+const CATALOG_CONTROL_SELECTORS = [
+  ".sidebar-recent-session__link",
+  "[data-child-session-toggle]",
+  "[data-sidebar-session-pin]",
+  "[data-catalog-session-menu], [data-session-menu]",
+] as const;
+
+function catalogRowRef(
+  identityKey: string,
+  sessionKey: string,
+  catalogKey: CatalogSessionKey,
+  menuOpen: boolean,
+  params: SessionCatalogGroupsParams,
+): ((element: Element | undefined) => void) | undefined {
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const activeRow = active?.closest<HTMLElement>("[data-session-key]");
+  const selector = CATALOG_CONTROL_SELECTORS.find((candidate) => active?.matches(candidate));
+  const restoreFocus =
+    selector !== undefined &&
+    (activeRow?.dataset.catalogSessionKey === identityKey ||
+      activeRow?.dataset.sessionKey === identityKey ||
+      activeRow?.dataset.sessionKey === sessionKey);
+  if (!menuOpen && !restoreFocus) {
+    return undefined;
+  }
+  return (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return;
+    }
+    if (menuOpen) {
+      params.onCatalogMenuTriggerRendered(
+        catalogKey,
+        element.querySelector(CATALOG_CONTROL_SELECTORS[3]) ?? undefined,
+      );
+    }
+    if (restoreFocus) {
+      queueMicrotask(() => {
+        if (element.isConnected && document.activeElement === document.body) {
+          element.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
+        }
+      });
+    }
+  };
+}
 
 function renderSessionRunSpinner(showTitle = true) {
   return html`<span
@@ -253,20 +309,16 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               ${icons.listFilter}
             </button>
             ${canCreateSession
-              ? html`<button
-                  type="button"
-                  class="sidebar-session-group-actions sidebar-session-new sidebar-session-catalog-new"
-                  title=${params.newSessionDisabledReason ??
-                  `${t("chat.runControls.newSession")} — ${catalog.label}`}
-                  aria-label=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
-                  ?disabled=${Boolean(params.newSessionDisabledReason)}
-                  @click=${() =>
-                    params.onOpenNewSession?.(params.newSessionAgentId, {
-                      catalogId: catalog.id,
-                    })}
-                >
-                  ${icons.plus}
-                </button>`
+              ? renderNewSessionLink({
+                  basePath: params.basePath,
+                  agentId: params.newSessionAgentId,
+                  target: { catalogId: catalog.id },
+                  className:
+                    "sidebar-session-group-actions sidebar-session-new sidebar-session-catalog-new",
+                  label: `${t("chat.runControls.newSession")} — ${catalog.label}`,
+                  disabledReason: params.newSessionDisabledReason,
+                  onOpen: params.onOpenNewSession,
+                })
               : nothing}
           `,
         })}
@@ -311,6 +363,18 @@ function renderCatalogHostGroup(
       : params.projectGrouping === "person"
         ? groupCatalogSessionsByPerson(host.sessions)
         : null;
+  const renderRows = (sessions: readonly SessionCatalogSession[], projectChild = false) =>
+    repeat(
+      sessions,
+      (session) =>
+        buildCatalogSessionKey({
+          catalogId: catalog.id,
+          hostId: host.hostId,
+          threadId: session.threadId,
+        }),
+      (session) =>
+        renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params, projectChild),
+    );
   // Gateway errors stay on the catalog header; node headings remain so remote rows keep their owner.
   const showHostHeading = host.kind !== "gateway";
   return html`
@@ -336,54 +400,53 @@ function renderCatalogHostGroup(
         : nothing}
       <div class="sidebar-session-catalog-host__sessions" role="list" aria-label=${host.label}>
         ${projectGroups
-          ? html`${projectGroups.groups.map((group) => {
-              const sectionId = `catalog-project:${catalog.id}:${host.hostId}:${group.key}`;
-              const collapsed = params.collapsedSections.has(sectionId);
-              return html`
-                <div class="sidebar-session-catalog-project" role="listitem">
-                  <button
-                    type="button"
-                    class="sidebar-session-catalog-project__head"
-                    data-session-catalog-project=${group.key}
-                    aria-expanded=${String(!collapsed)}
-                    title=${group.title}
-                    @click=${() => params.onToggleSection(sectionId)}
-                  >
-                    <span class="sidebar-session-catalog-project__icon" aria-hidden="true"
-                      >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+          ? html`${repeat(
+              projectGroups.groups,
+              (group) => group.key,
+              (group) => {
+                const sectionId = `catalog-${group.kind}:${catalog.id}:${host.hostId}:${group.key}`;
+                const legacySectionId = group.legacySectionKey
+                  ? `catalog-project:${catalog.id}:${host.hostId}:${group.legacySectionKey}`
+                  : null;
+                const collapsedSectionId = params.collapsedSections.has(sectionId)
+                  ? sectionId
+                  : legacySectionId && params.collapsedSections.has(legacySectionId)
+                    ? legacySectionId
+                    : null;
+                const collapsed = collapsedSectionId !== null;
+                return html`
+                  <div class="sidebar-session-catalog-project" role="listitem">
+                    <button
+                      type="button"
+                      class="sidebar-session-catalog-project__head"
+                      data-session-catalog-project=${group.key}
+                      aria-expanded=${String(!collapsed)}
+                      title=${group.title}
+                      @click=${() => params.onToggleSection(collapsedSectionId ?? sectionId)}
                     >
-                    <span class="sidebar-session-catalog-project__label">${group.label}</span>
-                    <span class="sidebar-session-catalog-project__count" aria-hidden="true"
-                      >${group.sessions.length}</span
-                    >
-                  </button>
-                  ${collapsed
-                    ? nothing
-                    : html`<div
-                        class="sidebar-session-catalog-project__sessions"
-                        role="list"
-                        aria-label=${`${host.label}: ${group.label}`}
+                      <span class="sidebar-session-catalog-project__icon" aria-hidden="true"
+                        >${collapsed ? icons.chevronRight : icons.chevronDown}</span
                       >
-                        ${group.sessions.map((session) =>
-                          renderCatalogSessionRow(
-                            catalog,
-                            host,
-                            session,
-                            liveRowsByKey,
-                            params,
-                            true,
-                          ),
-                        )}
-                      </div>`}
-                </div>
-              `;
-            })}
-            ${projectGroups.ungrouped.map((session) =>
-              renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
-            )}`
-          : host.sessions.map((session) =>
-              renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
+                      <span class="sidebar-session-catalog-project__label">${group.label}</span>
+                      <span class="sidebar-session-catalog-project__count" aria-hidden="true"
+                        >${group.sessions.length}</span
+                      >
+                    </button>
+                    ${collapsed
+                      ? nothing
+                      : html`<div
+                          class="sidebar-session-catalog-project__sessions"
+                          role="list"
+                          aria-label=${`${host.label}: ${group.label}`}
+                        >
+                          ${renderRows(group.sessions, true)}
+                        </div>`}
+                  </div>
+                `;
+              },
             )}
+            ${renderRows(projectGroups.ungrouped)}`
+          : renderRows(host.sessions)}
       </div>
     </section>
   `;
@@ -400,20 +463,26 @@ function renderCatalogSessionRow(
   const timestamp = normalizeCatalogTimestamp(
     session.recencyAt ?? session.updatedAt ?? session.createdAt,
   );
-  const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
-  if (adoptedRow) {
-    const label = session.name || session.threadId;
-    return params.renderLiveRow(adoptedRow, {
-      label,
-      ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
-    });
-  }
   const catalogKey = {
     catalogId: catalog.id,
     hostId: host.hostId,
     threadId: session.threadId,
   } satisfies CatalogSessionKey;
-  const key = session.sessionKey ?? buildCatalogSessionKey(catalogKey);
+  const identityKey = buildCatalogSessionKey(catalogKey);
+  const key = session.sessionKey ?? identityKey;
+  const menuOpen = params.isMenuOpen(catalogKey);
+  const rowRef = catalogRowRef(identityKey, key, catalogKey, menuOpen, params);
+  const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
+  if (adoptedRow) {
+    const label = session.name || session.threadId;
+    return params.renderLiveRow(adoptedRow, {
+      label,
+      catalogIdentityKey: identityKey,
+      catalogMenuOpen: menuOpen,
+      ...(rowRef ? { rowRef } : {}),
+      ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
+    });
+  }
   const label = session.name || session.threadId;
   const meta = formatSidebarTimestamp(timestamp);
   const routeId = "chat";
@@ -453,20 +522,33 @@ function renderCatalogSessionRow(
         : null,
       (trigger, x, y) => openMenu(x, y, trigger ?? undefined),
     );
+  const marqueeLabel = keyed(
+    JSON.stringify([label, session.status, session.pullRequest]),
+    html`<span
+      ${ref(restartHoverMarqueeIfHovered)}
+      class="sidebar-recent-session__name hover-marquee"
+      >${label}</span
+    >`,
+  );
   return html`
     <div
+      ${rowRef ? ref(rowRef) : nothing}
       class="sidebar-recent-session session-row-host sidebar-recent-session--single-line ${active
         ? "sidebar-recent-session--active"
         : ""} ${projectChild ? "sidebar-recent-session--catalog-project-child" : ""} ${running
         ? "session-row-host--running"
         : ""}"
       data-session-key=${key}
+      data-catalog-session-key=${identityKey}
+      data-session-row-action-count="1"
       role="listitem"
       @contextmenu=${openMenuFromEvent}
       @keydown=${openMenuFromEvent}
+      @mouseenter=${startHoverMarqueeFromEvent}
+      @mouseleave=${stopHoverMarqueeFromEvent}
     >
       <a
-        href=${href}
+        href=${withSidebarNavCollapseIntent(href)}
         class="sidebar-recent-session__link"
         aria-current=${active ? "page" : nothing}
         aria-describedby=${stateId ?? nothing}
@@ -484,7 +566,7 @@ function renderCatalogSessionRow(
       >
         <span class="sidebar-session-indicator"></span>
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__name hover-marquee">${label}</span>
+          <span class="sidebar-recent-session__title-row"> ${marqueeLabel} </span>
           <span class="sidebar-recent-session__details">
             <span class="sidebar-recent-session__details-endcap">
               ${renderSessionRowBadges({
@@ -515,7 +597,7 @@ function renderCatalogSessionRow(
             title=${t("chat.sidebar.openSessionMenu")}
             aria-label=${t("chat.sidebar.openSessionMenu")}
             aria-haspopup="menu"
-            aria-expanded=${String(params.isMenuOpen(catalogKey))}
+            aria-expanded=${String(menuOpen)}
             @click=${(event: MouseEvent) => {
               event.stopPropagation();
               const trigger = event.currentTarget as HTMLElement;

@@ -36,6 +36,11 @@ describe("widget theme bridge", () => {
       "--accent": "#bd4531",
       "--primary": "#bd4531",
       "--primary-foreground": "#fff",
+      "--radius-full": "9999px",
+      "--scrollbar-size": "12px",
+      "--scrollbar-thumb-inset": "3px",
+      "--scrollbar-thumb": "rgba(110, 105, 96, 0.32)",
+      "--scrollbar-thumb-hover": "rgba(110, 105, 96, 0.64)",
       "--mono": " ui-monospace ",
     });
     const postMessage = vi.fn();
@@ -54,6 +59,11 @@ describe("widget theme bridge", () => {
         accent: "#bd4531",
         "accent-fill": "#bd4531",
         "accent-fg": "#fff",
+        "radius-full": "9999px",
+        "scrollbar-size": "12px",
+        "scrollbar-thumb-inset": "3px",
+        "scrollbar-thumb": "rgba(110, 105, 96, 0.32)",
+        "scrollbar-thumb-hover": "rgba(110, 105, 96, 0.64)",
         "font-mono": "ui-monospace",
       },
     });

@@ -1,4 +1,7 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { migrateCanvasHostConfig } from "./config-migration.js";
 
@@ -74,4 +77,56 @@ describe("migrateCanvasHostConfig", () => {
       }),
     ).toBeNull();
   });
+
+  it("retains an unresolved source root for a later resolved repair", () => {
+    const config: OpenClawConfig = {
+      plugins: { entries: { canvas: { config: { host: { root: "${CANVAS_MIGRATION_ROOT}" } } } } },
+    };
+    expect(migrateCanvasHostConfig(config)).toBeNull();
+  });
+
+  it("moves an unresolved older root into the pending plugin setting", () => {
+    const root = "${CANVAS_MIGRATION_ROOT}";
+    const result = migrateCanvasHostConfig({ canvasHost: { root } } as OpenClawConfig);
+    expect(result?.config).toEqual({
+      plugins: { entries: { canvas: { config: { host: { root } } } } },
+    });
+    expect(migrateCanvasHostConfig(result!.config)).toBeNull();
+  });
+
+  it.each(["inherited", "empty", "replaced"] as const)(
+    "preserves the shipped root precedence when the plugin root is %s",
+    async (scenario) => {
+      await withTempHome(async (home) => {
+        const legacyRoot = path.join(home, "legacy-canvas");
+        const document = path.join(legacyRoot, "documents", "cv_existing");
+        await fs.mkdir(document, { recursive: true });
+        await fs.writeFile(path.join(document, "index.html"), "legacy");
+        const root = scenario === "empty" ? "" : path.join(home, "unused-canvas");
+        const result = migrateCanvasHostConfig({
+          canvasHost: { enabled: false, root: legacyRoot },
+          plugins: {
+            entries: {
+              canvas: {
+                config: {
+                  host: {
+                    enabled: true,
+                    ...(scenario === "inherited" ? {} : { root }),
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig);
+        expect(result?.config.plugins?.entries?.canvas?.config?.host).toEqual({
+          enabled: true,
+          ...(scenario === "inherited" ? { root: legacyRoot } : {}),
+        });
+        expect(result?.config).not.toHaveProperty("canvasHost");
+        await expect(fs.readFile(path.join(document, "index.html"), "utf8")).resolves.toBe(
+          "legacy",
+        );
+      });
+    },
+  );
 });

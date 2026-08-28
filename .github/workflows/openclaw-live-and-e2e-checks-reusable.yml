@@ -451,6 +451,8 @@ on:
         required: false
       DEEPINFRA_API_KEY:
         required: false
+      DEEPSEEK_API_KEY:
+        required: false
       DASHSCOPE_API_KEY:
         required: false
       GROQ_API_KEY:
@@ -534,7 +536,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "24.19.0"
   OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
   OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
   OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}
@@ -583,7 +585,7 @@ jobs:
           NODE
 
       - name: Checkout workflow repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -841,7 +843,11 @@ jobs:
               add_profile_suite native-live-src-gateway-profiles-openai-gpt56-ultra "stable full"
               add_profile_suite native-live-src-gateway-profiles-fireworks "full"
               add_profile_suite native-live-src-gateway-profiles-deepseek "full"
-              add_profile_suite native-live-src-gateway-profiles-opencode-go "full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go "stable full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go-deepseek-glm "full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go-kimi "full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go-mimo "full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go-minimax-qwen "full"
               add_profile_suite native-live-src-gateway-profiles-opencode-go-smoke "stable"
               add_profile_suite native-live-src-gateway-profiles-openrouter "full"
               add_profile_suite native-live-src-gateway-profiles-xai "full"
@@ -879,6 +885,10 @@ jobs:
               add_profile_suite native-live-extensions-media-music-google "full"
               add_profile_suite native-live-extensions-media-music-minimax "full"
               add_profile_suite native-live-extensions-media-video "full"
+              add_profile_suite native-live-extensions-media-video-a "full"
+              add_profile_suite native-live-extensions-media-video-b "full"
+              add_profile_suite native-live-extensions-media-video-c "full"
+              add_profile_suite native-live-extensions-media-video-d "full"
             fi
           fi
 
@@ -910,7 +920,7 @@ jobs:
       live_models_omitted_json: ${{ steps.plan.outputs.live_models_omitted_json }}
     steps:
       - name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -941,7 +951,7 @@ jobs:
       OPENCLAW_LIVE_TEST: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -991,7 +1001,7 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -1039,7 +1049,7 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -1081,12 +1091,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export OPENSHELL_VERSION=v0.0.92
+          export OPENSHELL_VERSION=v0.0.109
           installer_path="$(mktemp "${RUNNER_TEMP}/openshell-install.XXXXXX")"
           trap 'rm -f "$installer_path"' EXIT
           curl -LsSf --connect-timeout 10 --max-time 120 \
             -o "$installer_path" \
-            https://raw.githubusercontent.com/NVIDIA/OpenShell/2d108818f84be568e63232d5d0aba53775cea4f7/install.sh
+            https://raw.githubusercontent.com/NVIDIA/OpenShell/8d67250a5d17348eb96c4fa46226b06d8041f2ba/install.sh
           sh "$installer_path"
           openshell --version
 
@@ -1197,6 +1207,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -1255,7 +1266,7 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
@@ -1263,7 +1274,7 @@ jobs:
 
       - name: Checkout trusted release harness
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -1537,7 +1548,7 @@ jobs:
       groups_json: ${{ steps.groups.outputs.groups_json }}
     steps:
       - name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -1584,6 +1595,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -1640,14 +1652,14 @@ jobs:
       DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -1933,14 +1945,14 @@ jobs:
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -2160,14 +2172,14 @@ jobs:
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -2222,7 +2234,24 @@ jobs:
           set -euo pipefail
           mkdir -p .artifacts/docker-tests
 
-          if [[ "$PREPARE_ONLY" == "true" || "$INCLUDE_RELEASE_PATH_SUITES" == "true" ]]; then
+          if [[ "$PREPARE_ONLY" == "true" ]]; then
+            # Shared artifacts serve both release-path and plugin prerelease consumers.
+            # Plan their union here without expanding either child's execution scope.
+            preparation_lanes="$(node --input-type=module <<'NODE'
+          import { allReleasePathLanes } from "./.release-harness/scripts/lib/docker-e2e-scenarios.mts";
+          import { createPluginPrereleaseTestPlan } from "./.release-harness/scripts/lib/plugin-prerelease-test-plan.mts";
+          const releaseLanes = allReleasePathLanes({
+            includeOpenWebUI: process.env.INCLUDE_OPENWEBUI === "true",
+            releaseProfile: process.env.RELEASE_TEST_PROFILE,
+          });
+          console.log([...new Set([
+            ...releaseLanes.map(({ name }) => name),
+            ...createPluginPrereleaseTestPlan().dockerLanes,
+          ])].join(" "));
+          NODE
+            )"
+            export OPENCLAW_DOCKER_ALL_LANES="$preparation_lanes"
+          elif [[ "$INCLUDE_RELEASE_PATH_SUITES" == "true" ]]; then
             export OPENCLAW_DOCKER_ALL_PROFILE=release-path
             export OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL=1
           elif [[ -n "$LANES" ]]; then
@@ -2838,7 +2867,7 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -2892,13 +2921,13 @@ jobs:
 
       - name: Setup Docker builder
         if: inputs.shared_image_policy == 'no-push-artifact'
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
         with:
-          max-cache-size-mb: 800000
+          cache-key: Dockerfile
 
       - name: Build shared live-test image
         if: inputs.shared_image_policy == 'no-push-artifact'
-        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2.3.0
         with:
           context: .
           file: ./Dockerfile
@@ -2917,7 +2946,7 @@ jobs:
       # target must not accidentally package the current checkout into its image.
       - name: Checkout trusted release harness
         if: inputs.shared_image_policy == 'no-push-artifact'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -3003,6 +3032,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -3039,7 +3069,7 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -3047,7 +3077,7 @@ jobs:
 
       - name: Checkout trusted live Docker harness
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -3175,6 +3205,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -3209,14 +3240,14 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Checkout trusted live Docker harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -3598,6 +3629,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -3641,14 +3673,14 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -3866,6 +3898,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -3912,7 +3945,7 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -3920,7 +3953,7 @@ jobs:
 
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -4147,6 +4180,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -4190,14 +4224,14 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}

@@ -94,6 +94,87 @@ describe("temporal decay", () => {
     expect(merged[0]?.score ?? 0).toBeGreaterThan(merged[1]?.score ?? 0);
   });
 
+  it("decays dated and slugged memory files at any depth by their embedded date", async () => {
+    const merged = await mergeVectorResultsWithTemporalDecay([
+      createVectorMemoryEntry({
+        id: "nested-old",
+        path: "memory/dreaming/light/2025-01-01.md",
+        snippet: "stale dreaming report",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "root-old",
+        path: "memory/2025-01-01.md",
+        snippet: "stale daily note",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "root-timestamp",
+        path: "memory/2025-01-01-1430.md",
+        snippet: "stale session memory",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "root-collision",
+        path: "memory/2025-01-01-1430-2.md",
+        snippet: "stale colliding session memory",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "nested-slug",
+        path: "memory/dreaming/light/2025-01-01-vendor-pitch.md",
+        snippet: "stale named dreaming report",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "nested-undated",
+        path: "memory/dreaming/light/report.md",
+        snippet: "undated evergreen",
+        vectorScore: 0.7,
+      }),
+    ]);
+
+    const byPath = new Map(merged.map((entry) => [entry.path, entry]));
+    const nestedOld = byPath.get("memory/dreaming/light/2025-01-01.md");
+    const rootOld = byPath.get("memory/2025-01-01.md");
+    expect(nestedOld?.score).toBeCloseTo(rootOld?.score ?? 0);
+    expect(nestedOld?.score ?? 1).toBeLessThan(0.5);
+    expect(byPath.get("memory/2025-01-01-1430.md")?.score).toBeCloseTo(rootOld?.score ?? 0);
+    expect(byPath.get("memory/2025-01-01-1430-2.md")?.score).toBeCloseTo(rootOld?.score ?? 0);
+    expect(byPath.get("memory/dreaming/light/2025-01-01-vendor-pitch.md")?.score).toBeCloseTo(
+      rootOld?.score ?? 0,
+    );
+    expect(byPath.get("memory/dreaming/light/report.md")?.score).toBeCloseTo(0.7);
+  });
+
+  it("decays nested dated and slugged memory files with Windows-style separators", async () => {
+    const merged = await mergeVectorResultsWithTemporalDecay([
+      createVectorMemoryEntry({
+        id: "win-nested-old",
+        path: "memory\\dreaming\\light\\2025-01-01.md",
+        snippet: "stale dreaming report",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "win-nested-slug",
+        path: "memory\\dreaming\\light\\2025-01-01-1430.md",
+        snippet: "stale session memory",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "win-nested-undated",
+        path: "memory\\dreaming\\light\\report.md",
+        snippet: "undated evergreen",
+        vectorScore: 0.7,
+      }),
+    ]);
+
+    const byPath = new Map(merged.map((entry) => [entry.path, entry]));
+    expect(byPath.get("memory\\dreaming\\light\\2025-01-01.md")?.score ?? 1).toBeLessThan(0.5);
+    expect(byPath.get("memory\\dreaming\\light\\2025-01-01-1430.md")?.score ?? 1).toBeLessThan(0.5);
+    expect(byPath.get("memory\\dreaming\\light\\report.md")?.score).toBeCloseTo(0.7);
+  });
+
   it("handles future dates, zero age, and very old memories", async () => {
     const merged = await mergeVectorResultsWithTemporalDecay([
       createVectorMemoryEntry({

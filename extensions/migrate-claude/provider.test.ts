@@ -61,6 +61,15 @@ describe("Claude migration provider", () => {
     }
   });
 
+  it("keeps literal $ patterns in home when expanding tildes", () => {
+    const spy = vi.spyOn(os, "homedir").mockReturnValue("/home/$&user");
+    try {
+      expect(resolveHomePath("~/.claude")).toBe(path.resolve("/home/$&user/.claude"));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("rejects missing Claude sources before planning", async () => {
     const root = testWorkspace.dir;
     const source = path.join(root, "missing");

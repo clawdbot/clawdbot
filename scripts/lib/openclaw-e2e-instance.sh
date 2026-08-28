@@ -526,6 +526,32 @@ openclaw_e2e_run_command() {
   local timeout_value="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"
   openclaw_e2e_maybe_timeout "$timeout_value" "$@"
 }
+openclaw_e2e_fixture_plugin_command() {
+  local runner=()
+  while [[ "${1:-}" != "--" && "$#" -gt 0 ]]; do
+    runner+=("$1")
+    shift
+  done
+  shift
+  local help consent
+  # Preserve the successful candidate help result for evidence checks after mutation.
+  # Clear it first so a failed replacement probe cannot expose stale capabilities.
+  OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED=
+  # Use the caller's bounded runner for both calls; never cache across package replacement.
+  help="$("${runner[@]}" "$1" "$2" --help)" || {
+    local probe_status=$?
+    printf '%s\nPlugin fixture help probe failed with status %s: %s %s\n' "$help" "$probe_status" "$1" "$2" >&2
+    return "$probe_status"
+  }
+  consent="$(printf '%s' "$help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)" || return $?
+  if [[ -n "$consent" ]]; then
+    OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED=1
+    set -- "$@" "$consent"
+  else
+    OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED=0
+  fi
+  "${runner[@]}" "$@"
+}
 openclaw_e2e_enable_openclaw_cli_timeout() {
   OPENCLAW_E2E_CLI_BIN="$(type -P openclaw)"
   if [ -z "$OPENCLAW_E2E_CLI_BIN" ]; then

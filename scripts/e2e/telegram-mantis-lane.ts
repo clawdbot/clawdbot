@@ -457,12 +457,20 @@ function readPublicFile(
   maxBytes: number,
 ): { relative: string; resolved: string; text: string } {
   const resolved = fs.realpathSync(input);
+  const expected = fs.lstatSync(resolved);
   const descriptor = fs.openSync(resolved, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
-    // Containment is checked after the open so the descriptor being read is the file the
-    // check accepted, not one a concurrent swap redirected it to.
-    const relative = publicRelativePath(root, resolved, label);
     const stat = fs.fstatSync(descriptor);
+    // Bind the read to the path inspected before open so a concurrent swap cannot redirect it.
+    if (stat.dev !== expected.dev || stat.ino !== expected.ino) {
+      throw new Error(`${label} must be inside the Mantis output directory.`);
+    }
+    // Linux pins the opened path directly; other platforms reject pre-open inode swaps.
+    const opened =
+      process.platform === "linux"
+        ? fs.realpathSync(`/proc/self/fd/${descriptor}`)
+        : fs.realpathSync(resolved);
+    const relative = publicRelativePath(root, opened, label);
     if (!stat.isFile() || stat.size > maxBytes) {
       throw new Error(`${label} must be a regular file no larger than ${maxBytes} bytes.`);
     }

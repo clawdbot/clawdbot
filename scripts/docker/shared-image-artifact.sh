@@ -205,16 +205,16 @@ require_common_inputs() {
   if [[ "${#image_refs[@]}" -eq 0 ]]; then
     fail "at least one image ref is required."
   fi
-  local image_ref
-  declare -A seen_refs=()
+  local image_ref seen_refs
+  seen_refs=$'\n'
   for image_ref in "${image_refs[@]}"; do
     if [[ ! "$image_ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/@:-]*$ ]]; then
       fail "image ref contains unsupported characters: $image_ref"
     fi
-    if [[ -n "${seen_refs[$image_ref]:-}" ]]; then
+    if [[ "$seen_refs" == *$'\n'"$image_ref"$'\n'* ]]; then
       fail "duplicate image ref: $image_ref"
     fi
-    seen_refs["$image_ref"]=1
+    seen_refs+="$image_ref"$'\n'
   done
 }
 
@@ -396,17 +396,20 @@ for (const image of value.images) {
 }
 NODE
 
-  mapfile -t validated < "$validated_path"
-  if [[ "${#validated[@]}" -ne $((2 + ${#image_refs[@]})) ]]; then
+  local validated=("__openclaw_sentinel__") validated_line
+  while IFS= read -r validated_line; do
+    validated+=("$validated_line")
+  done < "$validated_path"
+  if [[ "${#validated[@]}" -ne $((3 + ${#image_refs[@]})) ]]; then
     fail "invalid shared Docker image artifact: validated manifest output length"
   fi
   local actual_archive_sha256 actual_archive_size
   actual_archive_sha256="$(sha256sum "$archive_path" | awk '{print $1}')"
   actual_archive_size="$(wc -c < "$archive_path" | tr -d '[:space:]')"
-  if [[ "$actual_archive_sha256" != "${validated[0]}" ]]; then
+  if [[ "$actual_archive_sha256" != "${validated[1]}" ]]; then
     fail "shared Docker image artifact archive SHA-256 mismatch."
   fi
-  if [[ "$actual_archive_size" != "${validated[1]}" ]]; then
+  if [[ "$actual_archive_size" != "${validated[2]}" ]]; then
     fail "shared Docker image artifact archive size mismatch."
   fi
   zstd -t "$archive_path"
@@ -414,7 +417,7 @@ NODE
 
   local index expected_ref expected_id actual_id
   for index in "${!image_refs[@]}"; do
-    IFS=$'\t' read -r expected_ref expected_id <<< "${validated[$((index + 2))]}"
+    IFS=$'\t' read -r expected_ref expected_id <<< "${validated[$((index + 3))]}"
     if [[ "$expected_ref" != "${image_refs[$index]}" ]]; then
       fail "shared Docker image artifact ref mismatch after validation: ${image_refs[$index]}"
     fi

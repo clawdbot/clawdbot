@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
-import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar transient menus", () => {
@@ -22,25 +21,6 @@ describe("AppSidebar transient menus", () => {
     const menu = sidebar.querySelector(".sidebar-session-sort-menu");
     expect(menu).not.toBeNull();
     expect(menu?.closest("openclaw-menu-surface")).toBeNull();
-  });
-
-  it("keeps the plain attention panel inside its top-layer menu surface", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const attention = sidebar.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-sidebar-attention",
-    );
-    await attention?.updateComplete;
-    const trigger = attention?.querySelector<HTMLButtonElement>(".sidebar-issues-button");
-    expect(trigger).not.toBeNull();
-
-    trigger?.click();
-
-    await waitForFast(() => {
-      const panel = attention?.querySelector(".sidebar-issues-panel");
-      expect(panel).not.toBeNull();
-      expect(panel?.closest("openclaw-menu-surface")).not.toBeNull();
-    });
   });
 
   it("ignores a stale sort-menu hide after opening its replacement", async () => {

@@ -407,6 +407,36 @@ describe("resolveTextChunkLimit", () => {
 });
 
 describe("chunkMarkdownText", () => {
+  it.each(["length", "newline"] as const)(
+    "preserves indentation at fenced line boundaries in %s mode",
+    (mode) => {
+      for (const indent of ["    ", "\t", " \t "]) {
+        const body = `${indent}value = 1\n`.repeat(10);
+        const chunks = chunkMarkdownTextWithMode(`\`\`\`txt\n${body}\`\`\``, 34, mode);
+        expect(chunks.length).toBeGreaterThan(1);
+        expectFencesBalanced(chunks);
+        // Every split is at an existing line ending; retain it while removing fences.
+        expect
+          .soft(chunks.map((chunk) => chunk.slice(7, -3)).join(""), JSON.stringify(indent))
+          .toBe(body);
+        expect(chunks.every((chunk) => chunk.length <= 34)).toBe(true);
+      }
+    },
+  );
+
+  it.each(["length", "newline"] as const)(
+    "preserves spaces at hard fenced boundaries in %s mode",
+    (mode) => {
+      const body = "abc def ghi jkl mno";
+      const chunks = chunkMarkdownTextWithMode(`\`\`\`txt\n${body}\n\`\`\``, 14, mode);
+      expect(chunks.length).toBeGreaterThan(1);
+      expectFencesBalanced(chunks);
+      // Single-line chunks gain a newline only to close their transport fence.
+      expect(chunks.map((chunk) => chunk.slice(7, -4)).join("")).toBe(body);
+      expect(chunks.every((chunk) => chunk.length <= 14)).toBe(true);
+    },
+  );
+
   it.each([
     {
       name: "keeps fenced blocks intact when a safe break exists",

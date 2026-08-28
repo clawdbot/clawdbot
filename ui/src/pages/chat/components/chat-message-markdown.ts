@@ -36,7 +36,7 @@ const MAX_JSON_AUTOPARSE_CHARS = 20_000;
  * Must start with `{`/`[` and end with `}`/`]` and parse successfully.
  * Size-capped to prevent render-loop DoS from large JSON messages.
  */
-export function detectJson(text: string): { parsed: unknown; pretty: string } | null {
+export function detectJson(text: string): { parsed: unknown; text: string } | null {
   const trimmed = text.trim();
 
   // Enforce size cap to prevent UI freeze from multi-MB JSON payloads
@@ -50,7 +50,8 @@ export function detectJson(text: string): { parsed: unknown; pretty: string } | 
   ) {
     try {
       const parsed = JSON.parse(trimmed);
-      return { parsed, pretty: JSON.stringify(parsed, null, 2) };
+      // Parsing is only for the summary; reserialization loses numeric precision and duplicate keys.
+      return { parsed, text: trimmed };
     } catch {
       return null;
     }
@@ -139,7 +140,7 @@ export function resolveMessageActionDetails(params: {
         : undefined;
   const normalizedMessage = normalizeMessage(message);
   const role = normalizeRoleForGrouping(normalizedMessage.role);
-  const previewMarkdown = resolveMessageReplyText(message);
+  const previewMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
   // The Gateway records every display-cap truncation as __openclaw.truncated, so
   // that marker is the whole contract: sniffing the in-band sentinel would fetch
   // for any reply that merely contains the text. Assistant-only because the

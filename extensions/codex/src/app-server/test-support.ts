@@ -90,12 +90,19 @@ export function createCodexTestModel(provider = "openai", input = ["text"]): Mod
 }
 
 /** Creates an in-memory Codex app-server client harness with writable stdout frames. */
-export function createClientHarness() {
+export function createClientHarness(options: { autoEmitExit?: boolean } = {}) {
   const stdout = new PassThrough();
   const writes: string[] = [];
+  const writeEvents = new EventEmitter();
   let stdinDestroyed = false;
   let exitEmitted = false;
   let emitProcessExit: () => void = () => undefined;
+  const emitExit = () => {
+    if (!exitEmitted) {
+      exitEmitted = true;
+      emitProcessExit();
+    }
+  };
   type HarnessProcess = EventEmitter & {
     stdin: Writable;
     stdout: PassThrough;
@@ -107,17 +114,17 @@ export function createClientHarness() {
     write(chunk, _encoding, callback) {
       writes.push(chunk.toString());
       callback();
+      writeEvents.emit("write");
     },
   });
   const destroyStdin = stdin.destroy.bind(stdin);
   stdin.destroy = ((error?: Error) => {
     stdinDestroyed = true;
     const result = destroyStdin(error);
-    if (!exitEmitted) {
-      exitEmitted = true;
+    if (!exitEmitted && options.autoEmitExit !== false) {
       // Let stdin surface pipe errors before the harness emits the fake child exit.
       // Otherwise close-reason tests can race EPIPE against a synthetic clean exit.
-      setImmediate(emitProcessExit);
+      setImmediate(emitExit);
     }
     return result;
   }) as typeof stdin.destroy;
@@ -138,9 +145,32 @@ export function createClientHarness() {
     client,
     process,
     writes,
+    async waitForWrite(index: number): Promise<string> {
+      if (writes[index] !== undefined) {
+        return writes[index];
+      }
+      return await new Promise<string>((resolve, reject) => {
+        const cleanup = () => {
+          clearTimeout(timer);
+          writeEvents.off("write", onWrite);
+        };
+        const onWrite = () => {
+          if (writes[index] !== undefined) {
+            cleanup();
+            resolve(writes[index]);
+          }
+        };
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error(`Timed out waiting for app-server harness write ${index}`));
+        }, 1_000);
+        writeEvents.on("write", onWrite);
+      });
+    },
     get stdinDestroyed() {
       return stdinDestroyed;
     },
+    emitExit,
     send(message: unknown) {
       stdout.write(`${JSON.stringify(message)}\n`);
     },

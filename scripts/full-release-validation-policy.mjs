@@ -506,6 +506,16 @@ function dispatchResultBlockers(children) {
     }));
 }
 
+function releaseState(cancelled, activeRunIds, blockers, errors) {
+  const active = activeRunIds.length > 0;
+  return (
+    (cancelled && active && "cancelled_with_children") ||
+    (errors.length > 0 && "orchestration_error") ||
+    (blockers.length > 0 && (active ? "blocked_diagnostics_running" : "blocked_complete")) ||
+    (active ? "qualifying" : "passed")
+  );
+}
+
 export function classifyReleaseSnapshot({
   cancelled = false,
   children,
@@ -567,24 +577,12 @@ export function classifyReleaseSnapshot({
   );
   const errors = normalizeIssues([...extraErrors, ...childErrors], "orchestration_error");
 
-  let state;
-  if (cancelled && active.length > 0) {
-    state = "cancelled_with_children";
-  } else if (errors.length > 0) {
-    state = "orchestration_error";
-  } else if (blockers.length > 0) {
-    state = active.length > 0 ? "blocked_diagnostics_running" : "blocked_complete";
-  } else if (active.length > 0) {
-    state = "qualifying";
-  } else {
-    state = "passed";
-  }
-
+  const activeRunIds = active.map((child) => String(child.runId));
   return {
-    activeRunIds: active.map((child) => String(child.runId)),
+    activeRunIds,
     blockers,
     errors,
-    state,
+    state: releaseState(cancelled, activeRunIds, blockers, errors),
   };
 }
 
@@ -726,6 +724,8 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
     payload.mode !== mode ||
     payload.kind !== expectedKind ||
     !RELEASE_DECISION_STATE_SET.has(stringValue(payload.state)) ||
+    typeof payload.cancellation?.requested !== "boolean" ||
+    !Array.isArray(payload.cancellation?.cancelledRunIds) ||
     !/^[a-f0-9]{64}$/u.test(String(payload.executionPlanSha256 ?? "")) ||
     positiveInteger(payload.parentRunAttempt) === undefined ||
     positiveInteger(payload.sourceParentRunAttempt) === undefined ||
@@ -817,19 +817,11 @@ export function releasePlanGateFailures(gates) {
     }));
 }
 
-function verifyStateChildren(state, executionPlan, label) {
+function verifyStateStructure(state, executionPlan, label) {
   const selected = executionPlan.children.filter((entry) => entry.selected);
   const expectedKeys = selected.map((child) => child.key).toSorted();
-  const actualKeys = Object.keys(state.children).toSorted();
-  if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys)) {
+  if (JSON.stringify(Object.keys(state.children).toSorted()) !== JSON.stringify(expectedKeys)) {
     throw new Error(`${label} child set differs from the immutable execution plan`);
-  }
-  if (
-    state.activeRunIds.length > 0 ||
-    state.cancellation?.requested === true ||
-    (state.cancellation?.cancelledRunIds?.length ?? 0) > 0
-  ) {
-    throw new Error(`${label} claims passed with active or cancelled children`);
   }
   const snapshots = selected.map((child) => {
     if (!child.runId || !child.runAttempt) {
@@ -847,9 +839,6 @@ function verifyStateChildren(state, executionPlan, label) {
     ) {
       throw new Error(`${label} child provenance differs from the immutable plan: ${child.key}`);
     }
-    if (snapshot.errors.length > 0) {
-      throw new Error(`${label} child contains collector errors: ${child.key}`);
-    }
     return Object.assign({}, child, snapshot, {
       jobs: snapshot.timing.jobs.map((job) => ({
         conclusion: job.conclusion,
@@ -860,7 +849,19 @@ function verifyStateChildren(state, executionPlan, label) {
       })),
     });
   });
-  const recomputed = classifyReleaseSnapshot({
+  const { cancelledRunIds, requested } = state.cancellation;
+  const affectedRunIds = new Set(affectedActiveRunIds(snapshots, state.blockers));
+  if (
+    (requested &&
+      !state.errors.some(
+        ({ child, kind }) => child === "<collector>" && kind === "collector_cancelled",
+      )) ||
+    new Set(cancelledRunIds).size !== cancelledRunIds.length ||
+    cancelledRunIds.some((runId) => !/^[1-9][0-9]*$/u.test(runId) || !affectedRunIds.has(runId))
+  ) {
+    throw new Error(`${label} cancellation differs from exact child state`);
+  }
+  const baseline = classifyReleaseSnapshot({
     children: snapshots,
     extraBlockers: executionPlan.blockers,
     extraErrors: executionPlan.errors,
@@ -868,25 +869,57 @@ function verifyStateChildren(state, executionPlan, label) {
     releaseProfile: executionPlan.releaseProfile,
     workflowRef: executionPlan.workflowRef,
   });
-  if (
-    state.state !== "passed" ||
-    state.blockers.length > 0 ||
-    state.errors.length > 0 ||
-    recomputed.state !== "passed" ||
-    recomputed.blockers.length > 0 ||
-    recomputed.errors.length > 0
-  ) {
-    throw new Error(`${label} does not satisfy canonical terminal release policy`);
+  if (JSON.stringify(state.activeRunIds) !== JSON.stringify(baseline.activeRunIds)) {
+    throw new Error(`${label} activeRunIds differs from canonical release policy`);
+  }
+  for (const key of ["blockers", "errors"]) {
+    const claimed = new Set(state[key].map((issue) => JSON.stringify(issue)));
+    if (baseline[key].some((issue) => !claimed.has(JSON.stringify(issue)))) {
+      throw new Error(`${label} omits baseline ${key}`);
+    }
+  }
+  if (releaseState(requested, state.activeRunIds, state.blockers, state.errors) !== state.state) {
+    throw new Error(`${label} state differs from canonical release policy`);
   }
 }
 
-export function verifyReleaseStateArtifacts(
-  executionPlanPayload,
-  decisionPayload,
-  drainPayload,
-  expected = {},
-) {
-  const executionPlan = validateReleaseExecutionPlanArtifact(executionPlanPayload, expected);
+function verifyStateTransition(decision, drain) {
+  const reuseRecovery =
+    ["blocked_complete", "blocked_diagnostics_running"].includes(decision.state) &&
+    drain.state === "passed" &&
+    decision.errors.length === 0 &&
+    decision.blockers.length > 0 &&
+    decision.blockers.every(
+      ({ child, kind }) =>
+        child === "<evidence>" && ["reused_evidence_invalid", "provenance_mismatch"].includes(kind),
+    );
+  if (
+    ["qualifying", "blocked_diagnostics_running"].includes(drain.state) ||
+    decision.state === "qualifying" ||
+    (decision.state === "passed" && drain.state === "blocked_complete") ||
+    (decision.state.startsWith("blocked_") && drain.state === "passed" && !reuseRecovery)
+  ) {
+    throw new Error("release decision and diagnostic drain transition is invalid");
+  }
+  if (
+    decision.state.startsWith("blocked_") &&
+    drain.state === "blocked_complete" &&
+    !decision.blockers.every((blocker) =>
+      drain.blockers.some(
+        (candidate) =>
+          JSON.stringify(candidate) === JSON.stringify(blocker) ||
+          (blocker.kind === "workflow_failure" &&
+            candidate.kind === "job_failure" &&
+            ["child", "runId"].every((key) => candidate[key] === blocker[key])),
+      ),
+    )
+  ) {
+    throw new Error("diagnostic drain changed or removed a release decision blocker");
+  }
+}
+
+function verifyReleaseStatePair(planPayload, decisionPayload, drainPayload, expected = {}) {
+  const executionPlan = validateReleaseExecutionPlanArtifact(planPayload, expected);
   const decision = validateReleaseStateArtifact(decisionPayload, expected, "decision");
   const drain = validateReleaseStateArtifact(drainPayload, expected, "drain");
   if (
@@ -897,8 +930,9 @@ export function verifyReleaseStateArtifacts(
   ) {
     throw new Error("release decision and diagnostic drain execution plans differ");
   }
-  verifyStateChildren(decision, executionPlan, "release decision");
-  verifyStateChildren(drain, executionPlan, "diagnostic drain");
+  verifyStateStructure(decision, executionPlan, "release decision");
+  verifyStateStructure(drain, executionPlan, "diagnostic drain");
+  verifyStateTransition(decision, drain);
   return {
     decision,
     drain,
@@ -911,13 +945,19 @@ export function verifyReleaseStateArtifacts(
   };
 }
 
+export function verifyReleaseStateArtifacts(plan, decision, drain, expected = {}) {
+  const verified = verifyReleaseStatePair(plan, decision, drain, expected);
+  if (verified.decision.state !== "passed" || verified.drain.state !== "passed") {
+    const outcome = verified.drain.state === "passed" ? verified.decision : verified.drain;
+    throw new Error(formatReleaseStateOutcome(outcome));
+  }
+  return verified;
+}
+
 function newestStateCandidate(candidates, mode, runId, expected) {
   const prefix = mode === "decision" ? "full-release-decision" : "full-release-diagnostics";
   const pattern = new RegExp(`^${prefix}-${runId}-([1-9][0-9]*)$`, "u");
-  const maxParentRunAttempt =
-    expected.maxParentRunAttempt === undefined
-      ? Number.POSITIVE_INFINITY
-      : Number(expected.maxParentRunAttempt);
+  const maxParentRunAttempt = Number(expected.maxParentRunAttempt ?? Number.POSITIVE_INFINITY);
   const sorted = candidates
     .map((candidate) => {
       const match = pattern.exec(String(candidate.name ?? ""));
@@ -960,7 +1000,7 @@ export function selectReleaseStateArtifacts(
     executionPlan.parentRunId,
     selectionExpected,
   );
-  return verifyReleaseStateArtifacts(executionPlan, decision, drain, selectionExpected);
+  return verifyReleaseStatePair(executionPlan, decision, drain, selectionExpected);
 }
 
 function issueSummary(prefix, issue) {

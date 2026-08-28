@@ -613,81 +613,92 @@ describe("applyMediaUnderstanding", () => {
     );
   });
 
-  it("injects a placeholder transcript when local-path audio is too small", async () => {
-    const ctx = await createAudioCtx({
-      fileName: "tiny.ogg",
-      mediaType: "audio/ogg",
-      content: Buffer.alloc(100),
-    });
-    const transcribeAudio = vi.fn(async () => ({ text: "should-not-run" }));
-    const cfg: OpenClawConfig = {
-      tools: {
-        media: {
-          models: [{ provider: "groq", capabilities: ["audio"] }],
-          audio: {
-            enabled: true,
-            maxBytes: 1024 * 1024,
+  it.each([undefined, "audio-only"] as const)(
+    "injects one placeholder for too-small local audio in %s mode",
+    async (processingMode) => {
+      const ctx = await createAudioCtx({
+        fileName: "tiny.ogg",
+        mediaType: "audio/ogg",
+        content: Buffer.alloc(100),
+      });
+      const transcribeAudio = vi.fn(async () => ({ text: "should-not-run" }));
+      const cfg: OpenClawConfig = {
+        tools: {
+          media: {
+            models: [{ provider: "groq", capabilities: ["audio"] }],
+            audio: {
+              enabled: true,
+              maxBytes: 1024 * 1024,
+            },
           },
         },
-      },
-    };
+      };
 
-    const result = await applyMediaUnderstanding({
-      ctx,
-      cfg,
-      providers: {
-        groq: { id: "groq", transcribeAudio },
-      },
-    });
+      const result = await applyMediaUnderstanding({
+        ctx,
+        cfg,
+        processingMode,
+        providers: {
+          groq: { id: "groq", transcribeAudio },
+        },
+      });
 
-    expect(transcribeAudio).not.toHaveBeenCalled();
-    expect(result.appliedAudio).toBe(true);
-    expect(result.outputs).toEqual([
-      {
-        kind: "audio.transcription",
-        attachmentIndex: 0,
-        text: "[Voice note could not be transcribed because the audio attachment was too small]",
-        provider: "openclaw",
-        model: "synthetic-empty-audio",
-      },
-    ]);
-    expect(ctx.Transcript).toBe(
-      "[Voice note could not be transcribed because the audio attachment was too small]",
-    );
-    expect(ctx.Body).toBe(
-      "[Audio]\nTranscript:\n[Voice note could not be transcribed because the audio attachment was too small]",
-    );
-  });
+      expect(transcribeAudio).not.toHaveBeenCalled();
+      expect(result.appliedAudio).toBe(true);
+      expect(result.outputs).toEqual([
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "[Voice note could not be transcribed because the audio attachment was too small]",
+          provider: "openclaw",
+          model: "synthetic-empty-audio",
+        },
+      ]);
+      expect(ctx.Transcript).toBe(
+        "[Voice note could not be transcribed because the audio attachment was too small]",
+      );
+      expect(ctx.Body).toBe(
+        "[Audio]\nTranscript:\n[Voice note could not be transcribed because the audio attachment was too small]",
+      );
+    },
+  );
 
-  it("skips audio transcription when attachment exceeds maxBytes", async () => {
-    const ctx = await createAudioCtx({
-      fileName: "large.wav",
-      mediaType: "audio/wav",
-      content: Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
-    });
-    const transcribeAudio = vi.fn(async () => ({ text: "should-not-run" }));
-    const cfg: OpenClawConfig = {
-      tools: {
-        media: {
-          models: [{ provider: "groq", capabilities: ["audio"] }],
-          audio: {
-            enabled: true,
-            maxBytes: 4,
+  it.each([undefined, "audio-only"] as const)(
+    "marks audio exceeding maxBytes in %s mode",
+    async (processingMode) => {
+      const ctx = await createAudioCtx({
+        fileName: "large.wav",
+        mediaType: "audio/wav",
+        content: Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+      });
+      const transcribeAudio = vi.fn(async () => ({ text: "should-not-run" }));
+      const cfg: OpenClawConfig = {
+        tools: {
+          media: {
+            models: [{ provider: "groq", capabilities: ["audio"] }],
+            audio: {
+              enabled: true,
+              maxBytes: 4,
+            },
           },
         },
-      },
-    };
+      };
 
-    const result = await applyMediaUnderstanding({
-      ctx,
-      cfg,
-      providers: { groq: { id: "groq", transcribeAudio } },
-    });
+      const result = await applyMediaUnderstanding({
+        ctx,
+        cfg,
+        processingMode,
+        providers: { groq: { id: "groq", transcribeAudio } },
+      });
 
-    expect(result.appliedAudio).toBe(false);
-    expect(transcribeAudio).not.toHaveBeenCalled();
-    expect(ctx.Body).toBe("[Audio attachment could not be analyzed]");
-  });
+      expect(result.appliedAudio).toBe(false);
+      expect(result.outputs).toEqual([]);
+      expect(ctx.Transcript).toBeUndefined();
+      expect(transcribeAudio).not.toHaveBeenCalled();
+      expect(ctx.Body).toBe("[Audio attachment could not be analyzed]");
+      expect(ctx.BodyForAgent).toBe(ctx.Body);
+    },
+  );
 
   it("falls back to CLI model when provider fails", async () => {
     const ctx = await createAudioCtx();
@@ -1123,7 +1134,7 @@ describe("applyMediaUnderstanding", () => {
     expect(markerCount - 1).toBe(1);
   });
 
-  it("uses CLI image understanding and preserves caption for commands", async () => {
+  it("describes ACP-delivered images and preserves their captions for commands", async () => {
     const imagePath = await createTempMediaFile({
       fileName: "photo.jpg",
       content: "image-bytes",
@@ -1159,6 +1170,7 @@ describe("applyMediaUnderstanding", () => {
     const result = await applyMediaUnderstanding({
       ctx,
       cfg,
+      deliveredImageIndexes: new Set([0]),
     });
 
     expect(result.appliedImage).toBe(true);
@@ -1675,7 +1687,11 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.BodyForCommands).toBe("audio ok");
   });
 
-  it("limits native-harness preprocessing to audio", async () => {
+  it.each([
+    { outcome: "success", body: "[Audio]\nTranscript:\naudio ok" },
+    { outcome: "failure", body: "[Audio attachment could not be analyzed]" },
+    { outcome: "scope-denied", body: "[Audio attachment not analyzed in this chat]" },
+  ])("limits native-harness preprocessing to audio on STT $outcome", async ({ outcome, body }) => {
     const dir = await createTempMediaDir();
     const imagePath = path.join(dir, "photo.jpg");
     const audioPath = path.join(dir, "note.ogg");
@@ -1685,11 +1701,17 @@ describe("applyMediaUnderstanding", () => {
     await fs.writeFile(filePath, "file text");
 
     const describeImage = vi.fn(async () => ({ text: "image ok" }));
-    const transcribeAudio = vi.fn(async () => ({ text: "audio ok" }));
+    const transcribeAudio = vi.fn(async () => {
+      if (outcome === "failure") {
+        throw new Error("transcription provider unavailable");
+      }
+      return { text: "audio ok" };
+    });
     const ctx: MsgContext = {
       Body: "",
       media: [
         { path: imagePath, contentType: "image/jpeg" },
+        { url: "https://example.test/clip.mp4", contentType: "video/mp4" },
         { path: audioPath, contentType: "audio/ogg" },
         { path: filePath, contentType: "text/plain" },
       ],
@@ -1702,7 +1724,10 @@ describe("applyMediaUnderstanding", () => {
             { provider: "groq", capabilities: ["audio"] },
           ],
           image: { enabled: true },
-          audio: { enabled: true },
+          audio: {
+            enabled: true,
+            scope: { default: outcome === "scope-denied" ? "deny" : "allow" },
+          },
         },
       },
     };
@@ -1718,17 +1743,19 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expect(describeImage).not.toHaveBeenCalled();
-    expect(transcribeAudio).toHaveBeenCalledOnce();
+    expect(transcribeAudio).toHaveBeenCalledTimes(outcome === "scope-denied" ? 0 : 1);
     expect(result).toEqual(
       expect.objectContaining({
         appliedImage: false,
-        appliedAudio: true,
+        appliedAudio: outcome === "success",
         appliedVideo: false,
         appliedFile: false,
         extractedFileImages: [],
       }),
     );
-    expect(ctx.Body).toBe("[Audio]\nTranscript:\naudio ok");
+    expect(ctx.Body).toBe(body);
+    expect(ctx.BodyForAgent).toBe(body);
+    expect(ctx.Transcript).toBe(outcome === "success" ? "audio ok" : undefined);
   });
 
   it("orders synthetic too-small audio output between image and video", async () => {

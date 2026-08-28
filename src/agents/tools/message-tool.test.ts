@@ -1174,6 +1174,21 @@ describe("message tool secret scoping", () => {
     expect(input?.params).toMatchObject({ action: "send", message: "hi" });
   });
 
+  it("does not discover bundled plugins for an internal WebChat session", async () => {
+    const { getBundledChannelPlugin } = await import("../../channels/plugins/bundled.js");
+    const bundledPluginLookup = vi.mocked(getBundledChannelPlugin);
+    bundledPluginLookup.mockClear();
+
+    createMessageTool({
+      config: { agents: { entries: { main: { default: true } } } },
+      preparedMessageToolCatalog: EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
+      currentChannelProvider: "webchat",
+      agentSessionKey: "agent:main:webchat:dm:dashboard",
+    });
+
+    expect(bundledPluginLookup).not.toHaveBeenCalled();
+  });
+
   it("keeps automatic WebChat final-answer guidance while selecting the tool-local sink", async () => {
     mockSendResult();
 
@@ -4174,6 +4189,48 @@ describe("message tool description", () => {
     expect(tool.description).not.toContain("Current channel");
     expect(tool.description).not.toContain("Other configured channels");
     expect(tool.description).not.toContain("telegram (");
+  });
+
+  it("keeps cross-channel Telegram reactions available when emoji schema is metadata-only", () => {
+    const signalPlugin = createChannelPlugin({
+      id: "signal",
+      label: "Signal",
+      docsPath: "/channels/signal",
+      blurb: "Signal test plugin.",
+      actions: ["send"],
+    });
+    const telegramPlugin = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram test plugin.",
+      actions: ["send", "react"],
+      toolSchema: {
+        actions: [],
+        properties: {
+          emoji: Type.Optional(Type.String()),
+        },
+      },
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "signal", source: "test", plugin: signalPlugin },
+        { pluginId: "telegram", source: "test", plugin: telegramPlugin },
+      ]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "signal",
+    });
+
+    const properties = getToolProperties(tool);
+    expect(getActionEnum(properties)).toContain("react");
+    expect(properties.emoji).toMatchObject({ type: "string" });
+    expect((properties.emoji as { description?: string }).description).not.toContain(
+      "custom_emoji_id",
+    );
   });
 
   it("does not advertise cross-channel actions whose params are hidden by current-channel schema", () => {

@@ -11,10 +11,7 @@ import {
   resolvePackageExtensionEntries,
 } from "../plugins/manifest.js";
 import { unwrapDefaultModuleExport } from "../plugins/module-export.js";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-} from "../plugins/plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
@@ -58,8 +55,7 @@ const SUPPORTED_PLUGIN_SCAFFOLD_TYPES = [
   "provider",
 ] as const satisfies readonly PluginScaffoldType[];
 const CLAWHUB_PACKAGE_PUBLISH_WORKFLOW_REF = "9d49df109d4ad3dc8a6ecf05d26b39f46d294721";
-
-const toolPluginEntryModuleLoaders = createPluginModuleLoaderCache();
+const TOOL_PLUGIN_API_RANGE = ">=2026.5.17";
 
 function readJsonFile(filePath: string): JsonObject {
   const raw = fs.readFileSync(filePath, "utf8");
@@ -114,10 +110,10 @@ function readPackageManifest(rootDir: string): JsonObject {
   return readJsonFile(packagePath);
 }
 
-async function importToolPluginEntry(entryPath: string): Promise<unknown> {
+async function importToolPluginEntry(entryPath: string, rootDir: string): Promise<unknown> {
   const loader = getCachedPluginModuleLoader({
-    cache: toolPluginEntryModuleLoaders,
     modulePath: entryPath,
+    rootDir,
     importerUrl: import.meta.url,
     loaderFilename: entryPath,
     aliasMap: buildPluginLoaderAliasMap(entryPath, process.argv[1], import.meta.url),
@@ -143,7 +139,7 @@ export async function loadToolPlugin(params: {
       `plugin entry not found: ${normalizeRelativePath(params.rootDir, params.entryPath)}`,
     );
   }
-  const entry = await importToolPluginEntry(params.entryPath);
+  const entry = await importToolPluginEntry(params.entryPath, params.rootDir);
   const metadata = getToolPluginMetadata(entry);
   if (!metadata) {
     throw new Error(
@@ -449,6 +445,12 @@ function createConfigSchema() {
   };
 }
 
+const createPluginPackageMetadata = (pluginApi: string) => ({
+  extensions: ["./dist/index.js"],
+  compat: { pluginApi },
+  build: { openclawVersion: VERSION },
+});
+
 function buildScaffoldTsconfig(type: PluginScaffoldType): JsonObject {
   return {
     compilerOptions: {
@@ -493,7 +495,7 @@ function writeToolPluginScaffold(params: { rootDir: string; id: string; name: st
     },
     files: ["dist", "openclaw.plugin.json", "README.md"],
     peerDependencies: {
-      openclaw: ">=2026.5.17",
+      openclaw: TOOL_PLUGIN_API_RANGE,
     },
     dependencies: {
       typebox: "^1.1.38",
@@ -503,9 +505,7 @@ function writeToolPluginScaffold(params: { rootDir: string; id: string; name: st
       typescript: "^5.9.0",
       vitest: "^3.2.0",
     },
-    openclaw: {
-      extensions: ["./dist/index.js"],
-    },
+    openclaw: createPluginPackageMetadata(TOOL_PLUGIN_API_RANGE),
   };
   const idLiteral = jsStringLiteral(params.id);
   const nameLiteral = jsStringLiteral(params.name);
@@ -603,17 +603,11 @@ function writeProviderPluginScaffold(params: { rootDir: string; id: string; name
       vitest: "^3.2.0",
     },
     openclaw: {
-      extensions: ["./dist/index.js"],
+      ...createPluginPackageMetadata(`>=${VERSION}`),
       install: {
         clawhubSpec: `clawhub:${packageName}`,
         defaultChoice: "clawhub",
         minHostVersion: `>=${VERSION}`,
-      },
-      compat: {
-        pluginApi: `>=${VERSION}`,
-      },
-      build: {
-        openclawVersion: VERSION,
       },
       release: {
         publishToClawHub: true,

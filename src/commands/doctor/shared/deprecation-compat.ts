@@ -483,7 +483,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     removeAfter: "2026-07-26",
     source: "plugins.installs in authored config",
     migration: "src/config/plugin-install-config-migration.ts",
-    replacement: "shared SQLite installed_plugin_index install ledger",
+    replacement: "shared SQLite config_machine_state plugins.installedIndex install ledger",
     docsPath: "/cli/plugins#registry",
     tests: [
       "src/config/io.write-config.test.ts",

@@ -35,6 +35,7 @@ import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.j
 const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
+export const SYNTHESIZED_TIMEOUT_ERROR_TEXT = "LLM request timed out.";
 const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
   "LLM request failed: provider rejected the request schema or tool payload.";
 const MODEL_NOT_FOUND_USER_TEXT =
@@ -241,7 +242,7 @@ export function formatAssistantErrorText(
   }
 
   if (isTimeoutErrorMessage(raw)) {
-    return "LLM request timed out.";
+    return SYNTHESIZED_TIMEOUT_ERROR_TEXT;
   }
 
   if (isBillingErrorMessage(raw)) {
@@ -283,7 +284,7 @@ function isRawAssistantErrorPassthrough(params: {
     friendlyError.startsWith("LLM error") ||
     friendlyError.startsWith("HTTP ");
   return (
-    friendlyError === rawError ||
+    (friendlyError === rawError && friendlyError !== SYNTHESIZED_TIMEOUT_ERROR_TEXT) ||
     (rawError.length > 600 && friendlyError === `${truncateUtf16Safe(rawError, 600)}…`) ||
     Boolean(parsedMessage && hasRawDerivedProviderPrefix) ||
     Boolean(leadingStatusRest && friendlyError.startsWith("HTTP "))

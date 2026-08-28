@@ -91,6 +91,8 @@ data class Question(
   val multiSelect: Boolean? = null,
   val isOther: Boolean? = null,
   val isSecret: Boolean? = null,
+  val secretStore: QuestionSecretStore? = null,
+  val secretStoreExisting: QuestionSecretStoreExisting? = null,
 )
 
 @Serializable
@@ -345,6 +347,20 @@ data class GatewayNodeInvokeResultParamsError(
 )
 
 @Serializable
+data class QuestionSecretStore(
+  val name: String,
+  val kind: String,
+  val allowedHosts: List<String>? = null,
+  val reason: String? = null,
+)
+
+@Serializable
+data class QuestionSecretStoreExisting(
+  val updatedAtMs: Long,
+  val updatedBy: String? = null,
+)
+
+@Serializable
 data class ProjectsListResultProjectsItem(
   val id: String,
   val displayName: String,
@@ -483,6 +499,7 @@ enum class GatewayMethod(
   UsersLinkEmail("users.linkEmail"),
   UsersSetDisplayName("users.setDisplayName"),
   UsersSetAvatar("users.setAvatar"),
+  UsersSetRole("users.setRole"),
   TasksList("tasks.list"),
   TasksGet("tasks.get"),
   TasksCancel("tasks.cancel"),
@@ -761,6 +778,8 @@ enum class GatewayMethod(
   ToolsGithubAuthorizeCancel("tools.github.authorize.cancel"),
   SessionsGithubPublish("sessions.github.publish"),
   DiagnosticsLanes("diagnostics.lanes"),
+  SessionMembersListEvidence("session.members.listEvidence"),
+  PluginsInspect("plugins.inspect"),
 }
 
 enum class GatewayEvent(
@@ -775,6 +794,7 @@ enum class GatewayEvent(
   SessionObserver("session.observer"),
   SessionOperation("session.operation"),
   SessionSharing("session.sharing"),
+  SessionSharingEvidence("session.sharing.evidence"),
   SessionSuggestion("session.suggestion"),
   SessionTyping("session.typing"),
   SessionTool("session.tool"),
@@ -802,6 +822,7 @@ enum class GatewayEvent(
   DevicePairResolved("device.pair.resolved"),
   DevicePairSetupCompleted("device.pair.setup.completed"),
   DevicePairSetupDeliveryUncertain("device.pair.setup.deliveryUncertain"),
+  UsersPrefsChanged("users.prefs.changed"),
   SkillsChanged("skills.changed"),
   VoicewakeChanged("voicewake.changed"),
   VoicewakeRoutingChanged("voicewake.routing.changed"),

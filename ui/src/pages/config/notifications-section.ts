@@ -5,7 +5,7 @@ import type {
 } from "../../app/native-notifications.ts";
 import { icons } from "../../components/icons.ts";
 import {
-  renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsRow,
   renderSettingsStatus,
   renderSettingsValue,
@@ -17,7 +17,7 @@ import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 const NOTIFICATIONS_DOCS_URL = "https://docs.openclaw.ai/web/notifications";
 
 function renderNotificationsHint(copy: string) {
-  return html`${copy} ${renderDocsLink(NOTIFICATIONS_DOCS_URL, t("common.learnMore"))}`;
+  return html`${copy} ${renderLearnMoreLink(NOTIFICATIONS_DOCS_URL)}`;
 }
 
 export type WebPushUiState = {

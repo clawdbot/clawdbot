@@ -26,6 +26,14 @@ export function resolveTaskName(env: GatewayServiceEnv): string {
   return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
 }
 
+// Keeps the service gateway's stdin off the (possibly hidden) console so TTY
+// heuristics fail closed for permission prompts (#112173).
+const STDIN_NUL_REDIRECT = "< NUL";
+
+function stripStdinNulRedirect(commandLine: string): string {
+  return commandLine.replace(/\s*<\s*NUL\s*$/i, "");
+}
+
 export function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
   // Permission failures and hung schtasks calls can use the per-user Startup fallback.
   return (
@@ -240,7 +248,9 @@ export async function readScheduledTaskCommand(
         workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
         continue;
       }
-      commandLine = line;
+      // Generated launchers redirect stdin so a hidden service console never
+      // presents as interactive (#112173); the redirection is not an argument.
+      commandLine = stripStdinNulRedirect(line);
       break;
     }
     if (!commandLine) {
@@ -282,13 +292,23 @@ export function buildTaskScript({
   }
   if (environment) {
     for (const [key, value] of Object.entries(environment)) {
-      if (!value || key.toUpperCase() === "PATH") {
+      // `set "NODE_OPTIONS="` clears inherited flags before the Node command runs.
+      if (
+        value === undefined ||
+        (!value && key.toUpperCase() !== "NODE_OPTIONS") ||
+        key.toUpperCase() === "PATH"
+      ) {
         continue;
       }
       lines.push(renderCmdSetAssignment(key, value));
     }
   }
-  lines.push(programArguments.map(quoteCmdScriptArg).join(" "));
+  // Redirect stdin from NUL: a Scheduled Task console (even hidden via the
+  // VBS launcher) still hands the gateway real console handles, so
+  // `process.stdin.isTTY` reports true and interactive permission prompts
+  // block forever on a console no one can see (#112173). With stdin at NUL
+  // the gateway and its workers correctly take non-interactive paths.
+  lines.push(`${programArguments.map(quoteCmdScriptArg).join(" ")} ${STDIN_NUL_REDIRECT}`);
   return `${lines.join("\r\n")}\r\n`;
 }
 

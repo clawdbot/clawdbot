@@ -16,11 +16,19 @@ import {
 } from "../gateway/minimal-gateway.test-helpers.js";
 import {
   buildTailscaleHttpsUrl,
-  resolveGatewayProbeSnapshot,
+  resolveGatewayProbeSnapshot as resolveGatewayProbeSnapshotOwner,
   resolveSharedMemoryStatusSnapshot,
 } from "./status.scan.shared.js";
 
 const tempDirs: string[] = [];
+const resolveGatewayProbeSnapshot = (
+  params: Omit<Parameters<typeof resolveGatewayProbeSnapshotOwner>[0], "configPath" | "env">,
+) =>
+  resolveGatewayProbeSnapshotOwner({
+    ...params,
+    configPath: "/tmp/openclaw.json",
+    env: process.env,
+  });
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);

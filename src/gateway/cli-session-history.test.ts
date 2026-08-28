@@ -11,7 +11,6 @@ import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { readClaudeCliSessionMessages } from "./cli-session-history.claude.js";
 import {
-  augmentChatHistoryWithCliSessionImports,
   readClaudeCliFallbackSeed,
   readChatHistoryCliSessionImportSnapshot,
   resolveChatHistoryWithCliSessionImports,
@@ -20,7 +19,7 @@ import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js
 import { expectRecordFields, requireGatewayRecord } from "./test-helpers.assertions.js";
 
 type ClaudeCliFallbackSeed = NonNullable<ReturnType<typeof readClaudeCliFallbackSeed>>;
-type AugmentCliHistoryParams = Parameters<typeof augmentChatHistoryWithCliSessionImports>[0];
+type AugmentCliHistoryParams = Parameters<typeof resolveChatHistoryWithCliSessionImports>[0];
 
 function requireFallbackSeed(
   seed: ReturnType<typeof readClaudeCliFallbackSeed>,
@@ -50,7 +49,7 @@ function augmentBoundClaudeHistory(params: {
   provider: AugmentCliHistoryParams["provider"];
   localMessages?: AugmentCliHistoryParams["localMessages"];
 }) {
-  return augmentChatHistoryWithCliSessionImports({
+  return resolveChatHistoryWithCliSessionImports({
     entry: {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
@@ -63,7 +62,7 @@ function augmentBoundClaudeHistory(params: {
     provider: params.provider,
     localMessages: params.localMessages ?? [],
     homeDir: params.homeDir,
-  });
+  }).messages;
 }
 
 function buildLegacyReseedPrompt(current = "current"): string {
@@ -413,6 +412,78 @@ describe("cli session history", () => {
       const second = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
       expect(importedId(first[0])).toBe(`claude-cli:${sessionId}:line:1`);
       expect(importedId(second[0])).toBe(importedId(first[0]));
+    });
+  });
+
+  it("omits isMeta rows and records visible harness context provenance", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "operator-1",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: { role: "user", content: "run the review" },
+          },
+          {
+            type: "user",
+            uuid: "skill-meta-1",
+            isMeta: true,
+            sourceToolUseID: "toolu_skill",
+            timestamp: "2026-03-26T16:29:55.000Z",
+            message: {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "Base directory for this skill: /tmp/skills/autoreview\n\n# Auto Review",
+                },
+              ],
+            },
+          },
+          {
+            type: "user",
+            uuid: "compact-summary-1",
+            isCompactSummary: true,
+            timestamp: "2026-03-26T16:29:56.000Z",
+            message: {
+              role: "user",
+              content: "This session is being continued from a previous conversation.",
+            },
+          },
+          {
+            type: "user",
+            uuid: "transcript-only-1",
+            isVisibleInTranscriptOnly: true,
+            timestamp: "2026-03-26T16:29:57.000Z",
+            message: {
+              role: "user",
+              content: "Transcript-only synthetic context row.",
+            },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+
+      expect(messages).toHaveLength(3);
+      expect(JSON.stringify(messages)).not.toContain("Base directory for this skill");
+      // The operator-authored turn stays free of injected provenance.
+      expectFields(messages[0], { role: "user" });
+      expect(readRecord(messages[0]).provenance).toBeUndefined();
+      // Compact summaries and transcript-only rows stay visible as internal context.
+      expectFields(readRecord(messages[1]).provenance, {
+        kind: "internal_system",
+        sourceTool: "cli_harness_context",
+      });
+      expectFields(readRecord(messages[2]).provenance, {
+        kind: "internal_system",
+        sourceTool: "cli_harness_context",
+      });
     });
   });
 
@@ -1265,7 +1336,7 @@ describe("cli session history", () => {
         "utf-8",
       );
 
-      const messages = augmentChatHistoryWithCliSessionImports({
+      const messages = resolveChatHistoryWithCliSessionImports({
         entry: {
           sessionId: "openclaw-session",
           updatedAt: Date.now(),
@@ -1290,7 +1361,7 @@ describe("cli session history", () => {
           },
         ],
         homeDir,
-      });
+      }).messages;
 
       expect(messages).toHaveLength(2);
       expectFields(messages[0], { role: "user", content: "current recovered ask" });
@@ -1375,7 +1446,7 @@ describe("cli session history", () => {
 
   it("falls back to legacy cliSessionIds when bindings are absent", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
-      const messages = augmentChatHistoryWithCliSessionImports({
+      const messages = resolveChatHistoryWithCliSessionImports({
         entry: {
           sessionId: "openclaw-session",
           updatedAt: Date.now(),
@@ -1386,7 +1457,7 @@ describe("cli session history", () => {
         provider: "claude-cli",
         localMessages: [],
         homeDir,
-      });
+      }).messages;
       expect(messages).toHaveLength(3);
       expectFields(messages[1], {
         role: "assistant",
@@ -1397,7 +1468,7 @@ describe("cli session history", () => {
 
   it("falls back to legacy claudeCliSessionId when newer fields are absent", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
-      const messages = augmentChatHistoryWithCliSessionImports({
+      const messages = resolveChatHistoryWithCliSessionImports({
         entry: {
           sessionId: "openclaw-session",
           updatedAt: Date.now(),
@@ -1406,7 +1477,7 @@ describe("cli session history", () => {
         provider: "claude-cli",
         localMessages: [],
         homeDir,
-      });
+      }).messages;
       expect(messages).toHaveLength(3);
       expectFields(messages[0], {
         role: "user",

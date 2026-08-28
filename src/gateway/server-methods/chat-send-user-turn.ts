@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
@@ -11,6 +12,7 @@ import {
   INLINE_IMAGE_DURABLE_OMISSION_MARKER,
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
+import { resolveCreatorSandbox } from "../operator-role-policy.js";
 import { isAcpBridgeClient } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
@@ -81,6 +83,7 @@ function buildChatSendPromptMedia(
 
 function buildChatSendMessageContext(params: {
   agentId: string;
+  cfg?: OpenClawConfig;
   client: GatewayRequestHandlerOptions["client"];
   clientInfo?: GatewayClientInfo;
   clientRunId: string;
@@ -112,6 +115,8 @@ function buildChatSendMessageContext(params: {
       : undefined;
   const { originatingChannel, originatingTo, accountId, messageThreadId, explicitDeliverRoute } =
     params.originatingRoute;
+  const creation = resolveOperatorSessionCreation(params.client);
+  const sandbox = params.cfg ? resolveCreatorSandbox(params.cfg, creation) : undefined;
   // Current and historical turns must reach the single LLM timestamp boundary
   // with identical bare text. Stamping this live turn would bust the prompt cache.
   const ctx: MsgContext = {
@@ -148,7 +153,7 @@ function buildChatSendMessageContext(params: {
         },
     ...(params.suppressCommandInterpretation ? { CommandInterpretationSuppressed: true } : {}),
     MessageSid: params.clientRunId,
-    SessionCreation: resolveOperatorSessionCreation(params.client),
+    SessionCreation: { ...creation, ...(sandbox ? { sandbox } : {}) },
     ApprovalReviewerDeviceId: queuedFollowupOwnerDeviceId,
     ...(!isOperatorUiClient(params.clientInfo)
       ? {
@@ -189,7 +194,8 @@ export function prepareChatSendUserTurn(params: {
     | "systemProvenanceReceipt"
     | "toolBindings"
   >;
-  session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey">;
+  session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey"> &
+    Partial<Pick<PreparedChatSendSession, "cfg">>;
   admission: Pick<AdmittedChatSend, "originatingRoute">;
   attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];
@@ -232,6 +238,7 @@ export function prepareChatSendUserTurn(params: {
   void pluginBoundMediaPromise.catch(() => undefined);
   const messageContext = buildChatSendMessageContext({
     agentId: session.agentId,
+    cfg: session.cfg,
     client,
     clientInfo: request.clientInfo,
     clientRunId: session.clientRunId,

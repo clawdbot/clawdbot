@@ -3,8 +3,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
-import { constants as osConstants } from "node:os";
+import { constants as osConstants, tmpdir } from "node:os";
 import path from "node:path";
+import { createTempDirTracker } from "../test/helpers/temp-dir.ts";
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
@@ -651,7 +652,7 @@ export function resolveVitestSpawnParams(
   platform: NodeJS.Platform = process.platform,
 ): PnpmRunnerParams {
   return {
-    env: resolveVitestProcessEnv(env),
+    env: resolveVitestProcessEnv(resolveVitestCompileCacheSafeEnv(env)),
     detached: shouldUseDetachedVitestProcessGroup(platform),
     stdio: ["inherit", "pipe", "pipe"],
   };
@@ -1259,10 +1260,28 @@ export function spawnWatchedVitestProcess({
 }) {
   let forwardedSignal: NodeSignal | null = null;
   let diagnosticsCompletion: Promise<void> | null = null;
-  const child = spawnVitestProcess({
-    pnpmArgs,
-    spawnParams,
-  });
+  const tempDirs = createTempDirTracker();
+  let childSpawnParams = spawnParams;
+  // The POSIX completion contract joins all workers before deleting SQLite files.
+  // Own a fresh namespace outside worker module resets, never ambient PID directories.
+  if (spawnParams.detached && shouldUseDetachedVitestProcessGroup()) {
+    const childEnv = spawnParams.env ?? process.env;
+    const tempRoot = tempDirs.make(
+      "oc-vt-",
+      fs.realpathSync(childEnv.TMPDIR || childEnv.TMP || childEnv.TEMP || tmpdir()),
+    );
+    childSpawnParams = {
+      ...spawnParams,
+      env: { ...childEnv, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot },
+    };
+  }
+  let child: ChildProcess;
+  try {
+    child = spawnVitestProcess({ pnpmArgs, spawnParams: childSpawnParams });
+  } catch (error) {
+    tempDirs.cleanup();
+    throw error;
+  }
   const teardownChildCleanup = installVitestProcessGroupCleanup({
     child,
     forceSignal: "SIGKILL",
@@ -1321,11 +1340,19 @@ export function spawnWatchedVitestProcess({
   ])
     .then(async ([{ code, signal }]) => {
       await diagnosticsCompletion;
+      tempDirs.cleanup();
       const result = unhandledErrors.finish();
       if (result) {
         writeVitestUnhandledErrorSummary(result, env);
       }
       return { code, signal: normalizeNodeSignal(signal) };
+    })
+    .catch((error: unknown) => {
+      // A failed spawn owns no handles. A failed group join may still own them.
+      if (!child.pid) {
+        tempDirs.cleanup();
+      }
+      throw error;
     })
     .finally(teardown);
 

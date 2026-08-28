@@ -16,21 +16,28 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("reveals an active stream footer after a mobile tap", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+  it.each([
+    { label: "desktop hover", mobile: false, viewport: { height: 900, width: 1280 } },
+    { label: "mobile tap", mobile: true, viewport: { height: 844, width: 390 } },
+  ])("shows turn metadata only after completion on $label", async ({ mobile, viewport }) => {
     const context = await suite.newBrowserContext({
-      hasTouch: true,
-      isMobile: true,
+      hasTouch: mobile,
+      isMobile: mobile,
       locale: "en-US",
       serviceWorkers: "block",
-      viewport: { height: 844, width: 390 },
+      viewport,
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        { role: "assistant", content: "Earlier completed reply.", timestamp: Date.now() - 60_000 },
+      ],
+    });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".agent-chat__composer-combobox textarea").fill("show stream metadata");
+      await page.getByText("Earlier completed reply.").waitFor();
+      await page.locator(".agent-chat__composer-combobox textarea").fill("show turn metadata");
       await page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
       const runId = requireString(
@@ -51,203 +58,48 @@ suite.define(() => {
       });
 
       const activeStream = page.locator(".chat-bubble.streaming");
-      await activeStream.waitFor({ state: "visible", timeout: 10_000 });
-      const footer = activeStream
-        .locator(
-          "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' chat-group ')][1]",
-        )
-        .locator(".chat-group-footer");
-      await footer.waitFor({ state: "attached", timeout: 10_000 });
-      const presentation = () =>
-        footer.evaluate((element) => {
-          const style = getComputedStyle(element);
-          return { opacity: style.opacity, pointerEvents: style.pointerEvents };
-        });
-      await expect.poll(presentation).toEqual({ opacity: "0", pointerEvents: "none" });
+      await activeStream.waitFor({ state: "visible" });
+      const activeGroup = page.locator(".chat-group.assistant").last();
+      const reveal = async () => {
+        if (mobile) {
+          await activeGroup.locator(".chat-bubble").last().tap();
+        } else {
+          await activeGroup.hover();
+        }
+      };
+      await reveal();
+      expect(await activeGroup.locator(".chat-group-footer").count()).toBe(0);
+      expect(
+        await page.locator(".chat-group.assistant").first().locator(".chat-group-footer").count(),
+      ).toBe(1);
 
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "active-stream-metadata-resting.png"),
-        });
-      }
-
-      await activeStream.tap();
-      await expect.poll(presentation).toEqual({ opacity: "1", pointerEvents: "auto" });
-
-      if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "active-stream-metadata-revealed.png"),
-        });
-      }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("keeps streamed audio and video metadata pinned without overriding manual scroll", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const baseTs = Date.now() - 100_000;
-    const historyMessages = Array.from({ length: 50 }, (_, index) => ({
-      content: [
-        {
-          text: `Existing transcript message ${index}\n${"Existing streamed history.\n".repeat(5)}`,
-          type: "text",
-        },
-      ],
-      role: index % 2 === 0 ? "user" : "assistant",
-      timestamp: baseTs + index,
-    }));
-    const gateway = await installMockGateway(page, { historyMessages });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByText("Existing transcript message 49", { exact: false }).waitFor({
-        timeout: 10_000,
-      });
-      await waitForChatScrollIdle(page);
-
-      const prompt = "stream a voice note and video";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-      const sendRequest = await gateway.waitForRequest("chat.send");
-      const runId = requireString(
-        requireRecord(sendRequest.params).idempotencyKey,
-        "chat send idempotency key",
-      );
-      const mediaText =
-        "Here is the narrated update.\n" +
-        "MEDIA:https://example.com/voice.ogg\n" +
-        "MEDIA:https://example.com/clip.mp4";
-      await gateway.emitGatewayEvent("chat", {
-        deltaText: mediaText,
-        message: {
-          content: [{ text: mediaText, type: "text" }],
-          role: "assistant",
-          timestamp: Date.now(),
+      // Settled commentary is still part of an active turn while a tool runs.
+      await gateway.emitGatewayEvent("agent", {
+        data: {
+          args: { path: "README.md" },
+          name: "read",
+          phase: "start",
+          toolCallId: "footer-read",
         },
         runId,
+        seq: 1,
         sessionKey: "main",
-        state: "delta",
+        stream: "tool",
+        ts: Date.now(),
       });
+      await page.locator(".chat-working-indicator").waitFor({ state: "visible" });
+      await reveal();
+      expect(await activeGroup.locator(".chat-group-footer").count()).toBe(0);
 
-      const thread = page.locator(".chat-thread");
-      const activeStream = thread.locator(".chat-bubble.streaming");
-      await activeStream.waitFor({ state: "visible", timeout: 10_000 });
-      const stopGenerating = page.getByRole("button", { name: "Stop generating" });
-      await stopGenerating.waitFor({ state: "visible", timeout: 10_000 });
-      const growMedia = async (
-        selector: "audio" | "video",
-        height: number,
-        presentation: "active" | "committed" = "active",
-      ) => {
-        const media = (presentation === "active" ? activeStream : thread).locator(selector);
-        await media.waitFor({ state: "attached", timeout: 10_000 });
-        await waitForChatScrollIdle(page);
-        const scrollHeightBefore = await thread.evaluate((element) => element.scrollHeight);
-        await media.evaluate(
-          (element, { mediaKind, nextHeight }) => {
-            const layoutOwner =
-              mediaKind === "video"
-                ? element.closest<HTMLElement>(".chat-assistant-video-frame")
-                : element.closest<HTMLElement>("openclaw-chat-audio-player");
-            if (!layoutOwner) {
-              throw new Error(`expected assistant ${mediaKind} layout owner`);
-            }
-            layoutOwner.style.display = "block";
-            layoutOwner.style.height = `${nextHeight}px`;
-            layoutOwner.style.minHeight = `${nextHeight}px`;
-            if (mediaKind === "video") {
-              layoutOwner.style.maxHeight = "none";
-              element.style.height = "100%";
-              element.style.maxHeight = "none";
-            }
-            element.dispatchEvent(new Event("loadedmetadata", { bubbles: true }));
-          },
-          { mediaKind: selector, nextHeight: height },
-        );
-        await expect
-          .poll(() => thread.evaluate((element) => element.scrollHeight), { timeout: 10_000 })
-          .toBeGreaterThan(scrollHeightBefore);
-        await waitForChatScrollIdle(page);
-      };
-
-      await growMedia("audio", 320);
-      await stopGenerating.waitFor({ state: "visible", timeout: 10_000 });
+      await gateway.emitChatFinal({ runId, text: "The turn is complete." });
+      await activeGroup.getByText("The turn is complete.", { exact: true }).waitFor();
+      await reveal();
+      const footer = activeGroup.locator(".chat-group-footer");
       await expect
-        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-        .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
-      expect(await page.getByRole("button", { name: "Scroll to latest" }).count()).toBe(0);
-
-      await growMedia("video", 480);
-      await stopGenerating.waitFor({ state: "visible", timeout: 10_000 });
-      await expect
-        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-        .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
-      expect(await page.getByRole("button", { name: "Scroll to latest" }).count()).toBe(0);
-
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "streamed-media-pinned.png"),
-        });
-      }
-
-      await thread.hover();
-      await page.mouse.wheel(0, -600);
-      await expect
-        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-        .toBeGreaterThan(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
-      const scrollToLatest = page.getByRole("button", { name: "Scroll to latest" });
-      await scrollToLatest.waitFor({ state: "visible", timeout: 10_000 });
-      await waitForChatScrollIdle(page);
-      const readingScrollTop = await thread.evaluate((element) => element.scrollTop);
-
-      await growMedia("audio", 720);
-      await stopGenerating.waitFor({ state: "visible", timeout: 10_000 });
-      await expect
-        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-        .toBeGreaterThan(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
-      await expect
-        .poll(
-          async () =>
-            Math.abs((await thread.evaluate((element) => element.scrollTop)) - readingScrollTop),
-          { timeout: 10_000 },
-        )
-        .toBeLessThanOrEqual(1);
-      await scrollToLatest.waitFor({ state: "visible", timeout: 10_000 });
-
-      if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "streamed-media-manual-scroll.png"),
-        });
-      }
-
-      await scrollToLatest.click();
-      await expect
-        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-        .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
-      await scrollToLatest.waitFor({ state: "detached", timeout: 10_000 });
-      await stopGenerating.waitFor({ state: "visible", timeout: 10_000 });
-
-      await gateway.emitChatFinal({ runId, text: mediaText });
-      await activeStream.waitFor({ state: "detached", timeout: 10_000 });
-      await stopGenerating.waitFor({ state: "detached", timeout: 10_000 });
-      await growMedia("video", 800, "committed");
-      await expect
-        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-        .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
-      expect(await scrollToLatest.count()).toBe(0);
+        .poll(() => footer.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+      expect(await footer.locator(".chat-sender-name").textContent()).toBe("OpenClaw");
+      expect(await footer.locator(".chat-group-timestamp").count()).toBe(1);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -539,23 +391,25 @@ suite.define(() => {
           await mkdir(artifactDir, { recursive: true });
           await page.screenshot({ path: path.join(artifactDir, `terminal-partial-${label}.png`) });
         }
-        const alert = page.locator(".chat-run-error");
-        await alert.getByText(errorText).waitFor({ timeout: 10_000 });
-        expect(await alert.locator("button").count()).toBe(0);
+        const alert = page.locator(".chat-error");
+        await alert.locator("summary").getByText(errorText).waitFor({ timeout: 10_000 });
+        expect(await alert.getByRole("button", { name: "Dismiss error" }).count()).toBe(0);
+        expect(await alert.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
         expect(await page.locator(".chat-thread-inner").getByText(errorText).count()).toBe(0);
-        expect(
-          await alert.evaluate((element) =>
-            element.nextElementSibling?.classList.contains("agent-chat__composer-shell"),
-          ),
-        ).toBe(true);
         const [alertBox, composerBox] = await Promise.all([
           alert.boundingBox(),
           page.locator(".agent-chat__composer-shell").boundingBox(),
         ]);
         expect(alertBox).not.toBeNull();
         expect(composerBox).not.toBeNull();
-        expect(Math.abs((alertBox?.x ?? 0) - (composerBox?.x ?? 0))).toBeLessThan(1);
-        expect(Math.abs((alertBox?.width ?? 0) - (composerBox?.width ?? 0))).toBeLessThan(1);
+        expect(
+          Math.abs(
+            (alertBox?.x ?? 0) +
+              (alertBox?.width ?? 0) / 2 -
+              ((composerBox?.x ?? 0) + (composerBox?.width ?? 0) / 2),
+          ),
+        ).toBeLessThan(1);
+        expect(alertBox?.width ?? 0).toBeLessThanOrEqual(composerBox?.width ?? 0);
 
         await page.locator(".agent-chat__composer-combobox textarea").fill("retry after error");
         await page.getByRole("button", { name: "Send message" }).click();

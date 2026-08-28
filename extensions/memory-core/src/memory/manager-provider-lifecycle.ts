@@ -487,7 +487,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     }
     this.activeManagerOperations += 1;
     try {
-      return await run();
+      return await this.withPublishedDatabase(run);
     } finally {
       this.activeManagerOperations -= 1;
       if (this.activeManagerOperations === 0) {

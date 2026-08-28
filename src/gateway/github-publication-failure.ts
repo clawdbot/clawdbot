@@ -18,6 +18,13 @@ export function resolveGitHubPublicationFailure(error: unknown): {
       nextAction: "Open the current session worktree and request publication again.",
     };
   }
+  if (message.includes("transport configuration") || message.includes("replacement metadata")) {
+    return {
+      code: "workspace_changed",
+      nextAction:
+        "Remove the unsupported Git transport or replacement configuration from the session worktree, then retry.",
+    };
+  }
   if (message.includes("workspace") || message.includes("branch changed")) {
     return {
       code: "workspace_changed",

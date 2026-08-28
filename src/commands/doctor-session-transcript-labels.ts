@@ -11,11 +11,11 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import {
   readOnlySqliteTranscriptSessionIds,
-  readOnlySqliteTranscriptSnapshot,
-  resolveTargetSqlitePath,
-} from "./doctor-session-sqlite-readers.js";
+  readOnlySqliteTranscriptRepairSnapshot,
+} from "./doctor-session-sqlite-transcript-readers.js";
 
 const NOTE_TITLE = "Session transcript labels";
 
@@ -213,7 +213,11 @@ export async function noteSessionTranscriptLabelHealth(params: {
       const sessionIds = readOnlySqliteTranscriptSessionIds(sqlitePath);
       for (const sessionId of sessionIds) {
         // Read transcript in read-only mode (detection phase).
-        const readResult = readOnlySqliteTranscriptSnapshot(sqlitePath, sessionId);
+        const readResult = readOnlySqliteTranscriptRepairSnapshot(
+          sqlitePath,
+          sessionId,
+          normalizeLegacyInboundContextLabels,
+        );
         if (!readResult.ok) {
           const detail = formatErrorMessage(readResult.error).replace(/\s+/g, " ").trim();
           note(
@@ -226,12 +230,14 @@ export async function noteSessionTranscriptLabelHealth(params: {
         // Build per-row change list keyed by seq. Parse each row individually so unparseable
         // rows (with corrupted eventJson) don't break the whole session.
         const updates: Array<{ seq: number; eventJson: string }> = [];
+        let hasMalformedRow = false;
         for (const row of readResult.rows) {
           let event: TranscriptEvent;
           try {
             event = JSON.parse(row.eventJson) as TranscriptEvent;
           } catch {
-            // Skip rows with unparseable eventJson (corrupted data).
+            // A malformed sibling cannot produce a valid deferred projection after repair.
+            hasMalformedRow = true;
             continue;
           }
           if (normalizeLegacyInboundContextLabels(event)) {
@@ -249,6 +255,9 @@ export async function noteSessionTranscriptLabelHealth(params: {
         // REPAIR PHASE (if --fix): process immediately, don't buffer.
         if (params.shouldRepair) {
           try {
+            if (hasMalformedRow) {
+              throw new Error(`transcript contains malformed event JSON for ${sessionId}`);
+            }
             runOpenClawAgentWriteTransaction(
               (writeDatabase) => {
                 // Use rows-only guard (tolerant of malformed JSON in sibling rows).

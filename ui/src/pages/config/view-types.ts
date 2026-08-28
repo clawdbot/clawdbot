@@ -10,6 +10,7 @@ import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import type { ChatFollowUpMode, ChatSendShortcut, CatalogOpenTarget } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
+import type { TypefaceId } from "../../app/typography.ts";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import type { ConfigSchemaAnalysis } from "../../components/config-form.ts";
 import type { Locale } from "../../i18n/index.ts";
@@ -81,6 +82,7 @@ export type ConfigProps = {
   embeddedEditor?: boolean;
   /** Control UI rows that belong to the active schema section but are not Gateway config. */
   sectionPrelude?: TemplateResult;
+  showSectionDocs?: boolean;
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
   activeSection: string | null;
@@ -104,6 +106,12 @@ export type ConfigProps = {
   themeModeOverridden: boolean;
   themeModeProvenance: ServerUiPrefProvenance;
   themeModeResetValue: ThemeMode;
+  fontUi: TypefaceId | undefined;
+  fontChat: TypefaceId | undefined;
+  fontUiProvenance: ServerUiPrefProvenance;
+  fontChatProvenance: ServerUiPrefProvenance;
+  setFontUi: (font: TypefaceId | undefined) => void;
+  setFontChat: (font: TypefaceId | undefined) => void;
   accent: string | undefined;
   accentOverridden: boolean;
   accentProvenance: ServerUiPrefProvenance;
@@ -115,11 +123,8 @@ export type ConfigProps = {
   onLocaleChange: (locale: Locale | undefined) => void;
   resetLocale: () => void;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
-  resetTheme: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
-  resetThemeMode: () => void;
-  setAccent: (accent: string) => void;
-  resetAccent: () => void;
+  setAccent: (accent: string | undefined) => void;
   hasCustomTheme: boolean;
   customThemeLabel: string | null;
   customThemeSourceUrl: string | null;
@@ -135,7 +140,6 @@ export type ConfigProps = {
   textScale: number;
   textScaleOverridden: boolean;
   setTextScale: (value: number) => void;
-  resetTextScale: () => void;
   sidebarLiveActivity: boolean;
   setSidebarLiveActivity: (enabled: boolean) => void;
   hiddenSessionCatalogIds: ReadonlySet<string>;

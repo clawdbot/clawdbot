@@ -12,6 +12,8 @@ import { inspectNodeWorkerProcessIdentity } from "./node-worker-process-identity
 
 type NodeWorkerContainerOwner = { gatewayNamespace: string; launchId: string };
 
+export class NodeWorkerContainerContextMismatchError extends Error {}
+
 /** Owns exact container authority and startup cleanup independently of client PIDs. */
 export class NodeWorkerContainerLifecycle {
   constructor(
@@ -27,7 +29,7 @@ export class NodeWorkerContainerLifecycle {
         (receipt.container.engine !== this.engine.id ||
           receipt.container.engineTarget !== this.engine.target)
       ) {
-        throw new Error(
+        throw new NodeWorkerContainerContextMismatchError(
           `node worker launch ${receipt.launchId} belongs to a different ${receipt.container.engine} engine or daemon; restore its original engine context before enabling worker hosting`,
         );
       }
@@ -82,7 +84,7 @@ export class NodeWorkerContainerLifecycle {
 
   private requireMatchingEngine(container: NodeWorkerContainerIdentity): NodeWorkerContainerEngine {
     if (container.engine !== this.engine.id || container.engineTarget !== this.engine.target) {
-      throw new Error(
+      throw new NodeWorkerContainerContextMismatchError(
         `node worker container belongs to a different ${container.engine} engine or daemon context`,
       );
     }

@@ -28,6 +28,14 @@ import {
   resolveTsdownCleanOutputRoots,
   runTsdownBuildInvocation,
 } from "../../scripts/tsdown-build.mts";
+import {
+  isProcessAlive,
+  waitForChildClose,
+  waitForDead,
+  waitForFile,
+  waitForPidFile,
+} from "../helpers/process-wait.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -91,75 +99,6 @@ async function expectPathMissing(targetPath: string) {
     throw new Error("expected missing path error");
   }
   expect(Reflect.get(statError, "code")).toBe("ENOENT");
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (fs.existsSync(filePath)) {
-      return;
-    }
-    await sleep(5);
-  }
-  throw new Error(`timed out waiting for ${filePath}`);
-}
-
-// Pid files are written with plain writeFileSync, so an existence poll can
-// observe the open-truncate 0-byte window and parse NaN (the #109140 flake
-// class). Wait until the content parses to a real pid, not just for the file.
-async function waitForPidFile(filePath: string, timeoutMs: number): Promise<number> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (fs.existsSync(filePath)) {
-      const pid = Number.parseInt(fs.readFileSync(filePath, "utf8"), 10);
-      if (Number.isInteger(pid) && pid > 0) {
-        return pid;
-      }
-    }
-    await sleep(5);
-  }
-  throw new Error(`timed out waiting for pid in ${filePath}`);
-}
-
-async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!isProcessAlive(pid)) {
-      return;
-    }
-    await sleep(5);
-  }
-  throw new Error(`timed out waiting for pid ${pid} to exit`);
-}
-
-function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = 5_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
 }
 
 describe("resolveTsdownBuildInvocation", () => {
@@ -1853,50 +1792,126 @@ describe("resolveTsdownBuildInvocation", () => {
     await expectPathMissing(path.join(distRuntimeDir, "heartbeat-runner.runtime-fspOEj_1.js"));
   });
 
-  it("cleans tsdown output roots before using tsdown --no-clean", async () => {
-    const rootDir = createTempDir("openclaw-tsdown-clean-");
-    const distFile = path.join(rootDir, "dist", "stale.js");
-    const pluginGeneratedFile = path.join(rootDir, "dist", "extensions", "telegram", "index.js");
-    const distRuntimeFile = path.join(rootDir, "dist-runtime", "stale.js");
-    const agentCorePackageFile = path.join(rootDir, "packages", "agent-core", "dist", "stale.js");
-    const netPolicyPackageFile = path.join(rootDir, "packages", "net-policy", "dist", "stale.js");
-    const pluginSdkPackageFile = path.join(rootDir, "packages", "plugin-sdk", "dist", "keep.js");
-    const packageSourceFile = path.join(rootDir, "packages", "agent-core", "src", "keep.ts");
-    const unrelatedFile = path.join(rootDir, "tmp", "keep.js");
-    await fsPromises.mkdir(path.dirname(distFile), { recursive: true });
-    await fsPromises.mkdir(path.dirname(pluginGeneratedFile), { recursive: true });
-    await fsPromises.mkdir(path.dirname(distRuntimeFile), { recursive: true });
-    await fsPromises.mkdir(path.dirname(agentCorePackageFile), { recursive: true });
-    await fsPromises.mkdir(path.dirname(netPolicyPackageFile), { recursive: true });
-    await fsPromises.mkdir(path.dirname(pluginSdkPackageFile), { recursive: true });
-    await fsPromises.mkdir(path.dirname(packageSourceFile), { recursive: true });
-    await fsPromises.mkdir(path.dirname(unrelatedFile), { recursive: true });
-    await fsPromises.writeFile(distFile, "stale\n");
-    await fsPromises.writeFile(pluginGeneratedFile, "generated\n");
-    await fsPromises.writeFile(distRuntimeFile, "stale\n");
-    await fsPromises.writeFile(agentCorePackageFile, "stale\n");
-    await fsPromises.writeFile(netPolicyPackageFile, "stale\n");
-    await fsPromises.writeFile(pluginSdkPackageFile, "keep\n");
-    await fsPromises.writeFile(packageSourceFile, "keep\n");
-    await fsPromises.writeFile(unrelatedFile, "keep\n");
+  it.each([
+    { label: "default build", args: [], skipDts: "0", preserveMetadata: "0" },
+    {
+      label: "source launcher --no-clean",
+      args: ["--no-clean"],
+      skipDts: "1",
+      preserveMetadata: "0",
+    },
+    { label: "build-all startup metadata", args: [], skipDts: "0", preserveMetadata: "1" },
+    { label: "cached build-all", args: [], skipDts: "1", preserveMetadata: "1" },
+  ])(
+    "preserves separately owned outputs during $label cleanup",
+    async ({ args, skipDts, preserveMetadata }) => {
+      const rootDir = createTempDir("openclaw-tsdown-clean-");
+      const retainedFiles = [
+        "dist/control-ui/index.html",
+        "dist/control-ui/sw.js",
+        "dist/control-ui/asset-manifest.json",
+        "dist/control-ui/assets/index-AbCd1234.js",
+        "dist/control-ui/assets/index-AbCd1234.js.map",
+        "dist/control-ui/assets/index-AbCd1234.js.br",
+        "dist/control-ui/assets/nested/styles-AbCd1234.css",
+        "packages/plugin-sdk/dist/keep.js",
+        "packages/agent-core/src/keep.ts",
+        "tmp/keep.js",
+      ];
+      const declarationFiles = [
+        "dist/plugin-sdk/core.d.ts",
+        "dist/plugin-sdk/nested/types.d.cts",
+        "dist-runtime/extensions/demo/index.d.ts",
+        "packages/media-understanding-common/dist/index.d.mts",
+        "packages/media-understanding-common/dist/nested/types.d.ts",
+      ];
+      const metadataFile = "dist/cli-startup-metadata.json";
+      const staleFiles = [
+        "dist/entry.js",
+        "dist/stale-AbCd1234.js",
+        "dist/stale-AbCd1234.js.map",
+        "dist/plugin-sdk/core.js",
+        "dist/nested/stale.js",
+        "dist/nested/stale.js.map",
+        "dist/control-ui-old/index.html",
+        "dist/extensions/demo/src/index.js",
+        "dist/extensions/demo/node_modules/staged/index.js",
+        "dist/extensions/node_modules/openclaw/plugin-sdk/core.js",
+        "dist-runtime/stale.js",
+        "dist-runtime/stale.js.map",
+        "dist-runtime/control-ui/index.html",
+        "dist-runtime/extensions/demo/index.js",
+        "dist-runtime/extensions/demo/node_modules/staged/index.js",
+        "packages/agent-core/dist/stale.js",
+        "packages/net-policy/dist/stale.js",
+        "packages/media-understanding-common/dist/index.mjs",
+        "packages/media-understanding-common/dist/chunks/old.js",
+      ];
+      for (const relativePath of [
+        ...retainedFiles,
+        ...declarationFiles,
+        metadataFile,
+        ...staleFiles,
+      ]) {
+        const filePath = path.join(rootDir, relativePath);
+        await fsPromises.mkdir(path.dirname(filePath), { recursive: true });
+        await fsPromises.writeFile(filePath, `sentinel:${relativePath}\n`);
+      }
 
-    const outputRoots = listTsdownOutputRoots();
-    expect(outputRoots).toEqual(
-      expect.arrayContaining(["packages/agent-core/dist", "packages/net-policy/dist"]),
-    );
-    expect(outputRoots).not.toContain(path.join("packages", "plugin-sdk", "dist"));
-
-    cleanTsdownOutputRoots({ cwd: rootDir });
-
-    await expectPathMissing(distFile);
-    await expectPathMissing(pluginGeneratedFile);
-    await expectPathMissing(path.join(rootDir, "dist-runtime"));
-    await expectPathMissing(path.join(rootDir, "packages", "agent-core", "dist"));
-    await expectPathMissing(path.join(rootDir, "packages", "net-policy", "dist"));
-    await expect(fsPromises.readFile(pluginSdkPackageFile, "utf8")).resolves.toBe("keep\n");
-    await expect(fsPromises.readFile(packageSourceFile, "utf8")).resolves.toBe("keep\n");
-    await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
-  });
+      const scriptUrl = pathToFileURL(path.resolve("scripts/tsdown-build.mts")).href;
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          import.meta.resolve("tsx"),
+          "--input-type=module",
+          "-e",
+          `import { prepareTsdownBuildExecution } from ${JSON.stringify(scriptUrl)};
+       const plan = prepareTsdownBuildExecution(${JSON.stringify({ args, ...NO_MEMORY_LIMIT })});
+       if (!plan) throw new Error("fixture build was not admitted");`,
+        ],
+        {
+          cwd: rootDir,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: skipDts,
+            OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: preserveMetadata,
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      for (const relativePath of staleFiles) {
+        await expectPathMissing(path.join(rootDir, relativePath));
+      }
+      for (const relativePath of [
+        "dist/extensions/demo/node_modules",
+        "dist/extensions/node_modules",
+        "dist-runtime/extensions/demo/node_modules",
+        "packages/agent-core/dist",
+        "packages/net-policy/dist",
+      ]) {
+        await expectPathMissing(path.join(rootDir, relativePath));
+      }
+      for (const [files, preserve] of [
+        [declarationFiles, skipDts === "1"],
+        [[metadataFile], preserveMetadata === "1"],
+      ] as const) {
+        for (const relativePath of files) {
+          if (preserve) {
+            retainedFiles.push(relativePath);
+          } else {
+            await expectPathMissing(path.join(rootDir, relativePath));
+          }
+        }
+      }
+      for (const relativePath of retainedFiles) {
+        await expect(fsPromises.readFile(path.join(rootDir, relativePath), "utf8")).resolves.toBe(
+          `sentinel:${relativePath}\n`,
+        );
+      }
+    },
+  );
 
   it("cleans only selected tsdown output roots", async () => {
     const rootDir = createTempDir("openclaw-tsdown-selected-clean-");
@@ -1968,39 +1983,6 @@ describe("resolveTsdownBuildInvocation", () => {
     } finally {
       rmSync.mockRestore();
     }
-  });
-
-  it("removes CLI startup metadata during default tsdown clean", async () => {
-    const rootDir = createTempDir("openclaw-tsdown-clean-metadata-default-");
-    const metadataFile = path.join(rootDir, "dist", "cli-startup-metadata.json");
-    await fsPromises.mkdir(path.dirname(metadataFile), { recursive: true });
-    await fsPromises.writeFile(metadataFile, '{"generatedBy":"test"}\n');
-
-    cleanTsdownOutputRoots({ cwd: rootDir });
-
-    await expectPathMissing(metadataFile);
-  });
-
-  it("preserves CLI startup metadata across opted-in build-all tsdown clean", async () => {
-    const rootDir = createTempDir("openclaw-tsdown-clean-metadata-");
-    const metadataFile = path.join(rootDir, "dist", "cli-startup-metadata.json");
-    const staleFile = path.join(rootDir, "dist", "stale.js");
-    const nestedStaleFile = path.join(rootDir, "dist", "nested", "stale.js");
-    await fsPromises.mkdir(path.dirname(nestedStaleFile), { recursive: true });
-    await fsPromises.writeFile(metadataFile, '{"generatedBy":"test"}\n');
-    await fsPromises.writeFile(staleFile, "stale\n");
-    await fsPromises.writeFile(nestedStaleFile, "stale\n");
-
-    cleanTsdownOutputRoots({
-      cwd: rootDir,
-      env: { OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1" },
-    });
-
-    await expect(fsPromises.readFile(metadataFile, "utf8")).resolves.toBe(
-      '{"generatedBy":"test"}\n',
-    );
-    await expectPathMissing(staleFile);
-    await expectPathMissing(nestedStaleFile);
   });
 
   it("refuses a symlinked output root with preserved children and leaves the target unchanged", async () => {
@@ -2146,61 +2128,6 @@ describe("resolveTsdownBuildInvocation", () => {
     await expect(fsPromises.readFile(markerFile, "utf8")).resolves.toBe("keep\n");
   });
 
-  it("preserves existing package declarations when tsdown DTS output is skipped", async () => {
-    const rootDir = createTempDir("openclaw-tsdown-clean-skip-dts-");
-    const declarationFile = path.join(
-      rootDir,
-      "packages",
-      "media-understanding-common",
-      "dist",
-      "index.d.mts",
-    );
-    const nestedDeclarationFile = path.join(
-      rootDir,
-      "packages",
-      "media-understanding-common",
-      "dist",
-      "nested",
-      "types.d.ts",
-    );
-    const staleJsFile = path.join(
-      rootDir,
-      "packages",
-      "media-understanding-common",
-      "dist",
-      "index.mjs",
-    );
-    const nestedStaleFile = path.join(
-      rootDir,
-      "packages",
-      "media-understanding-common",
-      "dist",
-      "chunks",
-      "old.js",
-    );
-    const agentCorePackageFile = path.join(rootDir, "packages", "agent-core", "dist", "stale.js");
-    await fsPromises.mkdir(path.dirname(declarationFile), { recursive: true });
-    await fsPromises.mkdir(path.dirname(nestedDeclarationFile), { recursive: true });
-    await fsPromises.mkdir(path.dirname(nestedStaleFile), { recursive: true });
-    await fsPromises.mkdir(path.dirname(agentCorePackageFile), { recursive: true });
-    await fsPromises.writeFile(declarationFile, "export {};\n");
-    await fsPromises.writeFile(nestedDeclarationFile, "export {};\n");
-    await fsPromises.writeFile(staleJsFile, "stale\n");
-    await fsPromises.writeFile(nestedStaleFile, "old\n");
-    await fsPromises.writeFile(agentCorePackageFile, "stale\n");
-
-    cleanTsdownOutputRoots({
-      cwd: rootDir,
-      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-    });
-
-    await expect(fsPromises.readFile(declarationFile, "utf8")).resolves.toBe("export {};\n");
-    await expect(fsPromises.readFile(nestedDeclarationFile, "utf8")).resolves.toBe("export {};\n");
-    await expectPathMissing(staleJsFile);
-    await expectPathMissing(nestedStaleFile);
-    await expectPathMissing(path.join(rootDir, "packages", "agent-core", "dist"));
-  });
-
   it("prunes untracked generated declaration files that shadow source entries", async () => {
     const rootDir = createTempDir("openclaw-tsdown-source-dts-");
     const signalDir = path.join(rootDir, "extensions", "signal");
@@ -2273,6 +2200,31 @@ describe("runTsdownBuildInvocation", () => {
       },
       chunks,
     };
+  }
+
+  function startTimeoutFixture(parentScript: string, output: ReturnType<typeof createWriteSink>) {
+    return startProcessWatchdogFixture(() =>
+      runTsdownBuildInvocation(
+        {
+          command: process.execPath,
+          args: ["-e", parentScript],
+          options: {
+            stdio: ["ignore", "pipe", "pipe"],
+            shell: false,
+            env: process.env,
+          },
+        },
+        {
+          stdout: output.sink,
+          stderr: output.sink,
+          env: {
+            ...process.env,
+            OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
+            OPENCLAW_TSDOWN_TIMEOUT_MS: "250",
+          },
+        },
+      ),
+    );
   }
 
   it("streams child output while preserving diagnostics for post-run checks", async () => {
@@ -2382,50 +2334,40 @@ describe("runTsdownBuildInvocation", () => {
     async () => {
       const rootDir = createTempDir("openclaw-tsdown-timeout-");
       const childPidPath = path.join(rootDir, "child.pid");
-      const timeoutMs = 250;
-      let childPid: number | undefined;
-      const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
-      const parentScript = [
-        "const { spawn } = require('node:child_process');",
+      const termPath = path.join(rootDir, "child.term");
+      const childScript = [
         "const fs = require('node:fs');",
-        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
-        "process.on('SIGTERM', () => process.exit(0));",
+        `process.on('SIGTERM', () => fs.writeFileSync(${JSON.stringify(termPath)}, 'SIGTERM'));`,
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
         "setInterval(() => {}, 1000);",
       ].join("");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        "process.on('SIGTERM', () => process.exit(0));",
+        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const output = createWriteSink();
+      const run = startTimeoutFixture(parentScript, output);
+      let childPid: number | undefined;
 
       try {
-        const output = createWriteSink();
-        const runPromise = runTsdownBuildInvocation(
-          {
-            command: process.execPath,
-            args: ["-e", parentScript],
-            options: {
-              stdio: ["ignore", "pipe", "pipe"],
-              shell: false,
-              env: process.env,
-            },
-          },
-          {
-            stdout: output.sink,
-            stderr: output.sink,
-            env: {
-              ...process.env,
-              OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
-              OPENCLAW_TSDOWN_TIMEOUT_MS: String(timeoutMs),
-            },
-          },
-        );
-
-        childPid = await waitForPidFile(childPidPath, timeoutMs);
+        // The descendant publishes its PID only after installing its SIGTERM handler.
+        childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
-        const result = await runPromise;
+        run.releaseTimeout();
+        const result = await run.runPromise;
 
-        expect(result.timedOut).toBe(true);
+        expect(result).toMatchObject({ timedOut: true, status: 0, signal: null, error: null });
+        expect(fs.readFileSync(termPath, "utf8")).toBe("SIGTERM");
+        expect(output.chunks.join("")).toContain("forcing SIGKILL");
         await waitForDead(childPid, 2_000);
       } finally {
+        run.releaseTimeout();
+        await run.runPromise;
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
+          await waitForDead(childPid, 2_000);
         }
       }
     },
@@ -2435,64 +2377,47 @@ describe("runTsdownBuildInvocation", () => {
     "preserves timeout grace when descendant processes exit cleanly",
     async () => {
       const rootDir = createTempDir("openclaw-tsdown-timeout-clean-");
-      const readyPath = path.join(rootDir, "child.ready");
       const cleanupPath = path.join(rootDir, "child.cleanup");
       const childPidPath = path.join(rootDir, "child.pid");
       const childScript = [
         "const fs = require('node:fs');",
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
         "process.on('SIGTERM', () => {",
         "  setTimeout(() => {",
         `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean');`,
         "    process.exit(0);",
         "  }, 50);",
         "});",
-        `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
         "setInterval(() => {}, 1000);",
       ].join("");
       const parentScript = [
         "const { spawn } = require('node:child_process');",
-        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
         "process.on('SIGTERM', () => process.exit(0));",
+        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
         "setInterval(() => {}, 1000);",
       ].join("");
-      let childPid = 0;
+      const output = createWriteSink();
+      const run = startTimeoutFixture(parentScript, output);
+      let childPid: number | undefined;
 
       try {
-        const output = createWriteSink();
-        const startedAt = Date.now();
-        const runPromise = runTsdownBuildInvocation(
-          {
-            command: process.execPath,
-            args: ["-e", parentScript],
-            options: {
-              stdio: ["ignore", "pipe", "pipe"],
-              shell: false,
-              env: process.env,
-            },
-          },
-          {
-            stdout: output.sink,
-            stderr: output.sink,
-            env: {
-              ...process.env,
-              OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
-              OPENCLAW_TSDOWN_TIMEOUT_MS: "250",
-            },
-          },
-        );
-
-        await waitForFile(readyPath, 2_000);
+        // The descendant publishes its PID only after installing its SIGTERM handler.
         childPid = await waitForPidFile(childPidPath, 2_000);
-        const result = await runPromise;
+        const startedAt = Date.now();
+        run.releaseTimeout();
+        const result = await run.runPromise;
 
-        expect(result.timedOut).toBe(true);
+        expect(result).toMatchObject({ timedOut: true, status: 0, signal: null, error: null });
         expect(fs.readFileSync(cleanupPath, "utf8")).toBe("clean");
+        expect(output.chunks.join("")).not.toContain("forcing SIGKILL");
         expect(Date.now() - startedAt).toBeLessThan(900);
         await waitForDead(childPid, 2_000);
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
+        run.releaseTimeout();
+        await run.runPromise;
+        if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
+          await waitForDead(childPid, 2_000);
         }
       }
     },

@@ -113,7 +113,7 @@ reloads on relevant source, config, and bundled-plugin metadata changes. If the
 watched Gateway exits during startup, `gateway:watch` runs
 `openclaw doctor --fix --non-interactive` once and retries; set
 `OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0` to disable that dev-only repair pass.
-`pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` while developing the Control UI.
+TypeScript rebuilds triggered by `pnpm openclaw ...` or `pnpm gateway:watch` preserve existing `dist/control-ui` assets but do not rebuild them. Run `pnpm ui:build` once and again after `ui/` changes, or use `pnpm ui:dev` while developing the Control UI.
 
 ### 2) Point the macOS app at your running Gateway
 
@@ -136,7 +136,7 @@ openclaw health
 - **Wrong port:** Gateway WS defaults to `ws://127.0.0.1:18789`; keep app + CLI on the same port.
 - **Where state lives:**
   - Channel/provider state: `~/.openclaw/credentials/`
-  - Model auth profiles: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+  - Model auth profiles: SQLite auth stores (shared: `~/.openclaw/state/openclaw.sqlite`; agent-local: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`)
   - Sessions and transcripts: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
   - Legacy/archive session artifacts: `~/.openclaw/agents/<agentId>/sessions/`
   - Logs: `/tmp/openclaw/`
@@ -152,7 +152,7 @@ Use this when debugging auth or deciding what to back up:
 - **Pairing allowlists**:
   - `~/.openclaw/credentials/<channel>-allowFrom.json` (default account)
   - `~/.openclaw/credentials/<channel>-<accountId>-allowFrom.json` (non-default accounts)
-- **Model auth profiles**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+- **Model auth profiles**: shared and agent-local SQLite auth stores; see [Auth credential semantics](/auth-credential-semantics#agent-copy-portability) for inheritance and legacy shared-store relocation
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
   More detail: [Security](/gateway/security#credential-storage-map).

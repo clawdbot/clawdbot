@@ -50,11 +50,11 @@ const MACOS_SCRIPT_SCOPE_RE =
 const WORKSPACE_RSYNC_RECEIVER_SCOPE_RE =
   /^src\/(?:shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
-  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
+  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
 const IOS_SCREENSHOT_APP_SCOPE_RE =
   /^(?:apps\/ios\/|apps\/shared\/OpenClawKit\/|apps\/swabble\/|Swabble\/)/;
 const IOS_SCREENSHOT_SCRIPT_SCOPE_RE =
-  /^scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
+  /^scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
@@ -62,7 +62,7 @@ const WINDOWS_SQLITE_SCOPE_RE = /^src\/(?:state\/|.*sqlite.*\.ts$)/;
 const WINDOWS_FILE_URL_SCOPE_RE =
   /^(?:src\/agents\/tools\/(?:media-tool-file-url\.windows\.test|media-tool-shared(?:\.test)?|pdf-tool(?:\.test)?)|src\/auto-reply\/(?:reply\/stage-sandbox-media|reply\.triggers\.trigger-handling\.stages-inbound-media-into-sandbox-workspace\.test)|src\/media\/(?:local-media-path(?:\.windows\.test)?|local-roots(?:\.test)?|web-media(?:\.file-url\.windows\.test)?)|src\/channels\/inbound-event\/media(?:\.test)?|src\/gateway\/managed-image-attachments(?:\.test)?|extensions\/msteams\/src\/(?:media-helpers|messenger)(?:\.test)?)\.ts$/;
 const WINDOWS_SCOPE_RE =
-  /^(extensions\/mxc\/|src\/agents\/(?:bash-tools\.exec-script-(?:preflight|target)|bash-tools\.exec\.script-preflight\.test)\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive(?:\.worker(?:\.test)?)?|store\.session-lifecycle-mutation\.test)\.ts$|src\/process\/|src\/infra\/(?:(?:advertised-lan-host|exec-allowlist-pattern|fs-safe-remove)(?:\.windows)?(?:\.test)?|ports(?:-inspect|\.test)|ssh-client(?:\.windows\.test)?|update-managed-service-handoff(?:-(?:command|lifecycle)\.test)?|windows-install-roots)\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|src\/test-utils\/openclaw-test-state(?:\.test)?\.ts$|scripts\/(?:android-(?:app-i18n|pin-version)\.ts|ci-run-timings\.mjs|e2e\/lib\/package-compat\.mjs|generate-bundled-channel-config-metadata\.ts|install\.ps1|openclaw-cross-os-release-checks\.ts|plan-release-workflow-matrix\.mjs|run-additional-boundary-checks\.mts|verify-docker-attestations\.mjs|github\/run-openclaw-cross-os-release-checks\.sh|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|mts|js)|lib\/(?:direct-run\.(?:mjs|mts)|format-generated-module\.mts|tsx-cli-shim\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:direct-run-entrypoints|format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
+  /^(extensions\/mxc\/|src\/agents\/(?:bash-tools\.exec-script-(?:preflight|target)|bash-tools\.exec\.script-preflight\.test)\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive(?:\.worker(?:\.test)?)?|store\.session-lifecycle-mutation\.test)\.ts$|src\/process\/|src\/infra\/(?:(?:advertised-lan-host|exec-allowlist-pattern|fs-safe-remove)(?:\.windows)?(?:\.test)?|ports(?:-inspect|\.test)|ssh-client(?:\.windows\.test)?|update-managed-service-handoff(?:-(?:command|lifecycle)\.test)?|windows-install-roots)\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|src\/test-utils\/openclaw-test-state(?:\.test)?\.ts$|scripts\/(?:android-(?:app-i18n|pin-version)\.ts|ci-run-timings\.mjs|e2e\/lib\/package-compat\.mjs|generate-bundled-channel-config-metadata\.ts|install\.ps1|openclaw-cross-os-release-checks\.ts|plan-release-workflow-matrix\.mjs|run-additional-boundary-checks\.mts|verify-docker-attestations\.mjs|github\/run-openclaw-cross-os-release-checks\.sh|tsx\.mjs|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|mts|js)|lib\/(?:direct-run\.(?:mjs|mts)|format-generated-module\.mts|tsx-cli-shim\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:direct-run-entrypoints|format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
 const WINDOWS_TEST_SCOPE_RE =
   /^(extensions\/mxc\/test\/(?:mxc-backend|sandbox-policy-loader)\.test\.ts$|src\/agents\/bash-tools\.exec\.script-preflight\.test\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive\.worker|store\.session-lifecycle-mutation)\.test\.ts$|src\/process\/(?:exec\.windows|supervisor\/supervisor\.anchored-shell\.real|terminal-pty|windows-command)\.test\.ts$|src\/infra\/(?:advertised-lan-host(?:\.windows)?|exec-allowlist-pattern|fs-safe-remove|ports|ssh-client\.windows|update-managed-service-handoff-(?:command|lifecycle)|windows-install-roots)\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|src\/state\/openclaw-database-paths\.windows\.test\.ts$|src\/test-utils\/openclaw-test-state\.test\.ts$|test\/scripts\/(?:direct-run-entrypoints|format-generated-module|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
 const WINDOWS_SECRETREF_SCOPE_RE =
@@ -85,8 +85,14 @@ const WINDOWS_AGENT_HOME_PATH_SCOPE_RE =
   /^src\/(?:infra\/home-dir(?:\.test)?|agents\/(?:agent-tools\.read(?:\.host-operations|\.windows)?\.test|agent-tools\.read|sessions\/tools\/path-utils(?:\.test)?))\.ts$/;
 const WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE =
   /^(?:packages\/memory-host-sdk\/src\/host\/(?:(?:internal|read-file)(?:\.test)?|explicit-extra-markdown)|extensions\/memory-core\/src\/(?:cli-runtime-common|memory-extra-file-path\.windows\.test))\.ts$/;
+const WINDOWS_WORKSPACE_QUIESCENCE_SCOPE_RE =
+  /^src\/gateway\/worker-environments\/workspace-quiescence(?:-scripts|(?:\.windows)?\.test)?\.ts$/;
+const WINDOWS_WORKER_BUNDLE_SCOPE_RE =
+  /^src\/(?:shared\/worker-bundle-(?:archive|hash)(?:\.test)?|gateway\/worker-environments\/bundle(?:-staging)?(?:\.test)?|node-host\/node-worker-bundle-installer(?:\.test)?)\.ts$/;
+const WINDOWS_WORKER_WORKSPACE_SCOPE_RE =
+  /^src\/(?:node-host\/node-worker-transfer-client(?:\.test)?|gateway\/worker-environments\/(?:node-worker-tunnel(?:\.test)?|workspace-sync-(?:scripts|manifest\.test)))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
-  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:catalog|config|raw-copy|sync-plan)\.ts)$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:(?:catalog|config|raw-copy|sync-plan)\.ts|config\.json))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 const CONTROL_UI_RAW_COPY_SOURCE_RE = /^ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?$/;
 const CONTROL_UI_HARD_GENERATED_I18N_RE =
   /^ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl))$/;
@@ -97,7 +103,7 @@ class NativeGeneratedArtifactsMixedError extends Error {}
 const CHROMIUM_UI_TEST_SCOPE_RE =
   /^(ui\/|extensions\/browser\/chrome-extension\/|test\/vitest\/vitest\.(?:shared|ui-e2e)\.config\.ts$|scripts\/ensure-playwright-chromium\.mts$|package\.json$|\.github\/workflows\/ci\.yml$)/;
 const NATIVE_I18N_SCOPE_RE =
-  /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
+  /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-(?:app-i18n|i18n-locales))\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
 // Android base resources are co-owned: source PRs edit their English content,
 // while the generator rewrites managed sections. Treat them as generated only
 // alongside a hard-generated artifact so neither ownership path blocks the other.
@@ -201,7 +207,10 @@ export function detectChangedScope(changedPaths) {
         WINDOWS_AGENT_HOME_PATH_SCOPE_RE.test(path) ||
         WINDOWS_CHILD_ENV_SCOPE_RE.test(path) ||
         WINDOWS_NODE_HOST_EXECUTABLE_SCOPE_RE.test(path) ||
-        WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE.test(path)) &&
+        WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE.test(path) ||
+        WINDOWS_WORKSPACE_QUIESCENCE_SCOPE_RE.test(path) ||
+        WINDOWS_WORKER_BUNDLE_SCOPE_RE.test(path) ||
+        WINDOWS_WORKER_WORKSPACE_SCOPE_RE.test(path)) &&
       (!facts.isTestOnly ||
         WINDOWS_TEST_SCOPE_RE.test(path) ||
         WINDOWS_FILE_URL_SCOPE_RE.test(path) ||
@@ -213,7 +222,10 @@ export function detectChangedScope(changedPaths) {
         WINDOWS_AGENT_HOME_PATH_SCOPE_RE.test(path) ||
         WINDOWS_CHILD_ENV_SCOPE_RE.test(path) ||
         WINDOWS_NODE_HOST_EXECUTABLE_SCOPE_RE.test(path) ||
-        WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE.test(path))
+        WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE.test(path) ||
+        WINDOWS_WORKSPACE_QUIESCENCE_SCOPE_RE.test(path) ||
+        WINDOWS_WORKER_BUNDLE_SCOPE_RE.test(path) ||
+        WINDOWS_WORKER_WORKSPACE_SCOPE_RE.test(path))
     ) {
       runWindows = true;
     }

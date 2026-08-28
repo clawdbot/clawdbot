@@ -35,7 +35,7 @@ import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
-import { resolveMessageReplyText } from "./chat-message-markdown.ts";
+import { resolveMessageDisplayMarkdown, resolveMessageReplyText } from "./chat-message-markdown.ts";
 import {
   getChatMediaRenderVersion,
   renderActivityGroup,
@@ -53,7 +53,8 @@ import {
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
-import type { ChatTranscriptSession, TranscriptRow } from "./chat-transcript-controller.ts";
+import type { ChatTranscriptSession } from "./chat-transcript-controller.ts";
+import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
@@ -73,17 +74,18 @@ type ChatTranscriptProjection = {
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 
 type LoadedReplySource = {
-  rowKey: string;
-  preview: MessageReplyTarget & { sourceMessageId: string };
+  message: unknown;
+  messageId: string;
+  senderLabel: string;
 };
 
 function projectResolvedReplyPreview(
   message: unknown,
   replyToId: string,
   props: Pick<ChatThreadProps, "assistantName" | "userAvatar" | "userId" | "userName">,
-): LoadedReplySource["preview"] | undefined {
+): (MessageReplyTarget & { sourceMessageId: string }) | undefined {
   const normalized = normalizeMessage(message);
-  const text = resolveMessageReplyText(message);
+  const text = resolveMessageDisplayMarkdown(message, normalized);
   if (!text) {
     return undefined;
   }
@@ -267,14 +269,26 @@ export function projectChatTranscript(
   >();
   const turnRecapByGroupKey = new Map<string, TurnRecap>();
   const loadedReplySources = new Map<string, LoadedReplySource>();
-  const resolvedReplyPreviews = new Map<string, LoadedReplySource["preview"] | undefined>();
+  const messageRowKeysById = new Map<string, string>();
+  const resolvedReplyPreviews = new Map<
+    string,
+    (MessageReplyTarget & { sourceMessageId: string }) | undefined
+  >();
   const resolveReplyPreview = (replyToId: string) => {
-    const loaded = loadedReplySources.get(replyToId)?.preview;
-    if (loaded) {
-      return loaded;
-    }
     if (resolvedReplyPreviews.has(replyToId)) {
       return resolvedReplyPreviews.get(replyToId);
+    }
+    const loaded = loadedReplySources.get(replyToId);
+    const loadedText = loaded ? resolveMessageReplyText(loaded.message) : undefined;
+    if (loaded && loadedText) {
+      const preview = {
+        messageId: loaded.messageId,
+        sourceMessageId: replyToId,
+        senderLabel: loaded.senderLabel,
+        text: loadedText,
+      };
+      resolvedReplyPreviews.set(replyToId, preview);
+      return preview;
     }
     const message = props.replyMessageAccess?.read(replyToId);
     const preview = message ? projectResolvedReplyPreview(message, replyToId, props) : undefined;
@@ -291,11 +305,12 @@ export function projectChatTranscript(
     onRequestUpdate: requestUpdate,
     resourceBasePath: props.resourceBasePath,
     localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
+    connectionEpoch: props.connectionEpoch,
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
     resolveArtifactDownload: props.resolveArtifactDownload,
-    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
     onRequestOpenImage: props.onRequestOpenImage,
     onOpenImage: props.onOpenImage,
+    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
     canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
@@ -341,6 +356,7 @@ export function projectChatTranscript(
       userId: props.userId ?? null,
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
+      onRetryQueuedMessage: props.onRetryQueuedMessage,
       personActivity: props.personActivity,
       showAvatarGutter: !isDirectThread,
       contextWindow: threadContextWindow,
@@ -412,7 +428,7 @@ export function projectChatTranscript(
       return renderStreamGroup(item.parts, {
         ...streamGroupOptions,
         questionPrompts,
-        startupPhase: props.startupStatus?.phase,
+        startupLabel: props.startupLabel,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
       });
@@ -443,7 +459,7 @@ export function projectChatTranscript(
         streamOptions: {
           ...streamGroupOptions,
           questionPrompts,
-          startupPhase: props.startupStatus?.phase,
+          startupLabel: props.startupLabel,
           waitingApproval: props.waitingApproval,
           runOutputTokens: props.runOutputTokens,
         },
@@ -513,7 +529,7 @@ export function projectChatTranscript(
       parts: activeStatusParts,
       options: {
         ...streamGroupOptions,
-        startupPhase: props.startupStatus?.phase,
+        startupLabel: props.startupLabel,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
       },
@@ -540,24 +556,18 @@ export function projectChatTranscript(
     for (const group of groups) {
       for (const source of group.messages) {
         const sourceMessageId = persistedMessageEntryId(source.message);
-        const text = resolveMessageReplyText(source.message);
-        if (sourceMessageId && text) {
+        if (sourceMessageId && extractTextCached(source.message)?.trim()) {
+          messageRowKeysById.set(sourceMessageId, item.key);
           loadedReplySources.set(sourceMessageId, {
-            rowKey: item.key,
-            preview: {
-              messageId: source.key,
-              sourceMessageId,
-              senderLabel,
-              text,
-            },
+            message: source.message,
+            messageId: source.key,
+            senderLabel,
           });
         }
       }
     }
   }
-  transcript.syncMessageRows(
-    new Map([...loadedReplySources].map(([messageId, source]) => [messageId, source.rowKey])),
-  );
+  transcript.syncMessageRows(messageRowKeysById);
   let turnRecapOwnerKey: string | null = null;
   if (turnRecap !== null) {
     const lastItem = transcriptItems.at(-1);
@@ -575,17 +585,15 @@ export function projectChatTranscript(
   }
   // New row keys measure expanded work immediately; existing keys keep their
   // cached height until ResizeObserver reports the changed layout.
-  const transcriptRows = transcriptItems.flatMap((item): TranscriptRow<ChatRenderItem>[] =>
-    [{ kind: "item" as const, key: item.key, item }].concat(
-      item.kind === "work-group" && expandedToolCards.get(item.key)
-        ? item.groups.map((group) => ({
-            kind: "item" as const,
-            key: `${item.key}:${group.key}`,
-            item: group,
-          }))
-        : [],
-    ),
-  );
+  const transcriptRows: TranscriptRow<ChatRenderItem>[] = [];
+  for (const item of transcriptItems) {
+    transcriptRows.push({ kind: "item", key: item.key, item });
+    if (item.kind === "work-group" && expandedToolCards.get(item.key)) {
+      for (const group of item.groups) {
+        transcriptRows.push({ kind: "item", key: `${item.key}:${group.key}`, item: group });
+      }
+    }
+  }
   const realtimeConversation = renderRealtimeTalkConversation(props);
   if (realtimeConversation !== nothing) {
     transcriptRows.push({
@@ -614,11 +622,7 @@ export function projectChatTranscript(
   }
   const typingIndicator = renderChatTypingIndicator(props.typingActors);
   if (typingIndicator) {
-    transcriptRows.push({
-      kind: "content",
-      key: "presence:typing",
-      content: typingIndicator,
-    });
+    transcriptRows.push({ kind: "content", key: "presence:typing", content: typingIndicator });
   }
   trackTranscriptRenderDependencies(state, [
     chatItems,
@@ -643,7 +647,7 @@ export function projectChatTranscript(
     props.showToolCalls,
     Boolean(props.runActive),
     Boolean(props.runWorking),
-    props.startupStatus?.phase,
+    props.startupLabel,
     Boolean(props.waitingApproval),
     props.questionPrompts,
     Boolean(props.autoExpandToolCalls),
@@ -652,7 +656,6 @@ export function projectChatTranscript(
     props.userId,
     props.userName,
     props.userAvatar,
-    props.typingActors,
     props.resourceBasePath,
     (props.localMediaPreviewRoots ?? []).join("\u0000"),
     props.assistantAttachmentAuthToken,
@@ -662,13 +665,17 @@ export function projectChatTranscript(
     Boolean(props.fetchLinkFavicon),
     threadContextWindow,
     Boolean(props.onSetReply),
+    Boolean(props.onRetryQueuedMessage),
     props.replyMessageAccess?.revision ?? 0,
     props.replyMessageAccess?.navigationId ?? "",
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
+    props.runStatus?.phase ?? "",
+    props.runStatus?.occurredAt ?? 0,
   ]);
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
-    if (loadedReplySources.has(replyToId)) {
+    const loaded = loadedReplySources.get(replyToId);
+    if (loaded && resolveMessageReplyText(loaded.message)) {
       transcript.revealMessage(replyToId);
       return;
     }

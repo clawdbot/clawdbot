@@ -4,6 +4,11 @@
           - "extensions/azure-speech/**"
           - "docs/providers/azure-speech.md"
           - "docs/tools/tts.md"
+"plugin: geolocation":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/geolocation/**"
+          - "docs/plugins/geolocation.md"
 "plugin: file-transfer":
   - changed-files:
       - any-glob-to-any-file:
@@ -26,6 +31,11 @@
       - any-glob-to-any-file:
           - "extensions/pixverse/**"
           - "docs/providers/pixverse.md"
+"channel: a2a":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/a2a/**"
+          - "docs/channels/a2a.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
@@ -56,6 +66,11 @@
       - any-glob-to-any-file:
           - "extensions/logbook/**"
           - "docs/plugins/logbook.md"
+"plugin: imap":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/imap/**"
+          - "docs/automation/imap.md"
 "plugin: google-meet":
   - changed-files:
       - any-glob-to-any-file:

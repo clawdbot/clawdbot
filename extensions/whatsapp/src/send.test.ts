@@ -148,6 +148,28 @@ describe("web outbound", () => {
   });
 
   it.each([
+    {
+      name: "an image without alt text",
+      text: "![](https://example.com/diagram.png)",
+      expected: "![](https://example.com/diagram.png)",
+    },
+    {
+      name: "an image with visible alt text",
+      text: "![Diagram](https://example.com/diagram.png)",
+      expected: "Diagram",
+    },
+  ])("delivers $name instead of reporting an unsent success", async ({ text, expected }) => {
+    await expect(
+      sendMessageWhatsApp("+1555", text, {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+      }),
+    ).resolves.toEqual({ messageId: "msg123", toJid: "1555@s.whatsapp.net" });
+
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith("+1555", expected, undefined, undefined);
+  });
+
+  it.each([
     { kind: "text", mediaUrl: undefined, contentType: undefined },
     { kind: "image", mediaUrl: "/tmp/pic.png", contentType: "image/png" },
     { kind: "document", mediaUrl: "/tmp/report.pdf", contentType: "application/pdf" },

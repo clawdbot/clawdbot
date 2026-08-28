@@ -17,10 +17,15 @@ import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
+import {
+  areUiSessionKeysEquivalent,
+  parseAgentSessionKey,
+} from "../../lib/sessions/session-key.ts";
+import { showToast } from "../../lib/toast.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { headerPlatformByClient } from "./chat-pane-shared.ts";
-import { patchChatSessionLabel } from "./chat-state-route.ts";
+import { resolveChatAgentId } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.ts";
@@ -63,6 +68,11 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.beginHeaderRename(row);
       return;
     }
+    if (action.kind === "copy-session-id") {
+      const copied = row.sessionId ? await copyToClipboard(row.sessionId) : false;
+      showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+      return;
+    }
     if (action.kind === "continue-in-terminal") {
       this.openContinueInTerminalDialog(row);
       return;
@@ -73,21 +83,41 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       return;
     }
     const owner = this.headerOutcomeOwner;
-    const session = {
-      key: row.key,
-      sessionId: row.sessionId,
+    const toActionSession = (candidate: GatewaySessionRow) => ({
+      key: candidate.key,
+      sessionId: candidate.sessionId,
       label:
-        normalizeOptionalString(row.label) ?? normalizeOptionalString(this.paneTitle) ?? row.key,
-      pinned: row.pinned === true,
-      archived: row.archived === true,
+        normalizeOptionalString(candidate.label) ??
+        normalizeOptionalString(this.paneTitle) ??
+        candidate.key,
+      pinned: candidate.pinned === true,
+      unread: candidate.unread === true,
+      archived: candidate.archived === true,
+      category: candidate.category,
       active: true,
-      hasActiveRun: row.hasActiveRun ?? row.status === "running",
-      gatewayHasActiveRun: row.hasActiveRun,
+      hasActiveRun: candidate.hasActiveRun ?? candidate.status === "running",
+      gatewayHasActiveRun: candidate.hasActiveRun,
+    });
+    const session = toActionSession(row);
+    // Refresh metadata only on the selected instance; replacements must keep
+    // the captured ID so the Gateway rejects the stale action. No-ID rows
+    // still need current-list presence before a metadata patch can create them.
+    const resolveCurrentSession = (notify = false) => {
+      const currentRow = scope.sessions.state.result?.sessions.find(
+        (candidate) =>
+          areUiSessionKeysEquivalent(candidate.key, row.key) &&
+          (!session.sessionId || candidate.sessionId === session.sessionId),
+      );
+      const resolvedRow = currentRow ?? (session.sessionId ? row : null);
+      if (!resolvedRow && notify) {
+        showToast({ message: t("common.refresh") });
+      }
+      return resolvedRow ? toActionSession(resolvedRow) : null;
     };
     try {
       const operations = await (this.headerSessionOperationsLoad ??=
         import("../../components/session-organizer-operations.runtime.ts"));
-      const host: SessionActionHost = {
+      const host: SessionActionHost & { knownSessionGroups(): string[] } = {
         sessionData: {
           isSessionMutationScopeCurrent: (candidate) =>
             this.isHeaderSessionActionCurrent(candidate, owner),
@@ -110,14 +140,82 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         replaceCurrentSession: (key) => this.onPaneSessionChange?.(this.paneId, key),
         selectSession: (key) => this.onPaneSessionChange?.(this.paneId, key),
         sidebarSessionStatusFilter: () => "active",
+        knownSessionGroups: () =>
+          collectKnownSessionGroups(
+            scope.sessions.state.groups,
+            scope.sessions.state.result?.sessions ?? [],
+          ),
       };
       switch (action.kind) {
+        case "toggle-pin": {
+          const currentSession = resolveCurrentSession(true);
+          if (currentSession) {
+            await operations.patchSession(
+              host,
+              currentSession,
+              { pinned: !currentSession.pinned },
+              scope,
+            );
+          }
+          break;
+        }
+        case "toggle-unread": {
+          const currentSession = resolveCurrentSession(true);
+          if (currentSession) {
+            await operations.patchSession(
+              host,
+              currentSession,
+              { unread: !currentSession.unread },
+              scope,
+            );
+          }
+          break;
+        }
+        case "set-icon": {
+          const currentSession = resolveCurrentSession(true);
+          if (currentSession) {
+            await operations.patchSession(host, currentSession, { icon: action.icon }, scope);
+          }
+          break;
+        }
         case "assign-owner":
           await operations.assignSessionOwner(host, session, action.owner, scope);
           break;
         case "fork":
           await operations.forkSession(host, session, scope);
           break;
+        case "move-to-group":
+          await operations.assignSessionCategory(
+            host,
+            session,
+            action.category,
+            scope,
+            {},
+            {
+              resolveSession: resolveCurrentSession,
+            },
+          );
+          break;
+        case "new-group": {
+          const { showInputDialog } = await import("../../components/input-dialog.ts");
+          const name = await showInputDialog({
+            title: t("sessionsView.newGroupTitle"),
+            label: t("sessionsView.newGroupPrompt"),
+            submitLabel: t("sessionsView.newGroupCreate"),
+            requireValue: true,
+          });
+          if (name && this.isHeaderSessionActionCurrent(scope, owner)) {
+            await operations.assignSessionCategory(
+              host,
+              session,
+              name,
+              scope,
+              {},
+              { resolveSession: resolveCurrentSession },
+            );
+          }
+          break;
+        }
         case "toggle-archived":
           if (session.archived) {
             await operations.patchSession(host, session, { archived: false }, scope);
@@ -128,6 +226,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         case "delete":
           await operations.deleteSession(host, session, scope);
           break;
+        default:
+          action satisfies never;
       }
     } catch (error) {
       if (this.isHeaderSessionActionCurrent(scope, owner)) {
@@ -248,11 +348,16 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       return;
     }
     const customLabel = normalizeOptionalString(row.label) ?? null;
-    this.headerRenameSessionKey = row.key;
-    this.headerRenameInitialLabel = customLabel;
-    // Editable session names come only from persisted user data. Seeding from
-    // paneTitle would let display decoration become the next stored label.
-    this.headerRenameValue = customLabel ?? "";
+    const generatedTitle = parseAgentSessionKey(row.key)?.rest.startsWith("dashboard:")
+      ? (normalizeOptionalString(row.displayName) ??
+        (row.worktree ? undefined : normalizeOptionalString(row.derivedTitle)))
+      : undefined;
+    // The edit belongs to this instance, even if a replacement reuses its key.
+    this.headerRenameSession = { key: row.key, sessionId: row.sessionId, label: row.label };
+    // Dashboard titles are generated session text; channel/account decoration
+    // remains display-only and must never become the stored label.
+    this.headerRenameInitialValue = customLabel ?? generatedTitle ?? "";
+    this.headerRenameValue = this.headerRenameInitialValue;
     this.headerEditing = true;
     void this.updateComplete.then(() => {
       const input = this.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
@@ -263,35 +368,45 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
 
   protected cancelHeaderRename(): void {
     this.headerEditing = false;
-    this.headerRenameSessionKey = "";
+    this.headerRenameSession = null;
   }
 
   protected commitHeaderRename(): void {
     if (!this.headerEditing) {
       return;
     }
-    const key = this.headerRenameSessionKey;
+    const session = this.headerRenameSession;
+    const initialLabel = normalizeOptionalString(session?.label) ?? null;
     const trimmed = this.headerRenameValue.trim();
     const label = trimmed || null;
-    const unchangedLabel = label === this.headerRenameInitialLabel;
+    const unchangedGeneratedTitle =
+      initialLabel === null && trimmed === this.headerRenameInitialValue.trim();
+    const unchangedLabel = label === initialLabel;
     this.headerEditing = false;
-    this.headerRenameSessionKey = "";
+    this.headerRenameSession = null;
     const state = this.state;
-    if (!key || !state || unchangedLabel) {
+    if (!session || !state || unchangedGeneratedTitle || unchangedLabel) {
       return;
     }
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
       method: "sessions.patch",
-      params: { key, label },
+      params: { key: session.key, label },
     });
     if (!access.allowed) {
       this.publishHeaderError(access.reason);
       return;
     }
     const owner = this.headerOutcomeOwner;
-    void patchChatSessionLabel(state, this.context.sessions, key, label).catch((error: unknown) =>
-      this.publishHeaderError(error, owner),
-    );
+    void this.context.sessions
+      .patch(
+        session.key,
+        { label },
+        {
+          agentId: resolveChatAgentId(state),
+          expectedSessionId: session.sessionId,
+        },
+      )
+      .catch((error: unknown) => this.publishHeaderError(error, owner));
   }
 
   protected async loadHeaderMenuData(

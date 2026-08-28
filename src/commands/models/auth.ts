@@ -17,18 +17,13 @@ import {
 import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
 import {
-  externalCliDiscoveryForProviderAuth,
-  removeProviderAuthProfilesWithLock,
-} from "../../agents/auth-profiles.js";
-import {
-  listProfilesForProvider,
   promoteAuthProfileInOrder,
+  upsertAuthProfileAfterLoginWithLockOrThrow,
   upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
-import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
-import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
@@ -428,7 +423,7 @@ async function persistProviderAuthResult(params: {
       params.config,
       profile.credential.provider,
     );
-    await upsertAuthProfileWithLockOrThrow({
+    await upsertAuthProfileAfterLoginWithLockOrThrow({
       profileId: profile.profileId,
       credential: profile.credential,
       agentDir: params.agentDir,
@@ -540,9 +535,6 @@ async function runProviderAuthMethod(params: {
   openUrl?: (url: string) => Promise<void>;
 }): Promise<{ result: ProviderAuthResult; profiles: ProviderAuthResult["profiles"] }> {
   params.signal?.throwIfAborted();
-  const selectedProviderId = normalizeProviderId(params.provider.id);
-  await clearStaleProfileLockouts(selectedProviderId, params.agentDir);
-
   const result = await params.method.run({
     config: params.config,
     env: params.env ?? process.env,
@@ -564,15 +556,6 @@ async function runProviderAuthMethod(params: {
     },
   });
   params.signal?.throwIfAborted();
-  const resultProviderIds = new Set(
-    result.profiles.map((profile) => normalizeProviderId(profile.credential.provider)),
-  );
-  for (const providerId of resultProviderIds) {
-    if (providerId && providerId !== selectedProviderId) {
-      await clearStaleProfileLockouts(providerId, params.agentDir);
-    }
-  }
-
   const profiles = resolveLoginProfiles({
     result,
     requestedProfileId: params.profileId,
@@ -916,26 +899,6 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
   signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
 };
-
-/**
- * Clear stale cooldown/disabled state for all profiles matching a provider.
- * When a user explicitly runs `models auth login`, they intend to fix auth —
- * stale `auth_permanent` / `billing` lockouts should not persist across
- * a deliberate re-authentication attempt.
- */
-async function clearStaleProfileLockouts(provider: string, agentDir: string): Promise<void> {
-  try {
-    const store = loadAuthProfileStoreForRuntime(agentDir, {
-      externalCli: externalCliDiscoveryForProviderAuth({ provider }),
-    });
-    const profileIds = listProfilesForProvider(store, provider);
-    for (const profileId of profileIds) {
-      await clearAuthProfileCooldown({ store, profileId, agentDir });
-    }
-  } catch {
-    // Best-effort housekeeping — never block re-authentication.
-  }
-}
 
 /** Resolves a requested login provider or throws with available provider details. */
 export function resolveRequestedLoginProviderOrThrow(

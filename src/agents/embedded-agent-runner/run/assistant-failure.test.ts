@@ -1,6 +1,14 @@
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
+import type { Context, Model } from "../../../../packages/ai/src/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE } from "../../../llm/types.js";
+import type { AssistantMessage } from "../../../llm/types.js";
+import {
+  PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+  PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+} from "../../../llm/types.js";
+import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import { FailoverError } from "../../failover-error.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
 import {
@@ -20,6 +28,11 @@ vi.mock("../../../logging/node-require.js", () => ({
 
 const CREDENTIAL_FILE_ENOENT_MESSAGE =
   "ENOENT: no such file or directory, open '/home/operator/.claude/.credentials.json'";
+const INCOMPLETE_TERMINAL_STREAM_MESSAGE = "Bedrock stream ended before messageStop";
+const INCOMPLETE_TERMINAL_STREAM_CASES = [
+  { provider: "amazon-bedrock", message: INCOMPLETE_TERMINAL_STREAM_MESSAGE },
+  { provider: "mistral", message: "Mistral stream ended without a terminal finish reason" },
+] as const;
 
 type AssistantFailureInput = Parameters<typeof handleEmbeddedAssistantFailure>[0];
 
@@ -141,6 +154,107 @@ function makeIdleTimeoutFailureInput(options?: { replaySafe?: boolean }) {
   return fixture;
 }
 
+function makeTerminalStreamFailureInput(options?: {
+  assistant?: AssistantMessage;
+  errorMessage?: string;
+  fallbackConfigured?: boolean;
+  model?: string;
+  profileAvailable?: boolean;
+  provider?: string;
+}) {
+  const fixture = makeExhaustedCredentialFailureInput();
+  const provider = options?.provider ?? options?.assistant?.provider ?? "amazon-bedrock";
+  const model = options?.model ?? options?.assistant?.model ?? "mock-1";
+  const assistant =
+    options?.assistant ??
+    buildEmbeddedRunnerAssistant({
+      provider,
+      model,
+      stopReason: "error",
+      errorMessage: options?.errorMessage ?? INCOMPLETE_TERMINAL_STREAM_MESSAGE,
+      content: [{ type: "text", text: "I have" }],
+    });
+  const assistantText = assistant.content.find((part) => part.type === "text")?.text;
+  const attempt = makeEmbeddedRunnerAttempt({
+    assistantTexts: assistantText ? [assistantText] : [],
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+  });
+  fixture.input.attempt = attempt;
+  fixture.input.attemptAssistant = assistant;
+  fixture.input.currentAttemptAssistant = assistant;
+  fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+  fixture.input.activeErrorContext = { provider, model };
+  fixture.input.provider = provider;
+  fixture.input.providerOwner = undefined;
+  fixture.input.modelId = model;
+  fixture.input.model = model;
+  fixture.input.fallbackConfigured = options?.fallbackConfigured !== false;
+  fixture.input.authProfileId = undefined;
+  fixture.input.emptyErrorRetries = 0;
+  fixture.input.advanceAuthProfile = vi.fn(async () => options?.profileAvailable !== false);
+  return fixture;
+}
+
+async function streamIncompleteMistralResponseOverLoopback() {
+  const { streamMistral } = await import("../../../../packages/ai/src/providers/mistral.js");
+  const partialText = "Safe partial answer";
+  const server = http.createServer((request, response) => {
+    request.resume();
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end(
+      `data: ${JSON.stringify({
+        id: "terminal-stream-recovery-proof",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "mistral-large-latest",
+        choices: [
+          {
+            index: 0,
+            delta: { content: partialText },
+            finish_reason: null,
+          },
+        ],
+        usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+      })}\n\n`,
+    );
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const { port } = server.address() as AddressInfo;
+  const model = {
+    id: "mistral-large-latest",
+    name: "Mistral terminal recovery proof",
+    api: "mistral-conversations",
+    provider: "mistral",
+    baseUrl: `http://127.0.0.1:${port}`,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  } satisfies Model<"mistral-conversations">;
+  const context = {
+    messages: [{ role: "user", content: "Inspect only", timestamp: 1 }],
+  } satisfies Context;
+
+  try {
+    const stream = streamMistral(model, context, { apiKey: "redacted-fixture-token" });
+    for await (const event of stream) {
+      // Drain the installed SDK's real event stream before reading its result.
+      void event;
+    }
+    return { assistant: await stream.result(), partialText };
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
+
 describe("handleEmbeddedAssistantFailure", () => {
   it.each(["auth", "auth_permanent"] as const)(
     "carries %s profile failures into terminal resolution",
@@ -216,22 +330,187 @@ describe("handleEmbeddedAssistantFailure", () => {
     ]);
   });
 
-  it("does not rotate profiles or models after an ambiguous post-dispatch failure", async () => {
-    const fixture = makeExhaustedCredentialFailureInput();
-    fixture.input.emptyErrorRetries = 0;
-    if (!fixture.input.attemptAssistant) {
-      throw new Error("expected assistant fixture");
-    }
-    fixture.input.attemptAssistant.errorCode = PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE;
-    fixture.input.attemptAssistant.errorMessage = "reasoning is required";
-    fixture.input.resolveAuthProfileFailureReason = vi.fn(() => "timeout" as const);
+  it.each([PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE, PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE])(
+    "does not rotate profiles or models after replay-unsafe failure %s",
+    async (errorCode) => {
+      const fixture = makeExhaustedCredentialFailureInput();
+      fixture.input.emptyErrorRetries = 0;
+      if (!fixture.input.attemptAssistant) {
+        throw new Error("expected assistant fixture");
+      }
+      fixture.input.attemptAssistant.errorCode = errorCode;
+      fixture.input.attemptAssistant.errorMessage = "reasoning is required";
+      fixture.input.resolveAuthProfileFailureReason = vi.fn(() => "timeout" as const);
 
-    const outcome = await handleEmbeddedAssistantFailure(fixture.input);
+      const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
-    expect(outcome).toMatchObject({ action: "proceed", assistantProfileFailureReason: null });
-    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-    expect(fixture.traceAttempts).toEqual([]);
+      expect(outcome).toMatchObject({ action: "proceed", assistantProfileFailureReason: null });
+      expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+      expect(fixture.traceAttempts).toEqual([]);
+    },
+  );
+
+  it.each(INCOMPLETE_TERMINAL_STREAM_CASES)(
+    "rotates profiles for a $provider terminal stream with visible partial output",
+    async ({ provider, message }) => {
+      const fixture = makeTerminalStreamFailureInput({ errorMessage: message, provider });
+
+      const outcome = await handleEmbeddedAssistantFailure(fixture.input);
+
+      expect(outcome).toMatchObject({
+        action: "retry",
+        lastRetryFailoverReason: "timeout",
+      });
+      expect(fixture.input.advanceAuthProfile).toHaveBeenCalledOnce();
+      expect(fixture.traceAttempts).toEqual([
+        {
+          provider,
+          model: "mock-1",
+          result: "timeout",
+          reason: "timeout",
+          stage: "assistant",
+        },
+      ]);
+    },
+  );
+
+  it("recovers a real loopback Mistral partial EOF through embedded model fallback", async () => {
+    const { assistant, partialText } = await streamIncompleteMistralResponseOverLoopback();
+    const classification = classifyAssistantFailoverReason(assistant);
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "mistral/mistral-large-latest",
+            fallbacks: ["google/mock-2"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const calls: string[] = [];
+    let embeddedFailure: { reason: string; rawError?: string } | undefined;
+    let embeddedTrace: AssistantFailureInput["traceAttempts"] = [];
+
+    const result = await runWithModelFallback({
+      cfg: config,
+      provider: "mistral",
+      model: "mistral-large-latest",
+      sessionId: "session:mistral-terminal-recovery-proof",
+      skipAuthProfileRuntime: true,
+      run: async (provider, model) => {
+        calls.push(`${provider}/${model}`);
+        if (provider === "mistral") {
+          const fixture = makeTerminalStreamFailureInput({
+            assistant,
+            model,
+            profileAvailable: false,
+            provider,
+          });
+          embeddedTrace = fixture.traceAttempts;
+          try {
+            await handleEmbeddedAssistantFailure(fixture.input);
+          } catch (error) {
+            if (error instanceof FailoverError) {
+              embeddedFailure = { reason: error.reason, rawError: error.rawError };
+            }
+            throw error;
+          }
+        }
+        return "fallback complete";
+      },
+    });
+
+    const proof = {
+      transport: "http://127.0.0.1:<redacted>/chat/completions (SSE EOF)",
+      partialText,
+      producerError: assistant.errorMessage,
+      classification,
+      embeddedFailure,
+      embeddedTrace,
+      calls,
+      finalResult: result.result,
+      partialReturned: result.result.includes(partialText),
+    };
+    expect(assistant).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Mistral stream ended without a terminal finish reason",
+    });
+    expect(assistant.content).toContainEqual({ type: "text", text: partialText });
+    expect(classification).toBe("timeout");
+    expect(embeddedFailure).toEqual({
+      reason: "timeout",
+      rawError: "Mistral stream ended without a terminal finish reason",
+    });
+    expect(embeddedTrace).toEqual([
+      {
+        provider: "mistral",
+        model: "mistral-large-latest",
+        result: "timeout",
+        reason: "timeout",
+        stage: "assistant",
+        status: 408,
+      },
+    ]);
+    expect(calls).toEqual(["mistral/mistral-large-latest", "google/mock-2"]);
+    expect(result.result).toBe("fallback complete");
+    expect(proof.partialReturned).toBe(false);
+    console.log(`[terminal-stream recovery proof] ${JSON.stringify(proof)}`);
+  });
+
+  it.each(INCOMPLETE_TERMINAL_STREAM_CASES)(
+    "advances model fallback instead of returning a partial $provider terminal-stream error",
+    async ({ provider, message }) => {
+      const config = {
+        agents: {
+          defaults: {
+            model: {
+              primary: `${provider}/mock-1`,
+              fallbacks: ["google/mock-2"],
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+      const calls: string[] = [];
+
+      const result = await runWithModelFallback({
+        cfg: config,
+        provider,
+        model: "mock-1",
+        sessionId: `session:incomplete-terminal-stream:${provider}`,
+        skipAuthProfileRuntime: true,
+        run: async (candidateProvider, model) => {
+          calls.push(`${candidateProvider}/${model}`);
+          if (candidateProvider === provider) {
+            await handleEmbeddedAssistantFailure(
+              makeTerminalStreamFailureInput({
+                errorMessage: message,
+                profileAvailable: false,
+                provider,
+              }).input,
+            );
+          }
+          return "fallback complete";
+        },
+      });
+
+      expect(result.result).toBe("fallback complete");
+      expect(calls).toEqual([`${provider}/mock-1`, "google/mock-2"]);
+    },
+  );
+
+  it("surfaces an incomplete terminal-stream error when no retry target remains", async () => {
+    const fixture = makeTerminalStreamFailureInput({
+      fallbackConfigured: false,
+      profileAvailable: false,
+    });
+
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
+      reason: "timeout",
+      provider: "amazon-bedrock",
+      model: "mock-1",
+      rawError: INCOMPLETE_TERMINAL_STREAM_MESSAGE,
+    });
   });
 
   it("falls back after exhausted replay-safe credential-file retries without touching auth state", async () => {
@@ -303,35 +582,38 @@ describe("handleEmbeddedAssistantFailure", () => {
     ]);
   });
 
-  it("does not route a caller timeout with stale rate-limit metadata through failover", async () => {
-    const fixture = makeExhaustedCredentialFailureInput();
-    const assistant = buildEmbeddedRunnerAssistant({
-      stopReason: "error",
-      errorMessage: "HTTP 429 Too Many Requests",
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      terminal: { kind: "timeout", phase: "prompt", source: "external" },
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-    fixture.input.attempt = attempt;
-    fixture.input.attemptAssistant = assistant;
-    fixture.input.currentAttemptAssistant = assistant;
-    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
-    fixture.input.emptyErrorRetries = 0;
-    fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
-    fixture.input.maybeRetrySameModelRateLimit = vi.fn(async () => true);
+  it.each(["HTTP 429 Too Many Requests", INCOMPLETE_TERMINAL_STREAM_MESSAGE])(
+    "does not route a caller timeout with %s through failover",
+    async (errorMessage) => {
+      const fixture = makeExhaustedCredentialFailureInput();
+      const assistant = buildEmbeddedRunnerAssistant({
+        stopReason: "error",
+        errorMessage,
+      });
+      const attempt = makeEmbeddedRunnerAttempt({
+        terminal: { kind: "timeout", phase: "prompt", source: "external" },
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      });
+      fixture.input.attempt = attempt;
+      fixture.input.attemptAssistant = assistant;
+      fixture.input.currentAttemptAssistant = assistant;
+      fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+      fixture.input.emptyErrorRetries = 0;
+      fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
+      fixture.input.maybeRetrySameModelRateLimit = vi.fn(async () => true);
 
-    const outcome = await handleEmbeddedAssistantFailure(fixture.input);
+      const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
-    expect(outcome.action).toBe("proceed");
-    expect(fixture.input.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
-    expect(fixture.input.maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
-    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(fixture.input.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
-    expect(fixture.traceAttempts).toEqual([]);
-  });
+      expect(outcome.action).toBe("proceed");
+      expect(fixture.input.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
+      expect(fixture.input.maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
+      expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(fixture.input.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
+      expect(fixture.traceAttempts).toEqual([]);
+    },
+  );
 
   it("records a same-model rate-limit retry without a profile-rotation trace", async () => {
     const fixture = makeExhaustedCredentialFailureInput();

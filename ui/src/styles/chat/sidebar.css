@@ -56,6 +56,7 @@
 }
 
 .chat-main__conversation-column {
+  position: relative;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -65,6 +66,11 @@
 }
 
 .chat-main__conversation {
+  --chat-composer-top-margin: 8px;
+  --chat-transcript-composer-underlap: 30px;
+  --chat-transcript-fade-height: 24px;
+  --chat-transcript-fade-stack-overlap: calc(20px * var(--openclaw-corner-radius-scale));
+
   position: relative;
   display: flex;
   min-width: 0;
@@ -89,9 +95,31 @@
   background: linear-gradient(to bottom, var(--chat-surface), transparent);
 }
 
+@media (max-width: 560px) {
+  .chat-main__conversation {
+    --chat-transcript-fade-height: 64px;
+  }
+
+  .chat-main__conversation::before {
+    height: 56px;
+    background: linear-gradient(
+      to bottom,
+      var(--chat-surface) 0,
+      color-mix(in srgb, var(--chat-surface) 72%, transparent) 34%,
+      color-mix(in srgb, var(--chat-surface) 30%, transparent) 72%,
+      transparent 100%
+    );
+  }
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-main__conversation::before {
+    display: none;
+  }
+}
+
 openclaw-chat-sidebar-region,
-.sidebar-region__right-runtime,
-.sidebar-region__panels-runtime {
+.sidebar-region__right-runtime {
   display: contents;
 }
 
@@ -141,7 +169,6 @@ openclaw-chat-sidebar-region,
 /* Canonical rail header contract. The header owns geometry; actions are bare
    glyphs with an invisible hit area so generic button chrome cannot leak in. */
 .rail-header {
-  box-sizing: border-box;
   display: flex;
   height: var(--rail-header-height);
   min-height: var(--rail-header-height);
@@ -725,14 +752,6 @@ openclaw-chat-sidebar-region,
   line-height: 1.25;
 }
 
-.side-panel-empty__description {
-  max-width: 40ch;
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.4;
-}
-
 .side-panel-empty--selector .side-panel-empty__title {
   margin-top: 0;
   font-size: var(--control-ui-text-md);
@@ -740,13 +759,6 @@ openclaw-chat-sidebar-region,
 
 .side-panel-empty--selector {
   transform: translateY(-18px);
-}
-
-.side-panel-empty--selector .side-panel-empty__description {
-  max-width: none;
-  margin-top: 4px;
-  line-height: 1.3;
-  white-space: nowrap;
 }
 
 .side-panel-empty__types {
@@ -986,7 +998,8 @@ openclaw-chat-sidebar-region,
   opacity: 1;
 }
 
-.chat-workspace-rail__row-action {
+.chat-workspace-rail__row-action,
+.chat-workspace-rail__row-actions :where(.chat-copy-btn) {
   display: inline-grid;
   width: 24px;
   height: 24px;
@@ -998,13 +1011,15 @@ openclaw-chat-sidebar-region,
 }
 
 .chat-workspace-rail__row-action:hover,
-.chat-workspace-rail__row-action:focus-visible {
+.chat-workspace-rail__row-action:focus-visible,
+.chat-workspace-rail__row-actions :where(.chat-copy-btn:hover, .chat-copy-btn:focus-visible) {
   border-color: color-mix(in srgb, var(--border-strong) 72%, transparent);
   background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
   color: var(--text);
 }
 
-.chat-workspace-rail__row-action svg {
+.chat-workspace-rail__row-action svg,
+.chat-workspace-rail__row-actions :where(.chat-copy-btn svg) {
   width: 14px;
   height: 14px;
   fill: none;
@@ -1802,59 +1817,60 @@ openclaw-session-discussion {
 }
 
 /* Code syntax palette is shared with highlighted message code via base tokens. */
-.file-view .tok-comment {
+:is(.file-view, .code-highlight) .tok-comment {
   color: var(--muted);
   font-style: italic;
 }
 
-.file-view .tok-keyword {
+:is(.file-view, .code-highlight) .tok-keyword {
   color: var(--hljs-keyword);
 }
 
-.file-view
+:is(.file-view, .code-highlight)
   :where(.tok-number, .tok-literal, .tok-atom, .tok-bool, .tok-variableName, .tok-variableName2) {
   color: var(--hljs-number);
 }
 
-.file-view :where(.tok-string, .tok-string2) {
+:is(.file-view, .code-highlight) :where(.tok-string, .tok-string2) {
   color: var(--hljs-string);
 }
 
-.file-view :where(.tok-heading, .tok-definition) {
+:is(.file-view, .code-highlight) :where(.tok-heading, .tok-definition) {
   color: var(--hljs-title);
 }
 
-.file-view :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
+:is(.file-view, .code-highlight)
+  :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
   color: var(--hljs-type);
 }
 
-.file-view :where(.tok-propertyName, .tok-labelName) {
+:is(.file-view, .code-highlight) :where(.tok-propertyName, .tok-labelName) {
   color: var(--hljs-attribute);
 }
 
-.file-view :where(.tok-link, .tok-url) {
+:is(.file-view, .code-highlight) :where(.tok-link, .tok-url) {
   color: var(--accent-2);
 }
 
-.file-view .tok-meta {
+:is(.file-view, .code-highlight) .tok-meta {
   color: var(--hljs-meta);
 }
 
-.file-view .tok-deleted {
+:is(.file-view, .code-highlight) .tok-deleted {
   color: var(--hljs-deletion);
   background: var(--danger-subtle);
 }
 
-.file-view .tok-inserted {
+:is(.file-view, .code-highlight) .tok-inserted {
   color: var(--hljs-addition);
   background: var(--ok-subtle);
 }
 
-.file-view .tok-emphasis {
+:is(.file-view, .code-highlight) .tok-emphasis {
   font-style: italic;
 }
 
-.file-view .tok-strong {
+:is(.file-view, .code-highlight) .tok-strong {
   font-weight: 600;
 }
 
@@ -1887,6 +1903,33 @@ openclaw-session-discussion {
   justify-content: flex-end;
   padding: 8px 10px;
   border-top: 1px solid var(--border);
+}
+
+.sidebar-attachment-preview {
+  display: grid;
+  width: 100%;
+  min-height: 0;
+}
+
+.sidebar-attachment-preview__image {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  object-fit: contain;
+}
+
+.sidebar-attachment-preview__unavailable {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--muted);
 }
 
 .sidebar-markdown-shell {

@@ -410,12 +410,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
 
           // The outer lock makes this result-bearing transform single-attempt: setup
           // finishes before the final entry becomes visible to readers or delete flows.
+          const skipBootstrap = params.skipBootstrap ?? nextConfig.agents?.defaults?.skipBootstrap;
           const workspace = await ensureAgentWorkspace({
             dir: workspaceDir,
-            ensureBootstrapFiles:
-              params.skipBootstrap === undefined
-                ? !nextConfig.agents?.defaults?.skipBootstrap
-                : !params.skipBootstrap,
+            ensureBootstrapFiles: !skipBootstrap,
             skipOptionalBootstrapFiles:
               params.skipOptionalBootstrapFiles ??
               nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
@@ -440,7 +438,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
           // A creation-time name is config, not proof that the fresh workspace hatched.
           // Keep IDENTITY.md templated until BOOTSTRAP completes its first-turn ceremony.
-          if (!workspace.bootstrapPending) {
+          if (!workspace.bootstrapPending && !skipBootstrap) {
             await writeIdentityFile({ workspaceDir: workspace.dir, identity });
           }
           // The receipt owns compensation until the config transform publishes this result.

@@ -105,10 +105,6 @@ the UI does not guess. It shows a small disambiguation view with the matching
 display names, agents, and longer id prefixes. Use a longer prefix to make the
 URL unique. Current Gateways return at most ten recent candidates; when that
 bound is reached, the view treats the result as incomplete instead of guessing.
-Against an older Gateway that predates short-id resolve support, the UI falls
-back to the prior bounded list search, scanning at most five pages of results.
-It likewise reports an incomplete search instead of guessing when that fallback
-cannot prove uniqueness.
 
 To continue one of these links in the terminal or attach a coding harness, see
 [Session synchronization and attachment](/concepts/session-attachment).

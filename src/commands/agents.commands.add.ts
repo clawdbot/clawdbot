@@ -78,7 +78,7 @@ function emptyBindingResult(config: Parameters<typeof applyAgentBindings>[0]): A
 function loadReadablePersistedAuthProfileStore(agentDir: string): AuthProfileStore | null {
   const store = loadPersistedAuthProfileStore(agentDir);
   if (!store && inspectPersistedAuthProfileStoreRaw(agentDir).status !== "missing") {
-    throw new AuthProfileStoreUnreadableError(agentDir);
+    throw new AuthProfileStoreUnreadableError(resolveAuthProfileDatabasePath(agentDir));
   }
   return store;
 }

@@ -23,11 +23,11 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import {
   readOnlySqliteTranscriptSessionIds,
-  readOnlySqliteTranscriptStorageSnapshot,
-  resolveTargetSqlitePath,
-} from "./doctor-session-sqlite-readers.js";
+  readOnlySqliteHeaderlessTranscriptSnapshot,
+} from "./doctor-session-sqlite-transcript-readers.js";
 
 const NOTE_TITLE = "Session transcript headers";
 
@@ -216,7 +216,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
     const databaseOptions = { agentId: target.agentId, env, path: sqlitePath };
     try {
       for (const sessionId of readOnlySqliteTranscriptSessionIds(sqlitePath)) {
-        const snapshot = readOnlySqliteTranscriptStorageSnapshot(sqlitePath, sessionId);
+        const snapshot = readOnlySqliteHeaderlessTranscriptSnapshot(sqlitePath, sessionId);
         if (!snapshot.ok) {
           const detail = formatErrorMessage(snapshot.error).replace(/\s+/g, " ").trim();
           note(

@@ -3,6 +3,7 @@ import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  createAssistantAsyncMessage as buildAssistantAsyncMessage,
   createAssistantCommentaryMessage as buildAssistantCommentaryMessage,
   createAssistantMessage as buildAssistantMessage,
   createAssistantMirrorMessage as buildAssistantMirrorMessage,
@@ -11,6 +12,7 @@ import {
 import { shouldClearTerminalPresentationForNativeItem } from "./event-projector-items.js";
 import { extractRawAssistantText, readItemString } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
+import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
 type AnswerCandidateStatus = "candidate" | "superseded" | "selected";
@@ -20,6 +22,7 @@ export class CodexAssistantProjection {
   private readonly assistantItemOrder: string[] = [];
   private readonly assistantTimestampByItem = new Map<string, number>();
   private readonly assistantPhaseByItem = new Map<string, string>();
+  private readonly assistantDeliveryByItem = new Map<string, string>();
   private latestCompletedItemId: string | undefined;
   private latestCompletedTerminalAssistantItemId: string | undefined;
   private latestTerminalAssistantCandidateItemId: string | undefined;
@@ -45,13 +48,21 @@ export class CodexAssistantProjection {
   // invalidation has to be recorded from the first item notification for each
   // native or dynamic handoff, or a later coda would revive every pre-tool final.
   private persistableAssistantBarrier = 0;
+  // A completed answer mirrored before a steer is already durable. Do not
+  // replay it as the enclosing turn's terminal answer if Codex emits no coda.
+  private persistedAssistantBoundary = false;
   private readonly persistableAssistantBarrierItemIds = new Set<string>();
+  private readonly completedAssistantItemIds = new Set<string>();
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
     private readonly emitAgentEvent: (event: AgentEvent) => void,
     private readonly matchesToolProgressEcho: (text: string) => boolean,
     private readonly nextTranscriptTimestamp: () => number,
+    private readonly checkpointCommentary?: (
+      itemId: string,
+      entry: CodexTranscriptCheckpointEntry,
+    ) => void,
   ) {}
 
   hasCompletedTerminalAssistantText(completedItemIds: ReadonlySet<string>): boolean {
@@ -110,7 +121,8 @@ export class CodexAssistantProjection {
     }
     // Deltas carry no phase; item/started has already recorded it.
     const isCommentary = this.isCommentaryAssistantItem(itemId);
-    if (!isCommentary && itemId !== this.latestTerminalAssistantCandidateItemId) {
+    const isAsync = this.isAsyncAssistantItem(itemId);
+    if (!isCommentary && !isAsync && itemId !== this.latestTerminalAssistantCandidateItemId) {
       this.markTerminalAssistantCandidateSupersededBy();
     }
     if (!this.assistantStarted) {
@@ -120,6 +132,9 @@ export class CodexAssistantProjection {
     this.rememberAssistantItem(itemId);
     const text = `${this.assistantTextByItem.get(itemId) ?? ""}${delta}`;
     this.assistantTextByItem.set(itemId, text);
+    if (isAsync) {
+      return;
+    }
     if (isCommentary) {
       this.emitCommentaryProgress({ itemId, text });
       return;
@@ -162,18 +177,23 @@ export class CodexAssistantProjection {
 
   recordItemStarted(item: CodexThreadItem | undefined, itemId: string | undefined): void {
     this.noteNativeWorkBarrier(item);
+    this.rememberAssistantPhase(item);
     if (
       item?.type === "agentMessage" &&
       itemId &&
+      !this.isNonTerminalAssistantItem(itemId) &&
       itemId !== this.pendingRawTerminalAssistantEchoItemId
     ) {
       this.pendingRawTerminalAssistantEchoItemId = undefined;
     }
-    this.rememberAssistantPhase(item);
     if (item?.type === "agentMessage" && itemId) {
       this.rememberAssistantItem(itemId);
     }
-    if (itemId && itemId !== this.latestTerminalAssistantCandidateItemId) {
+    if (
+      itemId &&
+      !this.isNonTerminalAssistantItem(itemId) &&
+      itemId !== this.latestTerminalAssistantCandidateItemId
+    ) {
       this.markTerminalAssistantCandidateSupersededBy(itemId, {
         preserveEarlierActiveItem: true,
       });
@@ -187,24 +207,28 @@ export class CodexAssistantProjection {
     item: CodexThreadItem | undefined,
     itemId: string | undefined,
     activeItemIds: ReadonlySet<string>,
-  ): void {
+  ): { itemId: string; message: AssistantMessage; text: string } | undefined {
+    if (itemId && item?.type === "agentMessage") {
+      this.completedAssistantItemIds.add(itemId);
+    }
     this.noteNativeWorkBarrier(item);
+    this.rememberAssistantPhase(item);
     if (
       item?.type === "agentMessage" &&
       itemId &&
+      !this.isNonTerminalAssistantItem(itemId) &&
       itemId !== this.pendingRawTerminalAssistantEchoItemId
     ) {
       this.pendingRawTerminalAssistantEchoItemId = undefined;
     }
-    if (itemId) {
+    if (itemId && !this.isNonTerminalAssistantItem(itemId)) {
       this.latestCompletedItemId = itemId;
     }
-    this.rememberAssistantPhase(item);
-    if (item?.type === "agentMessage" && !this.isCommentaryAssistantItem(item.id)) {
+    if (item?.type === "agentMessage" && !this.isNonTerminalAssistantItem(item.id)) {
       this.latestCompletedTerminalAssistantItemId = item.id;
       this.markLatestTerminalAssistantCandidate(item.id, activeItemIds);
       this.pendingRawTerminalAssistantEchoItemId = item.id;
-    } else if (itemId) {
+    } else if (itemId && !this.isNonTerminalAssistantItem(itemId)) {
       this.markTerminalAssistantCandidateSupersededBy(itemId, {
         preserveEarlierActiveItem: true,
       });
@@ -218,18 +242,31 @@ export class CodexAssistantProjection {
       if (item.text && this.isCommentaryAssistantItem(item.id)) {
         this.emitCommentaryProgress({ itemId: item.id, text: item.text });
         this.pendingRawCommentaryEchoes += 1;
-      } else if (item.text && this.isFinalAnswerAssistantItem(item.id)) {
+      } else if (
+        item.text &&
+        !this.isAsyncAssistantItem(item.id) &&
+        this.isFinalAnswerAssistantItem(item.id)
+      ) {
         this.emitAnswerCandidate(item.id, "candidate");
       }
+      return this.createAsyncDelivery(item.id);
     }
+    return undefined;
   }
 
-  recordSnapshotItem(item: CodexThreadItem): void {
+  recordSnapshotItem(
+    item: CodexThreadItem,
+  ): { itemId: string; message: AssistantMessage; text: string } | undefined {
+    if (item.type === "agentMessage") {
+      this.completedAssistantItemIds.add(item.id);
+    }
     this.rememberAssistantPhase(item);
     if (item.type === "agentMessage" && typeof item.text === "string") {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
+      return this.createAsyncDelivery(item.id);
     }
+    return undefined;
   }
 
   handleRawResponseItemCompleted(item: JsonObject, activeItemIds: ReadonlySet<string>): void {
@@ -296,6 +333,7 @@ export class CodexAssistantProjection {
     if (phase) {
       this.assistantPhaseByItem.set(itemId, phase);
     }
+    this.completedAssistantItemIds.add(itemId);
     this.rememberAssistantItem(itemId);
     this.assistantTextByItem.set(itemId, text);
     // Empty raw finals prove an actual stop; retain that fact without publishing fake output.
@@ -323,6 +361,9 @@ export class CodexAssistantProjection {
     if (afterHandoff.length > 0) {
       return afterHandoff.slice(-1);
     }
+    if (this.persistedAssistantBoundary) {
+      return [];
+    }
     const recoveredAudible = this.collectPersistableAssistantTexts(0).filter(
       (text) => !isSilentReplyPayloadText(text),
     );
@@ -335,7 +376,22 @@ export class CodexAssistantProjection {
 
   collectCommentaryMessages(): Array<{ itemId: string; message: AssistantMessage }> {
     return this.assistantItemOrder.flatMap((itemId) => {
-      if (!this.isCommentaryAssistantItem(itemId)) {
+      const message = this.readCommentaryMessage(itemId);
+      return message ? [{ itemId, message }] : [];
+    });
+  }
+
+  private readCommentaryMessage(itemId: string): AssistantMessage | undefined {
+    const text = this.assistantTextByItem.get(itemId)?.trim();
+    const timestamp = this.assistantTimestampByItem.get(itemId);
+    return this.isCommentaryAssistantItem(itemId) && text && timestamp !== undefined
+      ? buildAssistantCommentaryMessage(this.params, text, itemId, timestamp)
+      : undefined;
+  }
+
+  collectAsyncMessages(): Array<{ itemId: string; message: AssistantMessage }> {
+    return this.assistantItemOrder.flatMap((itemId) => {
+      if (!this.isAsyncAssistantItem(itemId)) {
         return [];
       }
       const text = this.assistantTextByItem.get(itemId)?.trim();
@@ -346,10 +402,45 @@ export class CodexAssistantProjection {
       return [
         {
           itemId,
-          message: buildAssistantCommentaryMessage(this.params, text, itemId, timestamp),
+          message: buildAssistantAsyncMessage(this.params, text, itemId, timestamp),
         },
       ];
     });
+  }
+
+  createCompletedAssistantBoundaryMessage(
+    completedItemIds: ReadonlySet<string>,
+    options: AssistantMessageOptions,
+  ): { itemId: string; message: AssistantMessage } | undefined {
+    const itemId = this.latestCompletedTerminalAssistantItemId;
+    const text = itemId ? this.assistantTextByItem.get(itemId)?.trim() : undefined;
+    const itemIndex = itemId ? this.assistantItemOrder.indexOf(itemId) : -1;
+    if (
+      !itemId ||
+      !completedItemIds.has(itemId) ||
+      itemIndex < this.persistableAssistantBarrier ||
+      !text ||
+      isSilentReplyPayloadText(text) ||
+      this.isToolProgressEchoText(itemId, text)
+    ) {
+      return undefined;
+    }
+    const message = this.createAssistantMessage(text, options);
+    return {
+      itemId,
+      message: {
+        ...message,
+        timestamp: this.assistantTimestampByItem.get(itemId) ?? message.timestamp,
+      },
+    };
+  }
+
+  markAssistantBoundaryPersisted(itemId: string): void {
+    const index = this.assistantItemOrder.indexOf(itemId);
+    if (index >= 0) {
+      this.persistableAssistantBarrier = Math.max(this.persistableAssistantBarrier, index + 1);
+      this.persistedAssistantBoundary = true;
+    }
   }
 
   finalizeAnswerCandidate(turn: { status?: string; items?: CodexThreadItem[] }): void {
@@ -367,7 +458,8 @@ export class CodexAssistantProjection {
         return false;
       }
       const phase = readItemString(item, "phase");
-      return phase === "final_answer" || phase === undefined;
+      const delivery = readItemString(item, "delivery");
+      return delivery !== "async" && (phase === "final_answer" || phase === undefined);
     });
     const authoritative = authoritativeIndex >= 0 ? turnItems[authoritativeIndex] : undefined;
     const invalidatedByLaterTool = turnItems
@@ -395,7 +487,7 @@ export class CodexAssistantProjection {
   hasAssistantItemTextForSynthesis(): boolean {
     for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
       const itemId = this.assistantItemOrder[i];
-      if (!itemId || this.assistantPhaseByItem.get(itemId) === "commentary") {
+      if (!itemId || this.isNonTerminalAssistantItem(itemId)) {
         continue;
       }
       const text = this.assistantTextByItem.get(itemId);
@@ -413,7 +505,7 @@ export class CodexAssistantProjection {
       const itemId = this.assistantItemOrder[i];
       if (
         !itemId ||
-        this.isCommentaryAssistantItem(itemId) ||
+        this.isNonTerminalAssistantItem(itemId) ||
         !this.assistantTextByItem.has(itemId)
       ) {
         continue;
@@ -445,10 +537,22 @@ export class CodexAssistantProjection {
     if (phase) {
       this.assistantPhaseByItem.set(item.id, phase);
     }
+    const delivery = readItemString(item, "delivery");
+    if (delivery) {
+      this.assistantDeliveryByItem.set(item.id, delivery);
+    }
   }
 
   private isCommentaryAssistantItem(itemId: string): boolean {
     return this.assistantPhaseByItem.get(itemId) === "commentary";
+  }
+
+  private isAsyncAssistantItem(itemId: string): boolean {
+    return this.assistantDeliveryByItem.get(itemId) === "async";
+  }
+
+  private isNonTerminalAssistantItem(itemId: string): boolean {
+    return this.isCommentaryAssistantItem(itemId) || this.isAsyncAssistantItem(itemId);
   }
 
   private isFinalAnswerAssistantItem(itemId: string): boolean {
@@ -460,7 +564,7 @@ export class CodexAssistantProjection {
   }
 
   private emitCommentaryProgress(params: { itemId: string; text: string }): void {
-    const progressText = params.text.replace(/\s+/g, " ").trim();
+    const progressText = params.text.trim();
     if (
       !progressText ||
       this.lastCommentaryProgressTextByItem.get(params.itemId) === progressText
@@ -560,7 +664,7 @@ export class CodexAssistantProjection {
         continue;
       }
       const text = this.assistantTextByItem.get(itemId)?.trim();
-      if (this.assistantPhaseByItem.get(itemId) === "commentary") {
+      if (this.isNonTerminalAssistantItem(itemId)) {
         continue;
       }
       if (text && !this.isToolProgressEchoText(itemId, text)) {
@@ -578,7 +682,7 @@ export class CodexAssistantProjection {
     // never replace; they only ride along for post-handoff identity.
     for (let index = minIndex; index < this.assistantItemOrder.length; index += 1) {
       const itemId = this.assistantItemOrder[index];
-      if (!itemId || this.assistantPhaseByItem.get(itemId) === "commentary") {
+      if (!itemId || this.isNonTerminalAssistantItem(itemId)) {
         continue;
       }
       const text = this.assistantTextByItem.get(itemId)?.trim();
@@ -614,11 +718,37 @@ export class CodexAssistantProjection {
   }
 
   private rememberAssistantItem(itemId: string): void {
-    if (!itemId || this.assistantItemOrder.includes(itemId)) {
+    if (!itemId) {
       return;
     }
-    this.assistantItemOrder.push(itemId);
-    this.assistantTimestampByItem.set(itemId, this.nextTranscriptTimestamp());
+    if (!this.assistantTimestampByItem.has(itemId)) {
+      this.assistantItemOrder.push(itemId);
+      this.assistantTimestampByItem.set(itemId, this.nextTranscriptTimestamp());
+    }
+    if (this.isCommentaryAssistantItem(itemId)) {
+      this.checkpointCommentary?.(itemId, {
+        read: () => this.readCommentaryMessage(itemId),
+        ready: () => this.completedAssistantItemIds.has(itemId),
+      });
+    }
+  }
+
+  private createAsyncDelivery(
+    itemId: string,
+  ): { itemId: string; message: AssistantMessage; text: string } | undefined {
+    if (!this.isAsyncAssistantItem(itemId)) {
+      return undefined;
+    }
+    const text = this.assistantTextByItem.get(itemId);
+    const timestamp = this.assistantTimestampByItem.get(itemId);
+    if (!text?.trim() || timestamp === undefined) {
+      return undefined;
+    }
+    return {
+      itemId,
+      message: buildAssistantAsyncMessage(this.params, text, itemId, timestamp),
+      text,
+    };
   }
 
   private isToolProgressEchoText(itemId: string, text: string): boolean {

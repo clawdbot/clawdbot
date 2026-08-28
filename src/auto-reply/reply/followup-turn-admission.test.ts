@@ -22,7 +22,7 @@ vi.mock("./agent-runner-auto-fallback.js", () => ({
 }));
 
 vi.mock("./agent-runner-memory.js", () => ({
-  runPreflightCompactionIfNeeded: (...args: unknown[]) => state.preflight(...args),
+  runSessionCompactionIfNeeded: (...args: unknown[]) => state.preflight(...args),
 }));
 
 vi.mock("./agent-runner-utils.js", () => ({
@@ -89,6 +89,8 @@ function createRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
 function createOperation(sessionId = "queued-session") {
   return {
     sessionId,
+    abortSignal: new AbortController().signal,
+    setPhase: vi.fn(),
     abortForRestart: vi.fn(() => true),
     retainFailureUntilComplete: vi.fn(),
     fail: vi.fn(),

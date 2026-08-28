@@ -92,6 +92,10 @@ wa-select.settings-select wa-option:state(current) {
   white-space: normal;
 }
 
+.picker-select__option:state(current) .picker-select__description {
+  color: inherit;
+}
+
 /* The model picker composes the shared picker and loads this same stylesheet. */
 .model-picker {
   display: grid;

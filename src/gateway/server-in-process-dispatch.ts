@@ -22,6 +22,7 @@ type InProcessGatewayDispatchOptions = {
   onAccepted?: (payload: unknown) => void;
   onSignalAbort?: () => Promise<void> | void;
   requestIdPrefix?: string;
+  sessionMutationCommitGuard?: () => void;
   timeoutMs?: number;
   signal?: AbortSignal;
 };
@@ -182,6 +183,7 @@ export async function dispatchGatewayRequestInProcessRaw(
     },
     context: options.context,
     methodRegistry: options.methodRegistry,
+    sessionMutationCommitGuard: options.sessionMutationCommitGuard,
     ...(options.signal ? { signal: options.signal } : {}),
   })
     .then(() => {

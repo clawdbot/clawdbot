@@ -11,6 +11,7 @@ import { clampText } from "../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
+  summarizeSessionPullRequests,
   scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
@@ -31,11 +32,14 @@ import {
   catalogRawResult,
   catalogRawString,
   nativeHistoryMessageIdentity,
-  summarizeSessionPullRequests,
 } from "./chat-pane-shared.ts";
 import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveChatAgentId, saveRouteSessionSettings } from "./chat-state-route.ts";
+import {
+  resolveChatAgentId,
+  saveRouteSessionSettings,
+  selectedChatSessionRow,
+} from "./chat-state-route.ts";
 import {
   dismissChatPullRequest,
   listDismissedChatPullRequests,
@@ -171,7 +175,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
 
   protected deferSessionHydrationUntilTranscript(
     sessionKey: string,
-    transcriptLoad: Promise<unknown>,
+    transcriptLoad: Promise<boolean>,
   ): void {
     const state = this.state;
     if (!state) {
@@ -195,13 +199,13 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       state.connected &&
       state.client === client &&
       state.sessionKey === sessionKey;
-    const scheduleHydration = () => {
+    const scheduleHydration = (historyCommitted: boolean) => {
       if (!isCurrent()) {
         retireIfCurrent();
         return;
       }
       if (!this.presented) {
-        this.pendingDeferredSessionHydration = scheduleHydration;
+        this.pendingDeferredSessionHydration = () => scheduleHydration(historyCommitted);
         return;
       }
       this.pendingDeferredSessionHydration = null;
@@ -210,19 +214,22 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       state.renderLifecycle.afterCommit((complete) => {
         if (isCurrent() && this.presented) {
           this.deferredSessionHydrationActive = false;
+          if (historyCommitted) {
+            this.markSessionRead(selectedChatSessionRow(state));
+          }
           void loadChatBranches(state);
           void this.probeSessionDiscussion(sessionKey);
           this.hydrateSessionCompanion(sessionKey);
           void this.refreshSessionPullRequests();
         } else if (isCurrent()) {
-          this.pendingDeferredSessionHydration = scheduleHydration;
+          this.pendingDeferredSessionHydration = () => scheduleHydration(historyCommitted);
         } else {
           retireIfCurrent();
         }
         complete();
       });
     };
-    void transcriptLoad.then(scheduleHydration, scheduleHydration);
+    void transcriptLoad.then(scheduleHydration, () => scheduleHydration(false));
   }
 
   protected resumeDeferredSessionHydration(): boolean {
@@ -250,7 +257,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     const agentStatusActive = Boolean(row.agentStatus && row.agentStatus.expiresAt > Date.now());
     const unread = row.unread === true || unreadFailure || agentStatusActive;
     if (!unread) {
-      this.unreadPatchGuard.shouldPatch(state.sessionKey, false);
+      this.unreadPatchGuard.shouldPatch(state.sessionKey, false, row.markedUnreadAt);
       return;
     }
     const agentId = parseAgentSessionKey(row.key)?.agentId ?? resolveChatAgentId(state);
@@ -260,24 +267,33 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     });
     // Read-only navigation must remain silent: absence of mutation access is
     // not an operation failure and should not latch the unread retry guard.
-    if (!access.allowed || !this.unreadPatchGuard.shouldPatch(state.sessionKey, true)) {
+    if (
+      !access.allowed ||
+      !this.unreadPatchGuard.shouldPatch(state.sessionKey, true, row.markedUnreadAt)
+    ) {
       return;
     }
     const guardKey = state.sessionKey;
-    void this.context.sessions.patch(row.key, { unread: false }, { agentId }).then(
-      (result) => {
-        // A null result means no request was sent (connection scope lost);
-        // unlatch like a failure or the badge stays lit until navigation.
-        if (result === null) {
+    void this.context.sessions
+      .patch(
+        row.key,
+        { unread: false },
+        { agentId, expectedMarkedUnreadAt: row.markedUnreadAt ?? null },
+      )
+      .then(
+        (result) => {
+          // A null result means no request was sent (connection scope lost);
+          // unlatch like a failure or the badge stays lit until navigation.
+          if (result === null) {
+            this.unreadPatchGuard.patchFailed(guardKey);
+          }
+        },
+        () => {
+          // Unlatch so later unread snapshots retry; the session capability
+          // publishes the actionable error for the owning page.
           this.unreadPatchGuard.patchFailed(guardKey);
-        }
-      },
-      () => {
-        // Unlatch so later unread snapshots retry; the session capability
-        // publishes the actionable error for the owning page.
-        this.unreadPatchGuard.patchFailed(guardKey);
-      },
-    );
+        },
+      );
   }
 
   protected async restoreArchivedSession(sessionKey: string, expectedSessionId: string) {

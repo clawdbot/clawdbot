@@ -1,6 +1,6 @@
 // Hook integration coverage for direct and queued embedded compaction.
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -49,6 +49,7 @@ import {
   resolveModelAsyncMock,
   resolveModelMock,
   resolveSandboxContextMock,
+  resolveSkillsPromptMock,
   resolveSessionAgentIdMock,
   resolveSessionAgentIdsMock,
   rotateTranscriptAfterCompactionMock,
@@ -390,6 +391,96 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(sessionManualCompactionMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: "unrestricted",
+      toolsAllow: undefined,
+      expectedPromptMode: "full",
+      expectedSkillsPrompt: "PRIVATE_SKILL_MARKER",
+      expectedToolNames: ["read", "exec"],
+    },
+    {
+      label: "wildcard",
+      toolsAllow: ["*"],
+      expectedPromptMode: "full",
+      expectedSkillsPrompt: "PRIVATE_SKILL_MARKER",
+      expectedToolNames: ["read", "exec"],
+    },
+    {
+      label: "finite",
+      toolsAllow: ["read"],
+      expectedPromptMode: "minimal",
+      expectedSkillsPrompt: null,
+      expectedToolNames: ["read"],
+    },
+  ])(
+    "projects the $label tool policy into the compact endpoint prompt",
+    async ({ toolsAllow, expectedPromptMode, expectedSkillsPrompt, expectedToolNames }) => {
+      resolveSkillsPromptMock.mockReturnValue("PRIVATE_SKILL_MARKER");
+      createOpenClawCodingToolsMock.mockReturnValue([
+        {
+          name: "read",
+          label: "Read",
+          description: "Read a file",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(),
+        },
+        {
+          name: "exec",
+          label: "Exec",
+          description: "Run a command",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(),
+        },
+      ]);
+      buildEmbeddedSystemPromptMock.mockImplementation((params) =>
+        JSON.stringify({
+          promptMode: params.promptMode,
+          skillsPrompt: params.skillsPrompt ?? null,
+          toolNames: params.tools.map((tool) => tool.name),
+        }),
+      );
+      let endpointSystemPrompt: string | undefined;
+      attemptServerEndpointCompactionMock.mockImplementationOnce(async (input: unknown) => {
+        endpointSystemPrompt = (input as { context: { systemPrompt: string } }).context
+          .systemPrompt;
+        return {
+          item: { type: "compaction", encrypted_content: "opaque" },
+          usage: { input_tokens: 1_000, output_tokens: 200 },
+        };
+      });
+
+      const result = await compactEmbeddedAgentSessionDirect(
+        wrappedCompactionArgs({
+          provider: "xai",
+          model: "grok-4.5",
+          config: {
+            models: {
+              providers: {
+                xai: {
+                  api: "openai-responses",
+                  baseUrl: "https://api.x.ai/v1",
+                  models: [],
+                },
+              },
+            },
+          },
+          customInstructions: undefined,
+          trigger: "manual",
+          toolsAllow,
+        }),
+      );
+
+      expect(result).toMatchObject({ compacted: true, compactionKind: "server-endpoint" });
+      expect(endpointSystemPrompt).toBeDefined();
+      expect(JSON.parse(endpointSystemPrompt ?? "{}")).toEqual({
+        promptMode: expectedPromptMode,
+        skillsPrompt: expectedSkillsPrompt,
+        toolNames: expectedToolNames,
+      });
+    },
+  );
+
   it("never calls the compact endpoint during overflow recovery", async () => {
     mockResolvedModel();
 
@@ -477,7 +568,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       runtimePlan,
     });
 
-    expect(result).toMatchObject({ ok: true });
+    expect(result, result.reason).toMatchObject({ ok: true });
     expect(selectAgentHarnessForPreparedModelProvidersMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
@@ -932,6 +1023,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         }),
       }),
     );
+    expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ heartbeatPrompt: expect.anything() }),
+    );
   });
 
   it("keeps the compaction prompt and durable provider resources after disposal", async () => {
@@ -963,16 +1057,22 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
-  it.each(["direct", "queued"] as const)(
-    "tracks the provider request allowance for %s compaction",
-    async (mode) => {
-      const requestTimeoutMs = 420_000;
+  it.each([
+    { mode: "direct", providerTimeoutMs: 420_000, expectedTimeoutMs: 420_000 },
+    { mode: "queued", providerTimeoutMs: 420_000, expectedTimeoutMs: 420_000 },
+    { mode: "direct", expectedTimeoutMs: 30_000 },
+    { mode: "queued", expectedTimeoutMs: 30_000 },
+  ] as const)(
+    "tracks the owned request allowance for $mode compaction",
+    async ({ mode, expectedTimeoutMs, ...scenario }) => {
       const providerRequest = createDeferred<unknown>();
       const ref = { sessionId: TEST_SESSION_ID, sessionKey: TEST_SESSION_KEY };
       let activeSnapshot:
         | ReturnType<typeof diagnosticRunActivity.getDiagnosticSessionActivitySnapshot>
         | undefined;
-      mockResolvedModel({ requestTimeoutMs });
+      mockResolvedModel(
+        "providerTimeoutMs" in scenario ? { requestTimeoutMs: scenario.providerTimeoutMs } : {},
+      );
       resolveEmbeddedAgentStreamFnMock.mockReturnValue(vi.fn(() => providerRequest.promise));
       attemptServerEndpointCompactionMock.mockImplementationOnce(async (input: unknown) => {
         const { context, model, streamFn } = input as {
@@ -1015,7 +1115,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         expect(activeSnapshot).toMatchObject({
           activeWorkKind: "model_call",
           hasActiveEmbeddedRun: true,
-          activeModelCallRequestTimeoutMs: requestTimeoutMs,
+          activeModelCallRequestTimeoutMs: expectedTimeoutMs,
         });
         await diagnosticEvents.waitForDiagnosticEventsDrained();
         expect(
@@ -1171,21 +1271,49 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
-  it("preserves the recorded session permission policy when building compaction tools", async () => {
-    await compactEmbeddedAgentSessionDirect(
-      wrappedCompactionArgs({
-        workspaceDir: "/tmp/workspace",
-        sessionEntry: {
-          sessionId: "session-1",
+  it.each([
+    { execMode: "auto", permissionMode: "workspace" },
+    { execMode: "full", permissionMode: "full" },
+  ] as const)(
+    "uses the final $permissionMode permission policy for compaction tools",
+    async ({ execMode, permissionMode }) => {
+      await compactEmbeddedAgentSessionDirect(
+        wrappedCompactionArgs({
+          workspaceDir: "/tmp/workspace",
           permissionMode: "full",
           sessionRoot: "/tmp/workspace",
-        },
+          execOverrides: { mode: execMode },
+          sessionEntry: {
+            sessionId: "session-1",
+            permissionMode: "full",
+            sessionRoot: "/tmp/workspace",
+          },
+        }),
+      );
+
+      const toolOptions = expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
+        sessionPermissionPolicy: { mode: permissionMode, root: "/tmp/workspace" },
+      });
+      expect(toolOptions.exec).toEqual(expect.objectContaining({ mode: execMode }));
+    },
+  );
+
+  it("defaults rootless compaction permissions to the canonical agent workspace", async () => {
+    const workspaceDir = tempDirs.make("openclaw-rootless-compaction-permission-");
+    const canonicalWorkspace = await realpath(workspaceDir);
+
+    await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({
+        workspaceDir,
+        permissionMode: "workspace",
+        sessionEntry: { sessionId: "session-1", permissionMode: "workspace" },
       }),
     );
 
-    expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
-      sessionPermissionPolicy: { mode: "full", root: "/tmp/workspace" },
+    const toolOptions = expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
+      sessionPermissionPolicy: { mode: "workspace", root: canonicalWorkspace },
     });
+    expect(toolOptions.exec).toEqual(expect.objectContaining({ mode: "auto" }));
   });
 
   it("keeps manifest-profiled plugin tools executable during compaction", async () => {
@@ -1321,6 +1449,34 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expectRecordFields(mockCallArg(applyAgentCompactionSettingsFromConfigMock), {
       contextTokenBudget: 64_000,
     });
+  });
+
+  it("creates a distinct skill-instruction delivery cache for each compaction attempt", async () => {
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+    });
+    const firstCache = expectRecordFields(
+      mockCallArg(createOpenClawCodingToolsMock),
+      {},
+    ).skillInstructionDeliveryCache;
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-2",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+    });
+    const secondCache = expectRecordFields(
+      mockCallArg(createOpenClawCodingToolsMock, 1),
+      {},
+    ).skillInstructionDeliveryCache;
+
+    expect(firstCache).toBeInstanceOf(Map);
+    expect(secondCache).toBeInstanceOf(Map);
+    expect(secondCache).not.toBe(firstCache);
   });
 
   it("skips runtime tool construction when the compaction model does not support tools", async () => {

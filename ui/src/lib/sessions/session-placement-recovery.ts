@@ -1,5 +1,10 @@
+import {
+  SessionPermissionModeSchema,
+  SessionToolOverridesSchema,
+} from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { Value } from "typebox/value";
 import type { SessionCreateParams } from "./create.ts";
 import {
   sessionPlacementRecoveryExactStorageKey,
@@ -52,6 +57,8 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "worktree",
   "incognito",
   "visibility",
+  "permissionMode",
+  "toolOverrides",
   ...PLACEMENT_CREATE_STRING_FIELDS,
 ]);
 
@@ -72,6 +79,10 @@ export function parseSessionPlacementCreateParams(
     record.worktree !== true ||
     (record.incognito !== undefined && record.incognito !== true) ||
     (record.visibility !== undefined && record.visibility !== "draft") ||
+    (record.permissionMode !== undefined &&
+      !Value.Check(SessionPermissionModeSchema, record.permissionMode)) ||
+    (record.toolOverrides !== undefined &&
+      !Value.Check(SessionToolOverridesSchema, record.toolOverrides)) ||
     (record.projectId !== undefined && record.cwd !== undefined) ||
     PLACEMENT_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),

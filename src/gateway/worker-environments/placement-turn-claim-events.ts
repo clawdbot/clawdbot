@@ -5,7 +5,12 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import {
+  captureGatewayRootWorkAdmissionContinuationScope,
+  type GatewayRootWorkAdmissionContinuationScope,
+} from "../../process/gateway-work-admission.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 
 type TurnClaimReleaseWaiter = (error?: Error) => void;
@@ -46,16 +51,28 @@ export type WorkerTurnExecutionIdentityCapability = Readonly<{
   run<T>(callback: (identity: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T>;
 }>;
 
-type BoundWorkerTurnExecutionIdentity = {
-  capability: WorkerTurnExecutionIdentityCapability;
+type BoundWorkerTurnOwner = {
+  capability?: WorkerTurnExecutionIdentityCapability;
   claim: WorkerSessionTurnClaim;
   claimKey: string;
+  continuation?: {
+    delegatedAuthority: AgentRunDelegatedAuthority;
+    scope: GatewayRootWorkAdmissionContinuationScope;
+    store: WorkerTurnExecutionIdentityStore;
+  };
 };
 
-const workerTurnExecutionIdentities = resolveGlobalMap<
-  string,
-  Map<string, BoundWorkerTurnExecutionIdentity>
->(Symbol.for("openclaw.workerTurnExecutionIdentities"), (identities) => identities.clear());
+const workerTurnOwners = resolveGlobalMap<string, Map<string, BoundWorkerTurnOwner>>(
+  Symbol.for("openclaw.workerTurnExecutionIdentities"),
+  (ownersByPath) => {
+    for (const owners of ownersByPath.values()) {
+      for (const owner of owners.values()) {
+        owner.continuation?.scope.release();
+      }
+    }
+    ownersByPath.clear();
+  },
+);
 
 const WORKER_TURN_EXECUTION_IDENTITY_PATH = Symbol("workerTurnExecutionIdentityPath");
 type WorkerTurnExecutionIdentityStore = {
@@ -113,9 +130,19 @@ export function bindWorkerTurnExecutionIdentity(
       return result;
     },
   });
-  const identities = workerTurnExecutionIdentities.get(path) ?? new Map();
-  identities.set(claim.sessionId, { capability, claim, claimKey: claimKey(claim) });
-  workerTurnExecutionIdentities.set(path, identities);
+  const owners = workerTurnOwners.get(path) ?? new Map();
+  const existing = owners.get(claim.sessionId);
+  const currentClaimKey = claimKey(claim);
+  if (existing && existing.claimKey !== currentClaimKey) {
+    existing.continuation?.scope.release();
+  }
+  owners.set(claim.sessionId, {
+    ...(existing?.claimKey === currentClaimKey ? existing : {}),
+    capability,
+    claim,
+    claimKey: currentClaimKey,
+  });
+  workerTurnOwners.set(path, owners);
 }
 
 export function getWorkerTurnExecutionIdentityCapability(
@@ -123,10 +150,78 @@ export function getWorkerTurnExecutionIdentityCapability(
   claim: WorkerSessionTurnClaim,
 ): WorkerTurnExecutionIdentityCapability | undefined {
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
-  const bound = path ? workerTurnExecutionIdentities.get(path)?.get(claim.sessionId) : undefined;
+  const bound = path ? workerTurnOwners.get(path)?.get(claim.sessionId) : undefined;
   return bound && bound.claimKey === claimKey(claim) && store.validateTurnClaim(claim)
     ? bound.capability
     : undefined;
+}
+
+/** Completion authority follows the exact admitted run, not optional audit provenance. */
+export function bindWorkerTurnAdmissionContinuation(
+  store: WorkerTurnExecutionIdentityStore,
+  claim: WorkerSessionTurnClaim,
+  operationalRunInstance: OperationalRunInstanceRef,
+): void {
+  const scope = captureGatewayRootWorkAdmissionContinuationScope();
+  if (!scope) {
+    return;
+  }
+  const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
+  const delegatedAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
+  if (!path || !store.validateTurnClaim(claim) || !delegatedAuthority) {
+    scope.release();
+    throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+  }
+  const owners = workerTurnOwners.get(path) ?? new Map();
+  const existing = owners.get(claim.sessionId);
+  existing?.continuation?.scope.release();
+  const currentClaimKey = claimKey(claim);
+  owners.set(claim.sessionId, {
+    ...(existing?.claimKey === currentClaimKey ? existing : {}),
+    claim,
+    claimKey: currentClaimKey,
+    continuation: { delegatedAuthority, scope, store },
+  });
+  workerTurnOwners.set(path, owners);
+}
+
+export function runWorkerTurnAdmissionContinuation<T>(
+  identity: WorkerConnectionIdentity,
+  run: () => Promise<T>,
+): Promise<T> | null {
+  const claim = identity.turnClaim;
+  if (
+    !claim ||
+    claim.owner.kind !== "worker" ||
+    identity.sessionId !== claim.sessionId ||
+    identity.runId !== claim.runId ||
+    identity.environmentId !== claim.owner.environmentId ||
+    identity.ownerEpoch !== claim.owner.ownerEpoch
+  ) {
+    return null;
+  }
+  const currentClaimKey = claimKey(claim);
+  let owner: BoundWorkerTurnOwner | undefined;
+  for (const owners of workerTurnOwners.values()) {
+    const candidate = owners.get(claim.sessionId);
+    if (candidate?.claimKey !== currentClaimKey) {
+      continue;
+    }
+    if (owner) {
+      return null;
+    }
+    owner = candidate;
+  }
+  const continuation = owner?.continuation;
+  if (
+    !owner ||
+    !continuation ||
+    !continuation.store.validateTurnClaim(owner.claim) ||
+    !validateAgentRunDelegatedAuthority(continuation.delegatedAuthority)
+  ) {
+    return null;
+  }
+  return continuation.scope.run(run);
 }
 
 export function attachWorkerTurnExecutionIdentityStore(store: object, path: string): void {
@@ -198,11 +293,13 @@ export function registerWorkerTurnClaimClosedHandler(
 
 export function signalWorkerTurnClaimClosed(path: string, claim: WorkerSessionTurnClaim): void {
   signalTurnClaimRelease(path, claim.sessionId);
-  const identities = workerTurnExecutionIdentities.get(path);
-  if (identities?.get(claim.sessionId)?.claimKey === claimKey(claim)) {
-    identities.delete(claim.sessionId);
-    if (identities.size === 0) {
-      workerTurnExecutionIdentities.delete(path);
+  const owners = workerTurnOwners.get(path);
+  const owner = owners?.get(claim.sessionId);
+  if (owner?.claimKey === claimKey(claim)) {
+    owner.continuation?.scope.release();
+    owners?.delete(claim.sessionId);
+    if (owners?.size === 0) {
+      workerTurnOwners.delete(path);
     }
   }
   for (const handler of workerTurnClaimClosedHandlers.get(path) ?? []) {

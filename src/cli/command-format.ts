@@ -6,7 +6,7 @@ const CLI_PREFIX_RE = /^(?:pnpm|npm|bunx|npx)\s+openclaw\b|^openclaw\b/;
 const CONTAINER_FLAG_RE = /(?:^|\s)--container(?:\s|=|$)/;
 const PROFILE_FLAG_RE = /(?:^|\s)--profile(?:\s|=|$)/;
 const DEV_FLAG_RE = /(?:^|\s)--dev(?:\s|$)/;
-const UPDATE_COMMAND_RE = /^(?:(?:pnpm|npm|bunx|npx)\s+openclaw|openclaw)\b.*\supdate(?:\s|$)/;
+const UPDATE_RE = /^(?:\s+--(?:dev|no-color|(?:profile|log-level)[=\s]+\S+))*\s+update(?:\s|$)/;
 const CONTAINER_HINT_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 
 /** Add active root options to a displayed command without duplicating explicit flags. */
@@ -29,7 +29,7 @@ export function formatCliCommand(
   if (
     container &&
     !CONTAINER_FLAG_RE.test(normalizedCommand) &&
-    !UPDATE_COMMAND_RE.test(normalizedCommand)
+    !UPDATE_RE.test(normalizedCommand.replace(CLI_PREFIX_RE, ""))
   ) {
     additions.push(`--container ${container}`);
   }

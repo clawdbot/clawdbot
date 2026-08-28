@@ -29,6 +29,7 @@ import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import type { GatewayRecoveryRuntime } from "../server-instance-runtime.types.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-state.js";
 import { resolveChatSendActiveScopeKey } from "./chat-origin-routing.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -44,6 +45,12 @@ type RestartSafeChatAdmission = {
   priorTerminalSourceRunId?: string;
   requestFingerprint: string;
   retryExpectedState?: SessionTranscriptTurnExpectedState;
+};
+
+export type RestartSafeChatTerminalState = {
+  error?: string;
+  retryable: boolean;
+  status: "failed" | "killed";
 };
 
 type RetryableUnadoptedChatClaim = SessionEntry & {
@@ -377,11 +384,11 @@ export function buildRestartSafeChatTranscriptState(params: {
       restartRecoveryBeforeAgentReplyState: undefined,
       restartRecoveryDeliveryReceiptState: undefined,
       restartRecoveryDeliveryToolCallId: undefined,
-      status: "running",
+      ...deriveGatewaySessionLifecycleSnapshot({
+        event: { runId: params.clientRunId, ts: params.startedAt, data: { phase: "start" } },
+      }),
       lifecycleRunId: params.clientRunId,
       lastRunId: undefined,
-      startedAt: params.startedAt,
-      endedAt: undefined,
       restartRecoveryDeliveryContext: undefined,
       restartRecoveryDeliveryRequestFingerprint: params.admission.requestFingerprint,
       restartRecoveryDeliveryRunId: params.clientRunId,
@@ -394,22 +401,19 @@ export function buildRestartSafeChatTranscriptState(params: {
       ...(params.admission.priorTerminalSourceRunId
         ? { restartRecoveryTerminalRunIds: [params.admission.priorTerminalSourceRunId] }
         : {}),
-      runtimeMs: undefined,
-      abortedLastRun: false,
-      updatedAt: params.startedAt,
     },
   };
 }
 
-export async function terminalizeRestartSafeChatAdmission(params: {
-  admittedSessionId: string;
-  clientRunId: string;
-  retryable: boolean;
-  sessionKey: string;
-  startedAt: number;
-  status: "failed" | "killed";
-  storePath: string;
-}): Promise<boolean> {
+export async function terminalizeRestartSafeChatAdmission(
+  params: RestartSafeChatTerminalState & {
+    admittedSessionId: string;
+    clientRunId: string;
+    sessionKey: string;
+    startedAt: number;
+    storePath: string;
+  },
+): Promise<boolean> {
   const endedAt = Date.now();
   let terminalized = false;
   await patchSessionEntryCore(
@@ -422,11 +426,25 @@ export async function terminalizeRestartSafeChatAdmission(params: {
         return null;
       }
       terminalized = true;
+      // Commit the diagnostic with claim release; a later lifecycle write could
+      // race the next admission before a newly mounted chat reads the failure.
       return {
+        ...deriveGatewaySessionLifecycleSnapshot({
+          event: {
+            runId: params.clientRunId,
+            ts: endedAt,
+            data: {
+              phase: params.status === "failed" ? "error" : "end",
+              startedAt: params.startedAt,
+              endedAt,
+              aborted: params.status === "killed",
+              error: params.error,
+            },
+          },
+        }),
         abortedLastRun: params.retryable ? false : params.status === "killed",
         lifecycleRunId: undefined,
         lastRunId: params.clientRunId,
-        endedAt,
         ...(params.retryable
           ? {}
           : buildRestartRecoveryClaimCleanupPatch({
@@ -434,9 +452,6 @@ export async function terminalizeRestartSafeChatAdmission(params: {
               recordTerminalSource: true,
               terminalSourceRunId: current.restartRecoveryDeliverySourceRunId,
             })),
-        runtimeMs: Math.max(0, endedAt - params.startedAt),
-        status: params.status,
-        updatedAt: endedAt,
       };
     },
     { requireWriteSuccess: true, skipMaintenance: true },

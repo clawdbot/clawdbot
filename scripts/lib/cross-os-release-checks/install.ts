@@ -23,7 +23,6 @@ import {
   PUBLISHED_INSTALLER_BASE_URL,
   installTimeoutMs,
   resolvePackDestinationTarball,
-  shouldRunBundledPluginPostinstall,
 } from "./config.ts";
 import { readLogTextWindow } from "./logs.ts";
 import { runCommand } from "./process.ts";
@@ -400,10 +399,7 @@ export async function installTarballPackage(params: {
     timeoutMs: params.timeoutMs,
     ignoreScripts: params.ignoreScripts,
   });
-  if (
-    params.restoreBundledPluginPostinstall !== false &&
-    shouldRunBundledPluginPostinstall({ lane: params.lane })
-  ) {
+  if (params.restoreBundledPluginPostinstall !== false) {
     await runBundledPluginPostinstall({
       lane: params.lane,
       env: params.env,

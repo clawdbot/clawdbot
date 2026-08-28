@@ -5,8 +5,10 @@ import {
   type PluginManifestRecord,
 } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
 import { listOfficialExternalChannelSecretTargetRegistryEntries } from "./official-external-channel-secret-contract.js";
+import { parseDotPath } from "./shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
@@ -23,14 +25,15 @@ function createPluginOpenClawConfigSecretTargetEntry(
   pluginId: string,
   configPath: string,
 ): SecretTargetRegistryEntry {
-  const pathPattern = ["plugins", "entries", pluginId, "config", ...configPath.split(".")].join(
-    ".",
-  );
+  const pluginConfigPath = ["plugins", "entries", pluginId, "config"];
+  const pathPatternSegments = [...pluginConfigPath, ...parseDotPath(configPath)];
+  const pathPattern = `${formatConcreteConfigPath(pluginConfigPath)}.${configPath}`;
   return {
     id: pathPattern,
     targetType: pathPattern,
     configFile: "openclaw.json",
     pathPattern,
+    pathPatternSegments,
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
     includeInPlan: true,

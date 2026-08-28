@@ -14,6 +14,7 @@ import {
   validateApprovalHistoryParams,
   validateApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type {
   ExecApprovalDecision,
@@ -42,6 +43,7 @@ import {
   type ExecApprovalIosPushDelivery,
   type PluginApprovalIosPushDelivery,
 } from "./approval-publication.js";
+import { canAccessApprovalSession } from "./approval-record-lookup.js";
 import { respondApprovalStorageUnavailable } from "./approval-shared.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -140,6 +142,7 @@ function readExactApprovalId(params: unknown): string | null {
 function loadVisibleApproval(params: {
   id: string;
   client: GatewayClient | null;
+  cfg: OpenClawConfig;
   allowApprovalRuntime?: boolean;
   allowTransportRef?: boolean;
   execApprovalManager: ExecApprovalManager;
@@ -159,6 +162,17 @@ function loadVisibleApproval(params: {
     params.execApprovalManager.getLiveSnapshot(params.id) ??
     params.pluginApprovalManager.getLiveSnapshot(params.id) ??
     params.systemAgentApprovalManager?.getLiveSnapshot(params.id);
+  if (
+    liveRecord &&
+    !canAccessApprovalSession({
+      cfg: params.cfg,
+      client: params.client,
+      sessionKey: liveRecord.request.sessionKey,
+      agentId: liveRecord.request.agentId,
+    })
+  ) {
+    return null;
+  }
   if (
     liveRecord &&
     !canAccessOperatorApproval({
@@ -184,6 +198,16 @@ function loadVisibleApproval(params: {
     throw error;
   }
   if (lookup.outcome === "found") {
+    if (
+      !canAccessApprovalSession({
+        cfg: params.cfg,
+        client: params.client,
+        sessionKey: lookup.record.source.sessionKey,
+        agentId: lookup.record.source.agentId,
+      })
+    ) {
+      return null;
+    }
     if (
       !canAccessOperatorApproval({
         client: params.client,
@@ -276,7 +300,7 @@ export function createApprovalHandlers(
   params: CreateApprovalHandlersParams,
 ): GatewayRequestHandlers {
   return {
-    "approval.history": ({ params: rawParams, respond, context }) => {
+    "approval.history": ({ params: rawParams, respond, client, context }) => {
       if (!validateApprovalHistoryParams(rawParams)) {
         respond(
           false,
@@ -306,10 +330,19 @@ export function createApprovalHandlers(
         respondApprovalStorageUnavailable({ context, respond, operation: "history", error });
         return;
       }
-      const controlUiBasePath = normalizeControlUiBasePath(
-        context.getRuntimeConfig()?.gateway?.controlUi?.basePath,
-      );
+      const cfg = context.getRuntimeConfig();
+      const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
       const items = history.records.flatMap((record) => {
+        if (
+          !canAccessApprovalSession({
+            cfg,
+            client,
+            sessionKey: record.source.sessionKey,
+            agentId: record.source.agentId,
+          })
+        ) {
+          return [];
+        }
         const snapshot = buildApprovalSnapshot(record, controlUiBasePath);
         return snapshot && snapshot.status !== "pending" ? [snapshot] : [];
       });
@@ -336,6 +369,7 @@ export function createApprovalHandlers(
           ? loadVisibleApproval({
               id,
               client,
+              cfg: context.getRuntimeConfig(),
               execApprovalManager: params.execApprovalManager,
               pluginApprovalManager: params.pluginApprovalManager,
               systemAgentApprovalManager: params.systemAgentApprovalManager,
@@ -372,6 +406,7 @@ export function createApprovalHandlers(
           ? loadVisibleApproval({
               id,
               client,
+              cfg: context.getRuntimeConfig(),
               allowApprovalRuntime: true,
               allowTransportRef: true,
               execApprovalManager: params.execApprovalManager,

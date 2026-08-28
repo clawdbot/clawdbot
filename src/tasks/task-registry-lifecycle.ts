@@ -1,5 +1,6 @@
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agents/agent-run-terminal-outcome.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { hasAuthoritativeTaskBacking } from "./task-backing-authority.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import { recordTaskActivityEvent } from "./task-registry-activity.js";
 import {
@@ -39,7 +40,7 @@ function ensureListener() {
     }
     const now = evt.ts || Date.now();
     for (const current of scopedTasks) {
-      if (isTerminalTaskStatus(current.status)) {
+      if (isTerminalTaskStatus(current.status) || !hasAuthoritativeTaskBacking(current)) {
         continue;
       }
       if (recordTaskActivityEvent(current, evt)) {

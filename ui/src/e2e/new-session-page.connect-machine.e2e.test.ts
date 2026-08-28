@@ -178,6 +178,34 @@ suite.define(() => {
     }
   });
 
+  it("redacts sensitive connection-link failures before rendering them", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["device.pair.setupCode"],
+    });
+    const secret = "e2e-pairing-bearer-secret";
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.locator("#new-session-where-trigger").click();
+      await page.getByRole("button", { name: "Connect a machine…" }).click();
+      await gateway.waitForRequest("device.pair.setupCode");
+      await gateway.rejectDeferred("device.pair.setupCode", {
+        message: `pairing failed: Authorization: Bearer ${secret}`,
+      });
+
+      const alert = page
+        .locator('openclaw-modal-dialog[label="Connect a machine"]')
+        .getByRole("alert");
+      await alert.waitFor();
+      expect(await alert.textContent()).toContain("Authorization: [redacted]");
+      expect(await alert.textContent()).not.toContain(secret);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("closes an in-flight connection dialog when the Gateway reconnects", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();

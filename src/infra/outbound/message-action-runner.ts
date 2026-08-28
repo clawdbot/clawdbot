@@ -24,11 +24,12 @@ import {
 } from "./channel-selection.js";
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
 import { validateExplicitMessageAccountSelection } from "./message-account-selection.js";
-import type {
-  MessageActionInput,
-  MessageActionNormalization,
-  MessageActionResult,
-  ResolvedActionContext,
+import {
+  resolveMessageSendOutcome,
+  type MessageActionInput,
+  type MessageActionNormalization,
+  type MessageActionResult,
+  type ResolvedActionContext,
 } from "./message-action-contracts.js";
 import { MessageActionDeniedError } from "./message-action-denial.js";
 import { executeMessagePlugin, executeMessagePoll } from "./message-action-execution.js";
@@ -63,34 +64,6 @@ function withSendNormalization(
   normalization?: MessageActionNormalization,
 ): MessageActionResult {
   return normalization && result.kind === "send" ? { ...result, normalization } : result;
-}
-
-function deriveBroadcastEntryOutcome(
-  sendResult?: MessageSendResult,
-): { ok: true } | { ok: false; error: string; sentBeforeError?: true } {
-  if (
-    !sendResult ||
-    sendResult.deliveryStatus === undefined ||
-    sendResult.deliveryStatus === "sent"
-  ) {
-    return { ok: true };
-  }
-  switch (sendResult.deliveryStatus) {
-    case "suppressed":
-      return {
-        ok: false,
-        error: `Broadcast send suppressed: ${sendResult.suppressionReason ?? "unknown reason"}.`,
-      };
-    case "failed":
-      return { ok: false, error: sendResult.error ?? "Broadcast send failed." };
-    case "partial_failed":
-      return {
-        ok: false,
-        error: sendResult.error ?? "Broadcast send partially failed.",
-        sentBeforeError: true,
-      };
-  }
-  return sendResult.deliveryStatus satisfies never;
 }
 
 async function handleBroadcastAction(
@@ -195,8 +168,9 @@ async function handleBroadcastAction(
         results.push({
           channel: targetChannel,
           to: resolved.to,
-          ...deriveBroadcastEntryOutcome(
+          ...resolveMessageSendOutcome(
             sendResult.kind === "send" ? sendResult.sendResult : undefined,
+            "Broadcast",
           ),
           payload: sendResult.kind === "send" ? sendResult.payload : undefined,
           result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
@@ -254,6 +228,7 @@ async function handleInternalSourceReplySendAction(
     dryRun,
     mediaPolicy: resolveAttachmentMediaPolicy({
       sandboxRoot: input.sandboxRoot,
+      sandboxContainerWorkdir: input.sandboxContainerWorkdir,
       mediaAccess: input.mediaAccess,
       mediaLocalRoots: getAgentScopedMediaLocalRoots(input.cfg, agentId),
     }),
@@ -288,6 +263,7 @@ async function handleInternalSourceReplySendAction(
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
       sandboxRoot: input.sandboxRoot,
+      sandboxContainerWorkdir: input.sandboxContainerWorkdir,
     })(sourceReplyPayload);
     if (
       resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls.length !== requestedMediaCount
@@ -449,6 +425,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
 
   const normalizationPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
+    sandboxContainerWorkdir: input.sandboxContainerWorkdir,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId),
   });
   const extraActionMediaSourceParamKeys = resolveExtraActionMediaSourceParamKeys({
@@ -490,6 +467,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
     });
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
+    sandboxContainerWorkdir: input.sandboxContainerWorkdir,
     mediaAccess,
   });
   const gateway = input.gateway;

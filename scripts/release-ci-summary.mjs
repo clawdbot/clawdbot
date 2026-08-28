@@ -1359,6 +1359,7 @@ export function validateTrustedProducerIdentity(
   // Keep this predicate local: verifier source identity covers this file only.
   const shaPinned = SHA_PINNED_BRANCH_PATTERN.test(manifest.workflowRef ?? "");
   const protectedTagRoute = trustedIdentity.type === "tag";
+  let protectedTagWorkflowRefProof = "manifest-v3-protected-tag-exact-sha";
   if (protectedTagRoute) {
     let liveTag;
     try {
@@ -1378,7 +1379,16 @@ export function validateTrustedProducerIdentity(
       throw new Error("protected-tag release evidence must use a canonical release-ci branch");
     }
     if (manifest.workflowSha !== trustedIdentity.sha) {
-      throw new Error("protected-tag release evidence workflow SHA does not match trusted tooling");
+      const comparison = client.compareCommitLineage(manifest.workflowSha, trustedIdentity.sha);
+      if (
+        !["ahead", "identical"].includes(String(comparison.status)) ||
+        comparison.merge_base_commit?.sha !== manifest.workflowSha
+      ) {
+        throw new Error(
+          "protected-tag release evidence producer is not on the trusted tooling lineage",
+        );
+      }
+      protectedTagWorkflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
     }
   } else if (manifest.workflowRef !== trustedWorkflowRef && !shaPinned) {
     throw new Error(
@@ -1412,7 +1422,7 @@ export function validateTrustedProducerIdentity(
       throw new Error("release evidence producer workflow full ref is not trusted");
     }
     workflowRefProof = protectedTagRoute
-      ? "manifest-v3-protected-tag-exact-sha"
+      ? protectedTagWorkflowRefProof
       : shaPinned
         ? "manifest-v3-sha-pinned-main-ancestry"
         : "manifest-v3-branch";

@@ -44,6 +44,7 @@ vi.mock("../runtime-api.js", async (importOriginal) => {
   };
 });
 
+import { fetchChannelMessage, fetchThreadReplies } from "./graph-thread.js";
 import { findGraphUsersByExactIdentity, searchGraphUsers } from "./graph-users.js";
 import {
   deleteGraphRequest,
@@ -214,6 +215,39 @@ describe("msteams graph helpers", () => {
     expect(normalizeQuery("  Team Alpha  ")).toBe("Team Alpha");
     expect(normalizeQuery("   ")).toBe("");
     expect(escapeOData("alice.o'hara")).toBe("alice.o''hara");
+  });
+
+  it("keeps channel parent and reply requests within their Graph query contracts", async () => {
+    const parent = { id: "parent-1", body: { content: "Original question" } };
+    const reply = { id: "reply-1", body: { content: "Earlier decision" } };
+    mockFetch(async (input: string | URL | Request) => {
+      const url = new URL(requestUrl(input));
+      const isReplies = url.pathname.endsWith("/replies");
+      const unsupported = [...url.searchParams.keys()].filter(
+        (parameter) => !isReplies || parameter !== "$top",
+      );
+      return jsonResponse(
+        unsupported.length > 0
+          ? { error: { code: "BadRequest", message: "Unsupported query parameter" } }
+          : isReplies
+            ? graphCollection(reply)
+            : parent,
+        unsupported.length > 0 ? { status: 400 } : undefined,
+      );
+    });
+
+    const outcomes = await Promise.allSettled([
+      fetchChannelMessage(graphToken, "group-1", "channel-1", "parent-1"),
+      fetchThreadReplies(graphToken, "group-1", "channel-1", "parent-1"),
+    ]);
+
+    expect(outcomes).toEqual([
+      { status: "fulfilled", value: parent },
+      { status: "fulfilled", value: [reply] },
+    ]);
+    expect(fetchCallSearchParam(0, "$select")).toBeNull();
+    expect(fetchCallSearchParam(1, "$select")).toBeNull();
+    expect(fetchCallSearchParam(1, "$top")).toBe("50");
   });
 
   it("lets the shared SSRF guard select the Graph transport", async () => {

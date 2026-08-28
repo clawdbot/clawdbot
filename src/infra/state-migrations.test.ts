@@ -17,31 +17,27 @@ import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/runtime-doct
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
-} from "../plugins/doctor-contract-registry.js";
+} from "../plugins/doctor-contract-module.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   ensureOpenClawAgentDatabaseSchema,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  OPENCLAW_STATE_SCHEMA_VERSION,
-  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { loadApnsRegistration } from "./push-apns.js";
 import {
   createWebPushVapidKeyPair,
@@ -115,6 +111,7 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
           id: string;
           label: string;
           doctorOnly?: boolean;
+          phase?: "after-session-repair";
           detectLegacyState: (params: {
             config: OpenClawConfig;
             env: NodeJS.ProcessEnv;
@@ -184,7 +181,6 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
 const tempDirs = createTrackedTempDirs();
 const APNS_DEVICE_FIELD = "token";
 
-type UpdateCheckStateDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
 type PluginBindingApprovalsDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_binding_approvals">;
 type CurrentConversationBindingsDatabase = Pick<
@@ -269,26 +265,13 @@ const createTempDir = () => tempDirs.make("openclaw-state-migrations-test-");
 
 function readUpdateCheckState(env: NodeJS.ProcessEnv):
   | {
-      last_checked_at: string | null;
-      last_available_version: string | null;
-      last_available_tag: string | null;
-      auto_install_id: string | null;
+      lastCheckedAt?: string;
+      lastAvailableVersion?: string;
+      lastAvailableTag?: string;
+      autoInstallId?: string;
     }
   | undefined {
-  const { db } = openOpenClawStateDatabase({ env });
-  const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(db);
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("update_check_state")
-      .select([
-        "last_checked_at",
-        "last_available_version",
-        "last_available_tag",
-        "auto_install_id",
-      ])
-      .where("state_key", "=", "default"),
-  );
+  return readConfigMachineState("update.checkState", { env });
 }
 
 function readConfigHealthRows(env: NodeJS.ProcessEnv): Array<{
@@ -487,39 +470,14 @@ function seedSchemaOnlyLegacyAgentDatabase(
   return databasePath;
 }
 
-type VoiceWakeRoutingTestDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "voicewake_routing_config" | "voicewake_routing_routes"
->;
-
 function seedCanonicalVoiceWakeRouting(stateDir: string, trigger: string): void {
-  const updatedAtMs = Date.now();
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const routingDb = getNodeSqliteKysely<VoiceWakeRoutingTestDatabase>(db);
-      executeSqliteQuerySync(
-        db,
-        routingDb.insertInto("voicewake_routing_config").values({
-          config_key: "default",
-          version: 1,
-          default_target_mode: "current",
-          default_target_agent_id: null,
-          default_target_session_key: null,
-          updated_at_ms: updatedAtMs,
-        }),
-      );
-      executeSqliteQuerySync(
-        db,
-        routingDb.insertInto("voicewake_routing_routes").values({
-          config_key: "default",
-          position: 0,
-          trigger,
-          target_mode: "agent",
-          target_agent_id: "main",
-          target_session_key: null,
-          updated_at_ms: updatedAtMs,
-        }),
-      );
+  writeConfigMachineState(
+    "voicewake.routing",
+    {
+      version: 1,
+      defaultTarget: { mode: "current" },
+      routes: [{ trigger, target: { agentId: "main" } }],
+      updatedAtMs: Date.now(),
     },
     { env: createEnv(stateDir) },
   );
@@ -1230,9 +1188,12 @@ describe("state migrations", () => {
     try {
       const databasePath = resolveOpenClawStateSqlitePath(env);
       const database = new DatabaseSync(databasePath, { readOnly: true });
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
       expect(
-        database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name").all(),
-      ).toEqual([{ name: "schema_meta" }, { name: "state_leases" }]);
+        database.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
       database.close();
 
       const detected = await detectLegacyStateMigrations({
@@ -1330,6 +1291,78 @@ describe("state migrations", () => {
     expect(repaired.changes).toContain("doctor-only plugin state migrated");
     expect(detectLegacyState).toHaveBeenCalledTimes(2);
     expect(migrateLegacyState).toHaveBeenCalledOnce();
+  });
+
+  it("excludes post-session plugin repair from legacy migration detection and execution", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {} },
+      },
+    };
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
+    await fs.writeFile(
+      legacyStorePath,
+      JSON.stringify({ legacy: { sessionId: "imported-session", updatedAt: 1 } }),
+      "utf8",
+    );
+    const detect = vi.fn(({ context }: { context: unknown }) => {
+      expect(
+        (context as PluginDoctorStateMigrationContext).deletePluginStateEntriesIfUnchanged,
+      ).toBeUndefined();
+      return { preview: ["fixture plugin migration"] };
+    });
+    const postSessionDetect = vi.fn(() => ({ preview: ["post-session repair"] }));
+    const postSessionMigrate = vi.fn(() => ({ changes: ["post-session phase"], warnings: [] }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "fixture",
+        migration: {
+          id: "fixture-legacy",
+          label: "Fixture legacy plugin migration",
+          doctorOnly: true,
+          detectLegacyState: detect,
+          migrateLegacyState({ context }) {
+            expect(fsSync.existsSync(legacyStorePath)).toBe(true);
+            expect(
+              (context as PluginDoctorStateMigrationContext).deletePluginStateEntriesIfUnchanged,
+            ).toBeUndefined();
+            return { changes: ["legacy phase"], warnings: [] };
+          },
+        },
+      },
+      {
+        pluginId: "fixture",
+        migration: {
+          id: "fixture-after-session-repair",
+          label: "Fixture post-session plugin migration",
+          doctorOnly: true,
+          phase: "after-session-repair",
+          detectLegacyState: postSessionDetect,
+          migrateLegacyState: postSessionMigrate,
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+
+    expect(result.warnings).toEqual([]);
+    expect(detect).toHaveBeenCalledTimes(2);
+    expect(postSessionDetect).not.toHaveBeenCalled();
+    expect(postSessionMigrate).not.toHaveBeenCalled();
+    expect(result.changes).toContain("legacy phase");
+    expect(result.changes).not.toContain("post-session phase");
   });
 
   it("restores retained Memory Core host events only for explicit plugin-only Doctor repair", async () => {
@@ -3142,6 +3175,53 @@ describe("state migrations", () => {
     );
   });
 
+  it("repairs shared SQLite before discarding retired commitments JSON", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    await createLegacyAuditLedger(stateDir);
+    const sourcePath = path.join(stateDir, "commitments", "commitments.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({ version: 1, commitments: [{ id: "retired" }] }),
+      "utf8",
+    );
+    const cfg = createConfig();
+
+    const runtime = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(runtime.commitments?.hasLegacy).toBe(false);
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.preview).toContain(
+      "- Commitments: discard retired commitments/commitments.json rows without import, archive, or export",
+    );
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+
+    expect(result.warnings).toStrictEqual([]);
+    const schemaChange = result.changes.indexOf(
+      "Migrated shared state audit event ledger → versioned message lifecycle schema",
+    );
+    const discardChange = result.changes.indexOf(
+      "Discarded retired commitments JSON with 1 row; no data was imported, archived, or exported.",
+    );
+    expect(schemaChange).toBeGreaterThanOrEqual(0);
+    expect(discardChange).toBeGreaterThan(schemaChange);
+    await expectMissingPath(sourcePath);
+    expect(
+      openOpenClawStateDatabase({ env })
+        .db.prepare(
+          "SELECT removed_source FROM migration_sources WHERE migration_kind = 'legacy-commitments-json'",
+        )
+        .get(),
+    ).toEqual({ removed_source: 1 });
+  });
+
   it("doctor discards worktree rows that predate the provisioned-file ledger", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
@@ -3747,10 +3827,10 @@ describe("state migrations", () => {
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain("Migrated update-check state → shared SQLite state");
     expect(readUpdateCheckState(env)).toMatchObject({
-      last_checked_at: "2026-01-17T09:30:00.000Z",
-      last_available_version: "2.0.0",
-      last_available_tag: "latest",
-      auto_install_id: "install-1",
+      lastCheckedAt: "2026-01-17T09:30:00.000Z",
+      lastAvailableVersion: "2.0.0",
+      lastAvailableTag: "latest",
+      autoInstallId: "install-1",
     });
     await expectMissingPath(sourcePath);
     await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain("2.0.0");
@@ -3769,7 +3849,7 @@ describe("state migrations", () => {
     expect(conflictResult.notices).toEqual([
       expect.stringContaining("Kept shared SQLite update-check state because legacy cache differs"),
     ]);
-    expect(readUpdateCheckState(env)?.last_available_version).toBe("2.0.0");
+    expect(readUpdateCheckState(env)?.lastAvailableVersion).toBe("2.0.0");
     await expectMissingPath(sourcePath);
     await expect(fs.readFile(`${sourcePath}.migrated.2`, "utf8")).resolves.toContain("3.0.0");
 

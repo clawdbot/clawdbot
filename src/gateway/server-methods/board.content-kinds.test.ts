@@ -56,7 +56,7 @@ describe("board registered widget content kinds", () => {
     const previous = getActivePluginRegistry();
     const { registry, validateSource, composeDocument } = registeredWidgetRegistry();
     setActivePluginRegistry(registry);
-    const { invoke, store } = createBoardHarness(
+    const { context, invoke, store } = createBoardHarness(
       undefined,
       {},
       undefined,
@@ -112,7 +112,9 @@ describe("board registered widget content kinds", () => {
         frameUrl: expect.stringContaining("/__openclaw__/board/"),
         sandboxUrl: expect.stringContaining("/mcp-app-sandbox"),
       });
-      const authorized = resolveAuthorizedBoardWidgetView(store, widget.viewTicket!);
+      const authorized = resolveAuthorizedBoardWidgetView(store, widget.viewTicket!, {
+        gatewayContext: context,
+      });
       expect(authorized.document.html).toContain("<main>diagram:second</main>");
       expect(authorized.document.html).toContain(
         "https://gateway.test/__openclaw__/cap/diagram-token/__openclaw__/diagram/app.js",
@@ -143,49 +145,63 @@ describe("board registered widget content kinds", () => {
     );
   });
 
-  it("composes visible prompt actions only after the prompt grant", async () => {
-    const { registry, composeDocument } = registeredWidgetRegistry();
-    setActivePluginRegistry(registry);
-    const { invoke, store } = createBoardHarness(
-      undefined,
-      {},
-      undefined,
-      {},
-      {
-        connect: {} as never,
-        pluginSurfaceUrls: {
-          diagram: "https://gateway.test/__openclaw__/cap/diagram-token",
+  it.each(["ask", "full"] as const)(
+    "composes registered widget prompt actions after the %s policy grant",
+    async (mode) => {
+      const { registry, composeDocument } = registeredWidgetRegistry();
+      setActivePluginRegistry(registry);
+      const { context, invoke, store } = createBoardHarness(
+        undefined,
+        {},
+        undefined,
+        {
+          getRuntimeConfig: () => ({
+            agents: { list: [{ id: "main" }] },
+            tools: { exec: { mode } },
+          }),
         },
-      },
-    );
-    const put = await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "prompting",
-      content: { kind: "registered", contentKind: "diagram", source: "diagram:prompt" },
-      declared: { tools: ["prompt"] },
-    });
-    const putSnapshot = put.mock.calls[0]?.[1];
-    if (!putSnapshot) {
-      throw new Error("board.widget.put did not return a snapshot");
-    }
-    const pending = (putSnapshot as BoardSnapshot).widgets[0]!;
-    expect(pending.grantState).toBe("pending");
-    await invoke("board.widget.grant", {
-      sessionKey: "session",
-      name: "prompting",
-      decision: "granted",
-      revision: pending.revision,
-      instanceId: pending.instanceId,
-    });
-    const board = await invoke("board.get", { sessionKey: "session" });
-    const snapshot = board.mock.calls[0]?.[1];
-    if (!snapshot) {
-      throw new Error("board.get did not return a snapshot");
-    }
-    const widget = (snapshot as BoardSnapshot).widgets[0]!;
+        {
+          connect: {} as never,
+          pluginSurfaceUrls: {
+            diagram: "https://gateway.test/__openclaw__/cap/diagram-token",
+          },
+        },
+      );
+      const put = await invoke("board.widget.put", {
+        sessionKey: "session",
+        name: "prompting",
+        content: { kind: "registered", contentKind: "diagram", source: "diagram:prompt" },
+        declared: { tools: ["prompt"] },
+      });
+      const putSnapshot = put.mock.calls[0]?.[1];
+      if (!putSnapshot) {
+        throw new Error("board.widget.put did not return a snapshot");
+      }
+      const widgetSnapshot = (putSnapshot as BoardSnapshot).widgets[0]!;
+      expect(widgetSnapshot.grantState).toBe(mode === "ask" ? "pending" : "granted");
+      if (mode === "ask") {
+        await invoke("board.widget.grant", {
+          sessionKey: "session",
+          name: "prompting",
+          decision: "granted",
+          revision: widgetSnapshot.revision,
+          instanceId: widgetSnapshot.instanceId,
+        });
+      }
+      const board = await invoke("board.get", { sessionKey: "session" });
+      const snapshot = board.mock.calls[0]?.[1];
+      if (!snapshot) {
+        throw new Error("board.get did not return a snapshot");
+      }
+      const widget = (snapshot as BoardSnapshot).widgets[0]!;
 
-    resolveAuthorizedBoardWidgetView(store, widget.viewTicket!);
+      resolveAuthorizedBoardWidgetView(store, widget.viewTicket!, {
+        gatewayContext: context,
+      });
 
-    expect(composeDocument).toHaveBeenCalledWith(expect.objectContaining({ promptGranted: true }));
-  });
+      expect(composeDocument).toHaveBeenCalledWith(
+        expect.objectContaining({ promptGranted: true }),
+      );
+    },
+  );
 });

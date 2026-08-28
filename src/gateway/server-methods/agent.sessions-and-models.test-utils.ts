@@ -43,6 +43,7 @@ import {
   operatorWriteGatewayClient,
   resetAgentTaskRegistryForTests,
   waitForAgentCommandCall,
+  waitForAgentCommandCallAfter,
   invokeAgent,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
@@ -111,8 +112,8 @@ describe("gateway agent handler", () => {
     );
 
     expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
-    const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
-    expectStringFieldContains(error, "message", "quarantined after restart recovery exhaustion");
+    const error = expectRespondError(respond, { code: ErrorCodes.INVALID_REQUEST });
+    expectStringFieldContains(error, "message", "ended during restart recovery");
   });
 
   it("rejects ordinary work while restart recovery exhaustion is being tombstoned", async () => {
@@ -192,6 +193,7 @@ describe("gateway agent handler", () => {
       useTestStateDir(root);
       resetAgentTaskRegistryForTests();
       primeMainAgentRun();
+      const commandCallCount = mocks.agentCommand.mock.calls.length;
 
       await invokeAgent(
         {
@@ -201,6 +203,7 @@ describe("gateway agent handler", () => {
         },
         { reqId: "task-registry-agent-run" },
       );
+      await waitForAgentCommandCallAfter(commandCallCount);
 
       await waitForAssertion(() => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run"), {
@@ -235,7 +238,7 @@ describe("gateway agent handler", () => {
           },
           list: [{ id: "main", default: true }, { id: "work" }],
         },
-      };
+      } satisfies typeof mocks.loadConfigReturn;
       mocks.listAgentIds.mockReturnValue(["main", "work"]);
       mocks.loadConfigReturn = cfg;
       mocks.loadSessionEntry.mockReturnValue({
@@ -270,6 +273,7 @@ describe("gateway agent handler", () => {
           pluginRuntimeOwnerId: "memory-core",
         },
       };
+      const initialCommandCallCount = mocks.agentCommand.mock.calls.length;
 
       const respond = await invokeAgent(
         {
@@ -283,6 +287,7 @@ describe("gateway agent handler", () => {
           client: pluginClient,
         },
       );
+      await waitForAgentCommandCallAfter(initialCommandCallCount);
 
       const acceptedPayload = respond.mock.calls.find(
         ([ok, payload]) =>
@@ -534,7 +539,7 @@ describe("gateway agent handler", () => {
         const childSessionKey = "agent:main:subagent:registry-fail";
         const cfg = {
           session: { mainKey: "main", scope: "per-sender" },
-        };
+        } satisfies typeof mocks.loadConfigReturn;
         mocks.loadConfigReturn = cfg;
         mocks.loadSessionEntry.mockReturnValue({
           cfg,
@@ -687,6 +692,7 @@ describe("gateway agent handler", () => {
       resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       mocks.agentCommand.mockRejectedValueOnce(new Error("agent unavailable"));
+      const commandCallCount = mocks.agentCommand.mock.calls.length;
 
       await invokeAgent(
         {
@@ -696,6 +702,7 @@ describe("gateway agent handler", () => {
         },
         { reqId: "task-registry-agent-run-error" },
       );
+      await waitForAgentCommandCallAfter(commandCallCount);
 
       await waitForAssertion(() => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-error"), {
@@ -718,6 +725,7 @@ describe("gateway agent handler", () => {
         meta: { durationMs: 100, aborted: true },
       });
       const context = makeContext();
+      const commandCallCount = mocks.agentCommand.mock.calls.length;
 
       await invokeAgent(
         {
@@ -727,6 +735,7 @@ describe("gateway agent handler", () => {
         },
         { context, reqId: "task-registry-agent-run-aborted" },
       );
+      await waitForAgentCommandCallAfter(commandCallCount);
 
       await waitForAssertion(() => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-aborted"), {

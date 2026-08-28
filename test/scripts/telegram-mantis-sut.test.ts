@@ -10,6 +10,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const linuxIt = process.platform === "linux" ? it : it.skip;
 
 function sutSupervisorCommand(): string {
   const source = fs.readFileSync("scripts/mantis/mantis-sut-container.sh", "utf8");
@@ -49,7 +50,7 @@ describe("Telegram Mantis SUT", () => {
     );
   }, 40_000);
 
-  it("releases the runtime claim before deadline-exposed removal", () => {
+  linuxIt("releases the runtime claim before deadline-exposed removal", () => {
     const root = tempDirs.make("telegram-mantis-cleanup-");
     const binDir = path.join(root, "bin");
     const runtimeParent = path.join(root, "runtime");
@@ -124,7 +125,7 @@ describe("Telegram Mantis SUT", () => {
     }
   });
 
-  it("waits for the claimed runtime owner before returning from stop", () => {
+  linuxIt("waits for the claimed runtime owner before returning from stop", () => {
     const root = tempDirs.make("telegram-mantis-stop-sync-");
     const binDir = path.join(root, "bin");
     const runtimeParent = path.join(root, "runtime");
@@ -277,5 +278,30 @@ exit "\${GATEWAY_EXIT_CODE:-0}"
     expect(config.commands.ownerAllowFrom).toEqual(["telegram:12345"]);
     expect(config.models.providers.openai.baseUrl).toBe("http://mock-openai:19882/v1");
     expect(config.session.sendPolicy).toEqual({ default: "deny" });
+  });
+
+  it("routes Telegram through the proxy only for the container SUT", () => {
+    const shared = {
+      gatewayPort: 19_879,
+      groupId: "-100123456789",
+      mockPort: 19_882,
+      testerId: "12345",
+    };
+    const local = writeSutConfig({
+      ...shared,
+      mockHost: "127.0.0.1",
+      outputDir: tempDirs.make("telegram-local-sut-config-"),
+    });
+    const container = writeSutConfig({
+      ...shared,
+      mockHost: "mock-openai",
+      outputDir: tempDirs.make("telegram-container-sut-config-"),
+      telegramApiRoot: "http://telegram-api-proxy:8080",
+    });
+
+    const localConfig = JSON.parse(fs.readFileSync(local.configPath, "utf8"));
+    const containerConfig = JSON.parse(fs.readFileSync(container.configPath, "utf8"));
+    expect(localConfig.channels.telegram).not.toHaveProperty("apiRoot");
+    expect(containerConfig.channels.telegram.apiRoot).toBe("http://telegram-api-proxy:8080");
   });
 });

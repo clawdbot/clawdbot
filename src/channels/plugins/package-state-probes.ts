@@ -3,7 +3,6 @@
  *
  * Resolves lightweight configured/auth state checkers from package metadata and source overlays.
  */
-import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -16,10 +15,9 @@ import {
   type PluginChannelCatalogEntry,
 } from "../../plugins/channel-catalog-registry.js";
 import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
-import {
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
-} from "../../plugins/plugin-module-loader-cache.js";
+import { pluginCacheExistsSync } from "../../plugins/plugin-cache-files.js";
+import { getCachedPluginModuleLoader } from "../../plugins/plugin-module-loader-cache.js";
+import { isSafeChannelEnvVarTriggerName } from "../../secrets/channel-env-var-names.js";
 import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
 type ChannelPackageStateChecker = (params: {
@@ -49,7 +47,6 @@ type ChannelPackageStateLoadFailure = {
 };
 
 const log = createSubsystemLogger("channels");
-const sourcePackageStateLoaderCache: PluginModuleLoaderCache = new Map();
 
 type ChannelPackageStateModuleLocation = {
   modulePath: string;
@@ -70,8 +67,8 @@ function loadChannelPackageStateModule(params: { modulePath: string; rootDir: st
     // Local source checkers can run through the cached TS loader; built JS
     // paths must still load through the boundary-safe module loader above.
     const loader = getCachedPluginModuleLoader({
-      cache: sourcePackageStateLoaderCache,
       modulePath: params.modulePath,
+      rootDir: params.rootDir,
       importerUrl: import.meta.url,
       tryNative: true,
       cacheScopeKey: "channel-package-state",
@@ -81,7 +78,12 @@ function loadChannelPackageStateModule(params: { modulePath: string; rootDir: st
 }
 
 function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv | undefined, key: string): boolean {
-  return typeof env?.[key] === "string" && env[key].trim().length > 0;
+  if (!env || !isSafeChannelEnvVarTriggerName(key)) {
+    return false;
+  }
+  const normalized = key.trim();
+  const value = env[normalized] ?? env[normalized.toUpperCase()];
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function resolveSourceBundledPluginRoot(rootDir: string): {
@@ -131,7 +133,7 @@ function listBuiltBundledPackageStateModules(params: {
     path.join(sourceRoot.packageRoot, "dist-runtime", "extensions", sourceRoot.dirName),
   ]) {
     const modulePath = resolveExistingPluginModulePath(rootDir, params.specifier);
-    if (fs.existsSync(modulePath) && !isSourceModulePath(modulePath)) {
+    if (pluginCacheExistsSync(modulePath) && !isSourceModulePath(modulePath)) {
       locations.push({ modulePath, rootDir });
     }
   }
@@ -209,7 +211,7 @@ function resolveChannelPackageStateChecker(params: {
     return null;
   }
 
-  if (metadata.env) {
+  if (metadata.env && (!metadata.specifier || !metadata.exportName)) {
     return ({ env }) => {
       const allOf = metadata.env?.allOf ?? [];
       const anyOf = metadata.env?.anyOf ?? [];
@@ -306,8 +308,23 @@ export function hasBundledChannelPackageState(params: {
   if (!entry) {
     return false;
   }
-  const checker = resolveChannelPackageStateChecker({
+  return hasChannelPackageState({
     entry,
+    metadataKey: params.metadataKey,
+    cfg: params.cfg,
+    env: params.env,
+  });
+}
+
+/** Evaluates the exact channel package owner already selected and trusted by its caller. */
+export function hasChannelPackageState(params: {
+  entry: PluginChannelCatalogEntry;
+  metadataKey: ChannelPackageStateMetadataKey;
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const checker = resolveChannelPackageStateChecker({
+    entry: params.entry,
     metadataKey: params.metadataKey,
   });
   return checker ? checker({ cfg: params.cfg, env: params.env }) : false;

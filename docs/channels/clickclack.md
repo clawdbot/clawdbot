@@ -301,6 +301,13 @@ safety bound can omit an older active thread.
 - `replyMode: "agent"` (default) dispatches inbound messages through the normal agent pipeline, including session recording and tool policy.
 - `replyMode: "model"` skips the agent pipeline and uses the plugin runtime's `llm.complete` for direct bot replies, optionally shaped by `model` and `systemPrompt`. The selected provider and model own the completion budget.
 
+Both modes honor `responsePrefix` at the channel or account level. Account
+values win, including `""` to disable an inherited prefix. Use `"auto"` for
+the routed agent's identity name or `"[{model}]"` for the selected model.
+Explicit `message` tool and CLI text sends follow the
+[shared prefix behavior](/concepts/messages#prefixes-threading-and-replies),
+including omission of unresolved model-dependent prefixes.
+
 Model mode runs completions against the resolved bot agent id, which requires
 the explicit `plugins.entries.clickclack.llm.allowAgentIdOverride: true` trust
 bit:
@@ -524,8 +531,11 @@ Explicit outbound targets may also carry the `clickclack:` or `cc:` provider pre
 
 Outbound media uses ClickClack's upload API and then attaches the durable upload
 to the created channel message, thread reply, or DM. Local files and supported
-remote media URLs follow OpenClaw's normal media-access policy, with a 64 MiB
-per-file limit. Durable queued sends use separate owner-scoped nonces for each
+remote media URLs follow OpenClaw's normal media-access policy. Set
+`channels.clickclack.mediaMaxMb` to limit each outbound attachment in MiB;
+`accounts.<id>.mediaMaxMb` overrides the root, then `agents.defaults.mediaMaxMb`
+supplies the fallback. The 64 MiB upload ceiling always applies. Images may be
+optimized before sending. Durable queued sends use separate owner-scoped nonces for each
 upload and message part, then retry attachment association with those same
 objects. See [Durable media delivery](#durable-media-delivery) for the server
 contract and recovery behavior.
