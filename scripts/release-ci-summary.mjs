@@ -1083,7 +1083,7 @@ export function selectedChildKeys(parentJobs) {
 
 /**
  * @template {{ manifestKey: string, name: string }} Child
- * @param {{ childRunIds: Record<string, string> }} manifest
+ * @param {{ childRunIds: Partial<Record<string, string>> }} manifest
  * @param {Child[]} children
  * @param {Set<string>} selectedKeys
  * @returns {Array<{ child: Child, runId: string }>}

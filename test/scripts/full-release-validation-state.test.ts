@@ -3,7 +3,6 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
 import {
   composeReleaseAttemptJobs,
   isReleaseGhArtifactMissingError,
@@ -2434,14 +2433,14 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       timeout: 10_000,
     });
     expect(result.status, result.stderr).toBe(0);
-    const restored = JSON.parse(readFileSync(output, "utf8"));
+    const restored = JSON.parse(readFileSync(output, "utf8")) as typeof sealed;
     expect(restored).toMatchObject({
       attemptEvidenceVersion: 3,
       parentRunAttempt: 1,
       sha256: sealed.sha256,
     });
     expect(restored.candidate).toEqual(candidate);
-    expect(restored.candidate.publisher).toEqual(candidate.publisher);
+    expect(restored).toMatchObject({ candidate: { publisher: candidate.publisher } });
     const phasedKeys = new Set([
       "pluginPrereleaseIndependent",
       "pluginPrereleaseCandidate",
