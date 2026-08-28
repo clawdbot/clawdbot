@@ -512,7 +512,19 @@ and [Run Codex on a cloud worker](/plugins/codex-harness#run-codex-on-a-cloud-wo
 In the default per-agent home, stdio launches use Codex's ephemeral credential
 store, including custom commands selected by `appServer.command` or
 `OPENCLAW_CODEX_APP_SERVER_BIN`. Command wrappers must forward Codex's `-c`
-configuration arguments. OpenClaw supplies auth in this order:
+configuration arguments. For stdio launches with an explicit `app-server`
+subcommand, OpenClaw groups `-c` / `--config` overrides before that subcommand,
+preserving their order and leaving wrapper prefixes and other arguments in place.
+This prevents Codex from dropping earlier overrides when flags appear on both
+sides of `app-server`. OpenClaw's ephemeral credential-store override remains
+last when OpenClaw owns auth; native user-home auth is unchanged.
+Workspace-write turns also preserve explicit `sandbox_workspace_write` temporary
+root exclusions from these arguments, including attached `-ckey=value` flags
+and TOML comments after boolean values. The last explicit value wins.
+Explicit turn sandbox policies and network-proxy permission profiles keep their
+existing precedence.
+
+OpenClaw supplies auth in this order:
 
 1. An explicit or ordered OpenClaw auth profile for the agent.
 2. For an API-key route only, a prepared key or local stdio fallback from

@@ -347,20 +347,65 @@ describe("Codex app-server policy", () => {
     ).toBe("user");
   });
 
-  it("checks the selected native profile before trusting model-backed review", async () => {
-    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-review-profile-"));
-    try {
-      await fs.writeFile(
-        path.join(codexHome, "work.config.toml"),
-        'openai_base_url = "http://localhost:8080/v1"\n',
-      );
+  it.each([["--profile", "work"], ["--profile=work"], ["-pwork"]])(
+    "checks the selected native profile before trusting model-backed review: %j",
+    async (...profileArgs) => {
+      const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-review-profile-"));
+      try {
+        await fs.writeFile(
+          path.join(codexHome, "work.config.toml"),
+          'openai_base_url = "http://localhost:8080/v1"\n',
+        );
+        const appServer = resolveCodexAppServerRuntimeOptions({
+          env: {},
+          requirementsToml: null,
+          execMode: "auto",
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          pluginConfig: { appServer: { homeScope: "user" } },
+        });
+
+        expect(
+          resolveCodexAppServerForModelProvider({
+            appServer: {
+              ...appServer,
+              start: {
+                ...appServer.start,
+                args: [...profileArgs, "app-server"],
+                env: { CODEX_HOME: codexHome },
+              },
+            },
+            provider: "openai",
+            model: "gpt-5.5",
+            env: {},
+          }).approvalsReviewer,
+        ).toBe("user");
+      } finally {
+        await fs.rm(codexHome, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    ["-c", 'openai_base_url="http://localhost:8080/v1"'],
+    ["--config", 'openai_base_url="http://localhost:8080/v1"'],
+    ['--config=openai_base_url="http://localhost:8080/v1"'],
+    ['-copenai_base_url="http://localhost:8080/v1"'],
+    ['-c=chatgpt_base_url="http://localhost:8080/v1"'],
+    ['-cmodel_providers.openai.base_url="http://localhost:8080/v1"'],
+    [
+      '-copenai_base_url="http://localhost:8080/v1"',
+      '-copenai_base_url="https://api.openai.com/v1"',
+    ],
+  ])(
+    "checks native command-line endpoint overrides before trusting model-backed review: %j",
+    (...args) => {
       const appServer = resolveCodexAppServerRuntimeOptions({
         env: {},
         requirementsToml: null,
         execMode: "auto",
         modelProvider: "openai",
         model: "gpt-5.5",
-        pluginConfig: { appServer: { homeScope: "user" } },
       });
 
       expect(
@@ -369,8 +414,7 @@ describe("Codex app-server policy", () => {
             ...appServer,
             start: {
               ...appServer.start,
-              args: ["--profile", "work", "app-server"],
-              env: { CODEX_HOME: codexHome },
+              args: ["app-server", ...args],
             },
           },
           provider: "openai",
@@ -378,33 +422,6 @@ describe("Codex app-server policy", () => {
           env: {},
         }).approvalsReviewer,
       ).toBe("user");
-    } finally {
-      await fs.rm(codexHome, { recursive: true, force: true });
-    }
-  });
-
-  it("checks native command-line endpoint overrides before trusting model-backed review", () => {
-    const appServer = resolveCodexAppServerRuntimeOptions({
-      env: {},
-      requirementsToml: null,
-      execMode: "auto",
-      modelProvider: "openai",
-      model: "gpt-5.5",
-    });
-
-    expect(
-      resolveCodexAppServerForModelProvider({
-        appServer: {
-          ...appServer,
-          start: {
-            ...appServer.start,
-            args: ["app-server", "-c", 'openai_base_url="http://localhost:8080/v1"'],
-          },
-        },
-        provider: "openai",
-        model: "gpt-5.5",
-        env: {},
-      }).approvalsReviewer,
-    ).toBe("user");
-  });
+    },
+  );
 });
