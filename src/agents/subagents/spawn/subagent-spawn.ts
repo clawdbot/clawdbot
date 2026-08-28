@@ -292,7 +292,6 @@ export async function spawnSubagentDirect(
       requesterOrigin: childSessionOrigin,
       childSessionKey,
       label: label || undefined,
-      task,
       acpEnabled: isAcpRuntimeSpawnAvailable({
         config: cfg,
         sandboxed: childRuntimeSandboxed,

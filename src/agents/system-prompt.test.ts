@@ -2228,7 +2228,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("renders depth-1 orchestrator guidance, labels, and recovery notes", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
       acpEnabled: true,
@@ -2261,12 +2260,10 @@ describe("buildSubagentSystemPrompt", () => {
     );
   });
 
-  it("selects the current child's task without duplicating it in the system prompt", () => {
-    const task = "line one\n  line two\n  line three";
+  it("selects the current child's task instead of inherited envelopes", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
       requesterSessionKey: "agent:main:subagent:parent",
-      task,
       childDepth: 2,
       maxSpawnDepth: 2,
     });
@@ -2277,15 +2274,11 @@ describe("buildSubagentSystemPrompt", () => {
       /\[Subagent Task\].*(?:current|your|this) (?:child )?session|(?:current|your|this) (?:child )?session.*\[Subagent Task\]/i,
     );
     expect(prompt).toMatch(/inherited[^.\n]*(?:task|envelope)[^.\n]*(?:background|reference)/i);
-    expect(prompt).not.toContain("line one");
-    expect(prompt).not.toContain("  line two");
-    expect(prompt).not.toContain("  line three");
   });
 
   it("omits ACP spawning guidance when ACP is disabled", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
       acpEnabled: false,
@@ -2299,7 +2292,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("renders subagent-scoped native command guidance when ACP is disabled", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
       acpEnabled: false,
@@ -2313,7 +2305,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("omits ACP spawning guidance by default", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
     });
@@ -2325,7 +2316,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("prefers native Codex commands over Codex ACP when available", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
       nativeCommandGuidanceLines: [
@@ -2341,7 +2331,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("renders depth-2 leaf guidance with parent orchestrator labels", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc:subagent:def",
-      task: "leaf task",
       childDepth: 2,
       maxSpawnDepth: 2,
     });
@@ -2359,7 +2348,6 @@ describe("buildSubagentSystemPrompt", () => {
         name: "explicit maxSpawnDepth 1",
         input: {
           childSessionKey: "agent:main:subagent:abc",
-          task: "research task",
           childDepth: 1,
           maxSpawnDepth: 1,
         },
@@ -2369,7 +2357,6 @@ describe("buildSubagentSystemPrompt", () => {
         name: "implicit default depth/maxSpawnDepth",
         input: {
           childSessionKey: "agent:main:subagent:abc",
-          task: "basic task",
         },
         expectMainAgentLabel: true,
       },

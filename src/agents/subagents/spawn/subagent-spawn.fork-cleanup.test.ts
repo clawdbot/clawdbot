@@ -117,7 +117,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       await import("../../../state/openclaw-state-db.js"));
     swarmScheduler = await import("../swarm/swarm-scheduler.js");
     const { testing } = await import("../swarm/swarm-scheduler.test-support.js");
-    resetScheduler = testing.reset;
+    resetScheduler = () => testing.reset();
     const runtime = await import("./subagent-spawn.runtime.js");
     const upsert = vi
       .spyOn(runtime, "upsertSessionEntryCore")

@@ -12,7 +12,6 @@ export function buildSubagentSystemPrompt(params: {
   requesterOrigin?: DeliveryContext;
   childSessionKey: string;
   label?: string;
-  task?: string;
   /** Whether ACP-specific routing guidance should be included. Defaults to false. */
   acpEnabled?: boolean;
   /** Registered runtime slash/native command names such as `codex`. */
