@@ -177,35 +177,30 @@ describe("resolveExecTarget", () => {
     );
   });
 
-  it("allows explicit auto request when configured host is auto", () => {
-    expectExecTarget(
-      resolveExecTarget({
-        configuredTarget: "auto",
-        requestedTarget: "auto",
-        elevatedRequested: false,
-        sandboxAvailable: true,
-      }),
-      {
-        configuredTarget: "auto",
-        requestedTarget: "auto",
-        selectedTarget: "auto",
-        effectiveHost: "sandbox",
-      },
-    );
-  });
-
-  it("requires an exact match for non-auto configured targets", () => {
-    expect(() =>
-      resolveExecTarget({
-        configuredTarget: "gateway",
-        requestedTarget: "auto",
-        elevatedRequested: false,
-        sandboxAvailable: true,
-      }),
-    ).toThrow(
-      "exec host not allowed (requested auto; configured host is gateway; set tools.exec.host=auto to allow this override).",
-    );
-  });
+  it.each([
+    { configuredTarget: "auto" as const, sandboxAvailable: true, effectiveHost: "sandbox" },
+    { configuredTarget: "sandbox" as const, sandboxAvailable: true, effectiveHost: "sandbox" },
+    { configuredTarget: "gateway" as const, sandboxAvailable: true, effectiveHost: "gateway" },
+    { configuredTarget: "node" as const, sandboxAvailable: false, effectiveHost: "node" },
+  ])(
+    "treats requested auto as no override of configured host=$configuredTarget",
+    ({ configuredTarget, sandboxAvailable, effectiveHost }) => {
+      expectExecTarget(
+        resolveExecTarget({
+          configuredTarget,
+          requestedTarget: "auto",
+          elevatedRequested: false,
+          sandboxAvailable,
+        }),
+        {
+          configuredTarget,
+          requestedTarget: null,
+          selectedTarget: configuredTarget,
+          effectiveHost,
+        },
+      );
+    },
+  );
 
   it("allows exact node matches", () => {
     expectExecTarget(
