@@ -114,6 +114,26 @@ function findMessageWithIdempotencyKey(
   return undefined;
 }
 
+function collectAssistantRowsWithText(
+  lines: TranscriptLine[],
+  text: string,
+): Record<string, unknown>[] {
+  return lines
+    .map((line) => line.message)
+    .filter(
+      (message): message is Record<string, unknown> =>
+        message?.role === "assistant" &&
+        Array.isArray(message.content) &&
+        message.content.some(
+          (block) =>
+            typeof block === "object" &&
+            block !== null &&
+            (block as { type?: unknown }).type === "text" &&
+            (block as { text?: unknown }).text === text,
+        ),
+    );
+}
+
 function expectRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error(`expected ${label}`);
@@ -411,6 +431,63 @@ describe("chat abort transcript persistence", () => {
       runId,
       stopReason: "stop",
     });
+  });
+
+  it("does not duplicate a committed reply when a late abort re-persists the buffered text", async () => {
+    const { transcriptPath, sessionId, storePath } = await createTranscriptFixture(
+      "openclaw-chat-abort-committed-reply-",
+    );
+    // The embedded agent loop persists its final assistant row without a
+    // run-scoped idempotency key, so the store-level key dedupe cannot see it.
+    appendTranscriptMessageSync(
+      { agentId: "main", sessionId, sessionKey: "main", storePath },
+      {
+        idempotencyLookup: "caller-checked",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Completed reply" }],
+          timestamp: Date.now(),
+          stopReason: "stop",
+        },
+        now: 1,
+      },
+    );
+
+    // Settlement stall: the run committed its row but never emitted its
+    // terminal lifecycle event, so the gateway still projects it active with
+    // the full reply buffered.
+    const runId = "stalled-committed-run";
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, createActiveRun("main", { sessionId })]]),
+      chatRunState: createAbortTestRunState([[runId, { buffer: "Completed reply" }]]),
+      removeChatRun: vi
+        .fn()
+        .mockReturnValue({ sessionKey: "main", clientRunId: "client-stalled-committed-run" }),
+      agentRunSeq: new Map<string, number>([
+        [runId, 2],
+        ["client-stalled-committed-run", 3],
+      ]),
+      broadcast: vi.fn(),
+      nodeSendToSession: vi.fn(),
+      logGateway: { warn: vi.fn() },
+    });
+
+    await invokeChatAbortHandler({
+      handler: expectDefined(
+        chatHandlers["chat.abort"],
+        'chatHandlers["chat.abort"] test invariant',
+      ),
+      context,
+      request: { sessionKey: "main", runId },
+      respond,
+    });
+
+    const lines = await readTranscriptLines(transcriptPath);
+    const committedRows = collectAssistantRowsWithText(lines, "Completed reply");
+
+    expect(committedRows).toHaveLength(1);
+    expect(committedRows[0]?.openclawAbort).toBeUndefined();
   });
 
   it("does not let non-assistant idempotency collisions suppress abort partial persistence", async () => {

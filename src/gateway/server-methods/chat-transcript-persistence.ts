@@ -254,6 +254,24 @@ async function transcriptExists(scope: SessionTranscriptWriteScope): Promise<boo
   return found !== undefined;
 }
 
+/**
+ * Reads the text of the last committed assistant row, or undefined when none
+ * exists. A settled run commits its final assistant row before the lifecycle
+ * end event clears the live buffer, so abort paths compare against this fact
+ * instead of re-persisting buffered text that is already durable.
+ */
+export async function readLastCommittedAssistantText(
+  scope: AssistantTranscriptScopeParams,
+): Promise<string | undefined> {
+  // Newest-first single-row probe, matching the transcriptExists read pattern.
+  const found = await findTranscriptEvent(
+    { ...scope, sessionId: scope.sessionId },
+    (event) => transcriptEventMessage(event)?.role === "assistant",
+  ).catch(() => undefined);
+  const message = found ? transcriptEventMessage(found.event) : undefined;
+  return message ? extractAssistantTranscriptText(message) : undefined;
+}
+
 export async function appendAssistantTranscriptMessage(params: {
   sessionKey: string;
   message: string;

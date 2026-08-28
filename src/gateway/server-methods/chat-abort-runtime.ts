@@ -26,7 +26,10 @@ import {
   normalizeOptionalChatText as normalizeOptionalText,
   normalizeUnknownChatText as normalizeUnknownText,
 } from "./chat-text-normalization.js";
-import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
+import {
+  appendAssistantTranscriptMessage,
+  readLastCommittedAssistantText,
+} from "./chat-transcript-persistence.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type AbortOrigin = "rpc" | "stop-command" | "placement-abandon";
@@ -83,6 +86,18 @@ export async function persistAbortedPartials(params: {
       throw new Error("Placement abandonment transcript session changed before persistence");
     }
     const sessionId = entry?.sessionId ?? snapshot.sessionId;
+    // A run that committed its final assistant row keeps the same text in its
+    // live buffer until the lifecycle end clears it. Appending the abort
+    // partial then would duplicate the committed reply in the transcript.
+    const committedText = await readLastCommittedAssistantText({
+      sessionKey: params.sessionKey,
+      sessionId,
+      storePath,
+      ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
+    });
+    if (committedText === snapshot.text) {
+      continue;
+    }
     const appended = await appendAssistantTranscriptMessage({
       sessionKey: params.sessionKey,
       message: snapshot.text,
