@@ -22,6 +22,7 @@ export function applyCodexTranscriptTaint(
   const metadata = asOptionalRecord(existing);
   state.tainted ||= metadata?.turnTainted === true || metadata?.resultContentSource === "network";
   return message.role === "assistant" && state.tainted
+    // SAFETY: Preserve the assistant variant and add only provider metadata.
     ? ({ ...message, __openclaw: { ...metadata, turnTainted: true } } as AgentMessage)
     : message;
 }

@@ -190,7 +190,6 @@ extensions/codex/src/app-server/dynamic-tools.ts	6
 extensions/codex/src/app-server/effective-mcp-catalog.ts	1
 extensions/codex/src/app-server/elicitation-bridge.ts	1
 extensions/codex/src/app-server/event-projector-reasoning.ts	1
-extensions/codex/src/app-server/event-projector-snapshot.ts	2
 extensions/codex/src/app-server/event-projector-tool-items.ts	1
 extensions/codex/src/app-server/event-projector-tool-transcript.ts	4
 extensions/codex/src/app-server/event-projector-values.ts	2
