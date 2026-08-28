@@ -16,6 +16,7 @@ import {
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { transferToolEffectReceipt } from "./tool-effect-receipt.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
   isTrustedToolExecutionPreflightError,
@@ -626,6 +627,8 @@ export class ToolSearchRuntime {
         await assertCatalogOutputMatchesSchema(entry, candidate);
       }
       const snapshot = snapshotToolSearchTargetTranscriptResult(candidate);
+      // Projection changes object identity; move the private terminal receipt with it.
+      transferToolEffectReceipt(candidate, snapshot);
       await assertCatalogOutputMatchesSchema(entry, snapshot);
       return snapshot;
     };
@@ -650,6 +653,7 @@ export class ToolSearchRuntime {
           sourceName: entry.sourceName,
           toolCallId,
           parentToolCallId: options?.parentToolCallId,
+          replaySafe: this.isReplaySafeExactId(entry.id),
           input: normalizedInput,
           signal,
           onUpdate: options?.onUpdate,
