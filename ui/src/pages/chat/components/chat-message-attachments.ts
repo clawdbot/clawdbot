@@ -1,9 +1,11 @@
 import { html, nothing } from "lit";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { t } from "../../../i18n/index.ts";
+import "./chat-audio-player.ts";
 import "./chat-svg-attachment.ts";
-import { openAttachmentCardFromClick, renderAttachmentCardHeader } from "./chat-attachment-card.ts";
-import { safeAttachmentHref, safeAudioAttachmentHref } from "./chat-attachment-href.ts";
+import "./chat-video-player.ts";
+import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
+import { safeAttachmentHref, safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES,
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
@@ -361,6 +363,7 @@ export function renderAssistantAttachments(
   options: ImageRenderOptions,
   onOpenSidebar?: (content: SidebarContent) => void,
   onAssistantAttachmentLoaded?: () => void,
+  inlinePlayback = true,
 ) {
   if (attachments.length === 0) {
     return nothing;
@@ -446,8 +449,8 @@ export function renderAssistantAttachments(
         : attachment.height;
     const playbackAuthToken = localSource ? (authToken ?? null) : null;
     const safeAttachmentUrl =
-      attachment.kind === "audio"
-        ? safeAudioAttachmentHref(attachmentUrl ?? "")
+      attachment.kind === "audio" || attachment.kind === "video"
+        ? safeMediaAttachmentHref(attachmentUrl ?? "")
         : safeAttachmentHref(attachmentUrl ?? "");
     const hasLiveSidebarSource =
       localSource ||
@@ -603,24 +606,54 @@ export function renderAssistantAttachments(
         onRetry: retryUnavailableAttachment,
       });
     }
-    return html`
-      <div
-        class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
-        ?data-openable=${Boolean(openAttachmentSidebar)}
-        @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, openAttachmentSidebar)}
-      >
-        ${renderAttachmentCardHeader({
-          kind: attachment.kind,
-          label: attachment.label,
-          mimeType: attachment.mimeType,
-          sizeBytes,
-          downloadHref: safeAttachmentUrl,
-          onExpand: openAttachmentSidebar,
-          visualMode: "large-placeholder",
-          voiceNote: attachment.isVoiceNote === true,
-        })}
-      </div>
-    `;
+    if ((attachment.kind === "audio" || attachment.kind === "video") && !safeAttachmentUrl) {
+      return renderAssistantAttachmentStatusCard({
+        kind: attachment.kind,
+        label: attachment.label,
+        mimeType: attachment.mimeType,
+        badge: t("chat.attachments.unavailable"),
+        reason: t("chat.attachments.previewUnavailable"),
+      });
+    }
+    if (inlinePlayback && attachment.kind === "audio") {
+      return html`<openclaw-chat-audio-player
+        .src=${safeAttachmentUrl}
+        .sourceIdentity=${attachment.url}
+        .label=${attachment.label}
+        .mimeType=${attachment.mimeType ?? ""}
+        .playback=${playback}
+        .authToken=${playbackAuthToken}
+        .sizeBytes=${sizeBytes}
+        .serverDurationMs=${serverDurationMs}
+        .voiceNote=${attachment.isVoiceNote === true}
+        .onExpand=${openAttachmentSidebar}
+        .onMediaLoaded=${onAssistantAttachmentLoaded}
+      ></openclaw-chat-audio-player>`;
+    }
+    if (inlinePlayback && attachment.kind === "video") {
+      return html`<openclaw-chat-video-player
+        .src=${safeAttachmentUrl}
+        .sourceIdentity=${attachment.url}
+        .label=${attachment.label}
+        .mimeType=${attachment.mimeType ?? ""}
+        .playback=${playback}
+        .authToken=${playbackAuthToken}
+        .sizeBytes=${sizeBytes}
+        .mediaWidth=${mediaWidth}
+        .mediaHeight=${mediaHeight}
+        .onExpand=${openAttachmentSidebar}
+        .onMediaLoaded=${onAssistantAttachmentLoaded}
+      ></openclaw-chat-video-player>`;
+    }
+    return renderCompactAttachmentCard({
+      kind: attachment.kind,
+      label: attachment.label,
+      mimeType: attachment.mimeType,
+      sizeBytes,
+      downloadHref: safeAttachmentUrl,
+      onExpand: openAttachmentSidebar,
+      voiceNote: attachment.isVoiceNote === true,
+    });
   };
 
   return html` <div class="chat-assistant-attachments">${attachments.map(renderAttachment)}</div> `;

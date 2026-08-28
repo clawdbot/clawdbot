@@ -304,6 +304,7 @@ const MIME_BY_EXT: Record<string, string> = {
   m4a: "audio/mp4",
   m2a: "audio/mpeg",
   mp4: "video/mp4",
+  webm: "video/webm",
   mov: "video/quicktime",
   pdf: "application/pdf",
   txt: "text/plain",

@@ -5911,7 +5911,6 @@ export const en: TranslationMap = {
       volume: "Volume",
       download: "Download {filename}",
       preparing: "Preparing playback…",
-      videoUnavailable: "Can't play this format — download instead.",
     },
     modelControls: {
       default: "Default",

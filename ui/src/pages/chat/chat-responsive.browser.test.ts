@@ -4,6 +4,10 @@ import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.ts";
+import {
+  createPlaybackMediaFixture,
+  type PlaybackMediaFixtureFormat,
+} from "../../../../test/fixtures/media-playback.js";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import {
   canRunPlaywrightChromium,
@@ -55,6 +59,16 @@ const SHARED_APP_SLASH_TEXT = "Short landscape slash command keyboard regression
 const SHARED_APP_IMAGE_URL = "https://cdn.example/render%2Epng?download=1";
 const SHARED_APP_VIDEO_URL = "https://cdn.example/clip%252Emp4?download=1";
 const SHARED_APP_ATTACHMENT_OUTCOME_TEXT = "Mixed attachment outcome fixture.";
+const SHARED_APP_TTS_TEXT = "Audio generated and delivered via native TTS.";
+const SHARED_APP_PLAYBACK_MEDIA = [
+  ["voice---a75c70c7-0112-4d07-8fb5-40c82c979ee8.mp3", "audio", "audio/mpeg", "native"],
+  ["reply.ogg", "audio", "audio/ogg", "transcode"],
+  ["reply.m4a", "audio", "audio/x-m4a", "native"],
+  ["reply.flac", "audio", "audio/flac", "transcode"],
+  ["reply.mp4", "video", "video/mp4", "native"],
+  ["reply.webm", "video", "video/webm", "transcode"],
+] as const;
+const sharedAppPlaybackRequests: string[] = [];
 
 function installResponsiveChatGateway(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
   return installMockGateway(page, {
@@ -77,7 +91,25 @@ async function createSharedAppPage(): Promise<Page> {
   const page = await openBrowserPage(1366, 900, { isolated: true });
   try {
     page.on("pageerror", (error) => sharedAppPageErrors.push(error.message));
-    await page.route("https://cdn.example/**", (route) => route.abort());
+    await page.route("https://cdn.example/**", async (route) => {
+      const request = route.request();
+      const fileName = decodeURIComponent(
+        new URL(request.url()).pathname.split("/").at(-1) ?? "",
+      );
+      const media = SHARED_APP_PLAYBACK_MEDIA.find(([candidate]) => candidate === fileName);
+      if (!media) {
+        await route.abort();
+        return;
+      }
+      const format = fileName.split(".").at(-1) as PlaybackMediaFixtureFormat;
+      const body = createPlaybackMediaFixture(format);
+      sharedAppPlaybackRequests.push(request.url());
+      await route.fulfill({
+        status: 200,
+        contentType: media[2],
+        body: request.method() === "HEAD" ? Buffer.alloc(0) : body,
+      });
+    });
     await installResponsiveChatGateway(page, {
       assistantName: "Claw",
       historyMessages: [
@@ -94,9 +126,17 @@ async function createSharedAppPage(): Promise<Page> {
           timestamp: Date.UTC(2026, 6, 9, 10, 0),
         },
         {
-          content: "Encoded transcript video",
-          __openclaw: { media: [{ url: SHARED_APP_VIDEO_URL, contentType: "video/mp4" }] },
-          role: "user",
+          content: [
+            { text: SHARED_APP_TTS_TEXT, type: "text" },
+            ...SHARED_APP_PLAYBACK_MEDIA.map(([fileName, type, mimeType, playback]) => ({
+              fileName,
+              mimeType,
+              playback,
+              type,
+              url: `https://cdn.example/${fileName}`,
+            })),
+          ],
+          role: "assistant",
           timestamp: Date.UTC(2026, 6, 9, 10, 1),
         },
         {
@@ -2745,25 +2785,45 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   );
 
   it(
-    "renders encoded media extensions as images and compact cards",
+    "renders delivered playback media inline",
     FULL_APP_TEST_OPTIONS,
     async () => {
       const page = await getSharedAppPage();
       const image = page.locator(`img.chat-message-image[src="${SHARED_APP_IMAGE_URL}"]`);
-      const videoDownload = page.locator(
-        `a.chat-assistant-attachment-card__download[href="${SHARED_APP_VIDEO_URL}"]`,
-      );
-      const videoCard = page
-        .locator(".chat-assistant-attachment-card--compact")
-        .filter({ has: videoDownload });
       await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
-      await videoCard.waitFor({ state: "attached", timeout: 10_000 });
       expect(await image.getAttribute("src")).toBe(SHARED_APP_IMAGE_URL);
-      expect(await videoDownload.getAttribute("href")).toBe(SHARED_APP_VIDEO_URL);
-      expect(
-        (await videoCard.locator(".chat-assistant-attachment-card__title").textContent())?.trim(),
-      ).toBe("clip%2Emp4");
-      expect(await videoCard.locator("video").count()).toBe(0);
+      expect(await page.getByText(SHARED_APP_TTS_TEXT, { exact: true }).count()).toBe(1);
+      expect(await page.getByText(/MEDIA:/u).count()).toBe(0);
+      for (const [fileName, type, , playback] of SHARED_APP_PLAYBACK_MEDIA) {
+        const player = page
+          .locator(type === "audio" ? "openclaw-chat-audio-player" : "openclaw-chat-video-player")
+          .filter({ hasText: fileName });
+        await player.waitFor({ state: "attached", timeout: 10_000 });
+        expect(
+          await player.evaluate((element) => (element as { playback?: unknown }).playback),
+        ).toBe(playback);
+        const card = player.locator(".chat-assistant-attachment-card");
+        await card.waitFor({ state: "visible", timeout: 10_000 });
+        await card.scrollIntoViewIfNeeded();
+        if (fileName !== "reply.m4a" && fileName !== "reply.mp4") {
+          expect(await player.locator(".chat-assistant-attachment-card--compact").count()).toBe(0);
+          const media = player.locator(type);
+          await expect
+            .poll(() => media.evaluate((element) => (element as HTMLMediaElement).readyState), {
+              timeout: 10_000,
+            })
+            .toBeGreaterThanOrEqual(1);
+        }
+        expect(
+          sharedAppPlaybackRequests.some((url) => {
+            if (!url.includes(fileName)) {
+              return false;
+            }
+            return playback === "native" || new URL(url).searchParams.get("playback") === "1";
+          }),
+        ).toBe(true);
+      }
+      expect(await page.getByText(/can't play this format/iu).count()).toBe(0);
     },
   );
 

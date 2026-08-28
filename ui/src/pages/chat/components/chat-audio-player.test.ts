@@ -137,7 +137,7 @@ describe("ChatAudioPlayer", () => {
     expect(pause).toHaveBeenCalledOnce();
   });
 
-  it("releases playback and shows the fallback after an unrecovered media error", async () => {
+  it("releases playback and shows a normal attachment card after an unrecovered media error", async () => {
     const first = await createPlayer("broken");
     const firstMedia = first.querySelector("audio")!;
     let paused = true;
@@ -158,9 +158,9 @@ describe("ChatAudioPlayer", () => {
     firstMedia.dispatchEvent(new Event("error"));
     await first.updateComplete;
     expect((first as unknown as { playing: boolean }).playing).toBe(false);
-    expect(first.querySelector(".chat-assistant-attachment-card__reason")?.textContent).toContain(
-      "Can't play this format — download instead.",
-    );
+    expect(first.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
+    expect(first.querySelector(".chat-assistant-attachment-card__reason")).toBeNull();
+    expect(first.querySelector(".chat-audio-player")).toBeNull();
     expect(
       first
         .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
@@ -209,12 +209,10 @@ describe("ChatAudioPlayer", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("falls back to download after rendition retries are exhausted", async () => {
+  it("falls back to a normal attachment card after rendition retries are exhausted", async () => {
     vi.useFakeTimers();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => new Response(null, { status: 202 })),
-    );
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
     const player = document.createElement("openclaw-chat-audio-player");
     player.src = "/__openclaw__/assistant-media?source=voice.caf&mediaTicket=ticket";
     player.sourceIdentity = "/tmp/voice.caf";
@@ -225,14 +223,25 @@ describe("ChatAudioPlayer", () => {
     await vi.runAllTimersAsync();
     await player.updateComplete;
 
-    expect(player.querySelector(".chat-assistant-attachment-card__reason")?.textContent).toContain(
-      "Can't play this format — download instead.",
-    );
+    expect(player.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
+    expect(player.querySelector(".chat-assistant-attachment-card__reason")).toBeNull();
+    expect(player.querySelector(".chat-audio-player")).toBeNull();
     expect(
       player
         .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
         ?.getAttribute("href"),
     ).not.toContain("playback=1");
+
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+    player.src = "/__openclaw__/assistant-media?source=voice.caf&mediaTicket=recovered";
+    await player.updateComplete;
+    await vi.runAllTimersAsync();
+    await player.updateComplete;
+
+    expect(player.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
+    expect(player.querySelector("audio")?.getAttribute("src")).toContain(
+      "mediaTicket=recovered&playback=1",
+    );
   });
 
   it("renders decoded waveform peaks when the player reaches the viewport", async () => {

@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { deflateRawSync } from "node:zlib";
 import type { Plugin } from "vite";
+import { createPlaybackMediaFixture } from "../test/fixtures/media-playback.js";
 
 const CHAT_ATTACHMENT_FIXTURE_PATH = "/__fixtures/chat-attachments/";
 const MANAGED_IMAGE_FIXTURE_PATH = "/api/chat/media/outgoing/chat-attachment-fixture/";
@@ -74,69 +74,6 @@ function zipAsset(entries: Record<string, string>, contentType: string): Fixture
   return { body: Buffer.concat([...localParts, centralDirectory, end]), contentType };
 }
 
-function buildWavAsset(): FixtureAsset {
-  const sampleRate = 8_000;
-  const durationSeconds = 2;
-  const sampleCount = Math.floor(sampleRate * durationSeconds);
-  const body = Buffer.alloc(44 + sampleCount * 2);
-  body.write("RIFF", 0, "ascii");
-  body.writeUInt32LE(body.length - 8, 4);
-  body.write("WAVEfmt ", 8, "ascii");
-  body.writeUInt32LE(16, 16);
-  body.writeUInt16LE(1, 20);
-  body.writeUInt16LE(1, 22);
-  body.writeUInt32LE(sampleRate, 24);
-  body.writeUInt32LE(sampleRate * 2, 28);
-  body.writeUInt16LE(2, 32);
-  body.writeUInt16LE(16, 34);
-  body.write("data", 36, "ascii");
-  body.writeUInt32LE(sampleCount * 2, 40);
-  for (let index = 0; index < sampleCount; index += 1) {
-    const envelope = Math.min(1, index / 240, (sampleCount - index) / 240);
-    const modulation = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin((2 * Math.PI * 2 * index) / sampleRate));
-    const sample =
-      Math.sin((2 * Math.PI * 440 * index) / sampleRate) * envelope * modulation * 0.35;
-    body.writeInt16LE(Math.round(sample * 0x7fff), 44 + index * 2);
-  }
-  return { body, contentType: "audio/wav" };
-}
-
-const fallbackVideoBase64 =
-  "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";
-
-function buildVideoAsset(): FixtureAsset {
-  try {
-    const body = execFileSync(
-      "ffmpeg",
-      [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-f",
-        "lavfi",
-        "-i",
-        "color=c=#2563eb:s=640x360:r=30",
-        "-t",
-        "1.5",
-        "-an",
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-movflags",
-        "frag_keyframe+empty_moov",
-        "-f",
-        "mp4",
-        "pipe:1",
-      ],
-      { stdio: ["ignore", "pipe", "ignore"] },
-    );
-    return { body, contentType: "video/mp4" };
-  } catch {
-    return { body: Buffer.from(fallbackVideoBase64, "base64"), contentType: "video/mp4" };
-  }
-}
-
 const buildChatAttachmentAssets = (): Record<string, FixtureAsset> => ({
   "sample-image.svg": textAsset(
     `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><defs><linearGradient id="g" x1="0" x2="1"><stop stop-color="#172554"/><stop offset="1" stop-color="#be123c"/></linearGradient></defs><rect width="640" height="360" rx="24" fill="url(#g)"/><circle cx="150" cy="128" r="52" fill="#fbbf24" opacity=".9"/><path d="M0 300 190 178l100 64 90-88 260 146H0Z" fill="#0f172a" opacity=".8"/></svg>`,
@@ -153,9 +90,21 @@ const buildChatAttachmentAssets = (): Record<string, FixtureAsset> => ({
     ),
     contentType: "image/png",
   },
-  "sample-video.mp4": buildVideoAsset(),
-  "sample-audio.wav": buildWavAsset(),
-  "sample-audio-secondary.wav": buildWavAsset(),
+  "sample-video.mp4": {
+    body: createPlaybackMediaFixture("mp4"),
+    contentType: "video/mp4",
+  },
+  "voice---a75c70c7-0112-4d07-8fb5-40c82c979ee8.mp3": {
+    body: createPlaybackMediaFixture("mp3"),
+    contentType: "audio/mpeg",
+  },
+  "reply.ogg": { body: createPlaybackMediaFixture("ogg"), contentType: "audio/ogg" },
+  "reply.m4a": { body: createPlaybackMediaFixture("m4a"), contentType: "audio/x-m4a" },
+  "reply.flac": { body: createPlaybackMediaFixture("flac"), contentType: "audio/flac" },
+  "sample-video.webm": {
+    body: createPlaybackMediaFixture("webm"),
+    contentType: "video/webm",
+  },
   "brief.pdf": {
     body: Buffer.from(
       "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA0IDAgUiA+PiA+PiAvQ29udGVudHMgNSAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggNTAgPj4Kc3RyZWFtCkJUCi9GMSAyNCBUZgo3MiA3MjAgVGQKKEF0dGFjaG1lbnQgZml4dHVyZSkgVGoKRVQKZW5kc3RyZWFtCmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNDEgMDAwMDAgbiAKMDAwMDAwMDMxMSAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjQxMAolJUVPRgo=",
@@ -348,58 +297,63 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime + 8,
     },
-    sectionTitle("Audio", baseTime + 9),
+    sectionTitle("Before — current generic delivery cards", baseTime + 9),
     {
       role: "assistant",
       content: [
         {
-          type: "attachment",
-          attachment: {
-            kind: "audio",
-            label: "sample-audio.wav",
-            mimeType: "audio/wav",
-            url: fixtureUrl("sample-audio.wav"),
-            sizeBytes: assetSize("sample-audio.wav"),
-            durationMs: 2_000,
-          },
+          type: "text",
+          text: "Current WebChat delivery removes inline playback from every media file.",
         },
-        {
-          type: "attachment",
-          attachment: {
-            kind: "audio",
-            label: "sample-audio-secondary.wav",
-            mimeType: "audio/wav",
-            url: fixtureUrl("sample-audio-secondary.wav"),
-            sizeBytes: assetSize("sample-audio-secondary.wav"),
-            durationMs: 2_000,
-          },
-        },
+        documentAttachment(
+          "voice---a75c70c7-0112-4d07-8fb5-40c82c979ee8.mp3",
+          "audio/mpeg",
+        ),
+        documentAttachment("reply.ogg", "audio/ogg"),
+        documentAttachment("reply.m4a", "audio/x-m4a"),
+        documentAttachment("reply.flac", "audio/flac"),
+        documentAttachment("sample-video.mp4", "video/mp4"),
+        documentAttachment("sample-video.webm", "video/webm"),
       ],
       timestamp: baseTime + 10,
     },
-    sectionTitle("Video", baseTime + 11),
+    sectionTitle("After — approved playback and silent fallback", baseTime + 11),
     {
       role: "assistant",
       content: [
         {
+          type: "text",
+          text: "Audio generated and delivered via native TTS.",
+        },
+        ...(
+          [
+            ["voice---a75c70c7-0112-4d07-8fb5-40c82c979ee8.mp3", "audio", "audio/mpeg", "native"],
+            ["reply.ogg", "audio", "audio/ogg", "transcode"],
+            ["reply.m4a", "audio", "audio/x-m4a", "native"],
+            ["reply.flac", "audio", "audio/flac", "transcode"],
+            ["sample-video.mp4", "video", "video/mp4", "native"],
+            ["sample-video.webm", "video", "video/webm", "transcode"],
+          ] as const
+        ).map(([label, kind, mimeType, playback]) => ({
           type: "attachment",
           attachment: {
-            kind: "video",
-            label: "sample-video.mp4",
-            mimeType: "video/mp4",
-            url: fixtureUrl("sample-video.mp4"),
-            sizeBytes: assetSize("sample-video.mp4"),
-            durationMs: 1_500,
-            width: 640,
-            height: 360,
+            kind,
+            label,
+            mimeType,
+            playback,
+            url: fixtureUrl(label),
+            sizeBytes: assetSize(label),
+            durationMs: kind === "audio" ? 2_000 : 1_500,
+            ...(kind === "video" ? { width: 640, height: 360 } : {}),
           },
-        },
+        })),
         {
           type: "attachment",
           attachment: {
             kind: "video",
             label: "renewing-ticket-video.mp4",
             mimeType: "video/mp4",
+            playback: "native",
             url: `${RENEWING_MEDIA_FIXTURE_ROOT}sample-video.mp4`,
             sizeBytes: assetSize("sample-video.mp4"),
             durationMs: 1_500,
@@ -416,7 +370,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       content: [documentAttachment("bundle.zip", "application/zip")],
       timestamp: baseTime + 14,
     },
-    sectionTitle("Unavailable / failed / removed", baseTime + 17),
+    sectionTitle("Unavailable / failed / removed", baseTime + 15),
     {
       role: "assistant",
       content: [
@@ -448,7 +402,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
           },
         },
       ],
-      timestamp: baseTime + 18,
+      timestamp: baseTime + 16,
     },
   ];
 }
@@ -547,12 +501,21 @@ function serveAssistantMedia(
       );
       return;
     }
-    const mediaFacts =
-      fileName === "sample-video.mp4"
-        ? { durationMs: 1_500, width: 640, height: 360, playback: "native" }
-        : fileName === "sample-audio.wav" || fileName === "sample-audio-secondary.wav"
-          ? { durationMs: 2_000, playback: "native" }
-          : {};
+    const mediaFacts = (() => {
+      if (fileName === "sample-video.mp4") {
+        return { durationMs: 1_500, width: 640, height: 360, playback: "native" };
+      }
+      if (fileName === "sample-video.webm") {
+        return { durationMs: 1_500, width: 640, height: 360, playback: "transcode" };
+      }
+      if (fileName === "reply.ogg" || fileName === "reply.flac") {
+        return { durationMs: 2_000, playback: "transcode" };
+      }
+      if (fileName.endsWith(".mp3") || fileName === "reply.m4a") {
+        return { durationMs: 2_000, playback: "native" };
+      }
+      return {};
+    })();
     const mediaTicket = renewingTicket
       ? renewingMediaTicketGeneration++ < 2
         ? "ticket-A"

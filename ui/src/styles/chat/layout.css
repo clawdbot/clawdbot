@@ -1832,20 +1832,6 @@ openclaw-chat-video-player {
   background: var(--bg);
 }
 
-.chat-assistant-video-fallback {
-  display: none;
-  gap: 8px;
-  padding: 4px 0 0;
-}
-
-.chat-assistant-attachment-card--video[data-unplayable] .chat-assistant-video-frame {
-  display: none;
-}
-
-.chat-assistant-attachment-card--video[data-unplayable] .chat-assistant-video-fallback {
-  display: grid;
-}
-
 .chat-assistant-attachment-card__reason {
   color: var(--muted);
   font-size: 12px;
