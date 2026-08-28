@@ -2045,6 +2045,15 @@ export const en: TranslationMap = {
       "{count} sensitive values hidden. Use the reveal button above to edit the raw config.",
   },
   execApproval: {
+    scope: {
+      standingGrant:
+        'Always allow runs this exact command for "{automation}" without asking, until revoked (revocable)',
+      standingGrantDays:
+        'Always allow runs this exact command for "{automation}" without asking, for {count} days (revocable)',
+      messageSend: "Sends to {count} recipient(s) via {target}",
+      payment: "Pays {amount} {currency} to {target}",
+      externalPost: "Posts externally to {target}",
+    },
     expiresIn: "expires in {time}",
     expired: "expired",
     execApprovalNeeded: "Exec approval needed",
@@ -2714,6 +2723,7 @@ export const en: TranslationMap = {
     retry: "Retry",
   },
   modelSetup: {
+    missingAuth: "No provider credential is configured for this model. Set it up in Model Setup.",
     heading: "Connect a verified AI model",
     intro:
       "OpenClaw checks the AI access available on this Gateway and verifies the exact model before it enables conversations.",
@@ -3628,6 +3638,8 @@ export const en: TranslationMap = {
     },
   },
   activityFeed: {
+    partialHistory:
+      "People and counts describe visible recorded session associations; retained history and this people list may be incomplete.",
     sessionsMode: "Sessions",
     searchPlaceholder: "Search session titles…",
     time: "Time",
@@ -3660,7 +3672,7 @@ export const en: TranslationMap = {
     viewingNow: "Viewing now",
     notViewing: "Not viewing a session right now.",
     notFoundTitle: "Person not found",
-    notFoundDescription: "No presence or session activity matches this identity.",
+    notFoundDescription: "No online presence or visible session association matches this identity.",
   },
   profilePage: {
     offline: "Connect to the gateway to meet your agent.",
@@ -4425,6 +4437,25 @@ export const en: TranslationMap = {
         "These model-provider credentials need attention:\n{facts}\nExplain what expired and how to re-authenticate them.",
     },
   },
+  standingGrants: {
+    title: "Standing grants",
+    description:
+      "Allow-always on an automation approval mints a standing grant for that exact command. Revoking one makes the next occurrence ask again.",
+    historyTitle: "Approval history",
+    empty: "No standing grants. Answer an automation approval with Always allow to mint one.",
+    stateUntilRevoked: "Until revoked",
+    stateExpiresIn: "Expires in {count}d",
+    stateExpired: "Expired",
+    stateRevoked: "Revoked",
+    revoke: "Revoke",
+    revoking: "Revoking…",
+    columns: {
+      automation: "Automation",
+      command: "Command",
+      uses: "Uses",
+      state: "State",
+    },
+  },
   approvalHistory: {
     description:
       "Terminal exec, plugin, and system-agent approvals recorded by this gateway, newest first.",
@@ -4958,13 +4989,9 @@ export const en: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning: "Usage cache is rebuilding in the background. Displayed totals may be stale.",
-      title: "{status}: {pending} pending, {stale} stale, {cached} cached",
-      status: {
-        refreshing: "refreshing",
-        stale: "stale",
-        partial: "partial",
-      },
+      warning: "Usage data may be incomplete. Checking for updated totals automatically.",
+      paused:
+        "Usage data may be incomplete. Automatic checks paused; select Refresh to check again.",
     },
     empty: {
       title: "Start with a date range",
@@ -5763,6 +5790,19 @@ export const en: TranslationMap = {
       imageCount: "Image ({count})",
     },
     goals: {
+      composerMode: "Goal",
+      sessionChanged: "Conversation changed. Cancel and select Goal again.",
+      start: "Start goal",
+      save: "Save goal",
+      startHint: "Enter your objective.",
+      editHint: "Save without starting a run.",
+      objectivePlaceholder: "What should this goal accomplish?",
+      cancel: "Cancel goal entry",
+      offline: "Reconnect to manage goals.",
+      busy: "Wait for this run to finish. Your draft is unchanged.",
+      annotationUnsupported: "Send or remove browser annotations first. Your draft is unchanged.",
+      actionPending: "Wait for the pending goal action.",
+      admissionImmutable: "Retry or remove this request. Editing requires a new goal.",
       edit: "Edit goal",
       pause: "Pause goal",
       resume: "Resume goal",

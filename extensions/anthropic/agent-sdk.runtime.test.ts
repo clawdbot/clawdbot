@@ -510,6 +510,35 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(sdkOptions()).not.toHaveProperty("sessionId");
   });
 
+  it("preserves cache, effort, and checkpoint-fork controls through SDK options", async () => {
+    useSdkMessages();
+
+    await collect(
+      createContext({
+        args: [
+          "-p",
+          "--cache-system-prompt",
+          "--effort",
+          "max",
+          "--fork-session",
+          "--resume-session-at",
+          "assistant-before-stall",
+        ],
+        useResume: true,
+      }),
+    );
+
+    expect(sdkOptions()).toEqual(
+      expect.objectContaining({
+        resume: SESSION_ID,
+        effort: "max",
+        forkSession: true,
+        resumeSessionAt: "assistant-before-stall",
+        extraArgs: { "cache-system-prompt": null },
+      }),
+    );
+  });
+
   it("reuses one official SDK query and Claude process across compatible agent turns", async () => {
     const live = useLiveSdkStreams();
     const capability = createLiveCapability();
@@ -542,6 +571,39 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       { role: "user", content: "Remember orange." },
       { role: "user", content: "Which color did I mention?" },
     ]);
+  });
+
+  it("keeps a terminal error turn's warm query reusable for the next turn", async () => {
+    const live = useLiveSdkStreams();
+    const capability = createLiveCapability();
+    const first = collect(createContext({ prompt: "Attempt the task.", liveSession: capability }));
+    await vi.waitFor(() => expect(queryMock).toHaveBeenCalledOnce());
+    live.streams[0]?.write({
+      ...SUCCESS_RESULT,
+      subtype: "error_during_execution",
+      is_error: true,
+      result: "The native tool failed.",
+    });
+
+    await expect(first).resolves.toContainEqual(
+      expect.objectContaining({ is_error: true, result: "The native tool failed." }),
+    );
+    const firstHandle = capability.current();
+    expect(firstHandle?.isIdle()).toBe(true);
+
+    const second = collect(
+      createContext({
+        prompt: "Continue without repeating the failed action.",
+        useResume: true,
+        liveSession: capability,
+      }),
+    );
+    await vi.waitFor(() => expect(live.prompts[0]).toHaveLength(2));
+    live.streams[0]?.write({ ...SUCCESS_RESULT, result: "continued" });
+
+    await expect(second).resolves.toContainEqual(expect.objectContaining({ result: "continued" }));
+    expect(queryMock).toHaveBeenCalledOnce();
+    expect(capability.current()).toBe(firstHandle);
   });
 
   it("restarts the warm SDK query when its system prompt or execution fingerprint changes", async () => {
@@ -621,6 +683,21 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         },
       ),
     ).resolves.toEqual({ behavior: "deny", message: "The OpenClaw run is no longer active." });
+
+    const resumed = collect(
+      createContext({
+        prompt: "Resume after the interrupted turn.",
+        useResume: true,
+        liveSession: capability,
+      }),
+    );
+    await vi.waitFor(() => expect(queryMock).toHaveBeenCalledTimes(2));
+    live.streams[1]?.write({ ...SUCCESS_RESULT, result: "resumed" });
+
+    await expect(resumed).resolves.toContainEqual(expect.objectContaining({ result: "resumed" }));
+    expect(queryMock.mock.calls[1]?.[0]?.options).toEqual(
+      expect.objectContaining({ resume: SESSION_ID }),
+    );
   });
 
   it("rebinds a persistent SDK approval callback to only the active admitted turn", async () => {

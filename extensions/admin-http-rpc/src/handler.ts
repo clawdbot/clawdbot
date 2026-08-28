@@ -6,8 +6,11 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { WEBHOOK_BODY_READ_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
-import { readJsonWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
+import {
+  readJsonBodyWithLimit,
+  sendHttpRequestRejection,
+  WEBHOOK_BODY_READ_DEFAULTS,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import { isAdminHttpRpcAllowedMethod, listAdminHttpRpcAllowedMethods } from "./methods.js";
 
 const ErrorCodes = {
@@ -54,6 +57,7 @@ type ReadJsonBodyResult =
       ok: false;
       status: number;
       message: string;
+      closeAfterResponse?: boolean;
     };
 
 function createError(code: string, message: string): RpcError {
@@ -104,11 +108,10 @@ function statusForBodyErrorCode(code: RequestBodyLimitFailureCode): number {
   return 400;
 }
 
-async function readAdminJsonBody(
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<ReadJsonBodyResult> {
-  const body = await readJsonWebhookBodyForResponse(req, res, {
+async function readAdminJsonBody(req: IncomingMessage): Promise<ReadJsonBodyResult> {
+  const body = await readJsonBodyWithLimit(req, {
+    // Admin responses are part of the client contract. The response-first profile
+    // defers destruction so the transport owner can flush the JSON error.
     ...WEBHOOK_BODY_READ_DEFAULTS.postAuthResponseFirst,
     emptyObjectOnEmpty: false,
   });
@@ -129,6 +132,7 @@ async function readAdminJsonBody(
     ok: false,
     status: statusForBodyErrorCode(body.code),
     message: body.error,
+    closeAfterResponse: body.code !== "CONNECTION_CLOSED",
   };
 }
 
@@ -225,12 +229,25 @@ export async function handleAdminHttpRpcRequest(
     return true;
   }
 
-  const body = await readAdminJsonBody(req, res);
+  const body = await readAdminJsonBody(req);
   if (!body.ok) {
-    sendError(res, body.status, {
-      type: "invalid_request",
-      message: body.message,
-    });
+    if (body.closeAfterResponse) {
+      if (!res.headersSent) {
+        res.setHeader("Cache-Control", "no-store");
+      }
+      await sendHttpRequestRejection(
+        req,
+        res,
+        body.status,
+        JSON.stringify({ ok: false, error: { type: "invalid_request", message: body.message } }),
+        "application/json; charset=utf-8",
+      );
+    } else {
+      sendError(res, body.status, {
+        type: "invalid_request",
+        message: body.message,
+      });
+    }
     return true;
   }
 

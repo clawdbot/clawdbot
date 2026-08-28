@@ -645,6 +645,8 @@ export type ModelCatalogEntry = {
   alias?: string;
   tags?: string[];
   available?: boolean;
+  unavailableReason?: "missing-auth" | "auth-failed" | "cooldown";
+  unavailableUntil?: number;
   contextWindow?: number;
   contextWindows?: GatewayContextWindowOption[];
   contextWindowDefault?: string;

@@ -108,12 +108,13 @@ function recordSessionsSendParticipant(params: {
   requesterAgentId: string;
   sessionKey: string;
   targetAgentId: string;
+  promptedAt: number;
 }): void {
   recordSessionParticipantBestEffort({
-    actor: { type: "agent", id: params.requesterAgentId },
+    identity: { type: "agent", id: params.requesterAgentId },
+    promptedAt: params.promptedAt,
     agentId: params.targetAgentId,
     sessionKey: params.sessionKey,
-    source: "agent",
     storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
       agentId: params.targetAgentId,
     }),
@@ -503,6 +504,7 @@ export function createSessionsSendTool(opts?: {
     outputSchema: SessionsSendOutputSchema,
     prepareArguments: normalizeSessionsSendArguments,
     execute: async (_toolCallId, args) => {
+      const promptedAt = Date.now();
       const params = normalizeSessionsSendArguments(args);
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const message = readToolStringParam(params, "message", { required: true });
@@ -1161,6 +1163,7 @@ export function createSessionsSendTool(opts?: {
               targetSessionKey: start.a2aSessionKey ?? resolvedKey,
             });
             recordSessionsSendParticipant({
+              promptedAt,
               cfg,
               requesterAgentId,
               sessionKey: start.a2aSessionKey ?? resolvedKey,
@@ -1197,6 +1200,7 @@ export function createSessionsSendTool(opts?: {
             targetSessionKey: start.a2aSessionKey ?? resolvedKey,
           });
           recordSessionsSendParticipant({
+            promptedAt,
             cfg,
             requesterAgentId,
             sessionKey: start.a2aSessionKey ?? resolvedKey,

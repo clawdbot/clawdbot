@@ -4,7 +4,7 @@
   "openclaw": {
     "schemaVersions": {
       "state": 13,
-      "agent": 17
+      "agent": 18
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -1574,6 +1574,7 @@
     "check:timed:architecture": "node --import ./scripts/tsx.mjs scripts/check-timed.mts --include-architecture",
     "check:workflows": "node --import ./scripts/tsx.mjs scripts/check-workflows.mts",
     "ci:full-release": "node scripts/full-release-validation-at-sha.mjs",
+    "frv": "node scripts/frv.mjs",
     "ci:timings": "node scripts/ci-run-timings.mjs --latest-main",
     "ci:timings:refit": "node --import ./scripts/tsx.mjs scripts/ci-refit-test-timings.mts",
     "ci:timings:recent": "node scripts/ci-run-timings.mjs --recent 10",

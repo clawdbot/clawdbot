@@ -43,6 +43,12 @@ import { createPendingToolCallState } from "./session-tool-result-state.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import type { SessionManager } from "./sessions/index.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
+import {
+  copyCodeModeSourceAppend,
+  prepareCodeModeSourceAppend,
+  withCodeModeSourceAppend,
+  type CodeModeSourceAppend,
+} from "./transcript-code-mode-source.js";
 
 /**
  * Truncate oversized text content blocks in a tool result message.
@@ -624,6 +630,7 @@ export function installSessionToolResultGuard(
      */
     beforeMessageWriteHook?: (
       event: PluginHookBeforeMessageWriteEvent,
+      sourceAppend?: CodeModeSourceAppend,
     ) => PluginHookBeforeMessageWriteResult | undefined;
     redactLoggingConfig?: ToolResultDetailRedactionConfig;
     maxToolResultChars?: number;
@@ -652,9 +659,11 @@ export function installSessionToolResultGuard(
     sessionManager.appendMessageWithTranscriptAnchor.bind(sessionManager);
   setRawSessionAppendMessage(sessionManager, originalAppend);
   const pendingState = createPendingToolCallState();
-  const persistMessage = (message: AgentMessage) => {
+  const persistMessage = (message: AgentMessage, sourceAppend?: CodeModeSourceAppend) => {
     const transformer = opts?.transformMessageForPersistence;
-    return transformer ? transformer(message) : message;
+    const persisted = transformer ? transformer(message) : message;
+    copyCodeModeSourceAppend(message, persisted, sourceAppend);
+    return persisted;
   };
 
   const persistToolResult = (
@@ -678,6 +687,7 @@ export function installSessionToolResultGuard(
   const appendMessageAndCacheTranscriptSeq = (
     message: AgentMessage,
     options?: AppendMessageOptions,
+    sourceAppend?: CodeModeSourceAppend,
   ): {
     anchor?: TranscriptEntryAnchor;
     entryId: string;
@@ -686,11 +696,14 @@ export function installSessionToolResultGuard(
     sessionTarget?: ReturnType<SessionManager["getSessionTarget"]>;
   } => {
     const runOwnedMessage = attachSessionTranscriptRunId(message, transcriptRunId);
+    copyCodeModeSourceAppend(message, runOwnedMessage, sourceAppend);
     const parentEntryId = sessionManager.getLeafId();
     const appendParentEntryId = sessionManager.getAppendParentId();
     const { entryId, anchor } = originalAppendWithTranscriptAnchor(
       runOwnedMessage as never,
-      options,
+      sourceAppend
+        ? prepareCodeModeSourceAppend(options ?? {}, runOwnedMessage, sourceAppend)
+        : options,
     );
     if (sessionManager.getAppendParentId() === appendParentEntryId) {
       return { entryId, message: runOwnedMessage, ...(anchor ? { anchor } : {}) };
@@ -729,11 +742,12 @@ export function installSessionToolResultGuard(
    */
   const applyBeforeWriteHook = (
     msg: AgentMessage,
+    sourceAppend?: CodeModeSourceAppend,
   ): { message: AgentMessage; changed: boolean } | null => {
     if (!beforeWrite) {
       return { message: msg, changed: false };
     }
-    const result = beforeWrite({ message: msg });
+    const result = beforeWrite({ message: msg }, sourceAppend);
     if (result?.block) {
       return null;
     }
@@ -781,7 +795,11 @@ export function installSessionToolResultGuard(
     pendingState.clear();
   };
 
-  const guardedAppend = (message: AgentMessage, callerOptions?: AppendMessageOptions) => {
+  const guardedAppend = (
+    message: AgentMessage,
+    callerOptions?: AppendMessageOptions,
+    sourceAppend?: CodeModeSourceAppend,
+  ) => {
     const callerInvalidatesCache = callerOptions?.invalidateSerializedPrefixCache === true;
     let nextMessage = message;
     const role = (message as { role?: unknown }).role;
@@ -800,6 +818,7 @@ export function installSessionToolResultGuard(
         return undefined;
       }
       nextMessage = sanitizedMessage;
+      copyCodeModeSourceAppend(message, nextMessage, sourceAppend);
     }
     const nextRole = (nextMessage as { role?: unknown }).role;
 
@@ -884,8 +903,8 @@ export function installSessionToolResultGuard(
       flushPendingToolResults();
     }
 
-    const transformedMessage = persistMessage(nextMessage);
-    const finalWrite = applyBeforeWriteHook(transformedMessage);
+    const transformedMessage = persistMessage(nextMessage, sourceAppend);
+    const finalWrite = applyBeforeWriteHook(transformedMessage, sourceAppend);
     if (!finalWrite) {
       if (isUserAgentMessage(transformedMessage)) {
         opts?.onUserMessageBlocked?.(transformedMessage);
@@ -919,10 +938,14 @@ export function installSessionToolResultGuard(
       message: persistedMessage,
       messageSeq,
       sessionTarget,
-    } = appendMessageAndCacheTranscriptSeq(finalMessage, {
-      invalidateSerializedPrefixCache:
-        callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
-    });
+    } = appendMessageAndCacheTranscriptSeq(
+      finalMessage,
+      {
+        invalidateSerializedPrefixCache:
+          callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
+      },
+      sourceAppend,
+    );
     if (sessionTarget) {
       const runId = resolveTerminalAssistantTranscriptRunId(persistedMessage, transcriptRunId);
       void publishTranscriptUpdate(sessionTarget, {
@@ -956,7 +979,10 @@ export function installSessionToolResultGuard(
   };
 
   // Monkey-patch appendMessage with our guarded version.
-  sessionManager.appendMessage = guardedAppend as SessionManager["appendMessage"];
+  sessionManager.appendMessage = ((message, options) =>
+    withCodeModeSourceAppend(message, options, (sourceAppend) =>
+      guardedAppend(message, options, sourceAppend),
+    )) as SessionManager["appendMessage"];
   sessionManager.appendCompaction = guardedAppendCompaction;
 
   return {

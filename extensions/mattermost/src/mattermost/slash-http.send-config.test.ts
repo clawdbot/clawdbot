@@ -1,8 +1,8 @@
 // Mattermost tests cover slash http.send config plugin behavior.
 import { ServerResponse, type IncomingMessage } from "node:http";
-import { PassThrough } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 
@@ -147,17 +147,13 @@ let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashC
 const callbackUrlFixture = "https://gateway.example.com/slash";
 
 function createRequest(body = "token=valid-token"): IncomingMessage {
-  const req = new PassThrough();
-  const incoming = req as PassThrough & IncomingMessage;
-  incoming.method = "POST";
-  incoming.url = "/slash";
-  incoming.headers = {
+  const req = createMockIncomingRequest([body]);
+  req.method = "POST";
+  req.url = "/slash";
+  req.headers = {
     "content-type": "application/x-www-form-urlencoded",
   };
-  process.nextTick(() => {
-    req.end(body);
-  });
-  return incoming;
+  return req;
 }
 
 function createResponse(): {

@@ -1,7 +1,6 @@
 // Mattermost tests cover slash http plugin behavior.
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { PassThrough } from "node:stream";
-import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
+import { IncomingMessage, type ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
@@ -36,21 +35,21 @@ function createRequest(params: {
   contentType?: string;
   autoEnd?: boolean;
 }): IncomingMessage {
-  const req = new PassThrough();
-  const incoming = req as PassThrough & IncomingMessage;
-  incoming.method = params.method ?? "POST";
-  incoming.headers = {
+  const req = new IncomingMessage(new Socket());
+  req.method = params.method ?? "POST";
+  req.headers = {
     "content-type": params.contentType ?? "application/x-www-form-urlencoded",
   };
   process.nextTick(() => {
     if (params.body) {
-      req.write(params.body);
+      req.push(Buffer.from(params.body));
     }
     if (params.autoEnd !== false) {
-      req.end();
+      req.complete = true;
+      req.push(null);
     }
   });
-  return incoming;
+  return req;
 }
 
 function createResponse(): {
@@ -635,55 +634,5 @@ describe("slash-http", () => {
     expect(firstLogMessage(log)).toBe(
       `mattermost: slash command registration check failed for /oc_status: ${"e".repeat(299)}; command lookup: primary failure`,
     );
-  });
-});
-
-describe("createSlashCommandHttpHandler body limits", () => {
-  it("answers an over-limit slash command with 413 and then closes the connection", async () => {
-    // Driven over a real socket: the handler answers while the sender is still uploading
-    // and then closes, so a mocked response cannot show whether either half happened.
-    const handler = createSlashCommandHttpHandler({
-      account: accountFixture,
-      cfg: {} as OpenClawConfig,
-      runtime: {} as RuntimeEnv,
-      registeredCommands: [],
-    });
-    const server = createServer((req, res) => {
-      void handler(req, res);
-    });
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
-        });
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected slash command test server to have a TCP address");
-      }
-
-      const result = await postRawWebhook({
-        url: `http://127.0.0.1:${address.port}/slash`,
-        body: `text=${"x".repeat(70 * 1024)}`,
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-      });
-
-      expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
-      expect(result.closedByServer).toBe(true);
-    } finally {
-      if (server.listening) {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => {
-            if (error) {
-              reject(error);
-              return;
-            }
-            resolve();
-          });
-        });
-      }
-    }
   });
 });

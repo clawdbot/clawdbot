@@ -98,6 +98,7 @@ export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
+  const promptedAt = Date.now();
   const task = params.task;
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
@@ -454,10 +455,10 @@ export async function spawnSubagentDirect(
         taskRowOwnership = launch.taskRowOwnership;
         acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
         recordSessionParticipantBestEffort({
-          actor: { type: "agent", id: requesterAgentId },
+          promptedAt,
+          identity: { type: "agent", id: requesterAgentId },
           agentId: targetAgentId,
           sessionKey: childSessionKey,
-          source: "agent",
           storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
         });
         return { runId: acceptedChildRunId };
@@ -602,10 +603,10 @@ export async function spawnSubagentDirect(
             // Out-of-process Gateway tracking finds that exact runId and suppresses its CLI row.
             const gatewayRunId = readGatewayRunId(launch.response) ?? childRunId;
             recordSessionParticipantBestEffort({
-              actor: { type: "agent", id: requesterAgentId },
+              promptedAt,
+              identity: { type: "agent", id: requesterAgentId },
               agentId: targetAgentId,
               sessionKey: childSessionKey,
-              source: "agent",
               storePath: resolveSessionStorePathCore(cfg.session?.store, {
                 agentId: targetAgentId,
               }),

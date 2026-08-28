@@ -9,6 +9,11 @@ import {
   buildSessionContext as buildCoreSessionContext,
   type SessionTreeEntry as CoreSessionTreeEntry,
 } from "../runtime/index.js";
+import {
+  copyCodeModeSourceAppend,
+  getCodeModeSourceAppend,
+  copyCodeModeSourceAppendOptions,
+} from "../transcript-code-mode-source.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { isIndexedSessionEntry, isSessionContextMetadataEntry } from "./session-manager-codec.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
@@ -43,14 +48,25 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     if (!isIndexedSessionEntry(canonicalEntry)) {
       throw new Error(`Invalid session transcript entry: ${entry.type}`);
     }
+    if (entry.type === "message" && canonicalEntry.type === "message") {
+      copyCodeModeSourceAppend(
+        entry.message,
+        canonicalEntry.message,
+        getCodeModeSourceAppend(options),
+        (source) => source,
+      );
+    }
     const activeBranchAppend =
       !this.pendingDeliberateAppend &&
       this.appendMode !== "side" &&
       !isSessionTranscriptSideAppendEntry(canonicalEntry);
-    const persistenceResult = this.persist(canonicalEntry, {
-      ...options,
-      ...(activeBranchAppend ? { appendIntent: "active-branch" } : {}),
-    });
+    const persistenceResult = this.persist(
+      canonicalEntry,
+      copyCodeModeSourceAppendOptions(options, {
+        ...options,
+        ...(activeBranchAppend ? { appendIntent: "active-branch" as const } : {}),
+      }),
+    );
     if (persistenceResult && typeof persistenceResult === "object") {
       if (persistenceResult.adoptedMessageId) {
         this.reloadPersistedTranscript();

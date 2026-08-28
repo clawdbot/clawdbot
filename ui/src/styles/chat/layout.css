@@ -423,7 +423,7 @@ openclaw-chat-page {
 .chat-topbar-notices {
   position: absolute;
   z-index: 24;
-  top: 8px;
+  top: calc(var(--chat-mobile-pane-header-height, 0px) + 8px);
   left: 50%;
   display: flex;
   align-items: center;
@@ -767,7 +767,7 @@ openclaw-chat-page {
 .chat-history-available {
   position: absolute;
   z-index: 10;
-  top: 10px;
+  top: calc(var(--chat-mobile-pane-header-height, 0px) + 10px);
   left: 50%;
   max-width: calc(100% - 2 * var(--chat-thread-gutter));
   border-radius: var(--radius-full);
@@ -2013,7 +2013,7 @@ button.chat-reply-preview--message:disabled {
 .chat-gutter-stack {
   position: absolute;
   z-index: 24;
-  top: 10px;
+  top: calc(var(--chat-mobile-pane-header-height, 0px) + 10px);
   right: 14px;
   display: grid;
   width: min(450px, calc(100% - 28px));

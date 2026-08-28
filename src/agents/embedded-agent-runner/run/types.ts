@@ -25,7 +25,7 @@ import type { McpConnectAction } from "../../mcp-connect-action.js";
 import type { McpAppChannelView } from "../../mcp-ui-resource.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
-import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
+import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
@@ -221,6 +221,8 @@ export type EmbeddedRunAttemptResult = {
   sessionFileUsed?: string;
   diagnosticTrace?: DiagnosticTraceContext;
   agentHarnessId?: string;
+  /** Current physical model attempt; replaced from the prepared runtime plan at the boundary. */
+  modelAttempt?: AgentRuntimeModelAttempt;
   /** Exact credential material fingerprint reported by a harness-owned auth boundary. */
   authBindingFingerprint?: string;
   /** Exact local implementation used by a plugin-owned harness attempt. */

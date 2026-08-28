@@ -42,10 +42,6 @@ type AgentTurnStartRequest = {
   onRunObserved?: (runId: string) => void;
 };
 
-function createAcceptanceRespond(io: AgentTurnIo): RespondFn {
-  return (ok, payload, error, meta) => io.emitAcceptance([ok, payload, error], meta);
-}
-
 function replayAgentTurnIfCached(params: {
   preflight: AgentRequestPreflight;
   context: GatewayRequestHandlerOptions["context"];
@@ -96,10 +92,12 @@ export function createAgentTurnService(
     io,
     onRunObserved,
   }: AgentTurnStartRequest): Promise<void> => {
+    const promptedAt = Date.now();
     if (replayAgentTurnIfCached({ preflight, context, io })) {
       return;
     }
-    const respond = createAcceptanceRespond(io);
+    const respond: RespondFn = (ok, payload, error, meta) =>
+      io.emitAcceptance([ok, payload, error], meta);
     const {
       request,
       cfg,
@@ -522,6 +520,7 @@ export function createAgentTurnService(
       const { activeSessionAgentId } = delivery;
 
       const preparedDispatch = await prepareAgentRunDispatch({
+        promptedAt,
         request,
         cfg,
         cfgForAgent,

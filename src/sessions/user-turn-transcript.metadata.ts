@@ -2,7 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
-import { applyInputProvenanceToUserMessage, normalizeInputProvenance } from "./input-provenance.js";
+import { normalizeInputProvenance } from "./input-provenance.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnInput,
@@ -84,6 +84,7 @@ export function buildPersistedUserTurnMetadata(
 }
 
 type AgentMessageWithOpenClawMetadata = AgentMessage & {
+  display?: false;
   __openclaw?: Record<string, unknown>;
 };
 
@@ -119,7 +120,18 @@ export function restorePreparedUserTurnOperationalMetaForRuntime(params: {
   const senderIsOwner = preparedMeta?.senderIsOwner;
   const steerTargetRunId = normalizePersistedSteerTargetRunId(preparedMeta?.steerTargetRunId);
   const nextMessage: AgentMessageWithOpenClawMetadata = { ...params.runtimeMessage };
+  const provenance = normalizeInputProvenance(Reflect.get(params.preparedMessage, "provenance"));
+  if (provenance) {
+    Object.assign(nextMessage, { provenance });
+  }
+  if (params.preparedMessage.display === false) {
+    nextMessage.display = false;
+  }
   const runtimeMeta = { ...nextMessage["__openclaw"] };
+  delete runtimeMeta.intent;
+  if (preparedMeta?.intent) {
+    runtimeMeta.intent = preparedMeta.intent;
+  }
   delete runtimeMeta.steerTargetRunId;
   if (steerTargetRunId) {
     runtimeMeta.steerTargetRunId = steerTargetRunId;
@@ -147,6 +159,9 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     typeof originalIdempotencyKey === "string" ? originalIdempotencyKey : undefined;
   const provenance = normalizeInputProvenance(Reflect.get(message, "provenance"));
   const originalMeta = message["__openclaw"];
+  const display = message.display;
+  const intent =
+    originalMeta?.intent === undefined ? undefined : structuredClone(originalMeta.intent);
   const senderIsOwner = originalMeta?.senderIsOwner;
   const replyToId = normalizeOptionalString(originalMeta?.replyToId);
   const originalReplyPreview = asOptionalRecord(originalMeta?.replyToPreview);
@@ -178,13 +193,10 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   if (nextMessage?.role !== "user") {
     return undefined;
   }
-  const preparedUserMessage = provenance
-    ? applyInputProvenanceToUserMessage(nextMessage, provenance)
-    : nextMessage;
-  if (preparedUserMessage.role !== "user") {
-    return undefined;
-  }
-  const nextUserMessage: PersistedUserTurnMessage = { ...preparedUserMessage };
+  const nextUserMessage: PersistedUserTurnMessage = {
+    ...nextMessage,
+    ...(provenance ? { provenance } : {}),
+  };
   const protectedMeta: Record<string, unknown> = {
     ...nextUserMessage["__openclaw"],
     ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
@@ -194,13 +206,18 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     ...(lateMedia ? { lateMedia: true } : {}),
     ...(media === undefined ? {} : { media }),
     ...(mediaImageLayout === undefined ? {} : { mediaImageLayout }),
+    ...(intent === undefined ? {} : { intent }),
   };
+  if (intent === undefined) {
+    delete protectedMeta.intent;
+  }
   delete protectedMeta.steerTargetRunId;
   if (steerTargetRunId) {
     protectedMeta.steerTargetRunId = steerTargetRunId;
   }
   const protectedMessage: PersistedUserTurnMessage = {
     ...nextUserMessage,
+    ...(display === false ? { display: false } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };
   delete protectedMessage["__openclaw"];

@@ -4,7 +4,7 @@ import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as markdown from "../../../components/markdown.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts";
 import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { chatStartupStatusLabel } from "../chat-run-startup.ts";

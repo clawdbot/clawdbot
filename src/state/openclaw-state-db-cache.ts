@@ -132,7 +132,7 @@ function closeStaleCachedOpenClawStateDatabase(database: OpenClawStateDatabase):
 }
 
 /** Latch background verification damage so later opens fail without rescanning. */
-function recordOpenClawStateDatabaseOpenFailure(
+export function recordOpenClawStateDatabaseOpenFailure(
   pathname: string,
   error: Error,
   generation?: SqliteFileGeneration,
@@ -141,7 +141,7 @@ function recordOpenClawStateDatabaseOpenFailure(
 }
 
 /** Clear a terminal open failure after doctor rewrites the database file. */
-function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
+export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
   terminalOpenLatch.clear(pathname);
 }
 
@@ -183,7 +183,7 @@ function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
 }
 
 /** Close one cached shared state database handle by exact pathname. */
-function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
+export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
   const resolvedPath = path.resolve(pathname);
   const database = cachedDatabases.get(resolvedPath);
   if (!database) {
@@ -199,7 +199,7 @@ function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
 }
 
 /** Close all cached shared state database handles. */
-function closeOpenClawStateDatabase(
+export function closeOpenClawStateDatabase(
   options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
 ): void {
   for (const database of cachedDatabases.values()) {
@@ -213,12 +213,12 @@ function closeOpenClawStateDatabase(
 }
 
 /** Test whether any cached shared state database handle is still open. */
-function isOpenClawStateDatabaseOpen(): boolean {
+export function isOpenClawStateDatabaseOpen(): boolean {
   return Array.from(cachedDatabases.values()).some((database) => database.db.isOpen);
 }
 
 /** Close shared state handles and clear terminal failure latches for test isolation. */
-function closeOpenClawStateDatabaseForTest(): void {
+export function closeOpenClawStateDatabaseForTest(): void {
   closeOpenClawStateDatabase();
   terminalOpenLatch.clearAll();
 }

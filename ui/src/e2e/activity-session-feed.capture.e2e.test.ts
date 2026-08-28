@@ -51,6 +51,165 @@ suite.define(() => {
         const incidentNotesKey = "agent:main:incident-notes";
         const automationKeys = [designKey, gatewayHandoffKey, nightlyMaintenanceKey];
         const nonAutomationKeys = [releaseKey, incidentNotesKey];
+        const sessionList = {
+          people: [
+            {
+              identity: { type: "profile", id: "profile-alice" },
+              label: "Alice Chen",
+              sessionCount: 3,
+            },
+            {
+              identity: { type: "profile", id: "profile-bob" },
+              label: "Bob Rivera",
+              sessionCount: 2,
+            },
+            {
+              identity: { type: "profile", id: "profile-carol" },
+              label: "Carol Singh",
+              sessionCount: 2,
+            },
+          ],
+          peopleSessionCount: 5,
+          count: 5,
+          creators: [
+            { id: "profile-alice", label: "Alice Chen" },
+            { id: "profile-bob", label: "Bob Rivera" },
+            { id: "profile-carol", label: "Carol Singh" },
+          ],
+          defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+          path: "",
+          sessions: [
+            {
+              key: releaseKey,
+              kind: "direct",
+              displayName: "Release readiness",
+              agentId: "main",
+              channel: "webchat",
+              createdActor: {
+                type: "human",
+                id: "profile-alice",
+                identity: { type: "profile", id: "profile-alice" },
+                label: "Alice Chen",
+              },
+              owner: {
+                actor: {
+                  type: "human",
+                  id: "profile-alice",
+                  identity: { type: "profile", id: "profile-alice" },
+                  label: "Alice Chen",
+                },
+              },
+              participants: [
+                { identity: { type: "profile", id: "profile-bob" }, label: "Bob Rivera" },
+              ],
+              activeRunIds: ["mock run:a/b"],
+              hasActiveRun: true,
+              observerDigest: {
+                headline: "Waiting on a fictional mock approval",
+                health: "waiting-on-user",
+                revision: 1,
+                runId: "mock run:a/b",
+                updatedAt: now - 4 * 60_000,
+              },
+              status: "running",
+              updatedAt: now - 4 * 60_000,
+            },
+            {
+              key: designKey,
+              kind: "direct",
+              displayName: "Control UI design review",
+              agentId: "main",
+              createdActor: {
+                type: "human",
+                id: "profile-bob",
+                identity: { type: "profile", id: "profile-bob" },
+                label: "Bob Rivera",
+              },
+              owner: {
+                actor: {
+                  type: "human",
+                  id: "profile-bob",
+                  identity: { type: "profile", id: "profile-bob" },
+                  label: "Bob Rivera",
+                },
+              },
+              createdVia: "cron",
+              participants: [
+                { identity: { type: "profile", id: "profile-alice" }, label: "Alice Chen" },
+              ],
+              hasAutomation: true,
+              updatedAt: now - 42 * 60_000,
+            },
+            {
+              key: gatewayHandoffKey,
+              kind: "direct",
+              displayName: "Gateway handoff",
+              agentId: "main",
+              createdActor: {
+                type: "human",
+                id: "profile-carol",
+                identity: { type: "profile", id: "profile-carol" },
+                label: "Carol Singh",
+              },
+              owner: {
+                actor: {
+                  type: "human",
+                  id: "profile-carol",
+                  identity: { type: "profile", id: "profile-carol" },
+                  label: "Carol Singh",
+                },
+              },
+              createdVia: "cron",
+              hasAutomation: true,
+              updatedAt: now - 2 * 60 * 60_000,
+            },
+            {
+              key: nightlyMaintenanceKey,
+              kind: "direct",
+              displayName: "Nightly mock maintenance",
+              agentId: "main",
+              createdActor: {
+                type: "human",
+                id: "profile-carol",
+                identity: { type: "profile", id: "profile-carol" },
+                label: "Carol Singh",
+              },
+              owner: {
+                actor: {
+                  type: "human",
+                  id: "profile-carol",
+                  identity: { type: "profile", id: "profile-carol" },
+                  label: "Carol Singh",
+                },
+              },
+              createdVia: "cron",
+              hasAutomation: true,
+              updatedAt: now - 3 * 60 * 60_000,
+            },
+            {
+              key: incidentNotesKey,
+              kind: "direct",
+              displayName: "Incident follow-up",
+              agentId: "main",
+              createdActor: {
+                type: "human",
+                id: "profile-alice",
+                identity: { type: "profile", id: "profile-alice" },
+                label: "Alice Chen",
+              },
+              owner: {
+                actor: {
+                  type: "human",
+                  id: "profile-alice",
+                  identity: { type: "profile", id: "profile-alice" },
+                  label: "Alice Chen",
+                },
+              },
+              updatedAt: now - 50 * 60 * 60_000,
+            },
+          ],
+          ts: now,
+        };
         await installMockGateway(page, {
           hasMultipleSessionSharingIdentities: true,
           presenceUsers: [
@@ -91,91 +250,29 @@ suite.define(() => {
           ],
           methodResponses: {
             "sessions.list": {
-              count: 5,
-              creators: [
-                { id: "profile-alice", label: "Alice Chen" },
-                { id: "profile-bob", label: "Bob Rivera" },
-                { id: "profile-carol", label: "Carol Singh" },
+              cases: [
+                {
+                  match: { involvingProfileId: "profile-carol" },
+                  response: {
+                    ...sessionList,
+                    count: 2,
+                    sessions: sessionList.sessions.filter((row) =>
+                      [gatewayHandoffKey, nightlyMaintenanceKey].includes(row.key),
+                    ),
+                  },
+                },
+                {
+                  match: { involvingProfileId: "profile-alice" },
+                  response: {
+                    ...sessionList,
+                    count: 3,
+                    sessions: sessionList.sessions.filter((row) =>
+                      [releaseKey, designKey, incidentNotesKey].includes(row.key),
+                    ),
+                  },
+                },
+                { response: sessionList },
               ],
-              defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-              path: "",
-              sessions: [
-                {
-                  key: releaseKey,
-                  kind: "direct",
-                  displayName: "Release readiness",
-                  agentId: "main",
-                  channel: "webchat",
-                  createdActor: { type: "human", id: "profile-alice", label: "Alice Chen" },
-                  owner: {
-                    actor: { type: "human", id: "profile-alice", label: "Alice Chen" },
-                  },
-                  participants: [{ type: "human", id: "profile-bob", label: "Bob Rivera" }],
-                  activeRunIds: ["mock run:a/b"],
-                  hasActiveRun: true,
-                  observerDigest: {
-                    headline: "Waiting on a fictional mock approval",
-                    health: "waiting-on-user",
-                    revision: 1,
-                    runId: "mock run:a/b",
-                    updatedAt: now - 4 * 60_000,
-                  },
-                  status: "running",
-                  updatedAt: now - 4 * 60_000,
-                },
-                {
-                  key: designKey,
-                  kind: "direct",
-                  displayName: "Control UI design review",
-                  agentId: "main",
-                  createdActor: { type: "human", id: "profile-bob", label: "Bob Rivera" },
-                  owner: {
-                    actor: { type: "human", id: "profile-bob", label: "Bob Rivera" },
-                  },
-                  createdVia: "cron",
-                  participants: [{ type: "human", id: "profile-alice", label: "Alice Chen" }],
-                  hasAutomation: true,
-                  updatedAt: now - 42 * 60_000,
-                },
-                {
-                  key: gatewayHandoffKey,
-                  kind: "direct",
-                  displayName: "Gateway handoff",
-                  agentId: "main",
-                  createdActor: { type: "human", id: "profile-carol", label: "Carol Singh" },
-                  owner: {
-                    actor: { type: "human", id: "profile-carol", label: "Carol Singh" },
-                  },
-                  createdVia: "cron",
-                  hasAutomation: true,
-                  updatedAt: now - 2 * 60 * 60_000,
-                },
-                {
-                  key: nightlyMaintenanceKey,
-                  kind: "direct",
-                  displayName: "Nightly mock maintenance",
-                  agentId: "main",
-                  createdActor: { type: "human", id: "profile-carol", label: "Carol Singh" },
-                  owner: {
-                    actor: { type: "human", id: "profile-carol", label: "Carol Singh" },
-                  },
-                  createdVia: "cron",
-                  hasAutomation: true,
-                  updatedAt: now - 3 * 60 * 60_000,
-                },
-                {
-                  key: incidentNotesKey,
-                  kind: "direct",
-                  displayName: "Incident follow-up",
-                  agentId: "main",
-                  createdActor: { type: "human", id: "profile-alice", label: "Alice Chen" },
-                  owner: {
-                    actor: { type: "human", id: "profile-alice", label: "Alice Chen" },
-                  },
-                  updatedAt: now - 50 * 60 * 60_000,
-                },
-              ],
-              ts: now,
             },
           },
           sessionKey: releaseKey,

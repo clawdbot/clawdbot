@@ -1,37 +1,22 @@
 /**
  * Mock IncomingMessage builder for webhook and HTTP request tests.
  */
-import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
+import { IncomingMessage } from "node:http";
+import { Socket } from "node:net";
 
 export function createMockIncomingRequest(chunks: string[]): IncomingMessage {
-  const req = new EventEmitter() as IncomingMessage & {
-    destroyed?: boolean;
-    destroy: (error?: Error) => IncomingMessage;
-  };
-  let paused = false;
-  req.destroyed = false;
-  req.headers = {};
-  req.destroy = () => {
-    req.destroyed = true;
-    return req;
-  };
-  // Readable contract: pausing stops delivery without tearing the request down. Body
-  // readers use it to stop an over-limit stream while leaving the response writable,
-  // so a mock without it can only ever exercise the destroying path.
-  req.pause = () => {
-    paused = true;
-    return req;
-  };
+  const req = new IncomingMessage(new Socket());
 
   void Promise.resolve().then(() => {
     for (const chunk of chunks) {
-      req.emit("data", Buffer.from(chunk, "utf-8"));
-      if (req.destroyed || paused) {
+      if (req.destroyed) {
         return;
       }
+      req.push(Buffer.from(chunk, "utf-8"));
     }
-    req.emit("end");
+    // Like Node's parser, mark complete before EOF so normal cleanup keeps the socket open.
+    req.complete = true;
+    req.push(null);
   });
 
   return req;

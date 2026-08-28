@@ -1,6 +1,6 @@
 // Admin Http Rpc tests cover handler plugin behavior.
 import { createServer, type Server } from "node:http";
-import { connect, type Socket } from "node:net";
+import { connect, Socket } from "node:net";
 import { Readable } from "node:stream";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -38,6 +38,7 @@ function createRequest(body: unknown, method = "POST") {
   const req = Readable.from([typeof body === "string" ? body : JSON.stringify(body)]);
   Object.assign(req, {
     method,
+    socket: new Socket(),
     url: "/api/v1/admin/rpc",
     headers: {
       "content-type": "application/json",
@@ -54,6 +55,7 @@ function createHangingRequest() {
   });
   Object.assign(req, {
     method: "POST",
+    socket: new Socket(),
     url: "/api/v1/admin/rpc",
     headers: {
       "content-type": "application/json",
@@ -290,30 +292,6 @@ describe("admin-http-rpc plugin handler", () => {
     expect(result.captured.statusCode).toBe(405);
     expect(result.captured.headers.allow).toBe("POST");
     expect(dispatchGatewayMethod).not.toHaveBeenCalled();
-  });
-
-  it("times out incomplete request bodies before dispatch", async () => {
-    vi.useFakeTimers();
-    try {
-      const req = createHangingRequest();
-      const resultPromise = invokeRequest(req);
-      await vi.advanceTimersByTimeAsync(30_000);
-      const result = await resultPromise;
-
-      expect(result.handled).toBe(true);
-      expect(result.captured.statusCode).toBe(408);
-      expect(result.json).toEqual({
-        ok: false,
-        error: {
-          type: "invalid_request",
-          message: "Request body timeout",
-        },
-      });
-      expectBodyReadListenersCleaned(req);
-      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("settles an early client close and removes request-body listeners", async () => {

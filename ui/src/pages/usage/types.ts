@@ -1,6 +1,7 @@
 import type { CostUsageSummary } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import type { UsageRetryState } from "../../lib/incomplete-usage-retry.ts";
 // Control UI view renders usageTypes screen content.
 import type {
   CostUsageDailyEntry,
@@ -77,7 +78,7 @@ type UsageDataState = {
   totals: UsageTotals | null;
   aggregates: UsageAggregates | null;
   costDaily: CostDailyEntry[];
-  cacheStatus: SessionsUsageResult["cacheStatus"];
+  cacheRefresh: UsageRetryState;
   providerUsage: ProviderUsageSummary["providers"];
   /** The gateway never converged the refresh; the empty list is not an answer. */
   providerUsageStalled: boolean;

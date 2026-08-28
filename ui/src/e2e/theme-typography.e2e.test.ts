@@ -170,7 +170,9 @@ suite.define(() => {
       "Stored in this browser only",
     );
     await page.evaluate(() => document.fonts.ready);
-    expect(new Set(fontRequests())).toEqual(new Set(["dm-sans.css 200", "fraunces.css 200"]));
+    expect(new Set(fontRequests())).toEqual(
+      new Set(["dm-sans.css 200", "fraunces.css 200", "jetbrains-mono.css 200"]),
+    );
     const families = () =>
       preview.evaluate((panel) => ({
         ui: getComputedStyle(panel.querySelector(".settings-typography-preview__caption")!)
@@ -289,13 +291,17 @@ suite.define(() => {
         };
       });
 
-      expect(report.linkHrefs).toEqual(faces.map((face) => `/fonts/${face}.css`));
+      // Every theme also declares the mono face: base.css --mono names
+      // JetBrains Mono for code spans regardless of the active family.
+      const expectedFaces = [...new Set([...faces, "jetbrains-mono"])];
+      expect(report.linkHrefs).toEqual(expectedFaces.map((face) => `/fonts/${face}.css`));
       expect(report.bodyFontFamily).toBe(body);
       expect(report.chatFontFamily).toBe(chat);
       // Serif chat faces opt out of the app-wide `antialiased` thinning
       // (applyChatFontSmoothing) so their hairlines stay crisp.
       expect(report.chatFontSmoothing).toBe(chatSmoothing);
-      expect(new Set(report.loaded)).toEqual(new Set([body, chat]));
+      // Mono glyphs on the page pull the always-declared JetBrains Mono face.
+      expect(new Set(report.loaded)).toEqual(new Set([body, chat, "JetBrains Mono"]));
       expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
 
       await captureTypography(page, `${theme}-chat-dark`);

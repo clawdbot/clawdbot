@@ -13,6 +13,7 @@ import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome
 import type { createCacheTrace } from "../../cache-trace.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import type { AgentRuntimeModelAttempt } from "../../runtime-plan/types.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
@@ -34,18 +35,26 @@ type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSessi
 type CacheTrace = ReturnType<typeof createCacheTrace>;
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 
-/** Keeps presentation state sticky while retry attempts replace their result object. */
-export function createMcpAttemptCarryover() {
+/** Keeps attempt-owned state available while retry attempts replace their result object. */
+export function createAttemptCarryover() {
   let latestMcpAppChannelView: EmbeddedRunAttemptResult["latestMcpAppChannelView"];
   let latestMcpConnectAction: EmbeddedRunAttemptResult["latestMcpConnectAction"];
+  let modelAttempt: AgentRuntimeModelAttempt | undefined;
   return {
     apply(
-      attempt: Pick<EmbeddedRunAttemptResult, "latestMcpAppChannelView" | "latestMcpConnectAction">,
+      attempt: Pick<
+        EmbeddedRunAttemptResult,
+        "latestMcpAppChannelView" | "latestMcpConnectAction" | "modelAttempt"
+      >,
     ): void {
+      modelAttempt = attempt.modelAttempt;
       latestMcpAppChannelView = attempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
       attempt.latestMcpAppChannelView = latestMcpAppChannelView;
       latestMcpConnectAction = attempt.latestMcpConnectAction ?? latestMcpConnectAction;
       attempt.latestMcpConnectAction = latestMcpConnectAction;
+    },
+    get modelAttempt() {
+      return modelAttempt;
     },
   };
 }

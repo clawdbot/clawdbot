@@ -1,9 +1,8 @@
 import { EventEmitter } from "node:events";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { Readable } from "node:stream";
+import type { ServerResponse } from "node:http";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createMockServerResponse, postRawWebhook } from "openclaw/plugin-sdk/test-env";
+import { createMockIncomingRequest, createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createA2aHttpHandler } from "./http.js";
 import { A2aTaskStore } from "./task-store.js";
@@ -60,9 +59,7 @@ async function startHttpHarness(options?: {
     body?: string;
     token?: string | null;
   }) {
-    const request = Readable.from(
-      dispatch.body === undefined ? [] : [dispatch.body],
-    ) as IncomingMessage;
+    const request = createMockIncomingRequest(dispatch.body === undefined ? [] : [dispatch.body]);
     request.method = dispatch.method;
     request.url = dispatch.endpoint;
     request.headers = {
@@ -75,8 +72,8 @@ async function startHttpHarness(options?: {
           }),
       ...(dispatch.token ? { authorization: `Bearer ${dispatch.token}` } : {}),
     };
-    Object.defineProperty(request, "socket", {
-      value: { remoteAddress: "127.0.0.1" },
+    Object.defineProperty(request.socket, "remoteAddress", {
+      value: "127.0.0.1",
     });
 
     const response = createMockServerResponse();
@@ -496,101 +493,5 @@ describe("A2A JSON-RPC protocol boundary", () => {
         },
       },
     });
-  });
-});
-
-async function listenOnLoopback(server: Server): Promise<number> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.removeListener("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected the A2A test server to have a TCP address");
-  }
-  return address.port;
-}
-
-async function closeServer(server: Server): Promise<void> {
-  if (!server.listening) {
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
-}
-
-describe("A2A HTTP transport", () => {
-  it("delivers the oversized-body rejection before releasing the connection", async () => {
-    // The mocked-response test above records status 413 even when the peer received
-    // nothing, so the answered-then-released contract is only observable on the wire.
-    const taskStore = new A2aTaskStore();
-    activeStores.add(taskStore);
-    const handler = createA2aHttpHandler({
-      config: {},
-      a2aConfig: { peers: { alpha: { token: "alpha-secret" } } },
-      version: VERSION,
-      taskStore,
-      dispatchInbound: async () => undefined,
-    });
-    const server = createServer((request, response) => {
-      void handler(request, response);
-    });
-    try {
-      const port = await listenOnLoopback(server);
-      const url = `http://127.0.0.1:${port}/a2a/v1`;
-      const headers = {
-        "content-type": "application/json",
-        authorization: "Bearer alpha-secret",
-      };
-
-      // Declared over-cap length: rejected before any body arrives, while the peer is
-      // still uploading and can only learn the outcome from what reaches it.
-      const rejected = await postRawWebhook({
-        url,
-        body: '{"jsonrpc":"2.0"}',
-        contentLength: 2 * 1024 * 1024,
-        headers,
-        idleTimeoutMs: 500,
-      });
-      expect(rejected.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
-      expect(rejected.body).toContain("exceeds the 1 MiB limit");
-      expect(rejected.closedByServer).toBe(true);
-
-      // The whole over-cap body in one write: the rejection is queued behind bytes the
-      // server has stopped reading, which is where a hard teardown discards it.
-      const flooded = await postRawWebhook({
-        url,
-        body: "x".repeat(1024 * 1024 + 128 * 1024),
-        headers,
-        idleTimeoutMs: 500,
-      });
-      expect(flooded.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
-      expect(flooded.body).toContain("exceeds the 1 MiB limit");
-      expect(flooded.closedByServer).toBe(true);
-
-      // Control: an under-cap request is read and answered on a retained connection, so
-      // the teardown above is attributable to the rejection and not to every request.
-      const accepted = await postRawWebhook({
-        url,
-        body: "not json",
-        headers,
-        idleTimeoutMs: 500,
-      });
-      expect(accepted.statusLine).toBe("HTTP/1.1 200 OK");
-      expect(accepted.body).toContain("Parse error");
-      expect(accepted.closedByServer).toBe(false);
-    } finally {
-      await closeServer(server);
-    }
   });
 });

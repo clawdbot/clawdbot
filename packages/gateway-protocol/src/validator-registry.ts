@@ -253,6 +253,8 @@ export const validateSessionsViewerPresenceSetParams = compile(
 );
 export const validateSessionsAbortParams = compile(S.SessionsAbortParamsSchema);
 export const validateSessionsPatchParams = compile(S.SessionsPatchParamsSchema);
+export const validateSessionsGoalUpdateParams = compile(S.SessionsGoalUpdateParamsSchema);
+export const validateSessionsGoalClearParams = compile(S.SessionsGoalClearParamsSchema);
 export const validateSessionsPatchManyParams = compile(S.SessionsPatchManyParamsSchema);
 export const validateSessionsPluginPatchParams = compile(S.SessionsPluginPatchParamsSchema);
 export const validateSessionsResetParams = compile(S.SessionsResetParamsSchema);
@@ -435,6 +437,10 @@ export const validateExecApprovalsSetParams = compile(S.ExecApprovalsSetParamsSc
 export const validateExecApprovalGetParams = compile(S.ExecApprovalGetParamsSchema);
 export const validateExecApprovalRequestParams = compile(S.ExecApprovalRequestParamsSchema);
 export const validateExecApprovalResolveParams = compile(S.ExecApprovalResolveParamsSchema);
+export const validateExecApprovalGrantsListParams = compile(S.ExecApprovalGrantsListParamsSchema);
+export const validateExecApprovalGrantsRevokeParams = compile(
+  S.ExecApprovalGrantsRevokeParamsSchema,
+);
 export const validateQuestionRequestParams = compile(S.QuestionRequestParamsSchema);
 export const validateQuestionWaitAnswerParams = compile(S.QuestionWaitAnswerParamsSchema);
 export const validateQuestionResolveParams = compile(S.QuestionResolveParamsSchema);

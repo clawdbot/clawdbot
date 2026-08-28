@@ -179,6 +179,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     ),
   "sessions-groups": () =>
     import("./server-methods/sessions-groups.js").then((module) => module.sessionGroupHandlers),
+  "sessions-goal": () =>
+    import("./server-methods/sessions-goal.js").then((module) => module.sessionGoalHandlers),
   "sessions-messaging": () =>
     import("./server-methods/sessions-messaging.js").then(
       (module) => module.sessionMessagingHandlers,

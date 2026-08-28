@@ -13,6 +13,7 @@ import {
 } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { extractToolResultMediaArtifact } from "../agents/embedded-agent-tool-media.js";
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
@@ -113,11 +114,39 @@ const {
   MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX,
   attachManagedOutgoingMediaToMessage: attachManagedOutgoingImagesToMessage,
   cleanupManagedOutgoingMediaRecords: cleanupManagedOutgoingImageRecords,
-  createManagedOutgoingMediaBlocks: createManagedOutgoingImageBlocks,
+  createManagedOutgoingMediaBlocks: createManagedOutgoingImageBlocksActual,
   handleManagedOutgoingMediaHttpRequest: handleManagedOutgoingImageHttpRequest,
+  prepareOutgoingMediaFromReplyPayload,
   resolveManagedOutgoingMediaArtifactDownload: resolveManagedOutgoingImageArtifactDownload,
   resolveManagedImageAttachmentLimits,
 } = await import("./managed-image-attachments.js");
+
+type ManagedOutgoingImageTestParams = Omit<
+  Parameters<typeof createManagedOutgoingImageBlocksActual>[0],
+  "items"
+> & {
+  mediaUrls?: string[] | null;
+  attachments?: ReplyMediaAttachment[] | null;
+  allowLocalNonImage?: boolean;
+};
+
+function createManagedOutgoingImageBlocks(params: ManagedOutgoingImageTestParams) {
+  const { mediaUrls, attachments, allowLocalNonImage, ...ownerParams } = params;
+  return createManagedOutgoingImageBlocksActual({
+    ...ownerParams,
+    items: (mediaUrls ?? []).map((url, index) => {
+      const attachment = attachments?.[index];
+      return Object.assign(
+        { url, trustedLocal: allowLocalNonImage === true },
+        typeof attachment?.name === "string" ? { filename: attachment.name } : {},
+        typeof attachment?.mimeType === "string" ? { mimeType: attachment.mimeType } : {},
+        typeof attachment?.durationMs === "number" ? { durationMs: attachment.durationMs } : {},
+        typeof attachment?.width === "number" ? { width: attachment.width } : {},
+        typeof attachment?.height === "number" ? { height: attachment.height } : {},
+      );
+    }),
+  });
+}
 
 async function replaceTestSessionEntry(
   scope: {
@@ -1307,6 +1336,42 @@ describe("createManagedOutgoingImageBlocks", () => {
     await prepareManagedSessionStore(stateDir);
   });
 
+  it("prepares deduplicated media with metadata and per-item trust aligned by URL", () => {
+    expect(
+      prepareOutgoingMediaFromReplyPayload({
+        mediaUrls: ["/tmp/a.json", "/tmp/a.json", "/tmp/b.json"],
+        trustedLocalMedia: true,
+        attachments: [
+          {
+            path: "/tmp/a.json",
+            name: "a.json",
+            mimeType: "application/json",
+            trustedLocalMedia: false,
+          },
+          {
+            path: "/tmp/b.json",
+            name: "b.json",
+            mimeType: "application/json",
+            trustedLocalMedia: true,
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        url: "/tmp/a.json",
+        filename: "a.json",
+        mimeType: "application/json",
+        trustedLocal: false,
+      },
+      {
+        url: "/tmp/b.json",
+        filename: "b.json",
+        mimeType: "application/json",
+        trustedLocal: true,
+      },
+    ]);
+  });
+
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
     setMediaStoreNetworkDepsForTest();
@@ -1930,6 +1995,133 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(onPrepareError).toHaveBeenCalledOnce();
   });
 
+  it("reports media with no supported content type instead of dropping it silently", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "mystery.blob");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.from([0, 1, 2, 3]));
+    const onPrepareError = vi.fn();
+
+    const blocks = await createManagedOutgoingImageBlocksActual({
+      sessionKey: "agent:main:main",
+      items: [{ url: sourcePath, trustedLocal: true }],
+      stateDir,
+      localRoots: [path.dirname(sourcePath)],
+      continueOnPrepareError: true,
+      onPrepareError,
+    });
+
+    expect(blocks).toEqual([]);
+    expect(onPrepareError).toHaveBeenCalledOnce();
+    expect(onPrepareError.mock.calls[0]?.[0]).toMatchObject({
+      message: expect.stringMatching(/could not be prepared/u),
+    });
+  });
+
+  it.each([
+    {
+      fileName: "config.xml",
+      mimeType: "application/xml",
+      expectedMimeType: "text/xml",
+      body: "<config/>",
+    },
+    { fileName: "vector.svg", mimeType: "image/svg+xml", body: "<svg/>" },
+    { fileName: "worker.py", mimeType: "text/x-python", body: "print('ready')" },
+    { fileName: "script.js", mimeType: "text/javascript", body: "export default true" },
+    {
+      fileName: "mystery.blob",
+      mimeType: "application/octet-stream",
+      body: Buffer.from([0, 1, 2, 3]),
+    },
+  ])("rejects unsupported $mimeType metadata before persistence", async (fixture) => {
+    const sourcePath = path.join(stateDir, "workspace", fixture.fileName);
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, fixture.body);
+
+    const onPrepareError = vi.fn();
+    const blocks = await createManagedOutgoingImageBlocksActual({
+      sessionKey: "agent:main:main",
+      items: [
+        {
+          url: sourcePath,
+          filename: fixture.fileName,
+          mimeType: fixture.mimeType,
+          trustedLocal: true,
+        },
+      ],
+      stateDir,
+      localRoots: [path.dirname(sourcePath)],
+      continueOnPrepareError: true,
+      onPrepareError,
+    });
+
+    expect(blocks).toEqual([]);
+    expect(onPrepareError).toHaveBeenCalledOnce();
+    expect(listManagedImageRecordEntries({ stateDir })).toEqual([]);
+    const originalsDir = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR);
+    await expectPathMissing(originalsDir);
+  });
+
+  it.each(["GET", "HEAD"])("does not serve legacy SVG records over %s", async (method) => {
+    const body = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script/></svg>');
+    const { attachmentId, sessionKey } = await createFixture(stateDir, {
+      filename: "vector.svg",
+      contentType: "image/svg+xml",
+      body,
+    });
+    const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName,
+      method,
+      authResponse: { authMethod: "token" },
+      transcriptMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "attachment",
+              attachment: {
+                kind: "document",
+                label: "vector.svg",
+                mimeType: "image/svg+xml",
+                url: pathName,
+              },
+            },
+          ],
+          __openclaw: { id: "msg-1" },
+        },
+      ],
+    });
+
+    expect(result.statusCode).toBe(404);
+    expect(result.headers["content-disposition"]).toBeUndefined();
+    expect(result.body).toEqual(method === "HEAD" ? Buffer.alloc(0) : Buffer.from("not found"));
+  });
+
+  it("rolls back earlier managed artifacts when a later item fails", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "mystery.blob");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.from([0, 1, 2, 3]));
+
+    await expect(
+      createManagedOutgoingImageBlocksActual({
+        sessionKey: "agent:main:main",
+        items: [
+          {
+            url: `data:image/png;base64,${TINY_PNG_BASE64}`,
+            trustedLocal: false,
+          },
+          { url: sourcePath, trustedLocal: true },
+        ],
+        stateDir,
+        localRoots: [path.dirname(sourcePath)],
+      }),
+    ).rejects.toThrow(/could not be prepared/u);
+
+    expect(listManagedImageRecordEntries({ stateDir })).toEqual([]);
+  });
+
   it("accepts URL images up to the configured managed-image byte limit", async () => {
     const imageBuffer = await createNoisyPngBuffer(1600, 1200);
     expect(imageBuffer.byteLength).toBeGreaterThan(5 * 1024 * 1024);
@@ -2046,7 +2238,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     }
   });
 
-  it("drops downloaded non-image sources without leaving orphaned originals", async () => {
+  it("creates managed document attachment envelopes for trusted local files", async () => {
     const pdfPath = path.join(stateDir, "not-an-image.pdf");
     await fs.writeFile(pdfPath, Buffer.from("%PDF-1.4\n% test\n"));
 
@@ -2055,16 +2247,56 @@ describe("createManagedOutgoingImageBlocks", () => {
       mediaUrls: [pdfPath],
       stateDir,
       localRoots: [stateDir],
+      allowLocalNonImage: true,
+      messageId: "msg-1",
     });
-    expect(blocks).toStrictEqual([]);
-    const originalsDir = path.join(stateDir, "media", "outgoing", "originals");
-    let originals: string[] | null = null;
-    try {
-      originals = await fs.readdir(originalsDir);
-    } catch (error) {
-      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    }
-    expect(originals ?? []).toStrictEqual([]);
+
+    expect(blocks).toEqual([
+      {
+        type: "attachment",
+        attachment: expect.objectContaining({
+          artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+          kind: "document",
+          label: "not-an-image.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 16,
+          url: expect.stringMatching(/^\/api\/chat\/media\/outgoing\//u),
+        }),
+      },
+    ]);
+
+    const attachment = (blocks[0] as { attachment?: { artifactId?: string; url?: string } })
+      .attachment;
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: attachment?.url ?? "",
+      authResponse: { authMethod: "token" },
+      transcriptMessages: [
+        {
+          role: "assistant",
+          content: blocks,
+          __openclaw: { id: "msg-1" },
+        },
+      ],
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-type"]).toBe("application/pdf");
+    expect(result.headers["content-disposition"]).toContain("attachment;");
+    expect(result.body).toEqual(Buffer.from("%PDF-1.4\n% test\n"));
+
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey: "agent:main:main",
+      artifactId: attachment?.artifactId ?? "",
+      stateDir,
+    });
+    expect(download).toMatchObject({
+      artifactId: attachment?.artifactId,
+      type: "file",
+      title: "not-an-image.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 16,
+    });
   });
 
   it("does not apply the configured image cap to managed audio", async () => {

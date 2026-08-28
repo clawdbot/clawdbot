@@ -1387,10 +1387,12 @@ describe("config cli", () => {
     ])("reports a $name to the operator", async (testCase) => {
       setGatewaySnapshot();
 
-      await expect(runConfigCommand(["config", "get", testCase.path])).rejects.toThrow(ExitError);
+      await expect(runConfigCommand(["config", "get", testCase.path])).rejects.toMatchObject({
+        name: "ExitError",
+        code: 1,
+      });
 
       expectErrorIncludes(testCase.message);
-      expect(mockExit).toHaveBeenCalledWith(1);
       expect(mockLog).not.toHaveBeenCalled();
     });
 
@@ -1410,9 +1412,9 @@ describe("config cli", () => {
     ])("outputs a JSON error for a $name", async (testCase) => {
       setGatewaySnapshot();
 
-      await expect(runConfigCommand(["config", "get", testCase.path, "--json"])).rejects.toThrow(
-        ExitError,
-      );
+      await expect(
+        runConfigCommand(["config", "get", testCase.path, "--json"]),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
 
       expect(mockError).not.toHaveBeenCalled();
       expect(parseLastLogPayload()).toEqual({
@@ -1422,7 +1424,6 @@ describe("config cli", () => {
           message: testCase.message,
         },
       });
-      expect(mockExit).toHaveBeenCalledWith(1);
     });
 
     it.each([
@@ -2251,8 +2252,9 @@ describe("config cli", () => {
           "--provider-timeout-ms",
           "1e3",
         ]),
-      ).rejects.toThrow("--provider-timeout-ms must be a positive integer.");
+      ).rejects.toThrow(ExitError);
 
+      expectErrorIncludes("--provider-timeout-ms must be a positive integer.");
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
@@ -2284,7 +2286,7 @@ describe("config cli", () => {
           entry,
           "--dry-run",
         ]),
-      ).rejects.toThrow(message);
+      ).rejects.toThrow(ExitError);
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
@@ -3727,9 +3729,10 @@ describe("config cli", () => {
         new ConfigMutationConflictError("included config changed since last load"),
       );
 
-      await expect(runConfigSet("gateway.port", "19000")).rejects.toThrow(ExitError);
-
-      expect(mockExit).toHaveBeenCalledWith(1);
+      await expect(runConfigSet("gateway.port", "19000")).rejects.toMatchObject({
+        name: "ExitError",
+        code: 1,
+      });
       expectErrorIncludes(
         "The config file changed while this command was writing (included config changed since last load), so nothing was changed. Re-run the same command to pick up the new file and try again.",
       );
@@ -3742,9 +3745,7 @@ describe("config cli", () => {
 
       await expect(
         runConfigCommand(["config", "set", "gateway.port", "19000", "--dry-run", "--json"]),
-      ).rejects.toThrow(ExitError);
-
-      expect(mockExit).toHaveBeenCalledWith(1);
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
       expect(parseLastLogPayload()).toMatchObject({
         ok: false,
         errors: [
@@ -3760,9 +3761,10 @@ describe("config cli", () => {
     it("preserves non-conflict config mutation errors", async () => {
       mockWriteConfigFile.mockRejectedValueOnce(new Error("permission denied"));
 
-      await expect(runConfigSet("gateway.port", "19000")).rejects.toThrow(ExitError);
-
-      expect(mockExit).toHaveBeenCalledWith(1);
+      await expect(runConfigSet("gateway.port", "19000")).rejects.toMatchObject({
+        name: "ExitError",
+        code: 1,
+      });
       expectErrorIncludes("permission denied");
       expect(mockError.mock.calls.flat().join("\n")).not.toContain(
         "The config file changed while this command was writing",
@@ -4220,7 +4222,8 @@ describe("config cli", () => {
         const resolved = { agents: { list } } as unknown as OpenClawConfig;
         setSnapshot(resolved, resolved);
       }
-      await expect(runConfigCommand(args)).rejects.toThrow(error);
+      await expect(runConfigCommand(args)).rejects.toThrow(ExitError);
+      expectErrorIncludes(error);
       if (!list) {
         expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       }
@@ -4262,9 +4265,8 @@ describe("config cli", () => {
         ],
       ],
     ])("rejects malformed bracket paths for config %s", async (_command, args) => {
-      await expect(runConfigCommand(args)).rejects.toThrow(
-        "Invalid path (missing separator after bracket): agents.list[0]id",
-      );
+      await expect(runConfigCommand(args)).rejects.toThrow(ExitError);
+      expectErrorIncludes("Invalid path (missing separator after bracket): agents.list[0]id");
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();

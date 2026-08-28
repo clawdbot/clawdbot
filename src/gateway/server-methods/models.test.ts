@@ -1009,6 +1009,7 @@ describe("models.list", () => {
                   source: "implicit",
                 },
                 available: false,
+                unavailableReason: "missing-auth",
                 tags: ["default"],
               },
             ],
@@ -1071,6 +1072,7 @@ describe("models.list", () => {
                   source: "implicit",
                 },
                 available: false,
+                unavailableReason: "missing-auth",
                 tags: ["default"],
               },
             ],
@@ -1124,6 +1126,7 @@ describe("models.list", () => {
                 source: "implicit",
               },
               available: false,
+              unavailableReason: "missing-auth",
               tags: ["default"],
             },
           ],
@@ -1366,7 +1369,15 @@ describe("models.list", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       {
-        models: [{ id: "qwen-local", name: "Qwen Local", provider: "vllm", available: false }],
+        models: [
+          {
+            id: "qwen-local",
+            name: "Qwen Local",
+            provider: "vllm",
+            available: false,
+            unavailableReason: "missing-auth",
+          },
+        ],
       },
       undefined,
     );
@@ -1466,6 +1477,7 @@ describe("models.list", () => {
               name: "Claude Test",
               provider: "anthropic",
               available: false,
+              unavailableReason: "missing-auth",
             },
             {
               id: "gpt-5.4",
@@ -2115,7 +2127,8 @@ describe("models.list", () => {
             },
           });
 
-        await writeCooldown(Date.now() + 60_000);
+        const billingCooldownUntil = Date.now() + 60_000;
+        await writeCooldown(billingCooldownUntil);
         const cooled = requestModelsList({
           view: "all",
           runtimeConfig,
@@ -2127,7 +2140,14 @@ describe("models.list", () => {
           true,
           {
             models: [
-              { id: "qwen-remote", name: "Qwen Remote", provider: "cliproxyapi", available: false },
+              {
+                id: "qwen-remote",
+                name: "Qwen Remote",
+                provider: "cliproxyapi",
+                available: false,
+                unavailableReason: "cooldown",
+                unavailableUntil: billingCooldownUntil,
+              },
             ],
           },
           undefined,
@@ -2355,6 +2375,7 @@ describe("models.list", () => {
             name: "Demo Model",
             provider: "demo-provider",
             available: false,
+            unavailableReason: "missing-auth",
           },
         ],
       },
@@ -2431,6 +2452,7 @@ describe("models.list", () => {
             name: "Vision Model",
             provider: "demo-provider",
             available: false,
+            unavailableReason: "missing-auth",
             contextWindow: 128_000,
           },
         ],

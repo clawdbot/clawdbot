@@ -2,7 +2,7 @@
 // Restart-aware connection state: shutdown broadcast, drain rejection, deadline.
 // Split from gateway-store.test.ts to respect the max-lines cap.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore as createStore,

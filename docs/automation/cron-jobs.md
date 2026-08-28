@@ -298,6 +298,8 @@ Before an isolated run starts, OpenClaw checks reachable local endpoints for con
 Command payloads run deterministic scripts inside the Gateway scheduler without starting a model-backed turn. They execute on the Gateway host, capture stdout/stderr, record the run in the job's run history, and reuse the same `announce`, `webhook`, and `none` delivery modes as agent-turn jobs.
 
 <Note>
+When an agent-turn automation's exec needs approval, the card is delivered to connected approval surfaces and the run waits for the decision; answering **Always allow** mints a scoped standing grant so later occurrences run without prompting. See [Standing grants for automations](/tools/exec-approvals#standing-grants-for-automations) for lifetime, listing, and revocation.
+
 Command payloads are an operator-admin Gateway automation surface, not an agent `tools.exec` call. Creating, updating, removing, or manually running automation jobs requires `operator.admin`; scheduled command runs later execute inside the Gateway process as that admin-authored automation. Agent exec policy (`tools.exec.mode`, approval prompts, per-agent tool allowlists) governs model-visible exec tools, not command payloads.
 </Note>
 
