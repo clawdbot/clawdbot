@@ -4993,6 +4993,7 @@ export const en: TranslationMap = {
     },
     export: {
       label: "Export",
+      changed: "Session context changed while preparing the export. Refresh usage and try again.",
       sessionsCsv: "Sessions CSV",
       dailyCsv: "Daily CSV",
       json: "JSON",
