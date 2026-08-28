@@ -59,9 +59,23 @@ const NPM_GLOBAL_CONFIG_PATH_CACHE_ENV_KEYS = [
   "USERPROFILE",
 ] as const;
 
-function resolveEnvPath(env: NodeJS.ProcessEnv, upperKey: string, lowerKey: string): string | null {
-  const raw = env[upperKey]?.trim() || env[lowerKey]?.trim();
+function resolveEnvPath(
+  env: NodeJS.ProcessEnv,
+  primaryKey: string,
+  fallbackKey: string,
+): string | null {
+  const raw = env[primaryKey]?.trim() || env[fallbackKey]?.trim();
   return raw ? resolveNpmConfigPath(raw, env) : null;
+}
+
+function resolvePnpmUserNpmrc(env: NodeJS.ProcessEnv): string {
+  // pnpm resolves these before loading .npmrc; order matches its config reader.
+  return (
+    resolveEnvPath(env, "pnpm_config_npmrc_auth_file", "PNPM_CONFIG_NPMRC_AUTH_FILE") ??
+    resolveEnvPath(env, "pnpm_config_userconfig", "PNPM_CONFIG_USERCONFIG") ??
+    resolveEnvPath(env, "npm_config_userconfig", "NPM_CONFIG_USERCONFIG") ??
+    resolveHomeNpmrc(env)
+  );
 }
 
 function resolveHomeNpmrc(env: NodeJS.ProcessEnv): string {
@@ -203,10 +217,15 @@ function resolveScopedGlobalNpmrc(scope: NpmConfigScope): string | null {
   return prefix ? path.join(prefix, "etc", "npmrc") : null;
 }
 
-function resolveNpmConfigFiles(env: NodeJS.ProcessEnv, scope: NpmConfigScope = {}): string[] {
+function resolveNpmConfigFiles(
+  env: NodeJS.ProcessEnv,
+  scope: NpmConfigScope = {},
+  userNpmrc = resolveEnvPath(env, "NPM_CONFIG_USERCONFIG", "npm_config_userconfig") ??
+    resolveHomeNpmrc(env),
+): string[] {
   const files = [
     resolveScopedProjectNpmrc(scope),
-    resolveEnvPath(env, "NPM_CONFIG_USERCONFIG", "npm_config_userconfig") ?? resolveHomeNpmrc(env),
+    userNpmrc,
     resolveEnvPath(env, "NPM_CONFIG_GLOBALCONFIG", "npm_config_globalconfig"),
     resolveScopedGlobalNpmrc(scope),
     readNpmGlobalConfigPath(env, scope),
@@ -231,6 +250,16 @@ export function hasRawNpmConfigKey(
   scope: NpmConfigScope = {},
 ): boolean {
   return resolveNpmConfigFiles(env, scope).some((file) => hasNpmrcConfigKey(file, key));
+}
+
+export function hasRawPnpmConfigKey(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  scope: NpmConfigScope = {},
+): boolean {
+  return resolveNpmConfigFiles(env, scope, resolvePnpmUserNpmrc(env)).some((file) =>
+    hasNpmrcConfigKey(file, key),
+  );
 }
 
 function resolveNpmFreshnessBypassMode(

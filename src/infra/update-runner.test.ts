@@ -1402,7 +1402,13 @@ describe("runGatewayUpdate", () => {
     expect(installEnvs[0]).not.toHaveProperty("pnpm_config_prefer_offline");
   });
 
-  it("preserves an explicit user npmrc prefer-offline setting", async () => {
+  it.each([
+    "NPM_CONFIG_USERCONFIG",
+    "PNPM_CONFIG_USERCONFIG",
+    "pnpm_config_userconfig",
+    "PNPM_CONFIG_NPMRC_AUTH_FILE",
+    "pnpm_config_npmrc_auth_file",
+  ] as const)("preserves an explicit user npmrc prefer-offline setting from %s", async (envKey) => {
     const userNpmrc = path.join(tempDir, "user.npmrc");
     await fs.writeFile(userNpmrc, "prefer-offline=false\n", "utf-8");
 
@@ -1410,7 +1416,7 @@ describe("runGatewayUpdate", () => {
       "pnpm",
       {
         HOME: path.join(tempDir, "home"),
-        NPM_CONFIG_USERCONFIG: userNpmrc,
+        [envKey]: userNpmrc,
         NPM_CONFIG_GLOBALCONFIG: path.join(tempDir, "global.npmrc"),
       },
       tempDir,
@@ -1423,6 +1429,29 @@ describe("runGatewayUpdate", () => {
     });
     expect(installEnv).not.toHaveProperty("PNPM_CONFIG_PREFER_OFFLINE");
     expect(installEnv).not.toHaveProperty("pnpm_config_prefer_offline");
+  });
+
+  it.each([
+    ["pnpm_config_npmrc_auth_file", "PNPM_CONFIG_NPMRC_AUTH_FILE"],
+    ["PNPM_CONFIG_NPMRC_AUTH_FILE", "pnpm_config_userconfig"],
+    ["pnpm_config_userconfig", "PNPM_CONFIG_USERCONFIG"],
+    ["PNPM_CONFIG_USERCONFIG", "npm_config_userconfig"],
+    ["npm_config_userconfig", "NPM_CONFIG_USERCONFIG"],
+  ] as const)("uses %s before the %s config fallback", async (primaryKey, fallbackKey) => {
+    const pnpmNpmrc = path.join(tempDir, "pnpm-user.npmrc");
+    const npmNpmrc = path.join(tempDir, "npm-user.npmrc");
+    await fs.writeFile(pnpmNpmrc, "registry=https://registry.example.invalid\n", "utf-8");
+    await fs.writeFile(npmNpmrc, "prefer-offline=false\n", "utf-8");
+
+    const installEnv = resolveInstallEnv("pnpm", {
+      [primaryKey]: pnpmNpmrc,
+      [fallbackKey]: npmNpmrc,
+    });
+
+    expect(installEnv).toMatchObject({
+      PNPM_CONFIG_PREFER_OFFLINE: "true",
+      pnpm_config_prefer_offline: "true",
+    });
   });
 
   it("marks git update doctor passes for configured-plugin repair deferral when requested", async () => {

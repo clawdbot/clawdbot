@@ -1314,13 +1314,29 @@ function Test-NpmConfigFileKey {
 function Test-NpmConfigRawKey {
     param(
         [string]$Key,
-        [string]$ProjectDir
+        [string]$ProjectDir,
+        [switch]$Pnpm
     )
     $files = New-Object System.Collections.Generic.List[string]
     if (-not [string]::IsNullOrWhiteSpace($ProjectDir)) {
         $files.Add((Join-Path $ProjectDir ".npmrc"))
     }
-    $userConfig = if ($env:NPM_CONFIG_USERCONFIG) { $env:NPM_CONFIG_USERCONFIG } else { $env:npm_config_userconfig }
+    # pnpm prefers its auth/user paths, then npm's compatibility path.
+    $userConfig = if ($Pnpm -and $env:pnpm_config_npmrc_auth_file) {
+        $env:pnpm_config_npmrc_auth_file
+    } elseif ($Pnpm -and $env:PNPM_CONFIG_NPMRC_AUTH_FILE) {
+        $env:PNPM_CONFIG_NPMRC_AUTH_FILE
+    } elseif ($Pnpm -and $env:pnpm_config_userconfig) {
+        $env:pnpm_config_userconfig
+    } elseif ($Pnpm -and $env:PNPM_CONFIG_USERCONFIG) {
+        $env:PNPM_CONFIG_USERCONFIG
+    } elseif ($Pnpm -and $env:npm_config_userconfig) {
+        $env:npm_config_userconfig
+    } elseif ($env:NPM_CONFIG_USERCONFIG) {
+        $env:NPM_CONFIG_USERCONFIG
+    } else {
+        $env:npm_config_userconfig
+    }
     if ($userConfig) {
         $resolvedUserConfig = Resolve-NpmConfigPath $userConfig
         if ($resolvedUserConfig) { $files.Add($resolvedUserConfig) }
@@ -1356,7 +1372,7 @@ function Test-ShouldPreferOfflinePnpmInstall {
     ) {
         return $false
     }
-    return -not (Test-NpmConfigRawKey -Key "prefer-offline" -ProjectDir $ProjectDir)
+    return -not (Test-NpmConfigRawKey -Key "prefer-offline" -ProjectDir $ProjectDir -Pnpm)
 }
 
 function Add-NpmCacheCandidate {

@@ -1,4 +1,4 @@
-import { hasRawNpmConfigKey } from "./npm-install-env.js";
+import { hasRawPnpmConfigKey } from "./npm-install-env.js";
 import { DEV_BRANCH } from "./update-channels.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
@@ -54,7 +54,7 @@ export function resolveInstallEnv(
   const effectiveEnv = env ?? process.env;
   const explicitPreferOffline =
     effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE ?? effectiveEnv.pnpm_config_prefer_offline;
-  const hasConfigPreferOffline = hasRawNpmConfigKey(effectiveEnv, "prefer-offline", {
+  const hasConfigPreferOffline = hasRawPnpmConfigKey(effectiveEnv, "prefer-offline", {
     npmConfigCwd: cwd,
   });
   const installEnv: NodeJS.ProcessEnv = {

@@ -1009,6 +1009,7 @@ npm_config_has_raw_key() {
     local npm_cmd="$1"
     local key="$2"
     local project_dir="${3:-}"
+    local config_owner="${4:-npm}"
     local raw=""
     local file=""
     local -a files=()
@@ -1017,7 +1018,12 @@ npm_config_has_raw_key() {
         files+=("${project_dir}/.npmrc")
     fi
 
-    raw="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
+    if [[ "$config_owner" == "pnpm" ]]; then
+        # pnpm prefers its auth/user paths, then npm's compatibility path.
+        raw="${pnpm_config_npmrc_auth_file:-${PNPM_CONFIG_NPMRC_AUTH_FILE:-${pnpm_config_userconfig:-${PNPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-${NPM_CONFIG_USERCONFIG:-}}}}}}"
+    else
+        raw="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
+    fi
     if [[ -n "$raw" ]]; then
         file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
         [[ -n "$file" ]] && files+=("$file")
@@ -2595,7 +2601,7 @@ should_prefer_offline_pnpm_install() {
     [[ -z "${PNPM_CONFIG_PREFER_OFFLINE+x}" && -z "${pnpm_config_prefer_offline+x}" ]] || return 1
     local npm_cmd=""
     npm_cmd="$(npm_command_path npm 2>/dev/null || true)"
-    [[ -z "$npm_cmd" ]] || ! npm_config_has_raw_key "$npm_cmd" "prefer-offline" "$project_dir"
+    [[ -z "$npm_cmd" ]] || ! npm_config_has_raw_key "$npm_cmd" "prefer-offline" "$project_dir" pnpm
 }
 
 resolve_git_openclaw_ref() {

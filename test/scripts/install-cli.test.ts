@@ -1012,6 +1012,7 @@ describe("install-cli.sh", () => {
           "set -euo pipefail",
           `source "${SCRIPT_PATH}"`,
           "unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline",
+          "unset PNPM_CONFIG_NPMRC_AUTH_FILE pnpm_config_npmrc_auth_file PNPM_CONFIG_USERCONFIG pnpm_config_userconfig NPM_CONFIG_USERCONFIG npm_config_userconfig",
           'if should_prefer_offline_pnpm_install "$PROJECT"; then printf "project=true\\n"; else printf "project=false\\n"; fi',
         ].join("\n"),
         { PROJECT: project },
@@ -1021,15 +1022,21 @@ describe("install-cli.sh", () => {
           "set -euo pipefail",
           `source "${SCRIPT_PATH}"`,
           "unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline",
-          'if should_prefer_offline_pnpm_install "$PROJECT"; then printf "user=true\\n"; else printf "user=false\\n"; fi',
+          "unset PNPM_CONFIG_NPMRC_AUTH_FILE pnpm_config_npmrc_auth_file PNPM_CONFIG_USERCONFIG pnpm_config_userconfig NPM_CONFIG_USERCONFIG npm_config_userconfig",
+          "for env_key in NPM_CONFIG_USERCONFIG PNPM_CONFIG_USERCONFIG pnpm_config_userconfig PNPM_CONFIG_NPMRC_AUTH_FILE pnpm_config_npmrc_auth_file; do",
+          '  export "$env_key=$USER_NPMRC"',
+          '  if should_prefer_offline_pnpm_install "$PROJECT"; then printf "%s=true\\n" "$env_key"; else printf "%s=false\\n" "$env_key"; fi',
+          '  unset "$env_key"',
+          "done",
         ].join("\n"),
-        { PROJECT: tmp, NPM_CONFIG_USERCONFIG: userNpmrc },
+        { PROJECT: tmp, USER_NPMRC: userNpmrc },
       );
       const underscoreResult = runInstallCliShell(
         [
           "set -euo pipefail",
           `source "${SCRIPT_PATH}"`,
           "unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline",
+          "unset PNPM_CONFIG_NPMRC_AUTH_FILE pnpm_config_npmrc_auth_file PNPM_CONFIG_USERCONFIG pnpm_config_userconfig NPM_CONFIG_USERCONFIG npm_config_userconfig",
           'if should_prefer_offline_pnpm_install "$PROJECT"; then printf "underscore=true\\n"; else printf "underscore=false\\n"; fi',
         ].join("\n"),
         { PROJECT: underscoreProject },
@@ -1038,7 +1045,15 @@ describe("install-cli.sh", () => {
       expect(projectResult.status).toBe(0);
       expect(projectResult.stdout).toContain("project=false");
       expect(userResult.status).toBe(0);
-      expect(userResult.stdout).toContain("user=false");
+      for (const envKey of [
+        "NPM_CONFIG_USERCONFIG",
+        "PNPM_CONFIG_USERCONFIG",
+        "pnpm_config_userconfig",
+        "PNPM_CONFIG_NPMRC_AUTH_FILE",
+        "pnpm_config_npmrc_auth_file",
+      ]) {
+        expect(userResult.stdout).toContain(`${envKey}=false`);
+      }
       expect(underscoreResult.status).toBe(0);
       expect(underscoreResult.stdout).toContain("underscore=true");
     } finally {
