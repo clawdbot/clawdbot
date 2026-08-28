@@ -17,10 +17,6 @@ import {
   isReleaseGhArtifactMissingError,
   validateReleaseStateArtifact,
 } from "./full-release-validation-policy.mjs";
-import {
-  isTrustedWorkflowTag,
-  verifyTrustedWorkflowRef as verifyTrustedWorkflowRefPolicy,
-} from "./full-release-validation-workflow-trust.mjs";
 import { execGhRead } from "./lib/plain-gh.mjs";
 
 const WORKFLOW = "full-release-validation.yml";
@@ -49,6 +45,7 @@ const RELEASE_CONTEXT_BRANCH_PATTERN =
   /^(?:release\/[0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.(?:[1-9]|1[0-2])\.33)$/u;
 const RELEASE_TAG_PATTERN =
   /^v([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*(?:-(?:alpha|beta)\.[1-9][0-9]*)?)$/u;
+const TRUSTED_WORKFLOW_TAG_PATTERN = /^release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u;
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const RERUN_GROUPS = new Set([
   "all",
@@ -294,7 +291,10 @@ export function parseArgs(argv: string[]) {
   ) {
     throw new Error("--target-ref must be a canonical OpenClaw release branch or tag");
   }
-  if (args.trustedWorkflowRef !== "main" && !isTrustedWorkflowTag(args.trustedWorkflowRef)) {
+  if (
+    args.trustedWorkflowRef !== "main" &&
+    !TRUSTED_WORKFLOW_TAG_PATTERN.test(args.trustedWorkflowRef)
+  ) {
     throw new Error(
       "--trusted-workflow-ref must be main or a protected release-publish/<12hex>-<decimal> tag",
     );
@@ -458,12 +458,35 @@ export function verifyTrustedWorkflowRef(
   isMainAncestor: (sha: string) => boolean = (sha) =>
     runStatus("git", ["merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"]).status === 0,
 ) {
-  verifyTrustedWorkflowRefPolicy(
-    workflowSha,
-    trustedWorkflowRef,
-    resolveRemoteTagSha,
-    isMainAncestor,
-  );
+  if (trustedWorkflowRef === "main") {
+    if (!isMainAncestor(workflowSha)) {
+      throw new Error(
+        `Workflow SHA ${workflowSha} is not reachable from current origin/main; refusing an untrusted release harness.`,
+      );
+    }
+    return;
+  }
+
+  const tagMatch = trustedWorkflowRef.match(TRUSTED_WORKFLOW_TAG_PATTERN);
+  if (!tagMatch) {
+    throw new Error(
+      "trusted workflow ref must be main or a protected release-publish/<12hex>-<decimal> tag",
+    );
+  }
+  if (workflowSha.slice(0, 12) !== tagMatch[1]) {
+    throw new Error(
+      `Trusted workflow tag ${trustedWorkflowRef} does not match Tooling SHA ${workflowSha}`,
+    );
+  }
+  const remoteTagSha = resolveRemoteTagSha(trustedWorkflowRef);
+  if (!remoteTagSha) {
+    throw new Error(`Trusted workflow tag ${trustedWorkflowRef} does not exist on origin`);
+  }
+  if (remoteTagSha.toLowerCase() !== workflowSha.toLowerCase()) {
+    throw new Error(
+      `Trusted workflow tag ${trustedWorkflowRef} resolves to ${remoteTagSha}, expected ${workflowSha}`,
+    );
+  }
 }
 
 function resolveTrustedWorkflowSha(requestedSha: string, trustedWorkflowRef: string) {
@@ -746,7 +769,7 @@ export function releaseEvidenceVerificationArgs(
   const trustedWorkflowFullRef =
     trustedWorkflowRef === "main"
       ? "refs/heads/main"
-      : isTrustedWorkflowTag(trustedWorkflowRef)
+      : TRUSTED_WORKFLOW_TAG_PATTERN.test(trustedWorkflowRef)
         ? `refs/tags/${trustedWorkflowRef}`
         : "";
   if (!trustedWorkflowFullRef) {

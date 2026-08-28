@@ -15,29 +15,13 @@ export interface FrvContinuationStatus {
 
 export interface FrvClient {
   repository?: string;
-  deleteWorkflowRef?: (branch: string, workflowSha: string) => Promise<unknown>;
-  dispatchContinuation?: (
-    plan: Record<string, unknown>,
-    operationDeadline?: number,
-  ) => Promise<{ branch: string; runId: string; workflowSha: string }>;
-  ensureWorkflowRef?: (branch: string, workflowSha: string) => Promise<void>;
   getAttemptJobs: (runId: string, runAttempt: number) => Promise<Record<string, unknown>[]>;
   getJobLog: (jobId: number) => Promise<string>;
   getParentJobs: (runId: string) => Promise<Record<string, unknown>[]>;
   getRun: (runId: string) => Promise<Record<string, unknown>>;
   getRunAttempt: (runId: string, runAttempt: number) => Promise<Record<string, unknown>>;
-  getWorkflowSource: (workflowSha: string) => Promise<string>;
-  loadHistoricalCandidateArtifacts: (
-    candidate: Record<string, unknown>,
-  ) => Promise<Record<string, unknown>> | Record<string, unknown>;
-  loadSourceManifest?: (
-    runId: string,
-    runAttempt: number,
-  ) => Promise<Record<string, unknown> | undefined>;
   rerunFailed?: (runId: string) => Promise<unknown>;
   rerunParent?: (runId: string) => Promise<unknown>;
-  verifyTrustedSourceSha?: (workflowSha: string) => Promise<void>;
-  verifyTrustedToolingSha?: (workflowSha: string) => Promise<void>;
   verify?: (
     runId: string,
     plan: Record<string, unknown>,
@@ -46,20 +30,7 @@ export interface FrvClient {
 }
 
 export type FrvConcreteClient = FrvClient &
-  Required<
-    Pick<
-      FrvClient,
-      | "deleteWorkflowRef"
-      | "dispatchContinuation"
-      | "ensureWorkflowRef"
-      | "loadSourceManifest"
-      | "rerunFailed"
-      | "rerunParent"
-      | "verify"
-      | "verifyTrustedSourceSha"
-      | "verifyTrustedToolingSha"
-    >
-  >;
+  Required<Pick<FrvClient, "rerunFailed" | "rerunParent" | "verify">>;
 
 export function inspectContinuation(
   plan: Record<string, unknown>,
@@ -69,30 +40,16 @@ export function createClient(
   repository: string,
   dependencies?: Record<string, unknown>,
 ): FrvConcreteClient;
-export function continuationBranchName(sourceRunId: string, toolingSha: string): string;
 export function preflightContinuation(
   plan: Record<string, unknown>,
   rootRunId: string,
-  client: Pick<
-    FrvClient,
-    | "getJobLog"
-    | "getParentJobs"
-    | "getRunAttempt"
-    | "getWorkflowSource"
-    | "loadHistoricalCandidateArtifacts"
-    | "loadSourceManifest"
-    | "verifyTrustedSourceSha"
-  >,
+  client: Pick<FrvClient, "getJobLog" | "getParentJobs" | "getRunAttempt">,
   repository?: string,
 ): Promise<Record<string, unknown>>;
 export function loadPlan(
   options: Record<string, unknown>,
   loadExecutionPlan?: (...args: unknown[]) => Promise<unknown>,
 ): Promise<Record<string, unknown>>;
-export function validateLegacySource(
-  value: unknown,
-  expectedRunId: string,
-): Record<string, unknown>;
 export function continueFailed(
   plan: Record<string, unknown>,
   rootRunId: string,

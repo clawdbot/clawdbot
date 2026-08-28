@@ -66,7 +66,7 @@ on:
         default: false
         type: boolean
       fail_fast:
-        description: Cancel only an exact active child after its first blocking job; false drains all children and is required for continuation recovery
+        description: Cancel only an exact active child after its first blocking job; false drains all children and permits same-parent recovery
         required: false
         default: false
         type: boolean
@@ -150,12 +150,6 @@ on:
         required: false
         default: ""
         type: string
-      continuation_plan_json:
-        description: Explicit nonpublishing source plan for adopting failed-job reruns from a pre-support all-group root
-        required: false
-        default: ""
-        type: string
-
 permissions:
   actions: write
   contents: read
@@ -259,13 +253,8 @@ jobs:
 
       - name: Validate release inputs
         env:
-          CONTINUATION_PLAN_JSON: ${{ inputs.continuation_plan_json }}
-          DISPATCH_RELEASE_EVIDENCE: ${{ inputs.dispatch_release_evidence }}
-          FAIL_FAST: ${{ inputs.fail_fast }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
-          RERUN_GROUP: ${{ inputs.rerun_group }}
-          REUSE_EVIDENCE: ${{ inputs.reuse_evidence }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_REF: ${{ inputs.ref }}
@@ -276,65 +265,6 @@ jobs:
             echo "skip_package_telegram_e2e is allowed only for release_profile=beta." >&2
             exit 1
           fi
-          if [[ -n "${CONTINUATION_PLAN_JSON:-}" && -n "${CONTINUATION_PLAN_JSON// }" ]]; then
-            if [[ "$RERUN_GROUP" != "all" ||
-                  "$DISPATCH_RELEASE_EVIDENCE" != "false" ||
-                  "$REUSE_EVIDENCE" != "false" ||
-                  "$FAIL_FAST" != "false" ]]; then
-              echo "continuation_plan_json requires rerun_group=all, reuse_evidence=false, dispatch_release_evidence=false, and fail_fast=false." >&2
-              exit 1
-            fi
-            jq -e \
-              --arg targetSha "$TARGET_SHA" \
-              '
-                type == "object" and
-                ((.sourceRunId | tostring) | test("^[1-9][0-9]*$")) and
-                (.sourceRunAttempt | type == "number" and . >= 1 and floor == .) and
-                (.sourceWorkflowRef | type == "string" and length > 0) and
-                (.sourceWorkflowSha | type == "string" and test("^[a-f0-9]{40}$")) and
-                (.releaseProfile == env.RELEASE_PROFILE) and
-                (.rerunGroup == "all") and
-                (.runReleaseSoak == "true" or .runReleaseSoak == "false") and
-                (.publicationEnabled == false) and
-                (.targetSha == $targetSha) and
-                (
-                  .candidate |
-                  type == "object" and
-                  keys == [
-                    "imageArchiveSha256",
-                    "imageArtifactDigest",
-                    "imageArtifactId",
-                    "imageArtifactName",
-                    "imageArtifactRunAttempt",
-                    "imageArtifactRunId",
-                    "packageArtifactDigest",
-                    "packageArtifactId",
-                    "packageArtifactName",
-                    "packageArtifactRunAttempt",
-                    "packageArtifactRunId",
-                    "packageFileName",
-                    "packageSha256",
-                    "packageSourceSha",
-                    "packageVersion",
-                    "prepublishPluginRegistryArtifactDigest",
-                    "prepublishPluginRegistryArtifactId",
-                    "prepublishPluginRegistryArtifactName",
-                    "prepublishPluginRegistryArtifactRunAttempt",
-                    "prepublishPluginRegistryArtifactRunId",
-                    "prepublishPluginRegistryManifestSha256"
-                  ] and
-                  .packageSourceSha == $targetSha
-                ) and
-                (.validationInputs | type == "object" and length > 0) and
-                (.sourceDisplayTitle | type == "string" and length > 0) and
-                (.sourceEvent == "workflow_dispatch") and
-                (.sourceRepository == env.GITHUB_REPOSITORY) and
-                (.sourceWorkflowPath == ".github/workflows/full-release-validation.yml") and
-                (.toolingSha | type == "string" and test("^[a-f0-9]{40}$")) and
-                (.children | type == "object" and length > 0)
-              ' <<< "$CONTINUATION_PLAN_JSON" >/dev/null
-          fi
-
           context_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"
           context_ref="${context_ref#refs/heads/}"
           context_ref="${context_ref#refs/tags/}"
@@ -500,7 +430,7 @@ jobs:
   evidence_reuse:
     name: Check for reusable validation evidence
     needs: [resolve_target]
-    if: inputs.continuation_plan_json == '' && inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/'))
+    if: inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -631,7 +561,7 @@ jobs:
   docker_runtime_assets_preflight:
     name: Verify Docker runtime image assets
     needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && inputs.continuation_plan_json == '' && github.run_attempt == 1 && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -657,7 +587,7 @@ jobs:
   prepare_release_candidate:
     name: Prepare shared release candidate
     needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && inputs.continuation_plan_json == '' && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && inputs.release_package_spec == '' && inputs.package_acceptance_package_spec == '' && (contains(fromJSON('["all","plugin-prerelease","cross-os","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && inputs.release_package_spec == '' && inputs.package_acceptance_package_spec == '' && (contains(fromJSON('["all","plugin-prerelease","cross-os","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) }}
     permissions:
       actions: read
       contents: read
@@ -682,7 +612,7 @@ jobs:
   normal_ci:
     name: Run normal full CI
     needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && inputs.continuation_plan_json == '' && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
@@ -1026,7 +956,7 @@ jobs:
   plugin_prerelease:
     name: Run plugin prerelease validation
     needs: [resolve_target, evidence_reuse, prepare_release_candidate]
-    if: ${{ always() && inputs.continuation_plan_json == '' && github.run_attempt == 1 && needs.resolve_target.result == 'success' && (needs.prepare_release_candidate.result == 'success' || needs.prepare_release_candidate.result == 'skipped') && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && (needs.prepare_release_candidate.result == 'success' || needs.prepare_release_candidate.result == 'skipped') && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
@@ -1050,7 +980,7 @@ jobs:
   release_checks:
     name: Run release/live/Docker/QA validation
     needs: [resolve_target, evidence_reuse, prepare_release_candidate]
-    if: ${{ always() && inputs.continuation_plan_json == '' && github.run_attempt == 1 && needs.resolve_target.result == 'success' && (needs.prepare_release_candidate.result == 'success' || needs.prepare_release_candidate.result == 'skipped') && contains(fromJSON('["all","install-smoke","cross-os","live-e2e","package","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && (needs.prepare_release_candidate.result == 'success' || needs.prepare_release_candidate.result == 'skipped') && contains(fromJSON('["all","install-smoke","cross-os","live-e2e","package","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     outputs:
@@ -1087,7 +1017,7 @@ jobs:
   npm_telegram:
     name: Run package Telegram E2E
     needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && inputs.continuation_plan_json == '' && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
     continue-on-error: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -1112,7 +1042,7 @@ jobs:
   performance:
     name: Run product performance evidence
     needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && inputs.continuation_plan_json == '' && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     outputs:
@@ -1198,18 +1128,6 @@ jobs:
           EVIDENCE_POLICY: ${{ needs.evidence_reuse.outputs.evidence_policy }}
           EVIDENCE_CHANGED_PATHS: ${{ needs.evidence_reuse.outputs.changed_paths || '[]' }}
           TRUSTED_WORKFLOW_JSON: ${{ needs.resolve_target.outputs.trusted_workflow_json }}
-          CONTINUATION_PLAN_JSON: ${{ inputs.continuation_plan_json }}
-          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
-          PROVIDER: ${{ inputs.provider }}
-          MODE: ${{ inputs.mode }}
-          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
-          CROSS_OS_SUITE_FILTER: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}
-          CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
-          NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
-          NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
-          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
-          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
-          PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
@@ -1242,74 +1160,6 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$FULL_RELEASE_RESTORE_PLAN" != "true" ]]; then
-            if [[ -n "${CONTINUATION_PLAN_JSON// }" ]]; then
-              current_validation_inputs="$(
-                jq -cn \
-                  --arg provider "$PROVIDER" \
-                  --arg mode "$MODE" \
-                  --arg targetContextRef "$TARGET_CONTEXT_REF" \
-                  --arg liveSuiteFilter "$LIVE_SUITE_FILTER" \
-                  --arg crossOsSuiteFilter "$CROSS_OS_SUITE_FILTER" \
-                  --arg releasePackageSpec "$RELEASE_PACKAGE_SPEC" \
-                  --arg packageAcceptancePackageSpec "$PACKAGE_ACCEPTANCE_PACKAGE_SPEC" \
-                  --arg codexPluginSpec "$CODEX_PLUGIN_SPEC" \
-                  --arg npmTelegramPackageSpec "$NPM_TELEGRAM_PACKAGE_SPEC" \
-                  --arg npmTelegramProviderMode "$NPM_TELEGRAM_PROVIDER_MODE" \
-                  --arg npmTelegramScenario "$NPM_TELEGRAM_SCENARIO" \
-                  --arg skipPackageTelegramE2e "$SKIP_PACKAGE_TELEGRAM_E2E" \
-                  --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
-                  --arg pluginPrereleaseNodeExcludePatternsJson "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON" \
-                  '{
-                    provider: $provider,
-                    mode: $mode,
-                    targetContextRef: $targetContextRef,
-                    liveSuiteFilter: $liveSuiteFilter,
-                    crossOsSuiteFilter: $crossOsSuiteFilter,
-                    releasePackageSpec: $releasePackageSpec,
-                    packageAcceptancePackageSpec: $packageAcceptancePackageSpec,
-                    codexPluginSpec: $codexPluginSpec,
-                    npmTelegramPackageSpec: $npmTelegramPackageSpec,
-                    npmTelegramProviderMode: $npmTelegramProviderMode,
-                    npmTelegramScenario: $npmTelegramScenario,
-                    skipPackageTelegramE2e: $skipPackageTelegramE2e,
-                    allowUnreleasedChangelog: $allowUnreleasedChangelog,
-                    pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson
-                  }'
-              )"
-              jq -e \
-                --arg runReleaseSoak "$RUN_RELEASE_SOAK" \
-                --argjson actualValidationInputs "$current_validation_inputs" \
-                '.runReleaseSoak == $runReleaseSoak and .validationInputs == $actualValidationInputs' \
-                <<< "$CONTINUATION_PLAN_JSON" >/dev/null
-              export FULL_RELEASE_PLAN_INPUTS_JSON="$(
-                jq -cn \
-                  --arg parentRunId "$GITHUB_RUN_ID" \
-                  --arg parentRunAttempt "$GITHUB_RUN_ATTEMPT" \
-                  --arg workflowRef "$GITHUB_REF_NAME" \
-                  --arg workflowSha "$GITHUB_SHA" \
-                  --argjson trustedWorkflow "$TRUSTED_WORKFLOW_JSON" \
-                  --argjson source "$CONTINUATION_PLAN_JSON" \
-                  --arg resolveTargetResult "$RESOLVE_TARGET_RESULT" \
-                  '{
-                    parentRunId: $parentRunId,
-                    parentRunAttempt: $parentRunAttempt,
-                    workflowRef: $workflowRef,
-                    workflowSha: $workflowSha,
-                    trustedWorkflow: $trustedWorkflow,
-                    evidenceReuse: false,
-                    rerunGroup: "all",
-                    releasePackageSpec: $source.validationInputs.releasePackageSpec,
-                    packageAcceptancePackageSpec: $source.validationInputs.packageAcceptancePackageSpec,
-                    npmTelegramPackageSpec: $source.validationInputs.npmTelegramPackageSpec,
-                    liveSuiteFilter: $source.validationInputs.liveSuiteFilter,
-                    resolveTargetResult: $resolveTargetResult,
-                    dockerPreflightResult: "skipped",
-                    prepareCandidateResult: "skipped",
-                    children: $source.children,
-                    continuation: ($source | del(.children, .targetSha))
-                  }'
-              )"
-            else
             export FULL_RELEASE_PLAN_INPUTS_JSON="$(
             jq -cn \
               --arg parentRunId "$GITHUB_RUN_ID" \
@@ -1382,7 +1232,6 @@ jobs:
                 }
               }'
             )"
-            fi
           fi
           node scripts/full-release-validation-state.mjs plan
 
@@ -1427,7 +1276,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          FAIL_FAST: ${{ inputs.continuation_plan_json == '' && inputs.fail_fast }}
+          FAIL_FAST: ${{ inputs.fail_fast }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
@@ -1760,7 +1609,6 @@ jobs:
                 )
             ' "$DIAGNOSTIC_DRAIN_PATH"
           )"
-          CONTINUATION_SOURCE="$(jq -c '.continuation // empty' "$RELEASE_EXECUTION_PLAN_PATH")"
           if [[ "$EVIDENCE_REUSE" == "true" ]]; then
             # Inherit the evidence manifest (profile, soak, child runs) so future
             # reuse lookups and evidence consumers keep resolving the chain root.
@@ -1781,7 +1629,6 @@ jobs:
               --arg sourceParentRunAttempt "$SOURCE_PARENT_RUN_ATTEMPT" \
               --argjson evidenceChangedPaths "$EVIDENCE_CHANGED_PATHS" \
               --argjson childEvidence "$CHILD_EVIDENCE" \
-              --argjson continuationSource "${CONTINUATION_SOURCE:-null}" \
               '. + {
                 version: 3,
                 runId: $runId,
@@ -1803,7 +1650,6 @@ jobs:
                   performanceReportPublication: "artifact-only"
                 }),
                 childEvidence: $childEvidence,
-                continuationSource: $continuationSource,
                 executionPlanSha256: $executionPlanSha256,
                 sourceParentRunAttempt: ($sourceParentRunAttempt | tonumber)
               }' <<< "$EVIDENCE_MANIFEST" > "${manifest_dir}/full-release-validation-manifest.json"
@@ -1845,7 +1691,6 @@ jobs:
             --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
             --arg pluginPrereleaseNodeExcludePatternsJson "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON" \
             --argjson childEvidence "$CHILD_EVIDENCE" \
-            --argjson continuationSource "${CONTINUATION_SOURCE:-null}" \
             '{
               version: 3,
               workflowName: $workflowName,
@@ -1863,7 +1708,6 @@ jobs:
               executionPlanSha256: $executionPlanSha256,
               sourceParentRunAttempt: ($sourceParentRunAttempt | tonumber),
               childEvidence: $childEvidence,
-              continuationSource: $continuationSource,
               validationInputs: {
                 provider: $provider,
                 mode: $mode,

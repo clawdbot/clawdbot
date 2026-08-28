@@ -31,32 +31,7 @@ export interface ReleaseChildSpec {
 export type ReleaseGhTransportErrorClass = "ambiguous" | "hard" | "transient";
 export function classifyReleaseGhTransportError(error: unknown): ReleaseGhTransportErrorClass;
 export function isReleaseGhArtifactMissingError(error: unknown): boolean;
-export const HISTORICAL_CONTINUATION_SOURCE_MODE: "historical-exact-tuple";
 export function releaseChildSpec(key: string): ReleaseChildSpec;
-export function normalizeReleaseCandidate(value: unknown, expected?: ReleaseRecord): ReleaseRecord;
-export function normalizeReleaseValidationInputs(value: unknown): ReleaseRecord;
-export function isCanonicalReleaseContinuationWorkflowRef(
-  workflowRef: unknown,
-  workflowSha: unknown,
-): boolean;
-export function requireCanonicalReleaseContinuationWorkflowRef(
-  workflowRef: unknown,
-  workflowSha: unknown,
-): string;
-export function selectHistoricalRootResolveJob(
-  parentJobs: ReleaseRecord[],
-  sourceRunAttempt: unknown,
-): ReleaseRecord;
-export function selectHistoricalReusableInputJob(
-  parentJobs: ReleaseRecord[],
-  sourceRunAttempt: unknown,
-): ReleaseRecord;
-export function selectHistoricalReleaseChecksResolveJob(
-  childJobs: ReleaseRecord[],
-  childRunAttempt: unknown,
-): ReleaseRecord;
-export function verifyReleaseContinuationSourceIdentity(input: ReleaseRecord): ReleaseRecord;
-export function verifyReleaseContinuationSource(input: ReleaseRecord): ReleaseRecord;
 export function validateReleaseChildRunProvenance(
   run: ReleaseRecord,
   expected?: ReleaseRecord,

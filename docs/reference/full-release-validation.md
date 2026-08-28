@@ -43,8 +43,9 @@ independent failures together. In that mode, the parent makes no child
 cancellation calls. Pass `-f fail_fast=true` only when the shorter
 first-failure path is preferable; Release Decision then cancels only the exact
 still-active child that owns the blocking failure.
-Continuation recovery requires `fail_fast=false`, and Release Decision masks it
-off whenever a continuation payload is present.
+Same-parent continuation requires the original root to have been dispatched
+with `fail_fast=false`. The controller verifies that exact logged input before
+any rerun mutation.
 
 After dispatch, the parent writes one immutable
 `full-release-execution-plan-<run-id>` artifact and preserves the same bytes in
@@ -99,57 +100,9 @@ attempts, the immutable execution plan, Decision/Drain artifacts, and the final
 manifest are the complete state model. It never tags, publishes, changes a
 registry, or prepares a new candidate.
 
-A parent with an authenticated historical execution-plan artifact that predates
-attempt-aware evidence requires an explicit, reviewed legacy source plan:
-
-```bash
-pnpm frv continue --failed \
-  --run <legacy-parent-run-id> \
-  --legacy-plan <reviewed-source-plan.json>
-```
-
-The JSON must freeze:
-
-- `source`: exact run ID and attempt, display title, event, workflow path, ref,
-  Tooling SHA, and repository
-- `targetSha`, complete `candidate`, `releaseProfile`, `runReleaseSoak`,
-  complete `validationInputs`, and the reviewed continuation `toolingSha`
-- `children`: exact child run ID and planned attempt, display title, workflow
-  path, ref, Tooling SHA, and URL
-
-After the exact failed child jobs pass, the controller dispatches one
-continuation parent from the frozen reviewed Tooling SHA. That parent dispatches
-no children, prepares no candidate, disables release-evidence dispatch, and
-emits a normal all-group manifest bound to the legacy source. The reviewed JSON
-must match the authenticated historical artifact's parent attempt, target,
-workflow, profile, rerun group, and exact selected child tuples. Attempt-aware
-artifacts reject legacy mode.
-Missing identity is an error; the command does not guess from current `main` or
-the newest similarly named run.
-
-Historical legacy plans use `sourceEvidenceMode: historical-exact-tuple`.
-Their failed source root may omit the validation manifest that newer roots
-always emit, but only when its authenticated plan predates attempt-aware
-evidence.
-Manifestless recovery binds the exact successful root resolver, the successful
-release-checks child resolver, one complete reusable-workflow runner Inputs
-group, the exact source `workflow_dispatch` schema, and the package,
-plugin-registry, and Docker candidate artifacts. The candidate artifacts must
-match their producer run and attempt, service digests, and embedded hashes.
-Inputs omitted from the complete runner group are accepted only when the source
-schema declares an explicitly blank default and no conflicting value exists.
-Missing, duplicate, incomplete, or changed evidence fails closed. The exact
-reviewed source, candidate, children, attempts, and child dispatch logs remain
-mandatory. Historical decision, drain, plan, and final-manifest artifacts are
-not expected and later evidence is never attributed to the old root. A
-historical manifest that does exist is verified in full. Canonical continuation
-sources still require it.
-
-Historical source workflows must use protected `main` or the canonical
-`release-ci/<source-sha12>-<digits>` route. Older ad hoc branch names are rejected
-up front; run a new all-group FRV rather than granting a compatibility
-exception. The source FRV SHA and the continuation Tooling SHA are each checked
-independently against protected `main`.
+Parents whose immutable plan predates attempt-aware evidence cannot be
+continued. Start a fresh all-group Full Release Validation instead; the
+controller never reconstructs old state or dispatches a replacement parent.
 
 The helper creates a temporary `release-ci/*` ref pinned to the Tooling SHA,
 passes the Validation SHA as both the candidate ref and `expected_sha`, and
@@ -172,36 +125,19 @@ creates or updates repository refs itself.
 
 ### Post-merge continuation proof
 
-Run live continuation proof only from the reviewed SHA after it lands on
-protected `main`, with no other release validation active. First run `pnpm frv
-status`, then `pnpm frv continue --failed --dry-run`, and finally the approved
-nonpublishing continuation. Accept the proof only when failed child attempts
-advance, accepted green attempts do not, exactly one continuation parent is
-observed, final verification passes, and the deterministic `release-ci/*` ref
-is absent afterward. A retained ref or cleanup warning is a failed operation.
+Use the non-release `FRV Proof Broker` and `FRV Proof Fixture` workflows only
+after the reviewed SHA lands on protected `main`. The fixture contains one
+fixed no-op job that intentionally fails on attempt one and passes on attempt
+two. The broker validates the exact maintainer, pull request head, protected
+main SHA, fixture workflow, and run tuple before rerunning only that failed job.
 
-Exercise wrong-OID rejection without a race by using the landed exports in an
-owner-controlled Node driver. Load the authenticated reviewed plan with
-`loadPlan`, derive its exact branch with `continuationBranchName`, and create a
-client with `createClient`. Select a different SHA that is also on protected
-`main`, verify both SHAs with `verifyTrustedToolingSha`, then call
-`ensureWorkflowRef(branch, alternateSha)`. Calling `dispatchContinuation(plan)`
-must reject `continuation tooling ref exists at a different OID` before workflow
-dispatch. Lease-delete only that task-owned ref with
-`deleteWorkflowRef(branch, alternateSha)`, require `{ deleted: true }`, and
-confirm the exact ref is absent. Record that no continuation parent was created.
-
-Exercise transient reads through the explicit `OPENCLAW_GH_BIN` seam. Before
-setting it, resolve the absolute real `gh` path. Use an owner-only task-local
-wrapper that delegates every non-target invocation unchanged, records counts,
-and returns a nonzero `HTTP 502` only for one exact read endpoint. Run only
-`status` or `continue --failed --dry-run`: one injected failure must retry and
-succeed, while four injected failures must exhaust the read budget and return
-nonzero without reporting success. The wrapper must not rewrite arguments,
-print its inherited environment or tokens, or target a write invocation. Remove
-the wrapper and counter afterward. Neither proof weakens protected-main
-ancestry, executes PR-head code with write credentials, or dispatches a release
-workflow.
+Accept the hosted mutation proof only when the exact fixture run advances to
+attempt two and passes. The broker emits a receipt and must create no release
+candidate, release artifact, publication, repository ref, replacement parent,
+or other workflow mutation. This proves the GitHub failed-job rerun boundary;
+the focused controller tests prove plan eligibility, green-attempt
+preservation, same-parent collection, and strict-verifier invocation. Do not
+use a real Full Release Validation run for this proof.
 
 The main-lineage requirement above applies to the initial validation tooling
 selection. Once release publication binds that Tooling SHA to an exact protected

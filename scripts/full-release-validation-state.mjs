@@ -561,7 +561,6 @@ async function planMode() {
   let plan = buildReleaseExecutionPlanArtifact({
     attemptEvidenceVersion: 1,
     children: built.children,
-    continuation: planInputs.continuation,
     evidenceReuse: evidenceReuseFromInputs(planInputs),
     expected: { ...expected, parentRunAttempt: currentAttempt },
     gates: built.gates,
@@ -578,7 +577,6 @@ async function planMode() {
       attemptEvidenceVersion: 1,
       blockers: plan.blockers,
       children: plan.children,
-      continuation: plan.continuation,
       errors: [
         ...plan.errors,
         {
@@ -609,7 +607,6 @@ async function planMode() {
     attemptEvidenceVersion: 1,
     blockers: reuse.blockers,
     children: reuse.children,
-    continuation: planInputs.continuation,
     errors: reuse.errors,
     evidenceReuse: evidenceReuseFromInputs(planInputs, reuse.sourceManifest),
     expected: { ...expected, parentRunAttempt: currentAttempt },
@@ -947,12 +944,6 @@ async function validateManifestMode() {
     (executionPlan.attemptEvidenceVersion === 1 &&
       JSON.stringify(canonicalJson(rawManifest.childEvidence)) !==
         JSON.stringify(canonicalJson(expectedChildEvidence))) ||
-    JSON.stringify(canonicalJson(rawManifest.continuationSource ?? null)) !==
-      JSON.stringify(canonicalJson(executionPlan.continuation ?? null)) ||
-    (executionPlan.continuation &&
-      (JSON.stringify(canonicalJson(rawManifest.validationInputs)) !==
-        JSON.stringify(canonicalJson(executionPlan.continuation.validationInputs)) ||
-        String(rawManifest.runReleaseSoak) !== executionPlan.continuation.runReleaseSoak)) ||
     rawManifest.executionPlanSha256 !== executionPlan.sha256 ||
     Number(rawManifest.sourceParentRunAttempt) !== executionPlan.parentRunAttempt
   ) {

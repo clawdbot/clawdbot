@@ -55,8 +55,9 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   access. With
   `fail_fast=true`, Release Decision may cancel only the exact still-active
   child that owns a blocking failure.
-- Continuation recovery requires `fail_fast=false`; Release Decision masks it
-  off whenever a continuation payload is present.
+- Same-parent continuation requires the original root to have been dispatched
+  with `fail_fast=false`. The controller verifies that exact logged input
+  before any rerun mutation.
 - After dispatch, one immutable execution-plan artifact records the original
   parent attempt, exact child tuples and titles, selected coverage, gates, and
   reuse identity. The same bytes are saved under an exact run-ID cache key.
@@ -81,18 +82,16 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   attempts, Diagnostic Drain, and final manifest are the only authorities. It
   never writes a tag, package, registry entry, release candidate, or
   publication.
-- Post-merge live proof must use the reviewed landed SHA on protected `main`,
-  leave accepted green attempts untouched, observe exactly one continuation
-  parent, pass final verification, and confirm the deterministic temporary ref
-  was deleted. Treat retained-ref cleanup as failure. For fault proof, use the
-  landed `loadPlan`, `continuationBranchName`, and `createClient` exports to
-  pre-seed the exact task-owned branch at a different trusted-main ancestor;
-  require wrong-OID rejection before dispatch, then exact-OID lease deletion.
-  Test read retries only through an owner-only task-local `OPENCLAW_GH_BIN`
-  wrapper against one exact read endpoint: one `HTTP 502` must recover and four
-  must fail nonzero during `status` or `continue --failed --dry-run`. Never
-  alter write arguments, expose tokens, weaken ancestry, or run PR-head code
-  with write credentials. See
+- Post-merge controller proof must use the reviewed landed SHA on protected
+  `main` through the non-release `FRV Proof Broker` and `FRV Proof Fixture`.
+  Require the exact fixed no-op fixture run to advance from its intentional
+  attempt-one failure to an attempt-two pass. The broker must emit its receipt
+  without creating a release candidate, release artifact, publication,
+  repository ref, replacement parent, or other workflow mutation. This is the
+  hosted GitHub failed-job rerun proof; focused controller tests own immutable
+  plan eligibility, green-attempt preservation, same-parent collection, and
+  strict-verifier invocation. Never use a real Full Release Validation run for
+  this proof. See
   [Full Release Validation](/reference/full-release-validation#post-merge-continuation-proof).
 - Use one release operator, one transition-only watcher, and at most one
   investigator for the current failed surface. Do not build audit-review-plan
@@ -168,34 +167,9 @@ until their dependent enforcement changes land.
   pnpm frv verify --run <successful-parent-run-id>
   ```
 
-- A historical parent whose authenticated execution-plan artifact predates
-  attempt-aware evidence can be recovered only with an operator-reviewed
-  `--legacy-plan <json>` that freezes the source parent tuple,
-  source repository, exact child tuples, target SHA, complete candidate
-  identity, release profile, soak value, complete validation inputs, and the
-  reviewed continuation Tooling SHA. The controller reruns only those child
-  run IDs, then dispatches one continuation parent from that frozen Tooling SHA
-  with every candidate and child-producing job disabled:
-
-  ```bash
-  pnpm frv continue --failed \
-    --run <legacy-parent-run-id> \
-    --legacy-plan <reviewed-source-plan.json>
-  ```
-
-  The continuation parent records the legacy source in its immutable plan and
-  emits a normal `rerunGroup=all` manifest. The reviewed JSON must match the
-  historical artifact's parent attempt, target, workflow, profile, rerun group,
-  and selected child tuples. Attempt-aware artifacts reject legacy mode. A
-  historical source manifest is optional only for these pre-support roots. When
-  absent, preflight and publication independently
-  bind the exact successful root resolver, release-checks child resolver,
-  reusable-workflow Inputs group, source workflow-dispatch schema, and package,
-  plugin-registry, and Docker candidate artifacts. Blank omitted inputs are
-  accepted only when that complete Inputs group omits the key and the exact
-  trusted source schema declares an explicitly blank default. Never infer
-  missing legacy identity from a skipped reuse job, nearby title, branch, latest
-  run, later decision/drain/manifest artifact, or current `main`.
+- Parents whose immutable plan predates attempt-aware evidence cannot be
+  continued. Start a fresh all-group Full Release Validation; never reconstruct
+  old state or dispatch a replacement parent.
 
 - Controller retries are `ci`, `plugin-prerelease`, `install-smoke`,
   `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`, `npm-telegram`,
