@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   interruptReplyRunTarget,
   isReplyRunAbortableForSignal,
@@ -37,6 +38,7 @@ import {
 } from "./chat-restart-recovery.js";
 import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
+  inspectGoalChatSendRetry,
   respondChatActiveLeafChanged,
   respondChatSessionRoutingChanged,
 } from "./chat-send-pre-admission.js";
@@ -101,6 +103,31 @@ export async function admitChatSend(params: {
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const pendingAttemptId = randomUUID();
   const pendingExpiresAtMs = resolveChatRunExpiresAtMs({ now, timeoutMs });
+  const goalRetry = inspectGoalChatSendRetry(params);
+  if (goalRetry.kind !== "new") {
+    if (goalRetry.kind === "replay") {
+      respond(true, { ...goalRetry.receipt, replayed: true }, undefined, {
+        cached: true,
+        runId: clientRunId,
+      });
+    }
+    return { ok: false as const };
+  }
+  // A plain chat retry must not replace a Goal reservation after yielding in recovery.
+  if (
+    readPreRegisteredRun({
+      key: pendingChatSendKey,
+      entry: context.dedupe.get(pendingChatSendKey),
+      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
+    })?.payload.goalFingerprint
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "Run ID is reserved by a Goal request; use a new ID."),
+    );
+    return { ok: false as const };
+  }
   // Keep the run abortable while lifecycle mutation owns the session. Admission
   // must reject an expired/missing reservation instead of reviving evicted work.
   context.dedupe.set(pendingChatSendKey, {
@@ -117,6 +144,9 @@ export async function admitChatSend(params: {
       ownerDeviceId: normalizeOptionalChatText(client?.connect?.device?.id),
       expiresAtMs: pendingExpiresAtMs,
       turnKind,
+      ...(request.goalOperation
+        ? { goalFingerprint: request.goalOperation.requestFingerprint }
+        : {}),
     },
   });
   const clearPendingChatSendReservation = () => {
@@ -200,6 +230,14 @@ export async function admitChatSend(params: {
       throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
     }
     const latestEntry = latestSession.entry;
+    if (
+      request.goalOperation &&
+      (isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, backingSessionId]) ||
+        hasPendingFollowupQueueWork([sessionKey, backingSessionId, activeRunScopeKey]) ||
+        replyRunRegistry.isActive(activeRunScopeKey))
+    ) {
+      throw new Error("goal-session-busy");
+    }
     if (entry && !latestEntry) {
       throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
     }
@@ -300,6 +338,11 @@ export async function admitChatSend(params: {
       sessionKey: latestSession.canonicalKey,
       storePath: latestSession.storePath,
     });
+    if (request.goalOperation && !restartSafeAdmission) {
+      throw new Error(
+        "Goal start or resume requires an idle local session with recoverable history. Finish current work or start a fresh session, then retry.",
+      );
+    }
     if (retryableClaim && !restartSafeAdmission) {
       throw new Error("chat retry does not match its durable admission");
     }
@@ -339,6 +382,18 @@ export async function admitChatSend(params: {
     });
   } catch (err) {
     clearPendingChatSendReservation();
+    if (err instanceof Error && err.message === "goal-session-busy") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "This session still has active or queued work. Wait for it to finish, then retry the Goal.",
+          { retryable: true, details: { reason: "goal-session-busy" } },
+        ),
+      );
+      return { ok: false as const };
+    }
     if (err instanceof Error && err.message === SESSION_ROUTING_CHANGED_ERROR_REASON) {
       respondChatSessionRoutingChanged(respond);
       return { ok: false as const };

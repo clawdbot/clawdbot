@@ -227,6 +227,37 @@
   margin-bottom: calc(0px - var(--chat-composer-shell-gap) - var(--chat-progress-underlap));
 }
 
+.agent-chat__goal-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+}
+
+.agent-chat__goal-mode-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.agent-chat__goal-mode-label svg {
+  width: 16px;
+  height: 16px;
+}
+
+.agent-chat__goal-mode-hint {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .agent-chat__goal {
   align-self: center;
   display: flex;

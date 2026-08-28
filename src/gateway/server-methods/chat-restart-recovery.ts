@@ -103,11 +103,17 @@ function fingerprintRestartSafeChatRequest(params: {
 }
 
 export function createRestartSafeChatRequest(params: {
+  goalRequestFingerprint?: string;
   eligible: boolean;
   message: string;
   senderIsOwner: boolean;
   cfg: OpenClawConfig;
 }): RestartSafeChatRequest | undefined {
+  if (params.goalRequestFingerprint) {
+    // Goal admission owns literal intent; slash-looking objectives are not commands.
+    // Its receipt fingerprints attachments, routing, and every immutable run option.
+    return { fingerprint: params.goalRequestFingerprint };
+  }
   if (!params.eligible || hasRestartUnsafeMessageSemantics(params.message, params.cfg)) {
     return undefined;
   }

@@ -37,10 +37,15 @@ export function createGatewayChatUserTurnController(params: {
   session: PreparedChatSendSession;
   startedAt: number;
   warn: (message: string) => void;
+  assertGoalCurrent?: () => void;
 }): GatewayChatUserTurnController {
   const { admission, request, session } = params;
-  const sender = gatewayClientSenderFields(params.client).sender;
+  const sender =
+    request.goalOperation?.action === "resume"
+      ? undefined
+      : gatewayClientSenderFields(params.client).sender;
   const baseInput: UserTurnInput = {
+    ...(request.goalOperation?.action === "resume" ? { display: false } : {}),
     text: request.rawMessage,
     timestamp: session.now,
     idempotencyKey: buildRunUserTurnIdempotencyKey(session.clientRunId),
@@ -78,6 +83,16 @@ export function createGatewayChatUserTurnController(params: {
     : Promise.resolve(baseInput);
   let acceptedSessionId = admission.admittedSessionId;
   const recorder = createUserTurnTranscriptRecorder({
+    ...(request.goalOperation
+      ? {
+          sessionTurnMutation: {
+            kind: "goal",
+            operation: request.goalOperation,
+            runId: session.clientRunId,
+            assertCurrent: params.assertGoalCurrent,
+          },
+        }
+      : {}),
     input: baseInput,
     resolveInput: () => inputPromise,
     target: () => {

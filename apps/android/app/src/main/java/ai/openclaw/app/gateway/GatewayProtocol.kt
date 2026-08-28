@@ -584,6 +584,8 @@ enum class GatewayMethod(
   SessionsSend("sessions.send"),
   SessionsAbort("sessions.abort"),
   SessionsPatch("sessions.patch"),
+  SessionsGoalUpdate("sessions.goal.update"),
+  SessionsGoalClear("sessions.goal.clear"),
   SessionsPluginPatch("sessions.pluginPatch"),
   SessionsCleanup("sessions.cleanup"),
   SessionsReset("sessions.reset"),

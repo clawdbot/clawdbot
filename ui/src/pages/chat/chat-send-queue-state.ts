@@ -42,6 +42,8 @@ export function enqueuePendingSendMessage(
   replyToId?: string,
   resumedOrderKey?: number,
   queueMode?: ChatQueueItem["queueMode"],
+  intent?: ChatQueueItem["intent"],
+  expectedLeafEntryId?: string | null,
 ): ChatQueueItem | null {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
@@ -53,7 +55,7 @@ export function enqueuePendingSendMessage(
   // retired by the write that admits this replacement, not here.
   const pending: ChatQueueItem = {
     id: generateUUID(),
-    text: trimmed,
+    text: intent ? text : trimmed,
     createdAt: Date.now(),
     ...(resumedOrderKey !== undefined ? { orderKey: resumedOrderKey } : {}),
     attachments: hasAttachments ? attachments : undefined,
@@ -62,6 +64,10 @@ export function enqueuePendingSendMessage(
     sendRunId: generateUUID(),
     sendState,
     ...(queueMode ? { queueMode } : {}),
+    ...(intent
+      ? { intent, ...(host.currentSessionId ? { sessionId: host.currentSessionId } : {}) }
+      : {}),
+    ...(intent && expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
     sendSubmittedAtMs: submittedAtMs,
     sessionKey: host.sessionKey,
     agentId: scopedAgentIdForSession(host, host.sessionKey),

@@ -1,6 +1,10 @@
 // User-turn transcript type contracts shared by runtime and queue option types.
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type {
+  SessionTranscriptTurnMutation,
+  SessionTranscriptTurnMutationResult,
+} from "../config/sessions/goals-operations.types.js";
+import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "../config/sessions/session-transcript-turn-lifecycle.types.js";
@@ -31,10 +35,13 @@ export type PersistedUserTurnMediaInput = Pick<
 };
 
 export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> & {
+  display?: false;
   __openclaw?: Record<string, unknown>;
 };
 
 export type UserTurnInput = {
+  /** Internal continuation input stays in model history without impersonating a human chat row. */
+  display?: false;
   text?: string | null;
   media?: readonly PersistedUserTurnMediaInput[] | null;
   /** Restart-safe native image placement; model-visible prompt bytes remain separate. */
@@ -104,6 +111,7 @@ export type UserTurnTranscriptTarget = UserTurnTranscriptPersistenceTarget;
 export type UserTurnTranscriptAdmissionReceipt = TranscriptTurnAdmission;
 
 export type UserTurnTranscriptPersistResult = {
+  sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;
   /** True only when this call inserted the transcript message. */
   appended?: boolean;
   sessionFile: string;
@@ -118,6 +126,7 @@ export type UserTurnTranscriptTargetResolver =
   | (() => UserTurnTranscriptTarget | undefined | Promise<UserTurnTranscriptTarget | undefined>);
 
 export type PersistUserTurnTranscriptParams = {
+  sessionTurnMutation?: SessionTranscriptTurnMutation;
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
   sessionId: string;
@@ -140,6 +149,7 @@ export type PersistUserTurnTranscriptParams = {
 type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
 
 export type CreateUserTurnTranscriptRecorderParams = {
+  sessionTurnMutation?: SessionTranscriptTurnMutation;
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
   resolveInput?: UserTurnInputResolver;

@@ -5792,6 +5792,23 @@ export const en: TranslationMap = {
       imageCount: "Image ({count})",
     },
     goals: {
+      composerMode: "Goal",
+      sessionChanged:
+        "This conversation changed since the goal draft was created. Cancel goal entry and select Goal again to use the current conversation.",
+      start: "Start goal",
+      save: "Save goal",
+      startHint: "Send an objective to start working toward it.",
+      editHint: "Update the objective without starting a new run.",
+      objectivePlaceholder: "What should this goal accomplish?",
+      cancel: "Cancel goal entry",
+      offline: "Reconnect to the Gateway before starting or changing a goal.",
+      busy: "Wait for the current run to finish before starting a goal. Your objective is still in the composer.",
+      annotationUnsupported:
+        "Send or remove browser annotations before starting a goal. Your objective and attachments are unchanged.",
+      actionPending:
+        "A goal action is already in progress. Wait for its result before trying again.",
+      admissionImmutable:
+        "This goal request can only be retried or removed. Start a new goal to change its objective.",
       edit: "Edit goal",
       pause: "Pause goal",
       resume: "Resume goal",

@@ -11,6 +11,7 @@ import {
   formatGoalUsage,
   goalElapsedMs,
 } from "../../../lib/session-goal.ts";
+import type { ChatGoalAction } from "../chat-goals.ts";
 import type { ChatComposerState } from "./chat-composer-types.ts";
 
 const goalElapsedTimers = new Map<HTMLElement, ReturnType<typeof setInterval>>();
@@ -57,7 +58,7 @@ function createGoalElapsedRef(goal: SessionGoal) {
 
 type ChatGoalActions = {
   canAct: boolean;
-  onGoalCommand?: (command: string) => void;
+  onGoalAction?: (goalId: string, action: ChatGoalAction) => void;
   onGoalEdit?: (goal: SessionGoal) => void;
   requestUpdate: () => void;
 };
@@ -93,7 +94,7 @@ export function renderChatGoal(
   const elapsed = formatGoalElapsed(goalElapsedMs(goal, Date.now()));
   const usage = formatGoalUsage(goal);
   const expanded = state.goalExpandedId === goal.id;
-  const showActions = actions.canAct && Boolean(actions.onGoalCommand);
+  const showActions = actions.canAct && Boolean(actions.onGoalAction);
   const canResume =
     goal.status === "paused" ||
     goal.status === "blocked" ||
@@ -131,7 +132,7 @@ export function renderChatGoal(
                 className: "agent-chat__goal-pause",
                 label: t("chat.goals.pause"),
                 icon: icons.pause,
-                onClick: () => actions.onGoalCommand?.("/goal pause"),
+                onClick: () => actions.onGoalAction?.(goal.id, "pause"),
               })
             : nothing}
           ${showActions && canResume
@@ -139,7 +140,7 @@ export function renderChatGoal(
                 className: "agent-chat__goal-resume",
                 label: t("chat.goals.resume"),
                 icon: icons.play,
-                onClick: () => actions.onGoalCommand?.("/goal resume"),
+                onClick: () => actions.onGoalAction?.(goal.id, "resume"),
               })
             : nothing}
           ${showActions
@@ -147,7 +148,7 @@ export function renderChatGoal(
                 className: "agent-chat__goal-clear",
                 label: t("chat.goals.clear"),
                 icon: icons.trash,
-                onClick: () => actions.onGoalCommand?.("/goal clear"),
+                onClick: () => actions.onGoalAction?.(goal.id, "clear"),
               })
             : nothing}
           <button

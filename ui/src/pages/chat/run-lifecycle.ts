@@ -148,6 +148,27 @@ export function isChatBusy(host: { chatSending?: boolean; chatRunId?: string | n
   return Boolean(host.chatSending || host.chatRunId);
 }
 
+export function adoptStartedChatRun(
+  host: RunLifecycleHost,
+  runId: string,
+  startedAt: number,
+): void {
+  // A terminal event may beat the request ACK; never resurrect that completed run.
+  if (host.chatRunStatus?.runId === runId || host.lastLocalTerminalReconcile?.runId === runId) {
+    return;
+  }
+  const adopted = host.chatRunId === runId;
+  const adoptedStream = adopted && typeof host.chatStream === "string";
+  host.chatRunId = runId;
+  if (!adopted) {
+    host.chatRunStartup = null;
+  }
+  if (!adoptedStream) {
+    host.chatStream = "";
+    host.chatStreamStartedAt = startedAt;
+  }
+}
+
 export function setChatRunError(
   state: { chatRunError?: { summary: string } | null },
   summary: string,

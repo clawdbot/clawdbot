@@ -24,7 +24,7 @@ import {
   rememberCommittedTranscriptMessageSequences,
 } from "./session-accessor.sqlite-transcript-sequences.js";
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
-import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-write.js";
+import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import { resolveSessionTranscriptRuntimeTarget } from "./session-accessor.transcript-target.js";
 import { appendTranscriptMessage, emitTranscriptUpdate } from "./session-accessor.transcript.js";
 import type {
@@ -156,8 +156,8 @@ export async function persistSessionTranscriptTurn(
   if (expectedSessionId) {
     return await persistExpectedSessionTranscriptTurn(scope, { ...options, expectedSessionId });
   }
-  if (options.sessionLifecyclePatch) {
-    throw new Error("Cannot patch session lifecycle without an expected session id");
+  if (options.sessionLifecyclePatch || options.sessionTurnMutation) {
+    throw new Error("Cannot mutate a session turn without an expected session id");
   }
   const target = await resolveTranscriptTurnTarget(scope, options.config);
   // Route through the guarded SQLite path when the session entry was loaded
@@ -357,6 +357,7 @@ async function persistExpectedSessionTranscriptTurn(
             message: attachSessionTranscriptRunId(append.message, options.runId),
           })),
           sessionLifecyclePatch: options.sessionLifecyclePatch,
+          sessionTurnMutation: options.sessionTurnMutation,
           sessionFile: target.sessionKey!,
           touchSessionEntry: options.touchSessionEntry,
         },
@@ -390,6 +391,7 @@ async function persistExpectedSessionTranscriptTurn(
     scope.sessionStore[resolved.normalizedKey] = turn.sessionEntry;
   }
   return {
+    sessionTurnMutationResult: turn.sessionTurnMutationResult,
     appendedCount: countAppendedTranscriptMessages(turn.appendedMessages),
     messages: turn.appendedMessages,
     sessionEntry: turn.sessionEntry ?? scope.sessionEntry,
