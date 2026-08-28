@@ -289,6 +289,11 @@ beforeAll(async () => {
   await loadGatewayClientModule();
 });
 
+beforeEach(() => {
+  logDebugMock.mockClear();
+  logErrorMock.mockClear();
+});
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -645,8 +650,6 @@ describe("GatewayClient request errors", () => {
   it("retries startup-unavailable connect failures without terminal callbacks", async () => {
     vi.useFakeTimers();
     wsInstances.length = 0;
-    logDebugMock.mockClear();
-    logErrorMock.mockClear();
     const onClose = vi.fn();
     const onConnectError = vi.fn();
     const client = new GatewayClient({
@@ -715,7 +718,6 @@ describe("GatewayClient close handling", () => {
     wsInstances.length = 0;
     clearDeviceAuthTokenMock.mockClear();
     clearDeviceAuthTokenMock.mockImplementation(() => undefined);
-    logDebugMock.mockClear();
   });
 
   it("clears stale token on device token mismatch close", () => {
@@ -1092,7 +1094,6 @@ describe("GatewayClient close handling", () => {
 describe("GatewayClient message dispatch", () => {
   beforeEach(() => {
     wsInstances.length = 0;
-    logDebugMock.mockClear();
   });
 
   it("keeps event callback errors inside message dispatch", () => {
@@ -1142,8 +1143,6 @@ describe("GatewayClient connect auth payload", () => {
     storeOriginDeviceTokenMock.mockReset();
     readLoggingConfigMock.mockReset();
     readLoggingConfigMock.mockReturnValue(undefined);
-    logDebugMock.mockClear();
-    logErrorMock.mockClear();
   });
 
   type ParsedConnectRequest = {

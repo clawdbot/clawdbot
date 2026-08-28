@@ -18,15 +18,33 @@ import { GatewayClient, type GatewayClientCloseInfo } from "./client.js";
 const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
 const servers: Server[] = [];
 const sockets = new Set<Socket>();
+let socketDrain = createDeferred();
 const clients: GatewayClient[] = [];
 let proxy: ProxylineHandle | undefined;
 
+function trackSocket(socket: Socket) {
+  if (sockets.size === 0) {
+    socketDrain = createDeferred();
+  }
+  sockets.add(socket);
+  socket.once("close", () => {
+    sockets.delete(socket);
+    if (sockets.size === 0) {
+      socketDrain.resolve();
+    }
+  });
+}
+
+async function waitForSocketDrain() {
+  // Recheck after waking: a new accepted socket can start another drain generation.
+  while (sockets.size > 0) {
+    await socketDrain.promise;
+  }
+}
+
 async function listen(server: Server): Promise<number> {
   servers.push(server);
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-  });
+  server.on("connection", trackSocket);
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
   });
@@ -47,6 +65,7 @@ afterEach(async () => {
       server.close(() => resolve());
     });
   }
+  await waitForSocketDrain();
 });
 
 async function startProxy(targetPort: number) {
@@ -59,8 +78,7 @@ async function startProxy(targetPort: number) {
       upstream.write(head);
       downstream.pipe(upstream).pipe(downstream);
     });
-    sockets.add(upstream);
-    upstream.once("close", () => sockets.delete(upstream));
+    trackSocket(upstream);
     downstream.on("error", () => upstream.destroy());
     upstream.on("error", () => downstream.destroy());
     downstream.once("close", () => upstream.destroy());
@@ -121,7 +139,7 @@ describe.each([false, true])("Gateway TLS upgrade (managed proxy: %s)", (managed
     client.start();
     const result = await outcome.promise;
     await client.stopAndWait();
-    await expect.poll(() => sockets.size).toBe(0);
+    await waitForSocketDrain();
     if (pin === fingerprint) {
       expect(result).toBe("open");
       expect(httpBytes).toBeGreaterThan(0);
@@ -171,7 +189,7 @@ describe.each([false, true])("Gateway TLS upgrade (managed proxy: %s)", (managed
       expect(String(await failed.promise)).toMatch(/timed out/i);
     }
     await client.stopAndWait();
-    await expect.poll(() => sockets.size).toBe(0);
+    await waitForSocketDrain();
     expect(tunnels?.() ?? 0).toBe(managed ? 1 : 0);
   });
 });
