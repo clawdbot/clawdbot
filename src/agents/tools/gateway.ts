@@ -641,7 +641,10 @@ export async function callGatewayTool<T = Record<string, unknown>>(
         return await callGateway<T>({
           ...callOptions,
           params: stripNodeInvokeTurnSource(callOptions.params),
+          // Older Gateways reject runtime identity metadata, so restore their
+          // paired-device identity path when replaying the legacy call shape.
           agentRuntimeIdentityToken: undefined,
+          deviceIdentity: undefined,
         });
       }
       throw staleGatewayAgentRuntimeIdentityError(error);

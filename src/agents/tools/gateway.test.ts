@@ -720,7 +720,9 @@ describe("gateway tool defaults", () => {
       "agentRuntimeIdentityToken",
       expect.any(String),
     );
+    expect(mocks.callGateway.mock.calls[0]?.[0].deviceIdentity).toBeNull();
     expect(mocks.callGateway.mock.calls[1]?.[0].agentRuntimeIdentityToken).toBeUndefined();
+    expect(mocks.callGateway.mock.calls[1]?.[0].deviceIdentity).toBeUndefined();
     expect(mocks.callGateway.mock.calls[1]?.[0].params).toEqual({
       nodeId: "node-1",
       command: "device.info",
