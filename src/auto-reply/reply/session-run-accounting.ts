@@ -43,6 +43,7 @@ export async function incrementRunCompactionCount(
         })
       : undefined);
   return incrementCompactionCount({
+    expectedSession: params.expectedSession,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
