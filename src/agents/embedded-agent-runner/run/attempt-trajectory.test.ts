@@ -94,6 +94,34 @@ describe("prepareEmbeddedAttemptTrajectory", () => {
     );
   });
 
+  it("records the forwarded stream auth profile on session.started", async () => {
+    const recorder = { recordEvent: vi.fn() };
+    hoisted.createTrajectoryRuntimeRecorder.mockReturnValue(recorder);
+
+    const input = createInput();
+    (input.attempt as { runtimePlan?: unknown }).runtimePlan = {
+      auth: { forwardedAuthProfileId: "profile-main" },
+    };
+    await prepareEmbeddedAttemptTrajectory(input as never);
+
+    expect(recorder.recordEvent).toHaveBeenNthCalledWith(
+      1,
+      "session.started",
+      expect.objectContaining({ authProfileId: "profile-main" }),
+    );
+  });
+
+  it("records no auth profile when the runtime auth plan forwarded none", async () => {
+    const recorder = { recordEvent: vi.fn() };
+    hoisted.createTrajectoryRuntimeRecorder.mockReturnValue(recorder);
+
+    await prepareEmbeddedAttemptTrajectory(createInput() as never);
+
+    const started = recorder.recordEvent.mock.calls.find((call) => call[0] === "session.started");
+    expect(started?.[1]).toMatchObject({ toolCount: 7 });
+    expect((started?.[1] as { authProfileId?: unknown }).authProfileId).toBeUndefined();
+  });
+
   it("keeps trajectory path resolution but skips recorder creation when disabled", async () => {
     await expect(prepareEmbeddedAttemptTrajectory(createInput(true) as never)).resolves.toBeNull();
 
