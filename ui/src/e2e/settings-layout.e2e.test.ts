@@ -75,6 +75,110 @@ const responsiveViewports = [
 ] as const;
 
 suite.define(() => {
+  it("uses the shared tab system for Communications without duplicate section help", async () => {
+    const context = await suite.browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const config = {
+      messages: { queueLimit: 5 },
+      tts: { auto: "off" },
+    };
+    const schema = {
+      type: "object",
+      properties: {
+        messages: {
+          type: "object",
+          title: "Messages",
+          properties: {
+            queueLimit: { type: "integer", title: "Queue limit", minimum: 0 },
+          },
+        },
+        tts: {
+          type: "object",
+          title: "Voice",
+          properties: {
+            auto: {
+              type: "string",
+              title: "Automatic speech",
+              enum: ["off", "always", "inbound", "tagged"],
+            },
+          },
+        },
+      },
+    };
+    await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          path: "~/.openclaw/openclaw.json",
+          exists: true,
+          raw: `${JSON.stringify(config, null, 2)}\n`,
+          hash: "communications-config-hash",
+          appliedConfigHash: "communications-config-hash",
+          valid: true,
+          config,
+          issues: [],
+        },
+        "config.schema": {
+          schema,
+          uiHints: {
+            messages: {
+              label: "Messages",
+              docsUrl: "https://docs.openclaw.ai/concepts/messages",
+            },
+            tts: { label: "Voice", docsUrl: "https://docs.openclaw.ai/tts" },
+          },
+          version: "communications-layout",
+          generatedAt: new Date(0).toISOString(),
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/communications`);
+      await waitForControlUiRoute(page, {
+        pathname: "/settings/communications",
+        routeId: "communications",
+      });
+
+      expect(await page.locator(".page-subtitle").textContent()).toBe(
+        "Messages and text-to-speech settings.",
+      );
+      expect(await page.locator("wa-tab-group.config-sections-hub-tabs").count()).toBe(1);
+      expect((await page.locator("wa-tab").allTextContents()).map((label) => label.trim())).toEqual(
+        ["Messages", "Voice"],
+      );
+      expect(await page.locator(".settings-section__help-button").count()).toBe(0);
+      if (proofEnabled) {
+        await mkdir(proofDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(proofDir, "communications-messages.png"),
+        });
+      }
+
+      await page.locator("#config-sections-tab-tts").click();
+      await page.waitForFunction(() =>
+        document.querySelector("#config-sections-tab-tts")?.hasAttribute("active"),
+      );
+      expect(await page.locator("#config-sections-tab-tts").getAttribute("active")).not.toBeNull();
+      expect(await page.locator(".settings-section__help-button").count()).toBe(0);
+      if (proofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(proofDir, "communications-voice.png"),
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps settings introductions, section headings, and Learn more links on one layout system", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",

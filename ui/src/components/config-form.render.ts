@@ -34,6 +34,7 @@ type ConfigFormProps = {
   onHideAdvanced?: () => void;
   /** Inline actions rendered next to the active section heading (e.g. env peek). */
   sectionActions?: TemplateResult;
+  showSectionDocs?: boolean;
   /** A Control UI-owned row rendered before common schema rows in the active section. */
   sectionPrelude?: TemplateResult;
   /** Composite pages render custom rows above the form; an empty schema
@@ -227,7 +228,7 @@ export function renderConfigForm(props: ConfigFormProps) {
     path: Array<string | number>;
   }) => {
     const sectionHint = hintForPath(params.path.slice(0, 1), props.uiHints);
-    const docsUrl = sectionHint?.docsUrl;
+    const docsUrl = props.showSectionDocs === false ? undefined : sectionHint?.docsUrl;
     const docsTriggerId = `settings-section-help-${params.id}`;
     const revealAdvanced =
       props.showAdvanced === true ||

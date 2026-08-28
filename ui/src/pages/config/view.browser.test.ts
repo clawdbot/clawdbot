@@ -1171,6 +1171,28 @@ describe("config view", () => {
     expect(sectionTabLabels(container)).toEqual(["Channels", "Messages"]);
   });
 
+  it("hides contextual section help when the page owns its introduction", () => {
+    const { container } = renderConfigView({
+      activeSection: "messages",
+      showRootTab: false,
+      showSectionDocs: false,
+      includeSections: ["messages", "tts"],
+      schema: {
+        type: "object",
+        properties: {
+          messages: { type: "object", properties: {} },
+          tts: { type: "object", properties: {} },
+        },
+      },
+      uiHints: {
+        messages: { docsUrl: "https://docs.openclaw.ai/concepts/messages" },
+        tts: { docsUrl: "https://docs.openclaw.ai/tts" },
+      },
+    });
+
+    expect(container.querySelector(".settings-section__help-button")).toBeNull();
+  });
+
   it("does not normalize off-scope schema sections for scoped config tabs", () => {
     const offScopeSchema = { type: "object" } as Record<string, unknown>;
     Object.defineProperty(offScopeSchema, "properties", {

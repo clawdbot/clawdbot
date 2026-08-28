@@ -560,6 +560,7 @@ export function renderConfig(props: ConfigProps) {
                               ${t("configView.peek")}
                             </button>`
                           : undefined,
+                      showSectionDocs: props.showSectionDocs,
                       sectionPrelude: props.sectionPrelude,
                       revealSensitive: props.activeSection === "env" ? envSensitiveVisible : false,
                       isSensitivePathRevealed: (path) => isSensitivePathRevealed(viewState, path),
