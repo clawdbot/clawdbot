@@ -46,6 +46,7 @@ export function renderPicker<Option extends PickerOption>(params: PickerParams<O
       class=${`settings-select picker-select ${params.className ?? ""}`}
       style="width:100%;min-width:min(138px,100%)"
       title=${params.title ?? nothing}
+      placeholder=${params.value === null ? params.label : nothing}
       placement=${params.placement ?? nothing}
       .value=${params.value}
       ?disabled=${params.disabled}

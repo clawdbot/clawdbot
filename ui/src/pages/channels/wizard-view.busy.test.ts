@@ -123,6 +123,25 @@ describe("renderChannelWizard busy controls", () => {
     expect(group?.querySelector('[slot="label"]')?.textContent).toBe("Pick one");
   });
 
+  it("shows the channel prompt inside an unselected channel picker", () => {
+    const select = renderStep(
+      {
+        id: "channel",
+        type: "select",
+        message: "Select a channel",
+        options: [
+          { label: "Telegram", value: "telegram" },
+          { label: "Discord", value: "discord" },
+        ],
+      },
+      false,
+    );
+
+    expect(select.container.querySelector("wa-select")?.getAttribute("placeholder")).toBe(
+      "Select a channel",
+    );
+  });
+
   it("disables multiselect choices and submission while a step is running", () => {
     const multiselect = renderStep({
       id: "multi",
