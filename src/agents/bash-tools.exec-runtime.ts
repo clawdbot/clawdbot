@@ -231,6 +231,7 @@ export function isRequestedExecTargetAllowed(params: {
   configuredTarget: ExecTarget;
   requestedTarget: ExecTarget;
   sandboxAvailable?: boolean;
+  elevatedRequested?: boolean;
 }) {
   if (params.requestedTarget === params.configuredTarget) {
     return true;
@@ -242,6 +243,17 @@ export function isRequestedExecTargetAllowed(params: {
     ) {
       return false;
     }
+    return true;
+  }
+  // Allow gateway+auto only when auto would resolve to gateway:
+  // - No sandbox: auto → gateway (same host)
+  // - Sandbox + elevated: auto → gateway (elevated maps non-node to gateway)
+  // - Sandbox + no elevated: auto → sandbox (different host, reject)
+  if (
+    params.configuredTarget === "gateway" &&
+    params.requestedTarget === "auto" &&
+    (!params.sandboxAvailable || params.elevatedRequested === true)
+  ) {
     return true;
   }
   return false;
@@ -282,6 +294,7 @@ export function resolveExecTarget(params: {
       configuredTarget,
       requestedTarget,
       sandboxAvailable: params.sandboxAvailable,
+      elevatedRequested: params.elevatedRequested,
     })
   ) {
     const allowedConfig = Array.from(
