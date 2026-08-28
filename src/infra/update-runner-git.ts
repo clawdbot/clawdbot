@@ -26,6 +26,7 @@ import {
   resolveInstallEnv,
   shouldInstallWithoutScriptsOnWindows,
 } from "./update-runner-git-commands.js";
+import { prepareStableGitFetch } from "./update-runner-git-fetch.js";
 import { runGitDevPreflight } from "./update-runner-git-preflight.js";
 import { rebuildRolledBackGitRuntime } from "./update-runner-git-recovery.js";
 import {
@@ -286,7 +287,7 @@ export async function updateGitCheckout(params: {
   }
 
   // Configured pruneTags must not turn this branch refresh into deletion of operator-local tags.
-  // Explicit tag refspecs in remote config retain their operator-declared pruning semantics.
+  // Explicit tag refspecs are excluded from the preliminary refresh and fetched only when selected.
   const fetchAllBranchesArgv = [
     "git",
     "-C",
@@ -390,15 +391,27 @@ export async function updateGitCheckout(params: {
       }
     }
   } else {
-    const fetchFailure = await runRequiredStep("git fetch", fetchAllBranchesArgv, "fetch-failed");
-    if (fetchFailure) {
-      return fetchFailure;
+    const stableFetch = await prepareStableGitFetch({
+      gitRoot,
+      timeoutMs,
+      runCommand,
+      progress: opts.progress,
+      steps,
+      fetchAllArgv: fetchAllBranchesArgv,
+    });
+    if (stableFetch.reason) {
+      return buildError(stableFetch.reason);
     }
-    const remoteStep = await runStep(step("git remote", ["git", "-C", gitRoot, "remote"], gitRoot));
-    if (remoteStep.exitCode !== 0) {
-      return buildError("fetch-failed");
+    let remotes = stableFetch.remotes;
+    if (!remotes) {
+      const remoteStep = await runStep(
+        step("git remote", ["git", "-C", gitRoot, "remote"], gitRoot),
+      );
+      if (remoteStep.exitCode !== 0) {
+        return buildError("fetch-failed");
+      }
+      remotes = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"));
     }
-    const remotes = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"));
     const mainRemoteStep = await runStep({
       ...step(
         "git config main remote",
@@ -414,16 +427,15 @@ export async function updateGitCheckout(params: {
       return buildError("fetch-failed");
     }
     const configuredMainRemote = mainRemoteStep.stdoutTail?.trim() ?? "";
-    let releaseRemote: string | null = null;
-    if (configuredMainRemote) {
-      if (configuredMainRemote !== "." && remotes.includes(configuredMainRemote)) {
-        releaseRemote = configuredMainRemote;
-      }
-    } else if (remotes.length === 1) {
-      releaseRemote = remotes.at(0) ?? null;
-    } else if (remotes.includes("origin")) {
-      releaseRemote = "origin";
-    }
+    const releaseRemote = configuredMainRemote
+      ? configuredMainRemote !== "." && remotes.includes(configuredMainRemote)
+        ? configuredMainRemote
+        : null
+      : remotes.length === 1
+        ? (remotes.at(0) ?? null)
+        : remotes.includes("origin")
+          ? "origin"
+          : null;
     if (!releaseRemote) {
       return buildError(
         !configuredMainRemote && remotes.length > 1 ? "ambiguous-release-remote" : "fetch-failed",

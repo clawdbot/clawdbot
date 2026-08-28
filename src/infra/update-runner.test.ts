@@ -521,7 +521,8 @@ describe("runGatewayUpdate", () => {
   async function createTrackedGitFixture(detached: boolean) {
     const sourceRoot = await fixtureRootTracker.make("tracked-source");
     const localRoot = await fixtureRootTracker.make("tracked-local");
-    await runRealGit(sourceRoot, "init", "--initial-branch=main");
+    await runRealGit(sourceRoot, "init");
+    await runRealGit(sourceRoot, "checkout", "-b", "main");
     await runRealGit(sourceRoot, "config", "user.name", "OpenClaw Test");
     await runRealGit(sourceRoot, "config", "user.email", "openclaw@example.com");
     await fs.writeFile(
@@ -552,7 +553,8 @@ describe("runGatewayUpdate", () => {
     const missingRemote = path.join(await fixtureRootTracker.make("release-missing"), "gone.git");
     const releaseTag = "v1.0.0";
     const localOnlyTag = "local-operator-tag";
-    await runRealGit(sourceRoot, "init", "--initial-branch=main");
+    await runRealGit(sourceRoot, "init");
+    await runRealGit(sourceRoot, "checkout", "-b", "main");
     await runRealGit(sourceRoot, "config", "user.name", "OpenClaw Test");
     await runRealGit(sourceRoot, "config", "user.email", "openclaw@example.com");
     await fs.writeFile(
@@ -617,6 +619,35 @@ describe("runGatewayUpdate", () => {
   it("refreshes a recreated release tag without fetching skipped remotes or pruning local tags", async () => {
     const { localRoot, releaseSha, releaseTag, localOnlyTag } =
       await createRecreatedReleaseTagFixture();
+    const reachedMutation = new Error("reached release mutation");
+
+    await expect(
+      runWithCommand(createRealGitUpdateRunner(), {
+        cwd: localRoot,
+        channel: "stable",
+        beforeGitMutation: async () => {
+          throw reachedMutation;
+        },
+      }),
+    ).rejects.toBe(reachedMutation);
+
+    await expect(runRealGit(localRoot, "rev-parse", `${releaseTag}^{}`)).resolves.toBe(releaseSha);
+    await expect(runRealGit(localRoot, "rev-parse", "refs/remotes/origin/main")).resolves.toBe(
+      releaseSha,
+    );
+    await expect(runRealGit(localRoot, "rev-parse", localOnlyTag)).resolves.toBeTruthy();
+  });
+
+  it("refreshes recreated release tags when a remote tag refspec is configured", async () => {
+    const { localRoot, releaseSha, releaseTag, localOnlyTag } =
+      await createRecreatedReleaseTagFixture();
+    await runRealGit(
+      localRoot,
+      "config",
+      "--add",
+      "remote.origin.fetch",
+      "refs/tags/*:refs/tags/*",
+    );
     const reachedMutation = new Error("reached release mutation");
 
     await expect(
