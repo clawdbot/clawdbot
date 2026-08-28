@@ -57,6 +57,8 @@ test("validates and restores one isolated Test Server credential", () => {
     restored.driverEnv.TELEGRAM_USER_DRIVER_STATE_DIR,
     path.join(stateRoot, "user-driver"),
   );
+  assert.equal(restored.driverEnv.TELEGRAM_USER_DRIVER_SUT_ID, payload.sutBotId);
+  assert.equal(restored.driverEnv.TELEGRAM_USER_DRIVER_SUT_USERNAME, payload.sutUsername);
   assert.equal(
     JSON.parse(fs.readFileSync(path.join(stateRoot, "credentials.local.json"), "utf8")).sutBotToken,
     payload.sutToken,
