@@ -20015,6 +20015,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let requiredeliveryroute: Bool?
     public let suppressdelivery: Bool?
     public let delivertoapprovalclientsonly: Bool?
+    public let detached: Bool?
     public let timeoutms: Int?
     public let twophase: Bool?
 
@@ -20047,6 +20048,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         requiredeliveryroute: Bool? = nil,
         suppressdelivery: Bool? = nil,
         delivertoapprovalclientsonly: Bool? = nil,
+        detached: Bool? = nil,
         timeoutms: Int? = nil,
         twophase: Bool? = nil)
     {
@@ -20078,6 +20080,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.requiredeliveryroute = requiredeliveryroute
         self.suppressdelivery = suppressdelivery
         self.delivertoapprovalclientsonly = delivertoapprovalclientsonly
+        self.detached = detached
         self.timeoutms = timeoutms
         self.twophase = twophase
     }
@@ -20111,6 +20114,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case requiredeliveryroute = "requireDeliveryRoute"
         case suppressdelivery = "suppressDelivery"
         case delivertoapprovalclientsonly = "deliverToApprovalClientsOnly"
+        case detached
         case timeoutms = "timeoutMs"
         case twophase = "twoPhase"
     }
