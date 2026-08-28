@@ -226,6 +226,8 @@ SecretRef assignments are rejected on unsupported runtime-mutable surfaces (for 
 
 Batch parsing always uses the batch payload (`--batch-json`/`--batch-file`) as the source of truth; `--strict-json` / `--json` do not change batch parsing behavior.
 
+Batch assignments apply in order, then validation checks the final config. A SecretRef replaced by a later assignment is not resolved or counted in dry-run output, even with `--allow-exec`. Providers that remain in a changed provider collection still receive command-path trust checks.
+
 JSON path/value mode also works for SecretRefs and providers directly:
 
 ```bash

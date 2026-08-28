@@ -27,7 +27,6 @@ import {
   buildConfigSetOperations,
   buildUnsetOperation,
   configPatchModeError,
-  modeError,
   readConfigPatchOperations,
   type ConfigPatchOptions,
   type ConfigUnsetOptions,
@@ -40,14 +39,7 @@ import {
   strictlyValidateConfigSnapshotForCli,
 } from "./config-cli-validation.js";
 import { isConfigMachineOutput, isConfigSetJsonParseOnly } from "./config-output-mode.js";
-import {
-  hasBatchMode,
-  hasProviderBuilderOptions,
-  hasRefBuilderOptions,
-  parseBatchSource,
-  type ConfigSetOptions,
-} from "./config-set-input.js";
-import { resolveConfigSetMode } from "./config-set-parser.js";
+import type { ConfigSetOptions } from "./config-set-input.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
@@ -83,34 +75,12 @@ export async function runConfigSet(opts: {
 }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
-    const isBatchMode = hasBatchMode(opts.cliOptions);
-    const modeResolution = resolveConfigSetMode({
-      hasBatchMode: isBatchMode,
-      hasRefBuilderOptions: hasRefBuilderOptions(opts.cliOptions),
-      hasProviderBuilderOptions: hasProviderBuilderOptions(opts.cliOptions),
-      strictJson: Boolean(opts.cliOptions.strictJson || opts.cliOptions.json),
-    });
-    if (!modeResolution.ok) {
-      throw modeError(modeResolution.error);
-    }
-    if (opts.cliOptions.allowExec && !opts.cliOptions.dryRun) {
-      throw modeError("--allow-exec requires --dry-run.");
-    }
-    if (opts.cliOptions.merge && opts.cliOptions.replace) {
-      throw modeError("choose either --merge or --replace, not both.");
-    }
-
-    const batchEntries = parseBatchSource(opts.cliOptions);
-    if (batchEntries && (opts.path !== undefined || opts.value !== undefined)) {
-      throw modeError("batch mode does not accept <path> or <value> arguments.");
-    }
     await runConfigOperations({
       runtime,
       operations: buildConfigSetOperations({
         path: opts.path,
         value: opts.value,
         opts: opts.cliOptions,
-        batchEntries: batchEntries ?? null,
       }),
       options: opts.cliOptions,
       successMode: "set",
