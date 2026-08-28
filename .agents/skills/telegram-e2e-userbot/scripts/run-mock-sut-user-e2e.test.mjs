@@ -380,6 +380,24 @@ test("successful command parents keep descendants lease-owned until cleanup", as
   assert.equal(fs.existsSync(sideEffect), false);
 });
 
+test("failed executable launches settle before credential release", async () => {
+  const result = await runCommand("/missing/openclaw-telegram-executable", [], {
+    cwd: process.cwd(),
+    env: process.env,
+    timeoutMs: 1_000,
+  });
+  assert.equal(result.status, null);
+  assert.equal(result.timedOut, false);
+  assert.match(result.stderr, /ENOENT/u);
+  let released = false;
+  await cleanupOwnedRuntime({
+    async release() {
+      released = true;
+    },
+  });
+  assert.equal(released, true);
+});
+
 test("credential command timeout stops a nested wrapper before its side effect", async (context) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-command-timeout-fence-"));
   const sideEffect = path.join(temp, "sent");

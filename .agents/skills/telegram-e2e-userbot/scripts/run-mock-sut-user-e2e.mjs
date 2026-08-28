@@ -623,8 +623,18 @@ export async function runCommand(command, args, options) {
     stderr = `${stderr}${chunk}`.slice(-1024 * 1024);
   });
   const completion = new Promise((resolveRun) => {
-    child.on("exit", (status) => {
+    let settled = false;
+    const finish = (status) => {
+      if (settled) return;
+      settled = true;
       resolveRun({ status, stdout, stderr, timedOut: false });
+    };
+    child.once("exit", finish);
+    child.once("error", (error) => {
+      stderr = `${stderr}${error instanceof Error ? error.message : String(error)}`.slice(
+        -1024 * 1024,
+      );
+      finish(null);
     });
   });
   let timeout;

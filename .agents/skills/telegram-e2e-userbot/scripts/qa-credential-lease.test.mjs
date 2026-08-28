@@ -193,6 +193,33 @@ test("does not retry unrelated broker internal errors", async () => {
   assert.equal(attempts, 1);
 });
 
+test("stops reading an oversized streamed broker response at the byte limit", async () => {
+  let pulls = 0;
+  let cancelled = false;
+  await assert.rejects(
+    acquireQaLease({
+      kind: "telegram-test-userbot",
+      env,
+      fetchImpl: async () =>
+        new Response(
+          new ReadableStream({
+            pull(controller) {
+              pulls += 1;
+              controller.enqueue(new Uint8Array(700_000));
+            },
+            cancel() {
+              cancelled = true;
+            },
+          }),
+          { status: 200 },
+        ),
+    }),
+    /response exceeded 1048576 bytes/u,
+  );
+  assert.equal(cancelled, true);
+  assert.ok(pulls <= 3);
+});
+
 test("hydrates an authenticated broker payload above the inline threshold", async () => {
   const expected = { schemaVersion: 1, archive: "x".repeat(300_000) };
   const serialized = JSON.stringify(expected);

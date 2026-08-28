@@ -66,9 +66,25 @@ function brokerConfig(env = process.env) {
 }
 
 async function readBrokerResponse(response, maxBytes) {
-  const text = await response.text();
-  if (Buffer.byteLength(text, "utf8") > maxBytes) {
-    throw new Error(`Broker response exceeded ${maxBytes} bytes.`);
+  if (!response.body) return {};
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let byteLength = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > maxBytes) {
+        await reader.cancel();
+        throw new Error(`Broker response exceeded ${maxBytes} bytes.`);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+  } finally {
+    reader.releaseLock();
   }
   if (!text.trim()) return {};
   try {
