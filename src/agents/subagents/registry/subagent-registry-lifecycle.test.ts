@@ -4931,6 +4931,66 @@ describe("requester settle wake trigger", () => {
     expect(runs.has(entry.runId)).toBe(false);
   });
 
+  it("keeps a delete-cleanup row that still has an unexpired archive deadline", () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      cleanup: "delete",
+      archiveAtMs: 9_000,
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "delete",
+      completedAt: 5_000,
+    });
+
+    expect(entry.requesterSettleWake?.retireAfterSettle).toBeUndefined();
+    const completeBatch = firstCallArg(settleWake).completeBatch as (
+      runIds: readonly string[],
+    ) => void;
+    completeBatch([entry.runId]);
+    // The archive deadline owns the finished row; the sweeper retires it at expiry.
+    expect(runs.has(entry.runId)).toBe(true);
+    expect(runs.get(entry.runId)?.archiveAtMs).toBe(9_000);
+  });
+
+  it("retires a delete-cleanup row whose archive deadline already passed", () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      cleanup: "delete",
+      archiveAtMs: 4_500,
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "delete",
+      completedAt: 5_000,
+    });
+
+    expect(entry.requesterSettleWake?.retireAfterSettle).toBe(true);
+    const completeBatch = firstCallArg(settleWake).completeBatch as (
+      runIds: readonly string[],
+    ) => void;
+    completeBatch([entry.runId]);
+    expect(runs.has(entry.runId)).toBe(false);
+  });
+
   it("emits cleanup effects when settle retirement wins before detached tails start", async () => {
     const entry = makeRunModeCleanupEntry("internal-settle-retirement");
     const transcriptTarget = entry.execution.transcriptTarget;

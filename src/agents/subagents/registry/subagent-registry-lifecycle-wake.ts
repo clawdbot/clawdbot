@@ -531,8 +531,16 @@ export function completeCleanupBookkeeping(
     retryDeferredCompletedAnnounces(cleanupParams.runId);
     return;
   }
+  // Delete cleanup already removed the child session, but the archive deadline
+  // (agents.defaults.subagents.archiveAfterMinutes) still owns the finished row
+  // so recent-run listings keep it until the sweeper expires it. Retiring here
+  // would drop the row early and duplicate that retirement.
+  const retainedByArchiveDeadline =
+    isDeleteCleanup &&
+    typeof cleanupParams.entry.archiveAtMs === "number" &&
+    cleanupParams.entry.archiveAtMs > cleanupParams.completedAt;
   const retireAfterSettle =
-    isDeleteCleanup ||
+    (isDeleteCleanup && !retainedByArchiveDeadline) ||
     (cleanupParams.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
       cleanupParams.entry.suppressAnnounceReason !== "killed");
   if (retireAfterSettle) {

@@ -201,6 +201,34 @@ describe("reconcileOrphanedRestoredRuns", () => {
     expect(runs.get(entry.runId)).toBe(entry);
   });
 
+  it("keeps completed delete-cleanup rows until their archive deadline expires", () => {
+    const entry = createRunEntry({
+      cleanup: "delete",
+      execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
+      cleanupHandled: true,
+      cleanupCompletedAt: 2_000,
+      archiveAtMs: Date.now() + 60_000,
+    });
+    const runs = new Map([[entry.runId, entry]]);
+
+    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns: new Set() })).toBe(false);
+    expect(runs.get(entry.runId)).toBe(entry);
+  });
+
+  it("prunes a completed delete-cleanup row once its archive deadline passed", () => {
+    const entry = createRunEntry({
+      cleanup: "delete",
+      execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
+      cleanupHandled: true,
+      cleanupCompletedAt: 2_000,
+      archiveAtMs: Date.now() - 1,
+    });
+    const runs = new Map([[entry.runId, entry]]);
+
+    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns: new Set() })).toBe(true);
+    expect(runs.has(entry.runId)).toBe(false);
+  });
+
   it.each(["reserved", "attempted", "consumed", "accepted", "abandoned"] as const)(
     "preserves orphaned restart recovery rows in the %s phase",
     (phase) => {

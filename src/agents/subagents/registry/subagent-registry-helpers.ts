@@ -340,6 +340,17 @@ export function reconcileOrphanedRestoredRuns(params: {
       continue;
     }
     if (
+      entry.cleanup === "delete" &&
+      typeof entry.cleanupCompletedAt === "number" &&
+      typeof entry.archiveAtMs === "number" &&
+      entry.archiveAtMs > now
+    ) {
+      // Completed delete-cleanup rows are session-less on purpose until their
+      // archive deadline. Pruning them here would hide finished runs from
+      // recent-run listings early; the sweeper retires them at expiry.
+      continue;
+    }
+    if (
       entry.killReconciliation ||
       entry.killIntent ||
       entry.execution.restartRecovery ||
