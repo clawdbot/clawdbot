@@ -164,6 +164,51 @@ describe("azure-openai-responses", () => {
     }
   });
 
+  it("omits prompt_cache_key when the model declares supportsPromptCacheKey false", async () => {
+    let sentParams: { prompt_cache_key?: unknown } | undefined;
+    const hostFetch: typeof fetch = async (input, init) => {
+      sentParams = (await new Request(input, init).json()) as typeof sentParams;
+      return Response.json({ error: { message: "captured" } }, { status: 400 });
+    };
+
+    configureAiTransportHost({ buildModelFetch: () => hostFetch });
+    try {
+      await streamSimpleAzureOpenAIResponses(
+        { ...azureResponsesModel, compat: { supportsPromptCacheKey: false } },
+        context,
+        { apiKey: "test-api-key", sessionId: "cache-key-session" },
+      ).result();
+
+      expect(sentParams).not.toHaveProperty("prompt_cache_key");
+    } finally {
+      configureAiTransportHost({});
+    }
+  });
+
+  it("keeps prompt_cache_key by default and on explicit compat support", async () => {
+    const collect = async (compat?: { supportsPromptCacheKey?: boolean }) => {
+      let sentParams: { prompt_cache_key?: unknown } | undefined;
+      const hostFetch: typeof fetch = async (input, init) => {
+        sentParams = (await new Request(input, init).json()) as typeof sentParams;
+        return Response.json({ error: { message: "captured" } }, { status: 400 });
+      };
+      configureAiTransportHost({ buildModelFetch: () => hostFetch });
+      try {
+        await streamSimpleAzureOpenAIResponses(
+          compat ? { ...azureResponsesModel, compat } : azureResponsesModel,
+          context,
+          { apiKey: "test-api-key", sessionId: "cache-key-session" },
+        ).result();
+      } finally {
+        configureAiTransportHost({});
+      }
+      return sentParams?.prompt_cache_key;
+    };
+
+    await expect(collect()).resolves.toBe("cache-key-session");
+    await expect(collect({ supportsPromptCacheKey: true })).resolves.toBe("cache-key-session");
+  });
+
   it("fences compaction replay by the resolved Azure endpoint", async () => {
     const routeA = "https://route-a.openai.azure.com/openai/v1";
     const routeB = "https://route-b.openai.azure.com/openai/v1";

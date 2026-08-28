@@ -6,6 +6,7 @@ import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
+import { readCompatPayloadBoolean } from "../transports/openai-responses-payload-policy.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { resolveAzureDeploymentNameFromMap } from "./azure-deployment-map.js";
@@ -227,14 +228,19 @@ function buildParams(
     replayMode,
   });
 
+  // An explicit false compat declaration is a documented endpoint contract, not a default:
+  // unsupported Azure deployments reject prompt_cache_key with a 400 for otherwise valid requests.
+  const omitPromptCacheKey =
+    options?.cacheRetention === "none" ||
+    readCompatPayloadBoolean(model.compat, "supportsPromptCacheKey") === false;
+
   const params: ResponseCreateParamsStreaming & OpenAIResponsesRequestParams = {
     model: deploymentName,
     input: messages,
     stream: true,
-    prompt_cache_key:
-      options?.cacheRetention === "none"
-        ? undefined
-        : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
+    prompt_cache_key: omitPromptCacheKey
+      ? undefined
+      : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
     store: false,
   };
 

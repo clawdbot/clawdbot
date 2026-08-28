@@ -217,7 +217,7 @@ function isOpenAIResponsesApi(api: string | undefined): boolean {
   return api !== undefined && OPENAI_RESPONSES_APIS.has(api);
 }
 
-function readCompatPayloadBoolean(
+export function readCompatPayloadBoolean(
   compat: unknown,
   key: "supportsInstructions" | "supportsPromptCacheKey" | "supportsStore",
 ): boolean | undefined {
