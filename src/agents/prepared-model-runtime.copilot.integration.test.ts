@@ -1,19 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, expect, it } from "vitest";
-import { ensureSelectedAgentHarnessPlugin } from "../../src/agents/harness/runtime-plugin.js";
-import { prepareWorkspacePluginRegistries } from "../../src/agents/prepared-model-runtime.inbound-registry.js";
-import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import { loadAndActivateRootPluginRegistry } from "../../src/plugins/loader.js";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
+import copilotPlugin from "../../extensions/copilot/index.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as pluginState from "../plugin-state/plugin-state-store.js";
+import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   writePlugin,
-} from "../../src/plugins/loader.test-fixtures.js";
-import { loadPluginMetadataSnapshot } from "../../src/plugins/plugin-metadata-snapshot.js";
-import { getActivePluginRegistry } from "../../src/plugins/runtime.js";
-import copilotPlugin from "./index.js";
+} from "../plugins/loader.test-fixtures.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
+import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 
 const REGISTER_COPILOT = Symbol.for("openclaw.test.registerCopilot");
 type RegistrationGlobal = typeof globalThis & {
@@ -21,12 +22,18 @@ type RegistrationGlobal = typeof globalThis & {
 };
 
 afterEach(() => {
+  vi.restoreAllMocks();
   delete (globalThis as RegistrationGlobal)[REGISTER_COPILOT];
   resetPluginLoaderTestStateForTest();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 it("prepares an agent-local Copilot BYOK harness without replacing the active root registry", async () => {
+  const openStore = vi
+    .spyOn(pluginState, "createPluginStateSyncKeyedStore")
+    .mockImplementation(() => {
+      throw new Error("prepared harness discovery must not activate state stores");
+    });
   const workspaceDir = fs.realpathSync(makePluginLoaderTempDir());
   const bundledRoot = fs.realpathSync(makePluginLoaderTempDir());
   // Let Vitest import the public entrypoint once; the real loader still owns its
@@ -41,7 +48,7 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
     };`,
   });
   fs.copyFileSync(
-    new URL("./openclaw.plugin.json", import.meta.url),
+    new URL("../../extensions/copilot/openclaw.plugin.json", import.meta.url),
     path.join(plugin.dir, "openclaw.plugin.json"),
   );
   (globalThis as RegistrationGlobal)[REGISTER_COPILOT] = copilotPlugin.register;
@@ -137,4 +144,5 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
     }),
   ).toEqual({ supported: true, priority: 100 });
   await harness?.dispose?.();
+  expect(openStore).not.toHaveBeenCalled();
 });

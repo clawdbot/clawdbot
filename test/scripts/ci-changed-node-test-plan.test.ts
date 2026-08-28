@@ -95,6 +95,20 @@ it.each([
 
 describe("CI changed Node test plan", () => {
   it.each([
+    "extensions/copilot/index.ts",
+    "extensions/copilot/harness.ts",
+    "extensions/copilot/openclaw.plugin.json",
+  ])("keeps host discovery proof when only %s changes", (changedPath) => {
+    const shards = createChangedNodeTestShards([changedPath]);
+    expect(shards?.flatMap((shard) => shard.targets ?? [])).toContain(
+      "src/agents/prepared-model-runtime.copilot.integration.test.ts",
+    );
+    expect(shards?.flatMap((shard) => shard.configs)).toContain(
+      resolveExtensionTestConfig("extensions/copilot"),
+    );
+  });
+
+  it.each([
     {
       source: "ui/src/styles/chat/layout.css",
       targets: [

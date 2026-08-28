@@ -1855,6 +1855,22 @@ describe("scripts/changed-lanes", () => {
     );
   });
 
+  it.each([
+    "extensions/copilot/src/tool-bridge.test.ts",
+    "extensions/codex/src/app-server/dynamic-tool-build.test.ts",
+    "extensions/copilot/src/test-support/fixture.ts",
+    "test/helpers/plugins/fixture.ts",
+    "scripts/check-no-extension-test-core-imports.ts",
+    "scripts/check-file-utils.ts",
+    "scripts/check-changed.mts",
+  ])("checks extension test import boundaries for %s", (changedPath) => {
+    const plan = createChangedCheckPlan(detectChangedLanes([changedPath]));
+    expect(plan.commands).toContainEqual({
+      name: "extension test core imports",
+      args: ["lint:plugins:no-extension-test-core-imports"],
+    });
+  });
+
   it("runs deprecation hygiene checks for outcome-changing paths and all lanes", () => {
     expect(
       shouldRunDeprecationHygieneChecks([
