@@ -244,7 +244,7 @@ describe("ChatAudioPlayer", () => {
     );
   });
 
-  it("renders decoded waveform peaks and recovers them after a renewed media ticket", async () => {
+  it("renders decoded waveform peaks and scopes waveform cache reuse to auth context", async () => {
     const intersectionCallbacks: IntersectionObserverCallback[] = [];
     vi.stubGlobal(
       "IntersectionObserver",
@@ -329,24 +329,9 @@ describe("ChatAudioPlayer", () => {
     expect(media.getAttribute("src")).toBe("blob:waveform-audio");
     expect(fetchMock).toHaveBeenCalledOnce();
 
-    Object.defineProperty(media, "error", { configurable: true, value: {} as MediaError });
-    media.dispatchEvent(new Event("error"));
-    await player.updateComplete;
-    expect(player.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
-
-    player.src = "https://example.com/waveform-reuse.mp3?mediaTicket=recovered";
-    await player.updateComplete;
-    await vi.waitFor(() =>
-      expect(player.querySelector("audio")?.getAttribute("src")).toBe(
-        "https://example.com/waveform-reuse.mp3?mediaTicket=recovered",
-      ),
-    );
-
     player.authToken = "new-principal";
     await player.updateComplete;
-    expect(player.querySelector("audio")?.getAttribute("src")).toBe(
-      "https://example.com/waveform-reuse.mp3?mediaTicket=recovered",
-    );
+    expect(media.getAttribute("src")).toBe("https://example.com/waveform-reuse.mp3");
 
     player.remove();
     const refreshed = document.createElement("openclaw-chat-audio-player");
@@ -366,6 +351,79 @@ describe("ChatAudioPlayer", () => {
     vi.spyOn(refreshedMedia, "play").mockResolvedValue(undefined);
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     resolveFetch?.(new Response(null, { status: 500 }));
+  });
+
+  it("recovers a waveform-backed source after a renewed media ticket", async () => {
+    const intersectionCallbacks: IntersectionObserverCallback[] = [];
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          intersectionCallbacks.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const samples = new Float32Array([0, 0.5, -1, 0.25]);
+    vi.stubGlobal(
+      "AudioContext",
+      class {
+        decodeAudioData = vi.fn(async () => ({
+          duration: 4,
+          length: samples.length,
+          numberOfChannels: 1,
+          getChannelData: () => samples,
+        }));
+        close = vi.fn(async () => undefined);
+      },
+    );
+    let resolveFirstFetch: ((response: Response) => void) | undefined;
+    let fetchCount = 0;
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      fetchCount += 1;
+      if (fetchCount > 1) {
+        return new Response(null, { status: 500 });
+      }
+      return await new Promise<Response>((resolve) => {
+        resolveFirstFetch = resolve;
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:waveform-audio");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const player = await createPlayer("waveform-recovery");
+    player.serverDurationMs = 4_000;
+    await player.updateComplete;
+    intersectionCallbacks.shift()?.(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      {} as IntersectionObserver,
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    resolveFirstFetch?.(
+      new Response(new Uint8Array([1, 2, 3, 4]), {
+        status: 200,
+        headers: { "Content-Type": "audio/mpeg", "Content-Length": "4" },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(player.querySelector("audio")?.getAttribute("src")).toBe("blob:waveform-audio"),
+    );
+
+    const media = player.querySelector("audio")!;
+    Object.defineProperty(media, "error", { configurable: true, value: {} as MediaError });
+    media.dispatchEvent(new Event("error"));
+    await player.updateComplete;
+    expect(player.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
+
+    player.src = "https://example.com/waveform-recovery.mp3?mediaTicket=recovered";
+    await player.updateComplete;
+    await vi.waitFor(() =>
+      expect(player.querySelector("audio")?.getAttribute("src")).toBe(
+        "https://example.com/waveform-recovery.mp3?mediaTicket=recovered",
+      ),
+    );
+    expect(player.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
   });
 
   it("skips waveform work without a server-probed duration", async () => {

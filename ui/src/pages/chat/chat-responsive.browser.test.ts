@@ -57,7 +57,6 @@ let cachedUiCss: string | null = null;
 const SHARED_APP_CONTEXT_TEXT = "Context hover regression fixture.";
 const SHARED_APP_SLASH_TEXT = "Short landscape slash command keyboard regression fixture.";
 const SHARED_APP_IMAGE_URL = "https://cdn.example/render%2Epng?download=1";
-const SHARED_APP_VIDEO_URL = "https://cdn.example/clip%252Emp4?download=1";
 const SHARED_APP_ATTACHMENT_OUTCOME_TEXT = "Mixed attachment outcome fixture.";
 const SHARED_APP_TTS_TEXT = "Audio generated and delivered via native TTS.";
 const SHARED_APP_PLAYBACK_MEDIA = [
