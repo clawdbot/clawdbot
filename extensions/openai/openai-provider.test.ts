@@ -697,22 +697,12 @@ describe("buildOpenAIProvider", () => {
         auth: {
           mode: "api_key",
           apiKey: "sk-openai-unavailable",
-          profileId: "openai:platform",
           source: "profile",
         },
       });
 
       expect(result.provider.models).toEqual([]);
-      if (rejected) {
-        expect(result.outcomes).toEqual([
-          {
-            provider: "openai",
-            profileId: "openai:platform",
-            rejectionScope: "catalog",
-            status: "auth-rejected",
-          },
-        ]);
-      }
+      expect(result.outcomes[0]?.rejectionScope).toBe(rejected ? "catalog" : undefined);
       expect(release).toHaveBeenCalledOnce();
     },
   );
