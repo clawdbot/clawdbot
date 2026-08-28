@@ -9,14 +9,12 @@ import {
   getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
-import {
-  readPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndexSync,
-} from "./installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-import { refreshPluginRegistry } from "./plugin-registry.js";
+import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
 import {
   buildPluginDiagnosticsReport,
