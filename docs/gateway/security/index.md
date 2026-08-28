@@ -5,7 +5,7 @@ read_when:
 title: "Security"
 ---
 
-<Warning>
+<Note>
   **One trust boundary per gateway.** This guidance assumes one trusted
   boundary per gateway: a single operator, or a team whose members trust
   each other. Group chats and [multi-user](/concepts/multi-user) operation
@@ -14,7 +14,7 @@ title: "Security"
   agent or gateway. For mixed-trust or adversarial-user operation, split
   trust boundaries: separate gateway + credentials, ideally separate OS
   users or hosts.
-</Warning>
+</Note>
 
 ## Scope: one trust boundary per gateway
 
@@ -258,9 +258,9 @@ What helps in practice:
 
 **Model choice matters.** Prompt-injection resistance is not uniform across model tiers - smaller/cheaper models are more susceptible to tool misuse and instruction hijacking under adversarial prompts.
 
-<Warning>
+<Note>
 For tool-enabled agents or agents that read untrusted content, prompt-injection risk with older/smaller models is often too high. Do not run those workloads on weak model tiers.
-</Warning>
+</Note>
 
 - Use the latest-generation, best-tier model for any bot that can run tools or touch files/networks.
 - Do not use older/weaker/smaller tiers for tool-enabled agents or untrusted inboxes.
@@ -371,9 +371,9 @@ Agent workspace access inside the sandbox (`agents.defaults.sandbox.workspaceAcc
 
 Extra `sandbox.docker.binds` are validated against normalized, canonicalized source paths. A blocked-path denylist covers `/etc`, `/private/etc`, `/proc`, `/sys`, `/dev`, `/root`, `/boot`, and directories that commonly contain or alias the Docker socket (`/run`, `/var/run`, and `docker.sock` under them), plus HOME credential subpaths (`.aws`, `.cargo`, `.config`, `.docker`, `.gnupg`, `.netrc`, `.npm`, `.ssh`). Parent-symlink tricks and canonical home aliases are resolved through existing ancestors and re-checked, so they still fail closed if they resolve into a blocked root.
 
-<Warning>
+<Note>
 `tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and do not enable it for strangers. Further restrict per agent via `agents.entries.*.tools.elevated`. See [Elevated mode](/tools/elevated).
-</Warning>
+</Note>
 
 ### Sub-agent delegation guardrail
 
