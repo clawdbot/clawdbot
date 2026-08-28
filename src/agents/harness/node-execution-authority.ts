@@ -19,6 +19,7 @@ type SessionNodeInvocation = NonNullable<
 export function createSessionNodeInvocation(
   attempt: HostAttempt,
   pluginId: string,
+  requiredNodeCommands: ReadonlySet<string>,
   assertActive: () => void,
   signal: AbortSignal,
 ): SessionNodeInvocation | undefined {
@@ -52,7 +53,10 @@ export function createSessionNodeInvocation(
     storePath: target.storePath,
   };
   return async (request, invoke) => {
-    if (request.source === "session-full" && !admittedFull) {
+    if (
+      request.source === "session-full" &&
+      (!admittedFull || !requiredNodeCommands.has(request.command))
+    ) {
       return undefined;
     }
     const assertCurrent = () => {
@@ -63,7 +67,8 @@ export function createSessionNodeInvocation(
         signal.aborted ||
         getActivePluginRegistry() !== gatewayRegistry ||
         pluginOwners.some((isCurrent) => !isCurrent?.()) ||
-        (request.source === "session-full" && attempt.permissionMode !== "full") ||
+        (request.source === "session-full" &&
+          (attempt.permissionMode !== "full" || !requiredNodeCommands.has(request.command))) ||
         (resolveContext && resolveContext() !== context) ||
         request.pluginId !== pluginId ||
         !entry ||

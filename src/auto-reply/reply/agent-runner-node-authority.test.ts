@@ -45,7 +45,17 @@ afterEach(async () => {
 
 describe("webchat admission to plugin node duplex authority", () => {
   const cases = [
-    ...(["full", "shared", "workspace", "raw"] as const).map((mode) => ({
+    ...(
+      [
+        "full",
+        "shared",
+        "workspace",
+        "raw",
+        "unrelated-command",
+        "missing-descriptor",
+        "expanded-descriptor",
+      ] as const
+    ).map((mode) => ({
       mode,
       phase: "startup" as const,
     })),
@@ -112,8 +122,16 @@ describe("webchat admission to plugin node duplex authority", () => {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
       };
+      const command =
+        mode === "unrelated-command" || mode === "expanded-descriptor" ? "demo.other" : "demo.read";
+      const requiredNodeCommands = mode === "missing-descriptor" ? undefined : ["demo.read"];
       const node = createNodeSession();
-      const { context, invoke } = createContext({ nodeSession: node });
+      node.declaredCommands = ["demo.read", "demo.other"];
+      node.commands = [...node.declaredCommands];
+      const { context, invoke } = createContext({
+        nodeSession: node,
+        getRuntimeConfig: () => ({ gateway: { nodes: { commands: { allow: node.commands } } } }),
+      });
       let currentContext: GatewayRequestContext | undefined = context;
       context.resolveGatewayContext = () => currentContext;
       const registry = createEmptyPluginRegistry();
@@ -126,18 +144,25 @@ describe("webchat admission to plugin node duplex authority", () => {
         configSchema: true,
       });
       registry.plugins.push(record);
-      registry.nodeHostCommands.push({
-        pluginId: record.id,
-        source: "fixture",
-        command: { command: "demo.read", dangerous: true, duplex: true, handle: async () => "{}" },
-      });
+      for (const declaredCommand of node.commands) {
+        registry.nodeHostCommands.push({
+          pluginId: record.id,
+          source: "fixture",
+          command: {
+            command: declaredCommand,
+            dangerous: true,
+            duplex: true,
+            handle: async () => "{}",
+          },
+        });
+      }
       const prompt = vi.fn();
       let revoke = async () => {};
       registry.nodeInvokePolicies.push({
         pluginId: record.id,
         source: "fixture",
         policy: {
-          commands: ["demo.read"],
+          commands: [...node.commands],
           async handle(policy) {
             await Promise.resolve();
             if (phase === "policy") {
@@ -172,7 +197,7 @@ describe("webchat admission to plugin node duplex authority", () => {
                 context: options.context,
                 client: options.client,
                 nodeSession: node,
-                command: "demo.read",
+                command,
                 params: options.params.params,
                 sessionKey: options.params.sessionKey as string,
                 nodeInvokeStream: options.client?.internal?.nodeInvokeStream,
@@ -260,13 +285,20 @@ describe("webchat admission to plugin node duplex authority", () => {
                   workspaceDir: params.workspaceDir,
                 },
                 pluginId: record.id,
+                requiredNodeCommands,
               });
+              if (mode === "expanded-descriptor") {
+                requiredNodeCommands?.push("demo.other");
+              }
               revoke = async () => {
                 switch (mode) {
                   case "full":
                   case "shared":
                   case "workspace":
                   case "raw":
+                  case "unrelated-command":
+                  case "missing-descriptor":
+                  case "expanded-descriptor":
                     break;
                   case "permission":
                     await upsertSessionEntryCore(sessionTarget, { permissionMode: "workspace" });
@@ -332,7 +364,7 @@ describe("webchat admission to plugin node duplex authority", () => {
                         try {
                           const input = {
                             nodeId: node.nodeId,
-                            command: "demo.read",
+                            command,
                             params: workspace,
                             sessionKey: SESSION_KEY,
                           };
@@ -394,10 +426,16 @@ describe("webchat admission to plugin node duplex authority", () => {
         expect(invoke.mock.calls[0]?.[0]).toMatchObject({
           params: { placement: workspace, authorization: "session-full" },
         });
-      } else if (mode === "workspace" || mode === "raw") {
+      } else if (
+        mode === "workspace" ||
+        mode === "raw" ||
+        mode === "unrelated-command" ||
+        mode === "missing-descriptor" ||
+        mode === "expanded-descriptor"
+      ) {
+        expect(invoke).not.toHaveBeenCalled();
         expect(launchErrors).toEqual(["one-time approval required"]);
         expect(prompt).toHaveBeenCalledOnce();
-        expect(invoke).not.toHaveBeenCalled();
       } else {
         expect(launchErrors).toHaveLength(1);
         expect(launchErrors[0]).toMatch(/no longer (active|current)/);

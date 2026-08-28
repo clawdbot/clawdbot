@@ -22,6 +22,7 @@ type PluginRuntimeGatewayRequestScope = {
   invokeWithSessionNodeAuthority?: <T>(
     request: {
       pluginId: string;
+      command: string;
       source: "session-full" | "human-approved";
       nodeId: string;
       workspace: OpenClawPluginNodeWorkspace;

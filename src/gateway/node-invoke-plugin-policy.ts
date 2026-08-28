@@ -599,6 +599,7 @@ export async function applyPluginNodeInvokePolicy(params: {
       ? ownedInvocation(
           {
             pluginId: entry.pluginId,
+            command: params.command,
             nodeId: params.nodeSession.nodeId,
             workspace: override.workspace,
             source,

@@ -262,7 +262,7 @@ export type OpenClawPluginNodeInvokePolicyContext = {
     family: string;
   };
   approvals?: OpenClawPluginNodeInvokePolicyApprovalRuntime;
-  /** Invoke only under the exact admitted Full owner; undefined requires a human decision. */
+  /** Full covers only the selected harness's declared node commands; undefined requires a human decision. */
   invokeNodeWithSessionFull?: (input: {
     workspace: OpenClawPluginNodeWorkspace;
     /** Called only after the host authorizes this exact admitted Full launch. */

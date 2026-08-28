@@ -193,7 +193,11 @@ describe("agent harness host capability", () => {
         });
         let currentContext = context;
         bindGatewayContextResolver(attempt.admittedRunContext, () => currentContext);
-        const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "fixture" });
+        const host = createAgentHarnessHostCapabilities({
+          attempt,
+          pluginId: "fixture",
+          requiredNodeCommands: ["fixture.exec"],
+        });
         const dispatched = vi.fn(async () => "launched");
         await withPluginRuntimeGatewayRequestScope(
           { isWebchatConnect: () => false, assertNodeExecutionCurrent: assertPlacementCurrent },
@@ -206,6 +210,7 @@ describe("agent harness host capability", () => {
               const result = invoke!(
                 {
                   source: "session-full",
+                  command: "fixture.exec",
                   pluginId: change === "plugin" ? "other" : "fixture",
                   nodeId: "node-1",
                   workspace: {

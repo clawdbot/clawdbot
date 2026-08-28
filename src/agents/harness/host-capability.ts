@@ -162,12 +162,16 @@ function createBoundCallerIdentity(params: AgentHarnessHostAttempt, receiptAutho
 export function createAgentHarnessHostCapabilities(params: {
   attempt: AgentHarnessHostAttempt;
   pluginId: string;
+  requiredNodeCommands?: readonly string[];
 }): {
   capabilities: AgentHarnessHostCapabilities;
   close: () => void;
   runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   const attempt = params.attempt;
+  // Capture the selected harness declaration before plugin code can mutate it.
+  // Full must not cover other commands merely because the same plugin owns them.
+  const requiredNodeCommands = new Set(params.requiredNodeCommands);
   const operationalRunInstance = attempt.admittedRunContext.operationalRunInstance;
   const delegatedAuthority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
   if (!delegatedAuthority) {
@@ -443,6 +447,7 @@ export function createAgentHarnessHostCapabilities(params: {
           invokeWithSessionNodeAuthority: createSessionNodeInvocation(
             attempt,
             params.pluginId,
+            requiredNodeCommands,
             assertActive,
             attempt.abortSignal
               ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
