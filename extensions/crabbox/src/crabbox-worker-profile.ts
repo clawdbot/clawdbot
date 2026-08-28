@@ -186,6 +186,11 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   if (warmImage !== undefined && typeof warmImage !== "boolean") {
     throw new WorkerProviderError("Crabbox profile warmImage must be a boolean");
   }
+  // Capture defaults on so repeat sessions start warm. `setupEnv` is the declared channel
+  // that forwards host environment values into setup, so those profiles can derive
+  // credentials that outlive the scrub inside a shared provider image; they keep requiring
+  // an explicit opt-in. An explicit warmImage always wins over this derived default.
+  const warmImageDefault = !setupEnv?.length;
   return {
     binary,
     class: machineClass,
@@ -200,7 +205,7 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
     setup,
     setupEnv,
     ttl,
-    warmImage: warmImage ?? false,
+    warmImage: warmImage ?? warmImageDefault,
   };
 }
 
