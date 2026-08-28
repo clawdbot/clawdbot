@@ -36,6 +36,7 @@ import {
   clearActivePluginRegistry,
   getActivePluginRegistry,
   setActivePluginRegistry,
+  stageActivePluginRegistry,
 } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -94,7 +95,8 @@ describe("cached plugin load failures", () => {
     );
 
     const active = createEmptyPluginRegistry();
-    setActivePluginRegistry(active, "existing-registry");
+    // Staging preserves the cached generation until a successor commits its retirement.
+    stageActivePluginRegistry(active, "existing-registry", "default");
 
     expect(() => load({ ...options, throwOnLoadError: true })).toThrow(
       "cached registration failed",
@@ -398,55 +400,73 @@ describe("resolveRuntimePluginRegistry", () => {
 });
 
 describe("clearPluginRegistryLoadCache", () => {
-  it("rebuilds plugin registrations after runtime retirement with unchanged load options", async () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "retirement-probe",
-      body: `module.exports = {
+  it.each(["clear", "replacement"])(
+    "rebuilds plugin registrations after runtime %s with unchanged load options",
+    async (retirement) => {
+      useNoBundledPlugins();
+      const plugin = writePlugin({
         id: "retirement-probe",
-        register(api) {
-          let closed = false;
-          api.registerRuntimeLifecycle({ id: "close", cleanup() { closed = true; } });
-          api.registerTool({
-            name: "retirement_probe", description: "Read fixture lifetime",
-            parameters: { type: "object", properties: {} },
-            execute() { return { content: [{ type: "text", text: closed ? "closed" : "live" }] }; },
-          });
+        body: `module.exports = {
+          id: "retirement-probe",
+          register(api) {
+            let closed = false;
+            api.registerRuntimeLifecycle({ id: "close", cleanup() { closed = true; } });
+            api.registerTool({
+              name: "retirement_probe", description: "Read fixture lifetime",
+              parameters: { type: "object", properties: {} },
+              execute() { return { content: [{ type: "text", text: closed ? "closed" : "live" }] }; },
+            });
+          },
+        };`,
+      });
+      writeFileSync(
+        path.join(plugin.dir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: plugin.id,
+          configSchema: { type: "object", additionalProperties: false, properties: {} },
+          contracts: { tools: ["retirement_probe"] },
+        }),
+      );
+      const options = {
+        config: {
+          plugins: {
+            allow: [plugin.id],
+            load: { paths: [plugin.file] },
+            slots: { memory: "none" },
+          },
         },
-      };`,
-    });
-    writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: plugin.id,
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-        contracts: { tools: ["retirement_probe"] },
-      }),
-    );
-    const options = {
-      config: {
-        plugins: { allow: [plugin.id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
-      },
-    };
-    const read = async (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-      const tool = registry.tools[0]!.factory({ config: options.config });
-      if (!tool || Array.isArray(tool)) {
-        throw new Error("expected one lifetime probe tool");
+      };
+      const read = async (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        const tool = registry.tools[0]!.factory({ config: options.config });
+        if (!tool || Array.isArray(tool)) {
+          throw new Error("expected one lifetime probe tool");
+        }
+        return await tool.execute("probe", {});
+      };
+      const original = loadOpenClawPlugins(options);
+      expect(loadOpenClawPlugins(options)).toBe(original);
+      expect(await read(original)).toMatchObject({ content: [{ text: "live" }] });
+
+      if (retirement === "clear") {
+        await clearActivePluginRegistry();
+      } else {
+        const replacementOptions = { ...options, workspaceDir: makePluginLoaderTempDir() };
+        const replacement = loadOpenClawPlugins(replacementOptions);
+        expect(replacement).not.toBe(original);
+        expect(await read(replacement)).toMatchObject({ content: [{ text: "live" }] });
+        await vi.waitFor(async () => {
+          expect(await read(original)).toMatchObject({ content: [{ text: "closed" }] });
+        });
+        expect(loadOpenClawPlugins(replacementOptions)).toBe(replacement);
       }
-      return await tool.execute("probe", {});
-    };
-    const original = loadOpenClawPlugins(options);
-    expect(loadOpenClawPlugins(options)).toBe(original);
-    expect(await read(original)).toMatchObject({ content: [{ text: "live" }] });
 
-    await clearActivePluginRegistry();
-
-    expect(await read(original)).toMatchObject({ content: [{ text: "closed" }] });
-    const reloaded = loadOpenClawPlugins(options);
-    expect(await read(reloaded)).toMatchObject({ content: [{ text: "live" }] });
-    expect(reloaded).not.toBe(original);
-    expect(loadOpenClawPlugins(options)).toBe(reloaded);
-  });
+      expect(await read(original)).toMatchObject({ content: [{ text: "closed" }] });
+      const reloaded = loadOpenClawPlugins(options);
+      expect(await read(reloaded)).toMatchObject({ content: [{ text: "live" }] });
+      expect(reloaded).not.toBe(original);
+      expect(loadOpenClawPlugins(options)).toBe(reloaded);
+    },
+  );
 
   it("preserves plugin-owned runtime registries while invalidating load snapshots", () => {
     registerEmbeddingProvider({
