@@ -3,8 +3,8 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { acquireTelegramTestCredential } from "./telegram-test-credential.mjs";
 import { startTelegramTestApiProxy } from "./telegram-test-api-proxy.mjs";
+import { acquireTelegramTestCredential } from "./telegram-test-credential.mjs";
 
 const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const USER_DRIVER_PATH = path.join(SKILL_DIR, "scripts", "user-driver.py");

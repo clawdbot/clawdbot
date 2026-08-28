@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { acquireQaLease } from "./qa-credential-lease.mjs";
 
-export const TELEGRAM_TEST_CREDENTIAL_KIND = "telegram-test-userbot";
+const TELEGRAM_TEST_CREDENTIAL_KIND = "telegram-test-userbot";
 
 function requireObject(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {

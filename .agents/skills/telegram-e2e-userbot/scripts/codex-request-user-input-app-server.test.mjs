@@ -14,7 +14,10 @@ test("requests native user input and completes with the selected answer", async 
     new URL("./codex-request-user-input-app-server.mjs", import.meta.url),
   );
   const child = spawn(process.execPath, [fixturePath], {
-    env: { ...process.env, OPENCLAW_CODEX_REQUEST_USER_INPUT_LOG: path.join(temp, "messages.ndjson") },
+    env: {
+      ...process.env,
+      OPENCLAW_CODEX_REQUEST_USER_INPUT_LOG: path.join(temp, "messages.ndjson"),
+    },
     stdio: ["pipe", "pipe", "inherit"],
   });
   context.after(() => child.kill("SIGTERM"));
@@ -37,9 +40,7 @@ test("requests native user input and completes with the selected answer", async 
   send({ id: 2, method: "thread/start", params: { cwd: temp } });
   await waitFor((message) => message.id === 2);
   send({ id: 3, method: "turn/start", params: {} });
-  const question = await waitFor(
-    (message) => message.method === "item/tool/requestUserInput",
-  );
+  const question = await waitFor((message) => message.method === "item/tool/requestUserInput");
   send({ id: question.id, result: { answers: { mode: { answers: ["Deep"] } } } });
   const completed = await waitFor((message) => message.method === "item/completed");
   assert.equal(completed.params.item.text, "CODEX_REQUEST_USER_INPUT_ANSWER=Deep");
@@ -74,7 +75,11 @@ test("emits protocol-faithful commentary and interrupts a held turn", async (con
     throw new Error(`fixture response timed out: ${JSON.stringify(messages)}`);
   };
 
-  send({ id: 1, method: "turn/start", params: { input: [{ type: "text", text: "OPENCLAW_E2E_CODEX_COMMENTARY" }] } });
+  send({
+    id: 1,
+    method: "turn/start",
+    params: { input: [{ type: "text", text: "OPENCLAW_E2E_CODEX_COMMENTARY" }] },
+  });
   const commentary = await waitFor(
     (message) => message.method === "item/completed" && message.params.item.phase === "commentary",
   );
@@ -83,17 +88,31 @@ test("emits protocol-faithful commentary and interrupts a held turn", async (con
     (message) => message.method === "turn/completed" && message.params.turn.status === "completed",
   );
 
-  send({ id: 2, method: "turn/start", params: { input: [{ type: "text", text: "OPENCLAW_E2E_CODEX_LONG_TURN" }] } });
+  send({
+    id: 2,
+    method: "turn/start",
+    params: { input: [{ type: "text", text: "OPENCLAW_E2E_CODEX_LONG_TURN" }] },
+  });
   await waitFor((message) => message.id === 2);
-  send({ id: 3, method: "turn/interrupt", params: { threadId: "thread-telegram-request-user-input" } });
+  send({
+    id: 3,
+    method: "turn/interrupt",
+    params: { threadId: "thread-telegram-request-user-input" },
+  });
   const interrupted = await waitFor(
-    (message) => message.method === "turn/completed" && message.params.turn.status === "interrupted",
+    (message) =>
+      message.method === "turn/completed" && message.params.turn.status === "interrupted",
   );
   assert.equal(interrupted.params.turn.id, "turn-telegram-request-user-input-2");
 
-  send({ id: 4, method: "turn/start", params: { input: [{ type: "text", text: "OPENCLAW_E2E_CODEX_EXPECTED_CHECK" }] } });
+  send({
+    id: 4,
+    method: "turn/start",
+    params: { input: [{ type: "text", text: "OPENCLAW_E2E_CODEX_EXPECTED_CHECK" }] },
+  });
   const failedCheck = await waitFor(
-    (message) => message.method === "item/completed" && message.params.item.type === "commandExecution",
+    (message) =>
+      message.method === "item/completed" && message.params.item.type === "commandExecution",
   );
   assert.equal(failedCheck.params.item.exitCode, 1);
   assert.equal(failedCheck.params.item.status, "failed");

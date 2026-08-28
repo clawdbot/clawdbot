@@ -20,7 +20,7 @@ export class QaCredentialBrokerError extends Error {
   }
 }
 
-export function brokerConfig(env = process.env) {
+function brokerConfig(env = process.env) {
   const siteUrl = env.OPENCLAW_QA_CONVEX_SITE_URL?.trim();
   const secret = env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim();
   if (!siteUrl || !secret) {

@@ -301,10 +301,13 @@ function draftThenExecEvents() {
 }
 
 function countFunctionOutputs(value) {
-  if (Array.isArray(value)) return value.reduce((total, item) => total + countFunctionOutputs(item), 0);
+  if (Array.isArray(value))
+    return value.reduce((total, item) => total + countFunctionOutputs(item), 0);
   if (!value || typeof value !== "object") return 0;
-  return (value.type === "function_call_output" ? 1 : 0) +
-    Object.values(value).reduce((total, item) => total + countFunctionOutputs(item), 0);
+  return (
+    (value.type === "function_call_output" ? 1 : 0) +
+    Object.values(value).reduce((total, item) => total + countFunctionOutputs(item), 0)
+  );
 }
 
 const server = http.createServer((request, response) => {
@@ -355,14 +358,21 @@ const server = http.createServer((request, response) => {
     }
     if (scenario === "tool-search-double-wrap") {
       const outputCount = countFunctionOutputs(body.input);
-      writeEvents(response, outputCount < 2 ? toolCallEvents(outputCount) : responseEvents("NO_REPLY"));
+      writeEvents(
+        response,
+        outputCount < 2 ? toolCallEvents(outputCount) : responseEvents("NO_REPLY"),
+      );
       return;
     }
     if (scenario === "model-fallback-room") {
       if (body.model === "primary") {
         response.setHeader("retry-after-ms", "0");
         writeJson(response, 503, {
-          error: { type: "server_error", code: "server_error", message: "PRIMARY_ROUTE_UNAVAILABLE" },
+          error: {
+            type: "server_error",
+            code: "server_error",
+            message: "PRIMARY_ROUTE_UNAVAILABLE",
+          },
         });
         return;
       }
@@ -435,10 +445,7 @@ const server = http.createServer((request, response) => {
     }
     if (scenario === "terminal-no-reply-drops-draft") {
       const outputCount = countFunctionOutputs(body.input);
-      writeEvents(
-        response,
-        outputCount === 0 ? draftThenExecEvents() : responseEvents("NO_REPLY"),
-      );
+      writeEvents(response, outputCount === 0 ? draftThenExecEvents() : responseEvents("NO_REPLY"));
       return;
     }
     if (scenario === "terminal-failure-after-success") {

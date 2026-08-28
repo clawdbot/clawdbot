@@ -131,7 +131,9 @@ const server = http.createServer((request, response) => {
     }
     writeEvents(response, responseEvents(heartbeat ? "HEARTBEAT_FIXTURE_DONE" : "ROUTE_READY"));
   })().catch((error) => {
-    writeJson(response, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
+    writeJson(response, 500, {
+      error: { message: error instanceof Error ? error.message : String(error) },
+    });
   });
 });
 

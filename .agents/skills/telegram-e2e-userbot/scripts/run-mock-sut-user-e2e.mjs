@@ -40,10 +40,7 @@ const CHILD_ENV_DENIED_PREFIXES = [
   "GITHUB_",
   "OPENCLAW_QA_CONVEX_",
 ];
-const CHILD_ENV_DENIED_KEYS = new Set([
-  "TELEGRAM_E2E_STATE_DIR",
-  "TELEGRAM_USER_DRIVER_STATE_DIR",
-]);
+const CHILD_ENV_DENIED_KEYS = new Set(["TELEGRAM_E2E_STATE_DIR", "TELEGRAM_USER_DRIVER_STATE_DIR"]);
 const CHILD_ENV_SECRET_KEY =
   /(?:^|_)(?:ACCESS_KEY|API_KEY|AUTH|COOKIE|CREDENTIAL|PASS|PASSWORD|PRIVATE_KEY|SECRET|SESSION|TOKEN)(?:_|$)/u;
 let activeCredential;
@@ -62,11 +59,7 @@ export function sanitizeChildEnvironment(env = process.env) {
   );
 }
 
-function createControlEnvironment({
-  baseEnv = process.env,
-  configPath,
-  stateDir,
-}) {
+function createControlEnvironment({ baseEnv = process.env, configPath, stateDir }) {
   return {
     ...sanitizeChildEnvironment(baseEnv),
     OPENCLAW_CONFIG_PATH: configPath,
@@ -503,14 +496,16 @@ async function sutIdentity(sutToken) {
 
 function spawnProcess(command, args, options) {
   assertRunnerActive();
-  const child = ownChild(spawn(command, args, {
-    cwd: options.cwd,
-    // Readiness detection regex-matches child output; ANSI color between
-    // "[gateway]" and "ready" breaks it, so force plain logs.
-    env: { ...options.env, NO_COLOR: "1", FORCE_COLOR: "0" },
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  }));
+  const child = ownChild(
+    spawn(command, args, {
+      cwd: options.cwd,
+      // Readiness detection regex-matches child output; ANSI color between
+      // "[gateway]" and "ready" breaks it, so force plain logs.
+      env: { ...options.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   child.output = "";
@@ -525,11 +520,13 @@ function spawnProcess(command, args, options) {
 function runCommand(command, args, options) {
   return new Promise((resolveRun) => {
     assertRunnerActive();
-    const child = ownChild(spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    }));
+    const child = ownChild(
+      spawn(command, args, {
+        cwd: options.cwd,
+        env: options.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    );
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -1043,11 +1040,13 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       for (const value of args.expect) probeArgs.push("--expect", value);
       if (args.anySutReply) probeArgs.push("--any-sut-reply");
     }
-    const probe = ownChild(spawn("uv", probeArgs, {
-      cwd: repoRoot,
-      env: driverEnv,
-      stdio: ["inherit", "pipe", "pipe"],
-    }));
+    const probe = ownChild(
+      spawn("uv", probeArgs, {
+        cwd: repoRoot,
+        env: driverEnv,
+        stdio: ["inherit", "pipe", "pipe"],
+      }),
+    );
     let recorderStdout = "";
     let recorderStderr = "";
     probe.stdout.setEncoding("utf8");

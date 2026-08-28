@@ -174,7 +174,9 @@ test("ends on NO_REPLY after a successful tool and failed terminal tool", async 
 test("self-narrates cron delivery only without recipient-only guidance", async () => {
   const server = await startFixture("cron-self-narration");
   try {
-    const oldPrompt = await post({ input: [{ text: "Your response will be delivered automatically." }] });
+    const oldPrompt = await post({
+      input: [{ text: "Your response will be delivered automatically." }],
+    });
     assert.match(await oldPrompt.text(), /I sent the user/u);
     const repairedPrompt = await post({
       input: [{ text: "Write only the exact user-facing message to send." }],
