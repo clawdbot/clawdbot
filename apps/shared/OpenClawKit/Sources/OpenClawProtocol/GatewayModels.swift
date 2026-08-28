@@ -24569,21 +24569,18 @@ public struct PluginsInstallParamsClawhub: Codable, Sendable {
     public let source: String
     public let packagename: String
     public let version: String?
-    public let acknowledgeclawhubrisk: Bool?
     public let acknowledgeinstallpolicywarning: Bool?
     public let acknowledgecapabilities: [String: AnyCodable]?
 
     public init(
         packagename: String,
         version: String? = nil,
-        acknowledgeclawhubrisk: Bool? = nil,
         acknowledgecapabilities: [String: AnyCodable]? = nil
     )
     {
         self.source = "clawhub"
         self.packagename = packagename
         self.version = version
-        self.acknowledgeclawhubrisk = acknowledgeclawhubrisk
         self.acknowledgeinstallpolicywarning = true
         self.acknowledgecapabilities = acknowledgecapabilities
     }
@@ -24592,7 +24589,6 @@ public struct PluginsInstallParamsClawhub: Codable, Sendable {
         case source
         case packagename = "packageName"
         case version
-        case acknowledgeclawhubrisk = "acknowledgeClawHubRisk"
         case acknowledgeinstallpolicywarning = "acknowledgeInstallPolicyWarning"
         case acknowledgecapabilities = "acknowledgeCapabilities"
     }
@@ -24601,7 +24597,7 @@ public struct PluginsInstallParamsClawhub: Codable, Sendable {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["source", "packageName", "version", "acknowledgeClawHubRisk", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities"]).contains($0) }
+            .filter { !Set(["source", "packageName", "version", "acknowledgeInstallPolicyWarning", "acknowledgeCapabilities"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -24622,7 +24618,6 @@ public struct PluginsInstallParamsClawhub: Codable, Sendable {
         self.source = "clawhub"
         self.packagename = try container.decode(String.self, forKey: .packagename)
         self.version = try container.decodeIfPresent(String.self, forKey: .version)
-        self.acknowledgeclawhubrisk = try container.decodeIfPresent(Bool.self, forKey: .acknowledgeclawhubrisk)
         let decodedAcknowledgeinstallpolicywarning = try container.decode(Bool.self, forKey: .acknowledgeinstallpolicywarning)
         guard decodedAcknowledgeinstallpolicywarning == true else {
             throw DecodingError.dataCorruptedError(
@@ -24640,7 +24635,6 @@ public struct PluginsInstallParamsClawhub: Codable, Sendable {
         try container.encode("clawhub", forKey: .source)
         try container.encode(packagename, forKey: .packagename)
         try container.encodeIfPresent(version, forKey: .version)
-        try container.encodeIfPresent(acknowledgeclawhubrisk, forKey: .acknowledgeclawhubrisk)
         try container.encode(true, forKey: .acknowledgeinstallpolicywarning)
         try container.encodeIfPresent(acknowledgecapabilities, forKey: .acknowledgecapabilities)
     }
