@@ -4,7 +4,13 @@ extension ExecHostExecutor {
     static func commandResponse(
         execution: Task<ShellExecutor.ShellResult, Never>) async -> ExecHostResponse
     {
-        let result = await execution.value
+        // Enqueuing stays adjacent to the approval commit; awaiting a detached
+        // task alone does not propagate the request's cancellation into it.
+        let result = await withTaskCancellationHandler {
+            await execution.value
+        } onCancel: {
+            execution.cancel()
+        }
         if let preflightError = result.preflightError {
             return self.errorResponse(
                 code: "UNAVAILABLE",
@@ -19,6 +25,13 @@ extension ExecHostExecutor {
             stderr: ExecHostOutputLimiter.truncate(result.stderr),
             error: result.errorMessage)
         return self.successResponse(payload)
+    }
+
+    static func cancelledResponse() -> ExecHostResponse {
+        self.errorResponse(
+            code: "UNAVAILABLE",
+            message: "SYSTEM_RUN_CANCELLED: execution cancelled",
+            reason: "cancelled")
     }
 
     static func errorResponse(_ error: ExecHostError) -> ExecHostResponse {

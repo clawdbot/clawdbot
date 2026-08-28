@@ -155,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var profileInstanceLock: AppInstanceLock?
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     private static func cleanUpProcesses() async {
+        let execHostCleanup = ExecApprovalsPromptServer.shared.stop()
         // Start tunnel retirement before helper drains can consume the quit deadline.
         async let tunnelCleanup: Void = RemoteTunnelManager.shared.shutdown()
         async let gatewayCleanup: Void = GatewayConnection.shared.shutdown()
@@ -166,6 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         await TalkMLXSpeechSynthesizer.shared.shutdown()
         await MacNodeModeCoordinator.shared.stopAndWait()
         _ = await (tunnelCleanup, gatewayCleanup, profileCleanup)
+        await execHostCleanup?.value
     }
 
     var openDashboardAction: @MainActor () -> Void = { AppNavigationActions.openDashboard() }
