@@ -115,9 +115,9 @@ export async function withCodexPluginCommandContext<T>(
     });
     await validateCurrent();
     const result = await run({
-      request: async <T>(method: string, requestParams?: unknown): Promise<T> => {
+      request: async <TResponse>(method: string, requestParams?: unknown): Promise<TResponse> => {
         await validateCurrent();
-        const response = await client.request<T>(method, requestParams);
+        const response = await client.request<TResponse>(method, requestParams);
         // A delayed response must not publish into a cache after scope changes.
         await validateCurrent();
         return response;

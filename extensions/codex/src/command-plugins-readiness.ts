@@ -226,7 +226,7 @@ export function formatCodexPluginReadiness(
       text: "App details unavailable. Check the plugin in Codex, then run this status command again.",
     });
   } else {
-    const apps = [...readiness.detail.apps].sort((left, right) => left.id.localeCompare(right.id));
+    const apps = readiness.detail.apps.toSorted((left, right) => left.id.localeCompare(right.id));
     const pageCount = Math.max(1, Math.ceil(apps.length / CODEX_PLUGIN_APP_LINK_PAGE_SIZE));
     if (page > pageCount) {
       return {
@@ -272,7 +272,8 @@ export function formatCodexPluginReadiness(
           : [],
       );
       const links = visible.map((app) => ({
-        ...app,
+        id: app.id,
+        name: app.name,
         installUrl: metadataById.get(app.id)?.installUrl ?? app.installUrl,
       }));
       blocks.push(
