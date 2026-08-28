@@ -1,7 +1,6 @@
 import { consume } from "@lit/context";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   ChannelsPairingListResult,
   ChannelsPairingRequest,
@@ -18,7 +17,6 @@ import { t } from "../../i18n/index.ts";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
-import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
   GatewayPageController,
@@ -27,8 +25,8 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { fetchPluginIconBlobUrl } from "../plugins/icon-loader.ts";
 import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./nostr-profile-ops.ts";
+import { ChannelPluginPresentationController } from "./plugin-presentation-controller.ts";
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
 import { renderChannels } from "./view.ts";
 import type { ChannelPairingPrompt } from "./view.types.ts";
@@ -36,14 +34,7 @@ import { runWhatsAppLogoutConfirmation } from "./whatsapp-logout.ts";
 import { ChannelWizardHost } from "./wizard-host.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
-type PluginPresentationRequest = {
-  client: GatewayBrowserClient;
-  controller: AbortController;
-  iconTimeout?: ReturnType<typeof setTimeout>;
-};
-
 const CHANNEL_PAIRING_POLL_INTERVAL_MS = 30_000;
-const CHANNEL_PLUGIN_ICON_TIMEOUT_MS = 10_000;
 const CHANNELS_DOCS_URL = "https://docs.openclaw.ai/channels";
 
 type NostrOperation = {
@@ -86,16 +77,11 @@ class ChannelsPage extends OpenClawLightDomElement {
   @state()
   private pairingNotice: string | null = null;
 
-  @state()
-  private showAdvancedSettings = false;
-
-  @state()
-  private pluginCatalog: PluginListResult | null = null;
-
-  @state()
-  private pluginIconUrls: Record<string, string> = {};
-
-  private pluginPresentationRequest: PluginPresentationRequest | null = null;
+  private readonly pluginPresentation = new ChannelPluginPresentationController({
+    getContext: () => this.context,
+    isConnected: () => this.isConnected,
+    requestUpdate: () => this.requestUpdate(),
+  });
 
   private readonly wizardHost = new ChannelWizardHost({
     getContext: () => this.context,
@@ -163,14 +149,12 @@ class ChannelsPage extends OpenClawLightDomElement {
         };
       },
     )
-    // The advanced tier is one global display pref; theme republishes every
-    // appearance setting, so this keeps the channel forms in sync with the
-    // toggle on the config pages.
+    // Republished theme settings keep channel forms in sync with the global advanced toggle.
     .watch(
       () => this.context?.theme,
       (theme, notify) => theme.subscribe(notify),
       () => {
-        this.showAdvancedSettings = loadSettings().showAdvancedSettings === true;
+        this.requestUpdate();
       },
     );
 
@@ -184,7 +168,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       this.clearNostrForm();
     }
     if (change.identityChanged || change.connectionChanged || snapshot.phase !== "connected") {
-      this.resetPluginPresentation();
+      this.pluginPresentation.reset();
     }
     if (
       change.identityChanged ||
@@ -235,7 +219,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       return;
     }
 
-    this.ensurePluginCatalog(client);
+    this.pluginPresentation.ensure(client);
 
     const channels = context.channels.state;
     const config = context.runtimeConfig.state;
@@ -268,94 +252,16 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.pairingAccountFilter = null;
     this.pairingNotice = null;
     this.pairingPolling.stop();
-    this.resetPluginPresentation();
+    this.pluginPresentation.reset();
     this.invalidateNostrForm();
     this.subscriptions.clear();
     this.schemaLoadStarted = false;
     super.disconnectedCallback();
   }
 
-  private ensurePluginCatalog(client: GatewayBrowserClient) {
-    if (this.pluginCatalog || this.pluginPresentationRequest?.client === client) {
-      return;
-    }
-    this.pluginPresentationRequest?.controller.abort();
-    const controller = new AbortController();
-    const request: PluginPresentationRequest = { client, controller };
-    this.pluginPresentationRequest = request;
-    void client
-      .request<PluginListResult>("plugins.list", {}, { signal: controller.signal })
-      .then(async (result) => {
-        if (
-          this.pluginPresentationRequest !== request ||
-          this.context.gateway.snapshot.client !== client
-        ) {
-          return;
-        }
-        this.pluginCatalog = result;
-        request.iconTimeout = setTimeout(
-          () => controller.abort(new DOMException("plugin icon fetch timed out", "TimeoutError")),
-          CHANNEL_PLUGIN_ICON_TIMEOUT_MS,
-        );
-        const iconEntries = await Promise.all(
-          result.plugins
-            .filter((plugin) => plugin.hasIcon)
-            .map(async (plugin) => {
-              const url = await fetchPluginIconBlobUrl({
-                pluginId: plugin.id,
-                resourceBasePath: this.context.resourceBasePath,
-                gatewayUrl: this.context.gateway.connection.gatewayUrl,
-                auth: {
-                  hello: this.context.gateway.snapshot.hello,
-                  settings: { token: this.context.gateway.connection.token },
-                  password: this.context.gateway.connection.password,
-                },
-                signal: controller.signal,
-              }).catch(() => null);
-              return [plugin.id, url] as const;
-            }),
-        );
-        const loadedUrls = Object.fromEntries(
-          iconEntries.filter((entry): entry is readonly [string, string] => entry[1] !== null),
-        );
-        if (this.pluginPresentationRequest !== request || !this.isConnected) {
-          for (const url of Object.values(loadedUrls)) {
-            URL.revokeObjectURL(url);
-          }
-          return;
-        }
-        this.pluginIconUrls = loadedUrls;
-      })
-      .catch(() => {
-        // Channel status metadata remains a complete fallback when catalog loading fails.
-      })
-      .finally(() => {
-        if (request.iconTimeout) {
-          clearTimeout(request.iconTimeout);
-        }
-        if (this.pluginPresentationRequest === request) {
-          this.pluginPresentationRequest = null;
-        }
-      });
-  }
-
-  private resetPluginPresentation() {
-    this.pluginPresentationRequest?.controller.abort();
-    if (this.pluginPresentationRequest?.iconTimeout) {
-      clearTimeout(this.pluginPresentationRequest.iconTimeout);
-    }
-    this.pluginPresentationRequest = null;
-    for (const url of Object.values(this.pluginIconUrls)) {
-      URL.revokeObjectURL(url);
-    }
-    this.pluginCatalog = null;
-    this.pluginIconUrls = {};
-  }
-
   private setShowAdvancedSettings(enabled: boolean) {
     patchSettings({ showAdvancedSettings: enabled });
-    // Republish so the config pages and this page read the same pref without a
-    // reload; patchSettings alone only writes storage and the server pref.
+    // Republish so config pages see the pref without a reload; patchSettings only writes storage.
     this.context.theme.refresh();
   }
 
@@ -759,8 +665,8 @@ class ChannelsPage extends OpenClawLightDomElement {
           connected: channels.connected,
           loading: channels.channelsLoading,
           snapshot: channels.channelsSnapshot,
-          pluginCatalog: this.pluginCatalog,
-          pluginIconUrls: this.pluginIconUrls,
+          pluginCatalog: this.pluginPresentation.pluginCatalog,
+          pluginIconUrls: this.pluginPresentation.pluginIconUrls,
           lastError: channels.channelsError,
           lastSuccessAt: channels.channelsLastSuccess,
           pairingLoading: channels.pairingLoading,
@@ -785,7 +691,7 @@ class ChannelsPage extends OpenClawLightDomElement {
           configSaving: config.configSaving,
           configError: config.lastError,
           configFormDirty: config.configFormDirty,
-          showAdvancedSettings: this.showAdvancedSettings,
+          showAdvancedSettings: loadSettings().showAdvancedSettings === true,
           nostrProfileFormState: this.nostrProfileFormState,
           nostrProfileAccountId: this.nostrProfileAccountId,
           selectedChannel: this.selectedChannel,
