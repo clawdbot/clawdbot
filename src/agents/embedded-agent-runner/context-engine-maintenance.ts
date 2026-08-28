@@ -6,7 +6,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { publishTranscriptUpdate } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
+import {
+  isContextEngineAbortRejection,
+  resolveContextEngineOwnerPluginId,
+} from "../../context-engine/registry.js";
 import type {
   ContextEngine,
   ContextEngineMaintenanceResult,
@@ -290,6 +293,7 @@ function buildContextEngineMaintenanceRuntimeContext(
 
 async function executeContextEngineMaintenance(
   params: ContextEngineMaintenanceParams & {
+    abortSignal?: AbortSignal;
     contextEngine: ContextEngine;
     executionMode: "foreground" | "background";
   },
@@ -297,6 +301,7 @@ async function executeContextEngineMaintenance(
   if (typeof params.contextEngine.maintain !== "function") {
     return undefined;
   }
+  params.abortSignal?.throwIfAborted();
   const result = await params.contextEngine.maintain({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -312,7 +317,9 @@ async function executeContextEngineMaintenance(
       purpose: `context-engine.${params.reason}.maintenance`,
       contextEnginePluginId: resolveContextEngineOwnerPluginId(params.contextEngine),
     }),
+    ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
   });
+  params.abortSignal?.throwIfAborted();
   if (result.changed) {
     log.info(
       `[context-engine] maintenance(${params.reason}) changed transcript ` +
@@ -325,12 +332,12 @@ async function executeContextEngineMaintenance(
 
 async function runDeferredTurnMaintenanceWorker(
   params: DeferredTurnMaintenanceScheduleParams & {
+    abortSignal: AbortSignal;
     runId: string;
   },
 ): Promise<void> {
   let surfacedUserNotice = false;
   let longRunningTimer: ReturnType<typeof setTimeout> | undefined;
-  const shutdownAbort = createDeferredTurnMaintenanceAbortSignal();
   const taskRun = { runId: params.runId, runtime: "acp" as const, sessionKey: params.sessionKey };
   const makeTaskVisible = (notifyPolicy: "done_only" | "state_changes") =>
     buildTurnMaintenanceTaskDescriptor({
@@ -382,7 +389,7 @@ async function runDeferredTurnMaintenanceWorker(
         : "No transcript changes were needed.",
     });
   } catch (err) {
-    if (shutdownAbort.abortSignal.aborted) {
+    if (isContextEngineAbortRejection(err, params.abortSignal)) {
       const task = findTaskByRunIdForOwner({
         runId: params.runId,
         callerOwnerKey: params.sessionKey,
@@ -419,7 +426,6 @@ async function runDeferredTurnMaintenanceWorker(
     if (longRunningTimer) {
       clearTimeout(longRunningTimer);
     }
-    shutdownAbort.dispose();
     if (params.disposeContextEngineAfterMaintenance) {
       await disposeDeferredMaintenanceContextEngine(params.contextEngine);
     }
@@ -511,7 +517,12 @@ function scheduleDeferredTurnMaintenance(
   let runPromise: Promise<void>;
   try {
     runPromise = enqueueCommandInLane(lane, () =>
-      runDeferredTurnMaintenanceWorker({ ...params, sessionKey, runId: task.runId! }),
+      runDeferredTurnMaintenanceWorker({
+        ...params,
+        abortSignal: schedulerAbort.abortSignal,
+        sessionKey,
+        runId: task.runId!,
+      }),
     );
   } catch (err) {
     releaseProcessOwner();
@@ -534,7 +545,11 @@ function scheduleDeferredTurnMaintenance(
     activeDeferredTurnMaintenanceRuns.delete(sessionKey);
     if (rerunParams) {
       await scheduleDeferredTurnMaintenance(rerunParams);
-    } else if (discardedRerunParams?.disposeContextEngineAfterMaintenance) {
+    } else if (
+      discardedRerunParams?.disposeContextEngineAfterMaintenance &&
+      (discardedRerunParams.contextEngine !== params.contextEngine ||
+        !params.disposeContextEngineAfterMaintenance)
+    ) {
       await disposeDeferredMaintenanceContextEngine(discardedRerunParams.contextEngine);
     }
   };
