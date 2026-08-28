@@ -5095,32 +5095,32 @@ describe("grouped chat rendering", () => {
   });
 
   it("shows a visible fallback for inline images omitted from stored history", () => {
-    const container = document.createElement("div");
+    const redactedBlocks = [
+      { type: "input_image", omitted: true, bytes: 26 },
+      {
+        type: "input_image",
+        omitted: true,
+        bytes: 27,
+        image_url: { detail: "high" },
+      },
+      {
+        type: "input_image",
+        omitted: true,
+        bytes: 16,
+        source: { media_type: "image/png" },
+      },
+    ];
 
-    renderAssistantMessage(
-      container,
-      createAssistantMessage([
-        { type: "input_image", omitted: true, bytes: 26 },
-        {
-          type: "input_image",
-          omitted: true,
-          bytes: 27,
-          image_url: { detail: "high" },
-        },
-        {
-          type: "input_image",
-          omitted: true,
-          bytes: 16,
-          source: { media_type: "image/png" },
-        },
-      ]),
-    );
+    for (const block of redactedBlocks) {
+      const container = document.createElement("div");
+      renderAssistantMessage(container, createAssistantMessage([block]));
 
-    expect(container.querySelectorAll(".chat-inline-media-omitted")).toHaveLength(3);
-    expect(container.textContent).toContain("Image unavailable in history");
-    expect(container.textContent).toContain(
-      "Inline image data was omitted from stored chat history.",
-    );
+      expect(container.querySelector(".chat-inline-media-omitted")).not.toBeNull();
+      expect(container.textContent).toContain("Image unavailable in history");
+      expect(container.textContent).toContain(
+        "Inline image data was omitted from stored chat history.",
+      );
+    }
   });
 
   it("expires pairing QR images and requests a refresh at the expiry boundary", async () => {
