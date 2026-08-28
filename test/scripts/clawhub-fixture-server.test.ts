@@ -111,6 +111,28 @@ function runNoRequestsAssertion(baseUrl?: string, cwd = process.cwd()) {
 }
 
 describe("ClawHub fixture server", () => {
+  it.each([
+    ["plugins", "0.1.0"],
+    ["kitchen-sink-plugin", KITCHEN_SINK_VERSION],
+    ["catalog-search", "0.1.0"],
+  ])("serves an accepted install audit for the %s profile", async (profile, version) => {
+    const { baseUrl } = await startFixtureServer(profile);
+    const auditMessages: string[] = [];
+    const trust = await checkClawHubPackageTrust({
+      subject: { kind: "plugin", packageName: PACKAGE_NAME },
+      version,
+      baseUrl,
+      mode: "update",
+      logger: { info: (message) => auditMessages.push(message) },
+    });
+
+    expect(trust.ok).toBe(true);
+    expect(auditMessages).toHaveLength(1);
+    expect(auditMessages[0]).toContain("Outcome: Safe");
+    expect(auditMessages[0]).toContain("No security concerns found in the fixture release.");
+    expect(auditMessages[0]).toContain(`${baseUrl}${PACKAGE_PATH}/versions/${version}/security`);
+  });
+
   it("serves package metadata and npm-pack artifacts for kitchen-sink fixtures", async () => {
     const { baseUrl } = await startFixtureServer("kitchen-sink-plugin");
 
