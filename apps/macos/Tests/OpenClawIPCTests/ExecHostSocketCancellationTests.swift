@@ -112,7 +112,7 @@ struct ExecHostSocketCancellationTests {
 
     @Test
     func `cancelled native executor never starts a command`() async throws {
-        let root = try self.makeRoot()
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try self.seed(root)
         let sentinel = root.appendingPathComponent("unexpected")
@@ -131,7 +131,7 @@ struct ExecHostSocketCancellationTests {
         admissionDelay: Duration = .zero,
         _ body: (ExecApprovalsSocketServer, URL, CancellationFixture) async throws -> Void) async throws
     {
-        let root = try self.makeRoot()
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try self.seed(root)
         let fixture = try CancellationFixture(root: root)
@@ -159,13 +159,6 @@ struct ExecHostSocketCancellationTests {
             throw error
         }
         await fixture.cleanUp(server: server)
-    }
-
-    private func makeRoot() throws -> URL {
-        let root = URL(fileURLWithPath: "/tmp/oehc-\(UUID().uuidString.prefix(12))", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        return root.resolvingSymlinksInPath()
     }
 
     private func seed(_ root: URL) throws {
