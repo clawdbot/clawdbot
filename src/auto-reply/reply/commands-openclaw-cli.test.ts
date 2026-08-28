@@ -37,7 +37,9 @@ describe("buildCurrentOpenClawCliExecRequest", () => {
     await withTempDir("openclaw-chat-cli-source-", async (root) => {
       const fixture = await createSourceCliFixture(root);
       const args = ["sessions", "export-trajectory"];
-      const { argv, env } = withSourceCliParent(fixture, () => buildCurrentOpenClawCliExecRequest(args));
+      const { argv, env } = withSourceCliParent(fixture, () =>
+        buildCurrentOpenClawCliExecRequest(args),
+      );
       const command = expectDefined(argv[0], "CLI invocation executable");
       const control = runSourceCliProbe(command, argv.slice(1), fixture.checkout, { env });
       expect(control.status, control.stderr).toBe(0);

@@ -8,11 +8,11 @@ import { resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
 import {
   createSourceCliFixture,
   runSourceCliProbe,
 } from "./openclaw-cli-invocation.test-support.js";
-import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
 import { clearGatewayAgentCliShim, prepareGatewayAgentCliShim } from "./openclaw-cli-shim.js";
 
 const envSnapshot = captureEnv([

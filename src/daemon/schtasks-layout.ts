@@ -303,7 +303,9 @@ export function buildTaskScript({
   // `process.stdin.isTTY` reports true and interactive permission prompts
   // block forever on a console no one can see (#112173). With stdin at NUL
   // the gateway and its workers correctly take non-interactive paths.
-  lines.push(`${programArguments.map((arg) => quoteCmdScriptArg(arg)).join(" ")} ${STDIN_NUL_REDIRECT}`);
+  lines.push(
+    `${programArguments.map((arg) => quoteCmdScriptArg(arg)).join(" ")} ${STDIN_NUL_REDIRECT}`,
+  );
   return `${lines.join("\r\n")}\r\n`;
 }
 

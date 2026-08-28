@@ -8,11 +8,11 @@ import {
   resolveTrustedWindowsCmdExe,
 } from "../process/windows-command.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
 import {
   createSourceCliFixture,
   runSourceCliProbe,
 } from "./openclaw-cli-invocation.test-support.js";
-import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
 import { clearGatewayAgentCliShim, prepareGatewayAgentCliShim } from "./openclaw-cli-shim.js";
 
 const requireFromHere = createRequire(import.meta.url);

@@ -46,7 +46,9 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
       });
       expect(invocation.args).toEqual([
         ...runtimeArgs,
-        ...(tsxArgs.length === 2 ? ["--import", trustedTsxLoader] : [`--import=${trustedTsxLoader}`]),
+        ...(tsxArgs.length === 2
+          ? ["--import", trustedTsxLoader]
+          : [`--import=${trustedTsxLoader}`]),
         repoSourceEntry,
         ...commandArgs,
       ]);
