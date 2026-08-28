@@ -1,13 +1,27 @@
 ---
-summary: "Integrated browser control service + action commands"
+summary: "Browser Harness default plus OpenClaw's native browser backend"
 read_when:
   - Adding agent-controlled browser automation
   - Debugging why openclaw is interfering with your own Chrome
   - Implementing browser settings + lifecycle in the macOS app
-title: "Browser (OpenClaw-managed)"
+title: "Browser"
 ---
 
-OpenClaw can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the agent controls. It runs through a small local control service inside the Gateway (loopback only) and is isolated from your personal browser.
+The bundled `browser` agent tool uses **Browser Use CLI 3.0 through Browser
+Harness by default**. On first use, OpenClaw downloads a pinned, verified `uv`
+binary and installs Browser Harness plus a managed Python 3.12 under the
+OpenClaw state directory. It does not modify system Python. Later calls reuse
+the same install and Browser Harness daemon.
+
+Browser Harness controls a running Chrome-family browser. It can launch Chrome,
+but Chrome may require the user to enable remote debugging once and approve its
+"Allow remote debugging?" prompt. No OpenClaw execution approval or Browser Use
+Cloud key is required for this local default. OpenClaw disables Browser Harness
+telemetry and recordings for this managed integration.
+
+OpenClaw's previous native browser implementation remains available. It runs a
+**dedicated Chrome/Brave/Edge/Chromium profile** through a local Gateway control
+service and is isolated from your personal browser:
 
 - Think of it as a **separate, agent-only browser**. The `openclaw` profile never touches your personal browser profile.
 - The agent opens tabs, reads pages, clicks, and types in this isolated lane.
@@ -26,12 +40,18 @@ OpenClaw can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the age
   plugin is enabled.
 - Optional multi-profile support (`openclaw`, `work`, `remote`, ...).
 
-This browser is **not** your daily driver. It is a safe, isolated surface for
-agent automation and verification.
+The native `openclaw` profile is **not** your daily driver. It is a safe,
+isolated surface for agent automation and verification.
 
 On macOS, you can explicitly copy cookies from a Chrome-family system profile into a separate managed profile. The managed browser still uses its own user data directory; only the selected cookies are copied, and local storage and IndexedDB stay behind. See [Profiles](#profiles-multi-browser) or the [`openclaw browser` CLI reference](/cli/browser) for import commands and limitations.
 
 ## Quick start
+
+For the default agent path, ask the agent to use the browser. The first call
+installs Browser Harness and starts or reuses its normal daemon automatically.
+The `browser` tool is included in fresh installs' default `coding` profile.
+
+The `openclaw browser` CLI continues to address the native backend directly:
 
 ```bash
 openclaw browser --browser-profile openclaw doctor
@@ -68,11 +88,29 @@ Defaults need both `plugins.entries.browser.enabled` **and** `browser.enabled=tr
 
 Browser config changes require a Gateway restart so the plugin can re-register its service.
 
+To keep the native agent tool explicitly, set the Browser plugin backend:
+
+```json5
+{
+  plugins: {
+    entries: {
+      browser: { config: { backend: "native" } },
+    },
+  },
+}
+```
+
+Existing installations with authored native `browser.*` settings keep the
+native backend unless they explicitly set `backend: "browser-harness"`. The
+native CLI, Gateway method, profiles, Chrome extension, and sandbox browser are
+not removed. Sandboxed, tab-bound, and explicitly configured native runs also
+continue to use the native implementation.
+
 ## Agent guidance
 
-Tool-profile note: `tools.profile: "coding"` includes `web_search` and
-`web_fetch`, but not the full `browser` tool. To let the agent or a
-spawned sub-agent use browser automation, add browser at the profile
+The bundled Browser plugin contributes `browser` to the default `coding` and
+`full` tool profiles. Explicit operator allowlists and deny rules remain
+authoritative. A stricter custom profile can still add browser at the profile
 stage:
 
 ```json5

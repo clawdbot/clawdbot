@@ -15,11 +15,23 @@
   "contracts": {
     "tools": ["browser"]
   },
+  "toolMetadata": {
+    "browser": {
+      "profiles": ["coding", "full"],
+      "sideEffecting": true
+    }
+  },
   "commandAliases": [{ "name": "browser" }],
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "backend": {
+        "type": "string",
+        "enum": ["browser-harness", "native"],
+        "default": "browser-harness"
+      }
+    }
   }
 }
