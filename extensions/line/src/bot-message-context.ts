@@ -526,16 +526,26 @@ export async function buildLinePostbackContext(params: {
   });
 
   const timestamp = event.timestamp;
-  const rawData = event.postback?.data?.trim() ?? "";
-  if (!rawData) {
+  const rawBody = event.postback?.data?.trim() ?? "";
+  if (!rawBody) {
     return null;
   }
-  let rawBody = rawData;
-  if (rawData.includes("line.action=")) {
-    const searchParams = new URLSearchParams(rawData);
+  let agentBody = rawBody;
+  if (rawBody.includes("line.action=")) {
+    const searchParams = new URLSearchParams(rawBody);
     const action = searchParams.get("line.action") ?? "";
     const device = searchParams.get("line.device");
-    rawBody = device ? `line action ${action} device ${device}` : `line action ${action}`;
+    agentBody = device ? `line action ${action} device ${device}` : `line action ${action}`;
+  }
+  // LINE returns picker and rich-menu choices separately from callback data.
+  // Sort them for stable prompt bytes, but keep rawBody unchanged for command auth.
+  for (const [key, value] of Object.entries(event.postback.params ?? {}).toSorted(
+    ([left], [right]) => (left < right ? -1 : left > right ? 1 : 0),
+  )) {
+    const picked = normalizeOptionalString(value);
+    if (picked) {
+      agentBody += ` ${key}=${picked}`;
+    }
   }
 
   const messageSid = event.replyToken ? `postback:${event.replyToken}` : `postback:${timestamp}`;
@@ -546,6 +556,7 @@ export async function buildLinePostbackContext(params: {
     route,
     source: { userId, groupId, roomId, isGroup, peerId },
     rawBody,
+    agentBody,
     timestamp,
     messageSid,
     commandAuthorized,

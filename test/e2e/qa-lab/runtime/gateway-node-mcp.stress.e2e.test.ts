@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
 import { createSessionMcpRuntime } from "../../../../src/agents/agent-bundle-mcp-runtime.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   NODE_MCP_COMMAND,
@@ -78,6 +79,7 @@ describe("Gateway/node MCP real-process stress", () => {
       );
 
       let fixture: HttpFixture | undefined;
+      const gatewayOwner = createQaGatewayChild();
       let gateway: GatewayHandle | undefined;
       let node: CapturedChild | undefined;
       let sessionRuntime: ReturnType<typeof createSessionMcpRuntime> | undefined;
@@ -106,7 +108,7 @@ describe("Gateway/node MCP real-process stress", () => {
         };
         await fs.writeFile(nodeConfigPath, `${JSON.stringify(nodeConfig, null, 2)}\n`, "utf8");
 
-        gateway = await startQaGatewayChild({
+        gateway = await gatewayOwner.start({
           repoRoot,
           command: {
             executablePath: process.execPath,
@@ -316,7 +318,7 @@ describe("Gateway/node MCP real-process stress", () => {
           ...(node ? [stopChild(node)] : []),
         ]);
         await Promise.allSettled([
-          ...(gateway ? [Promise.resolve(gateway.stop())] : []),
+          stopQaGatewayFixture(gatewayOwner),
           ...(fixture ? [stopChild(fixture)] : []),
         ]);
         for (const eventPath of [nodeEvents, sessionEvents]) {

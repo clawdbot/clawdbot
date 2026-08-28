@@ -176,6 +176,11 @@ function option(args, name) {
   return args[index + 1];
 }
 
+function optionalOption(args, name) {
+  const index = args.indexOf(name);
+  return index < 0 ? undefined : option(args, name);
+}
+
 function output(name, value) {
   const line = `${name}=${value}\n`;
   if (process.env.GITHUB_OUTPUT) {
@@ -191,6 +196,10 @@ async function discover(args) {
       readJson(option(args, "--request-input"), "candidate request input"),
     ),
   );
+  const expectedRequestSha256 = optionalOption(args, "--expected-request-sha256");
+  if (expectedRequestSha256 !== undefined && expectedRequestSha256 !== contract.requestSha256) {
+    fail("full release candidate request digest does not match the expected request digest");
+  }
   const token = process.env.GH_TOKEN;
   if (!token) {
     fail("GH_TOKEN is required");

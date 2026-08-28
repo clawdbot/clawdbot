@@ -26,7 +26,7 @@ vi.spyOn(toolAccountModule, "resolveFeishuToolAccount").mockReturnValue({
 
 const { registerFeishuDocTools } = await import("./docx.js");
 
-describe("feishu_doc create contract over the real Lark SDK", () => {
+describe("feishu_doc contract over the real Lark SDK", () => {
   afterAll(() => {
     vi.restoreAllMocks();
     vi.resetModules();
@@ -188,4 +188,122 @@ describe("feishu_doc create contract over the real Lark SDK", () => {
       });
     }
   });
+
+  it.each([
+    {
+      description: "a repeated page token",
+      pageToken: "repeated-token",
+      expectedPageTokens: [null, "repeated-token"],
+      expectedError:
+        'Feishu document children pagination repeated token for parent block "parent_loopback"',
+    },
+    {
+      description: "no next page token",
+      pageToken: undefined,
+      expectedPageTokens: [null],
+      expectedError:
+        'Feishu document children pagination is missing its next page token for parent block "parent_loopback"',
+    },
+  ])(
+    "stops insert pagination when the SDK returns $description",
+    async ({ pageToken, expectedPageTokens, expectedError }) => {
+      const pageTokens: Array<string | null> = [];
+      const server = createServer((request, response) => {
+        const url = new URL(request.url ?? "/", "http://127.0.0.1");
+        const sendJson = (body: unknown) => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify(body));
+        };
+
+        if (
+          request.method === "GET" &&
+          url.pathname === "/open-apis/docx/v1/documents/doc_loopback/blocks/after_loopback"
+        ) {
+          sendJson({
+            code: 0,
+            data: {
+              block: { block_id: "after_loopback", parent_id: "parent_loopback", block_type: 2 },
+            },
+          });
+          return;
+        }
+        if (
+          request.method === "GET" &&
+          url.pathname ===
+            "/open-apis/docx/v1/documents/doc_loopback/blocks/parent_loopback/children"
+        ) {
+          pageTokens.push(url.searchParams.get("page_token"));
+          if (pageTokens.length > 2) {
+            sendJson({ code: 1, msg: "unexpected third pagination request" });
+            return;
+          }
+          sendJson({
+            code: 0,
+            data: {
+              items: [{ block_id: "after_loopback", parent_id: "parent_loopback", block_type: 2 }],
+              has_more: true,
+              ...(pageToken ? { page_token: pageToken } : {}),
+            },
+          });
+          return;
+        }
+        response.writeHead(404).end();
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+
+      try {
+        const address = server.address() as AddressInfo;
+        const loopbackHttp = Object.create(Lark.defaultHttpInstance) as Lark.HttpInstance;
+        loopbackHttp.request = async (options) => {
+          const upstream = new URL(options.url ?? "");
+          const target = new URL(
+            `${upstream.pathname}${upstream.search}`,
+            `http://127.0.0.1:${address.port}`,
+          );
+          for (const [key, value] of Object.entries(options.params ?? {})) {
+            if (value !== undefined && value !== null) {
+              target.searchParams.set(key, String(value));
+            }
+          }
+          const response = await fetch(target, { method: options.method ?? "GET" });
+          return response.json();
+        };
+        createFeishuClientMock.mockReturnValue(
+          new Lark.Client({
+            appId: "loopback-test-app",
+            appSecret: "loopback-test-placeholder", // pragma: allowlist secret
+            domain: Lark.Domain.Feishu,
+            loggerLevel: Lark.LoggerLevel.error,
+            disableTokenCache: true,
+            httpInstance: loopbackHttp,
+          }),
+        );
+
+        const harness = createToolFactoryHarness({
+          channels: {
+            feishu: { enabled: true, appId: "app_id", appSecret: "app_secret" },
+          },
+        });
+        registerFeishuDocTools(harness.api);
+
+        const result = await harness.resolveTool("feishu_doc").execute("insert-document", {
+          action: "insert",
+          doc_token: "doc_loopback",
+          after_block_id: "after_loopback",
+          content: "Body content",
+        });
+
+        expect(result.details.error).toContain(expectedError);
+        expect(pageTokens).toEqual(expectedPageTokens);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 });

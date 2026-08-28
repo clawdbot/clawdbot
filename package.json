@@ -340,6 +340,7 @@
     "!dist/extensions/twitch/**",
     "!dist/extensions/venice/**",
     "!dist/extensions/vercel-ai-gateway/**",
+    "!dist/extensions/visitor-access/**",
     "!dist/extensions/voice-call/**",
     "!dist/extensions/volcengine/**",
     "!dist/extensions/voyage/**",

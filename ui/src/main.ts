@@ -28,6 +28,9 @@ if (isProd && "serviceWorker" in navigator) {
     if (controlUiWorkerActivationRetires(event.data)) {
       window.location.reload();
     }
+    if (event.data?.type === "sw-version-probe") {
+      event.ports[0]?.postMessage({ version: currentControlUiBuildId });
+    }
   });
   void navigator.serviceWorker
     .register(swUrl, { updateViaCache: "none" })

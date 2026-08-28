@@ -8,13 +8,15 @@ import {
   createQaChannelTransport,
   startQaBusServer,
 } from "../../../../extensions/qa-lab/api.js";
-import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
 import { GatewayClient } from "../../../../src/gateway/client.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../../src/utils/message-channel.js";
+import { createPlaybackMediaFixture } from "../../../fixtures/media-playback.js";
 import { createSolidPngBuffer, createTinyJpegBuffer } from "../../../helpers/image-fixtures.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const SESSION_KEY = "agent:qa:main";
 const FIXTURES = [
@@ -43,8 +45,12 @@ const FIXTURES = [
     "artifact",
   ],
   ["tone.wav", "audio/wav", "audio", "artifact"],
-  ["voice.mp3", "audio/mpeg", "audio", "artifact"],
+  ["voice---a75c70c7-0112-4d07-8fb5-40c82c979ee8.mp3", "audio/mpeg", "audio", "artifact"],
+  ["voice.ogg", "audio/ogg", "audio", "artifact"],
+  ["voice.m4a", "audio/x-m4a", "audio", "artifact"],
+  ["voice.flac", "audio/flac", "audio", "artifact"],
   ["clip.mp4", "video/mp4", "video", "artifact"],
+  ["clip.webm", "video/webm", "video", "artifact"],
   ["image.png", "image/png", "image", "artifact"],
   ["photo.jpg", "image/jpeg", "image", "artifact"],
   ["mystery.blob", "application/octet-stream", "attachment", "visible-error"],
@@ -61,17 +67,22 @@ const MIXED_BATCH = [
   ["bundle.7z", "delivery-failed"],
 ] as const;
 
-let harness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
+let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
 let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
 let client: GatewayClient | undefined;
 
 afterEach(async () => {
-  client?.stop();
-  client = undefined;
-  await harness?.stop().catch(() => undefined);
-  harness = undefined;
-  await bus?.stop().catch(() => undefined);
-  bus = undefined;
+  try {
+    await runQaGatewayFixture(
+      async () => client?.stop(),
+      () => gatewayOwner && stopQaGatewayFixture(gatewayOwner),
+      () => bus?.stop(),
+    );
+  } finally {
+    client = undefined;
+    gatewayOwner = undefined;
+    bus = undefined;
+  }
 });
 
 async function writeFixtures(workspaceDir: string): Promise<void> {
@@ -106,7 +117,14 @@ async function writeFixtures(workspaceDir: string): Promise<void> {
   await fs.writeFile(path.join(workspaceDir, "brief.docx"), await officeZip("docx"));
   await fs.writeFile(path.join(workspaceDir, "report.xlsx"), await officeZip("xlsx"));
   await fs.writeFile(path.join(workspaceDir, "tone.wav"), createWavBuffer());
-  await fs.writeFile(path.join(workspaceDir, "voice.mp3"), Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+  await fs.writeFile(
+    path.join(workspaceDir, "voice---a75c70c7-0112-4d07-8fb5-40c82c979ee8.mp3"),
+    createPlaybackMediaFixture("mp3"),
+  );
+  await fs.writeFile(path.join(workspaceDir, "voice.ogg"), createPlaybackMediaFixture("ogg"));
+  await fs.writeFile(path.join(workspaceDir, "voice.m4a"), createPlaybackMediaFixture("m4a"));
+  await fs.writeFile(path.join(workspaceDir, "voice.flac"), createPlaybackMediaFixture("flac"));
+  await fs.writeFile(path.join(workspaceDir, "clip.webm"), createPlaybackMediaFixture("webm"));
   await fs.writeFile(
     path.join(workspaceDir, "image.png"),
     createSolidPngBuffer(320, 180, { r: 37, g: 99, b: 235 }),
@@ -119,7 +137,7 @@ async function writeFixtures(workspaceDir: string): Promise<void> {
     path.join(workspaceDir, "bundle.7z"),
     Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0x00, 0x04]),
   );
-  await fs.writeFile(path.join(workspaceDir, "clip.mp4"), createMp4Buffer());
+  await fs.writeFile(path.join(workspaceDir, "clip.mp4"), createPlaybackMediaFixture("mp4"));
 }
 
 async function officeZip(kind: "docx" | "xlsx"): Promise<Buffer> {
@@ -153,13 +171,6 @@ function createWavBuffer(): Buffer {
   body.write("data", 36, "ascii");
   body.writeUInt32LE(samples * 2, 40);
   return body;
-}
-
-function createMp4Buffer(): Buffer {
-  return Buffer.from([
-    0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 0x00, 0x00, 0x02, 0x00,
-    0x69, 0x73, 0x6f, 0x6d, 0x6d, 0x70, 0x34, 0x31,
-  ]);
 }
 
 function isExpectedMediaBlock(block: unknown, expected: (typeof FIXTURES)[number]): boolean {
@@ -251,7 +262,8 @@ describe("WebChat managed media artifact matrix", () => {
       const state = createQaBusState();
       const transport = createQaChannelTransport(state);
       bus = await startQaBusServer({ state });
-      harness = await startQaLiveLaneGateway({
+      gatewayOwner = createQaLiveLaneGateway();
+      const harness = await gatewayOwner.start({
         repoRoot: process.cwd(),
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",
@@ -362,8 +374,8 @@ describe("WebChat managed media artifact matrix", () => {
       };
 
       expect(verdict).toEqual({
-        expected: 20,
-        observed: 20,
+        expected: 24,
+        observed: 24,
         missing: [],
         missingPath: true,
         mixedBatch: MIXED_BATCH.map(([name, outcome]) => ({ name, outcome, present: true })),

@@ -1350,6 +1350,56 @@ describe("runWithModelFallback", () => {
     );
   });
 
+  // A transport-owning plugin harness disables generic compaction recovery, so a provider
+  // request-size ceiling leaves the embedded runner as a FailoverError whose message has already
+  // been replaced with context-overflow copy. Only rawError still states the figures, which is why
+  // the boundary reads the recorded fact rather than the message. See #130096.
+  const GROQ_REQUEST_CEILING_413 =
+    "413 Request too large for model `openai/gpt-oss-120b` in organization `org_x` " +
+    "service tier `on_demand` on tokens per minute (TPM): Limit 8000, Requested 8098, " +
+    "please reduce your message size and try again.";
+
+  function makeNormalizedOverflowFailover(rawError?: string) {
+    return new FailoverError(
+      "Context overflow: prompt too large for the model. " +
+        "Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+      { reason: "context_overflow", provider: "groq", model: "openai/gpt-oss-120b", rawError },
+    );
+  }
+
+  it("keeps configured fallback running when the provider states a request-size ceiling", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(makeNormalizedOverflowFailover(GROQ_REQUEST_CEILING_413))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    // The ceiling belongs to the refusing provider's quota, not to any model's context window,
+    // so a differently provisioned candidate is exactly what may still admit the request.
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("still rethrows a context overflow that no request-size ceiling explains", async () => {
+    const cfg = makeCfg();
+    const overflow = makeNormalizedOverflowFailover("400 input is too long for the model");
+    const run = vi.fn().mockRejectedValue(overflow);
+
+    // Ordinary overflow stays the inner runner's to compact and retry; rotating to a model with a
+    // smaller window would fail worse. This pins that contract against the exception above.
+    await expect(
+      runWithModelFallback({ cfg, provider: "openai", model: "gpt-4.1-mini", run }),
+    ).rejects.toBe(overflow);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("does not treat Codex missing tool-result failures as model fallback candidates", async () => {
     const cfg = makeCfg({
       agents: {

@@ -654,6 +654,11 @@ in `replacePaths`; nested arrays under array entries use `[]`, such as
 silently clobbering routing or allowlist arrays. Use `config.apply` when you
 intend to replace the full config.
 
+Arrays of objects with stable `id` fields merge by ID unless their path appears
+in `replacePaths`. These updates preserve authored fields in untouched entries;
+runtime defaults, such as model catalog compatibility and context budgets, are
+not saved into sibling entries. Explicitly configured values remain authoritative.
+
 ## Environment variables
 
 OpenClaw reads env vars from the parent process plus:

@@ -11,6 +11,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "../../bus-state.js";
+import type { QaGatewayStopResult } from "../../gateway-child.js";
 import { createQaTransportAdapter } from "../../qa-transport-registry.js";
 import { runQaFlowSuiteCleanupPlan } from "../../suite.js";
 import { createTempDirHarness } from "../../temp-dir.test-helper.js";
@@ -195,12 +196,13 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
       }
       const gatewayStopped = createDeferred<void>();
       const stopStarted = createDeferred<void>();
-      const stopGateway = vi.fn(async () => {
+      const stopGateway = vi.fn(async (): Promise<QaGatewayStopResult> => {
         stopStarted.resolve();
         await gatewayStopped.promise;
         if (failureAt === "gateway stop") {
           throw failure;
         }
+        return { process: "confirmed-stopped", errors: [] };
       });
       const cleanup = runQaFlowSuiteCleanupPlan({
         cleanupTransportBeforeGatewayStop: transport.cleanupBeforeGatewayStop,

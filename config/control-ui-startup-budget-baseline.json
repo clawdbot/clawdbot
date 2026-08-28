@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 347274,
-  "reason": "main UI fixes #131958, #132024, #131831, and #132028 landed after the prior ratchet; recorded from the highest exact-merge CI build (347274 B) across five independent build jobs",
+  "startupJsGzipBytes": 347255,
+  "reason": "compact mobile session sharing with preserved draft state and a bounded member drilldown; recorded at the CI build-artifacts lane (347255 B)",
   "updatedAt": "2026-08-28"
 }
