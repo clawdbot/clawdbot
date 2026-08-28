@@ -10,7 +10,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.icu.text.BreakIterator
 import android.util.TypedValue
 import android.view.Gravity
 import android.widget.TextView
@@ -45,32 +44,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import java.util.Locale
-
-// TextView measures every paragraph, even outside its viewport. Bound each layout's
-// input as well as its size; keep the complete answer and only one active page.
-private const val CHAT_TEXT_READER_PAGE_CHARS = 16_384
-
-internal fun chatTextReaderPages(text: String): List<IntRange> {
-  val boundaries = BreakIterator.getCharacterInstance(Locale.ROOT).apply { setText(text) }
-  return buildList {
-    var start = 0
-    do {
-      var end = start + minOf(CHAT_TEXT_READER_PAGE_CHARS, text.length - start)
-      if (end < text.length) {
-        val boundary = boundaries.preceding(end + 1)
-        if (boundary > start) {
-          end = boundary
-        } else if (text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) {
-          // A single over-budget grapheme must still respect the allocation cap.
-          end -= 1
-        }
-      }
-      add(start until end)
-      start = end
-    } while (start < text.length)
-  }
-}
 
 internal fun chatMessagePlainText(content: List<ChatMessageContent>): String =
   content
@@ -132,7 +105,7 @@ internal fun ChatMessageActionHost(
           }
         }
         MessageActionItem(label = nativeString("Copy")) {
-          copyChatMessage(context, text)
+          copyChatText(context, text)
           menuExpanded = false
         }
         MessageActionItem(label = nativeString("Select text")) {
@@ -186,7 +159,7 @@ internal fun ChatTextReaderDialog(
   val body = ClawTheme.type.body
   val fontSizePx = with(LocalDensity.current) { body.fontSize.toPx() }
   val lineHeightPx = with(LocalDensity.current) { body.lineHeight.roundToPx() }
-  val pages = remember(text) { chatTextReaderPages(text) }
+  val pages = remember(text) { chatTextLayoutRanges(text) }
   var page by remember(text) { mutableIntStateOf(0) }
   val pageText = remember(text, page) { text.substring(pages[page]) }
   AlertDialog(
@@ -241,13 +214,13 @@ private fun MessageActionItem(
   DropdownMenuItem(text = { Text(label) }, onClick = onClick)
 }
 
-private fun copyChatMessage(
+internal fun copyChatText(
   context: Context,
   text: String,
 ) {
   val clipboard = context.getSystemService(ClipboardManager::class.java)
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw chat message", text))
-  Toast.makeText(context, nativeString("Message copied"), Toast.LENGTH_SHORT).show()
+  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw text", text))
+  Toast.makeText(context, nativeString("Text copied"), Toast.LENGTH_SHORT).show()
 }
 
 private fun shareChatMessage(

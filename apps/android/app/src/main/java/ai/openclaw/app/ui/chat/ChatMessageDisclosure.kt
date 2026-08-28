@@ -5,15 +5,17 @@ import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatFullMessageState
 import ai.openclaw.app.chat.ChatFullMessageUnavailable
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -44,13 +46,14 @@ internal fun ChatMessageDisclosure(
   selectionGeneration: Long,
   catalogRevision: Long,
   prepareRead: (ChatMessage) -> ChatController.FullMessageRead?,
-  content: @Composable (@Composable (ChatMessage) -> Unit) -> Unit,
+  content: @Composable ((ChatMessage) -> List<ChatMessageContent>, @Composable (ChatMessage) -> Unit) -> Unit,
 ) {
   // The selected read belongs to the list, not a recycled row. Rekey only its state,
   // leaving ordinary bubble expansion, menus, and media at their existing owners.
   val scope = key(owner, selectionGeneration, catalogRevision) { rememberCoroutineScope() }
   var selected by remember(scope) { mutableStateOf<ChatMessageDisclosureRead?>(null) }
   var expanded by remember(scope) { mutableStateOf(false) }
+  val onManualNavigation = LocalChatReaderNavigation.current
   val selection = selected
   val active = selection?.takeIf { messages.any(it.message::matchesFullRead) }
   if (selection != null && active == null) {
@@ -78,6 +81,7 @@ internal fun ChatMessageDisclosure(
   ) {
     // Admission happens in the tap, before queued coroutine work can outlive this render.
     val admitted = prepareRead(message) ?: return
+    onManualNavigation()
     if (retry || selected?.message?.matchesFullRead(message) != true) {
       selected?.job?.cancel()
       val next = ChatMessageDisclosureRead(message, admitted)
@@ -98,24 +102,22 @@ internal fun ChatMessageDisclosure(
     }
   }
 
-  content { message ->
+  BackHandler(enabled = expanded && active != null, onBack = ::close)
+
+  content(
+    { message ->
+      if (expanded && active?.message?.matchesFullRead(message) == true && result is ChatFullMessageState.Loaded) {
+        // History can append TTS audio or canvas previews from later transcript rows.
+        // Single-message retrieval owns the base content, not those display supplements.
+        result.content + message.content.filter { it.type != "text" && it !in result.content }
+      } else {
+        message.content
+      }
+    },
+  ) { message ->
     if (message.canReadFullMessage) {
-      ChatMessageDisclosureButton(nativeString("View all")) { open(message) }
-    }
-  }
-  if (expanded && active != null) {
-    if (result is ChatFullMessageState.Loaded) {
-      ChatTextReaderDialog(
-        text = chatMessagePlainText(result.content),
-        title = nativeString("Full text"),
-        dismissLabel = nativeString("Close"),
-        onDismiss = ::close,
-      )
-    } else {
-      AlertDialog(
-        onDismissRequest = ::close,
-        title = { Text(nativeString("Full text")) },
-        text = {
+      if (expanded && active?.message?.matchesFullRead(message) == true) {
+        if (result !is ChatFullMessageState.Loaded) {
           Text(
             when (result) {
               is ChatFullMessageState.Unavailable ->
@@ -130,14 +132,16 @@ internal fun ChatMessageDisclosure(
             },
             style = ClawTheme.type.caption,
           )
-        },
-        confirmButton = { TextButton(onClick = ::close) { Text(nativeString("Close")) } },
-        dismissButton = {
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           if (result == ChatFullMessageState.Failed) {
-            TextButton(onClick = { open(active.message, retry = true) }) { Text(nativeString("Retry")) }
+            ChatMessageDisclosureButton(nativeString("Retry")) { open(message, retry = true) }
           }
-        },
-      )
+          ChatMessageDisclosureButton(nativeString("Show less"), ::close)
+        }
+      } else {
+        ChatMessageDisclosureButton(nativeString("View all")) { open(message) }
+      }
     }
   }
 }

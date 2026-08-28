@@ -28,17 +28,27 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTextClearance
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
@@ -95,6 +105,10 @@ internal const val FULL_MESSAGE_SECOND_CHAT = "agent:main:disclosure-b"
 internal const val FULL_MESSAGE_ENTRY = "shared-transcript-entry"
 internal const val FULL_MESSAGE_TAIL = "The complete answer ends here."
 internal const val FULL_MESSAGE_READY_TIMEOUT_MS = 15_000L
+private const val FULL_MESSAGE_IMAGE = "inline-image.png"
+private const val FULL_MESSAGE_FILE = "inline-file.txt"
+private const val FULL_MESSAGE_AUDIO = "inline-history-tts.mp3"
+private const val FULL_MESSAGE_MEDIA_TEXT = "The second paragraph stays after the file."
 
 /** Real ChatScreen callbacks, live NodeRuntime, and physical WebSockets; no injected chat state. */
 @RunWith(RobolectricTestRunner::class)
@@ -193,12 +207,17 @@ class ChatFullMessageOwnershipLayoutTest {
       composeRule.onAllNodes(hasText("View all") and hasClickAction()).fetchSemanticsNodes().isNotEmpty(),
     )
     viewAll().assertIsDisplayed().assertIsEnabled().performClick()
-    awaitExpanded()
+    composeRule.waitUntil(FULL_MESSAGE_READY_TIMEOUT_MS) { gateway.fullReads.isNotEmpty() }
     assertEquals(listOf(expectedRequest()), gateway.fullReads.toList())
-    composeRule.onNodeWithText("Close").performClick()
-    assertNativeReaderAbsent()
+    awaitInlineExpanded()
+    composeRule
+      .onNodeWithText("Show less")
+      .performScrollTo()
+      .assertIsDisplayed()
+      .performClick()
+    assertInlineCollapsed()
     viewAll().assertIsDisplayed().performClick()
-    awaitExpanded()
+    awaitInlineExpanded()
     assertEquals("Re-expansion reuses the loaded entry", 1, gateway.fullReads.size)
   }
 
@@ -212,8 +231,8 @@ class ChatFullMessageOwnershipLayoutTest {
       awaitExpanded()
       assertEquals(expectedRequest(), gateway.fullReads.last())
       assertEquals(index + 1, gateway.fullReads.size)
-      composeRule.onNodeWithText("Close").performClick()
-      assertNativeReaderAbsent()
+      composeRule.onNodeWithText("Show less").performScrollTo().performClick()
+      assertExpandedTextAbsent()
     }
   }
 
@@ -252,24 +271,27 @@ class ChatFullMessageOwnershipLayoutTest {
       viewAll().assertIsDisplayed().assertIsEnabled().performClick()
       awaitExpanded(complete)
       assertEquals(index + 1, gateway.fullReads.size)
-      composeRule.onNodeWithText("Close").performClick()
-      assertNativeReaderAbsent()
+      composeRule.onNodeWithText("Show less").performScrollTo().performClick()
+      assertExpandedTextAbsent(complete.takeLast(128))
     }
   }
 
   @Test
   fun messageToolMirrorKeepsItsPreviewWithoutCanonicalRecovery() {
-    gateway.historyMessageToolMirror = true
-    refreshSelectedChat()
-    assertEquals(
-      FULL_MESSAGE_ENTRY,
-      runtime.chatMessages.value
-        .single()
-        .entryId,
-    )
-    viewAll().assertDoesNotExist()
-    assertNull(runtime.prepareFullMessageRead(currentOwner(), runtime.chatSelectionGeneration.value, runtime.gatewayCatalogRevision.value, runtime.chatMessages.value.single()))
-    assertTrue(gateway.fullReads.isEmpty())
+    for (marker in listOf("openclawMessageToolMirror", "openclawStreamFallback")) {
+      gateway.historySyntheticMarker = marker
+      gateway.historyMessageToolMirror = true
+      refreshSelectedChat()
+      assertEquals(
+        FULL_MESSAGE_ENTRY,
+        runtime.chatMessages.value
+          .single()
+          .entryId,
+      )
+      viewAll().assertDoesNotExist()
+      assertNull(runtime.prepareFullMessageRead(currentOwner(), runtime.chatSelectionGeneration.value, runtime.gatewayCatalogRevision.value, runtime.chatMessages.value.single()))
+      assertTrue(gateway.fullReads.isEmpty())
+    }
   }
 
   @Test
@@ -285,19 +307,29 @@ class ChatFullMessageOwnershipLayoutTest {
 
   @Test
   fun loadedReaderRetiresWhenItsPreviewBecomesAMessageToolMirror() {
-    viewAll().performClick()
-    awaitExpanded()
-    gateway.historyMessageToolMirror = true
-    refreshSelectedChat()
-    assertNativeReaderAbsent()
-    composeRule.onNodeWithText("Close").assertDoesNotExist()
-    viewAll().assertDoesNotExist()
-    assertEquals(1, gateway.fullReads.size)
-    gateway.historyMessageToolMirror = false
-    refreshSelectedChat()
-    viewAll().assertIsDisplayed().performClick()
-    awaitExpanded()
-    assertEquals("Restoring a canonical row must not revive its retired cache", 2, gateway.fullReads.size)
+    for (marker in listOf("openclawMessageToolMirror", "openclawStreamFallback")) {
+      if (marker == "openclawStreamFallback") selectChat(FULL_MESSAGE_SECOND_CHAT)
+      val before = gateway.fullReads.size
+      gateway.historySyntheticMarker = marker
+      viewAll().performClick()
+      awaitExpanded()
+      gateway.historyMessageToolMirror = true
+      refreshSelectedChat()
+      assertExpandedTextAbsent()
+      composeRule.onNodeWithText("Show less").assertDoesNotExist()
+      viewAll().assertDoesNotExist()
+      assertEquals(before + 1, gateway.fullReads.size)
+      gateway.historyMessageToolMirror = false
+      refreshSelectedChat()
+      viewAll().assertIsDisplayed().performClick()
+      awaitExpanded()
+      assertEquals("Restoring a canonical row must not revive its retired cache", before + 2, gateway.fullReads.size)
+      composeRule
+        .onNodeWithText("Show less")
+        .performScrollTo()
+        .assertIsDisplayed()
+        .performClick()
+    }
   }
 
   @Test
@@ -343,8 +375,12 @@ class ChatFullMessageOwnershipLayoutTest {
   fun retainedLoadedDisclosureCannotReopenAfterMirrorRefreshBeforeRecomposition() {
     viewAll().assertIsDisplayed().assertIsEnabled().performClick()
     awaitExpanded()
-    composeRule.onNodeWithText("Close").assertIsDisplayed().performClick()
-    assertNativeReaderAbsent()
+    composeRule
+      .onNodeWithText("Show less")
+      .performScrollTo()
+      .assertIsDisplayed()
+      .performClick()
+    assertExpandedTextAbsent()
     val oldAction =
       checkNotNull(
         viewAll()
@@ -381,8 +417,8 @@ class ChatFullMessageOwnershipLayoutTest {
       assertTrue(oldAction())
     }
     composeRule.waitForIdle()
-    assertNativeReaderAbsent()
-    composeRule.onNodeWithText("Close").assertDoesNotExist()
+    assertExpandedTextAbsent()
+    composeRule.onNodeWithText("Show less").assertDoesNotExist()
     viewAll().assertDoesNotExist()
     // A subsequent same-socket history response orders the absence check.
     refreshSelectedChat()
@@ -393,8 +429,12 @@ class ChatFullMessageOwnershipLayoutTest {
     viewAll().assertIsDisplayed().assertIsEnabled().performClick()
     awaitExpanded()
     assertEquals("A fresh canonical row must request again rather than revive the retired cache", listOf(expectedRequest(), expectedRequest()), gateway.fullReads.toList())
-    composeRule.onNodeWithText("Close").assertIsDisplayed().performClick()
-    assertNativeReaderAbsent()
+    composeRule
+      .onNodeWithText("Show less")
+      .performScrollTo()
+      .assertIsDisplayed()
+      .performClick()
+    assertExpandedTextAbsent()
   }
 
   @Test
@@ -441,15 +481,29 @@ class ChatFullMessageOwnershipLayoutTest {
     assertEquals(GraphicsMode.Mode.NATIVE, graphicsMode)
     assertEquals(36, RuntimeEnvironment.getApiLevel())
     val normalRequest = expectedRequest()
+    val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     var phase = "normal-size-control"
     try {
-      assertEquals(9_656, gateway.fullText(FULL_MESSAGE_FIRST_CHAT).length)
+      val normalText = gateway.fullText(FULL_MESSAGE_FIRST_CHAT)
+      assertEquals(9_656, normalText.length)
       viewAll().assertIsDisplayed().assertIsEnabled().performClick()
-      awaitExpanded()
-      assertNativeTailAndSelection(gateway.fullText(FULL_MESSAGE_FIRST_CHAT), FULL_MESSAGE_TAIL)
+      awaitInlineExpanded()
+      openMessageActions()
+      composeRule.onNodeWithText("Copy").performClick()
+      assertEquals(
+        normalText,
+        clipboard.primaryClip
+          ?.getItemAt(0)
+          ?.text
+          ?.toString(),
+      )
       assertEquals(listOf(normalRequest), gateway.fullReads.toList())
-      composeRule.onNodeWithText("Close").assertIsEnabled().performClick()
-      assertNativeReaderAbsent()
+      composeRule
+        .onNodeWithText("Show less")
+        .performScrollTo()
+        .assertIsEnabled()
+        .performClick()
+      assertInlineCollapsed()
       viewAll().assertIsDisplayed()
       println("FULL_MESSAGE_BOUNDARY normalSizeControl=passed utf16=9656")
       selectChat(FULL_MESSAGE_SECOND_CHAT)
@@ -469,55 +523,32 @@ class ChatFullMessageOwnershipLayoutTest {
       val message = response.getValue("message").jsonObject
       gateway.fullResponseOverride =
         JsonObject(response + ("message" to JsonObject(message + ("content" to JsonPrimitive(fullText)))))
-      // This ASCII fixture has no multi-unit graphemes: the independent expected pages
-      // exercise the allocation cap without using the production boundary helper as an oracle.
-      val expectedPages = fullText.chunked(16_384)
-      assertEquals(50, expectedPages.size)
-      phase = "open-large"
+      phase = "open-large-inline"
       viewAll().assertIsDisplayed().assertIsEnabled().performClick()
-      awaitExpanded(expectedPages.first())
+      showEndOfCode()
+      awaitInlineExpanded(tail, fullText)
+      assertInlineTailDisplayed(tail)
       assertEquals(listOf(normalRequest, expectedRequest()), gateway.fullReads.toList())
-      pageButton("First page").assertIsNotEnabled()
-      pageButton("Previous page").assertIsNotEnabled()
-      pageButton("Next page").assertIsDisplayed().assertIsEnabled().performClick()
-      awaitExpanded(expectedPages[1])
-      pageButton("Previous page").assertIsDisplayed().assertIsEnabled().performClick()
-      awaitExpanded(expectedPages.first())
-      pageButton("Last page").assertIsDisplayed().assertIsEnabled().performClick()
-      awaitExpanded(expectedPages.last())
-      composeRule.onNodeWithText("Page 50 of 50 · Select text on this page").assertIsDisplayed()
-      pageButton("Next page").assertIsNotEnabled()
-      pageButton("Last page").assertIsNotEnabled()
-      pageButton("First page").assertIsDisplayed().assertIsEnabled().performClick()
-      phase = "all-pages"
-      val observedText = StringBuilder()
-      expectedPages.forEachIndexed { index, pageText ->
-        awaitExpanded(pageText)
-        composeRule.runOnIdle {
-          val reader = nativeReaders().single()
-          assertTrue("Only one bounded page may be installed in the native reader", reader.text.length <= 16_384)
-          observedText.append(reader.text)
-        }
-        composeRule.onNodeWithText("Page ${index + 1} of 50 · Select text on this page").assertIsDisplayed()
-        if (index < expectedPages.lastIndex) pageButton("Next page").assertIsEnabled().performClick()
-      }
-      assertEquals("The loaded answer must remain accessible without gaps, overlap, or another request", fullText, observedText.toString())
-      assertEquals(listOf(normalRequest, expectedRequest()), gateway.fullReads.toList())
-      phase = "visible-tail"
-      assertNativeTailAndSelection(expectedPages.last(), tail)
-      pageButton("First page").assertIsDisplayed().assertIsEnabled().performClick()
-      awaitExpanded(expectedPages.first())
-      composeRule.runOnIdle {
-        val reader = nativeReaders().single()
-        assertEquals("Page navigation must not carry a previous page's selection", reader.selectionStart, reader.selectionEnd)
-        assertEquals("Returning to the first page resets its scroll position", 0, reader.scrollY)
-      }
-      pageButton("First page").assertIsNotEnabled()
-      pageButton("Previous page").assertIsNotEnabled()
-      phase = "close-large"
-      composeRule.onNodeWithText("Close").assertIsEnabled().performClick()
+      phase = "complete-buffer-copy"
+      openMessageActions()
+      composeRule.onNodeWithText("Copy").performClick()
+      assertEquals(
+        "Inline actions must retain the entire answer, including its markdown fences",
+        fullText,
+        clipboard.primaryClip
+          ?.getItemAt(0)
+          ?.text
+          ?.toString(),
+      )
+      phase = "collapse-large"
+      composeRule.onNodeWithText("Show less", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+      composeRule
+        .onNodeWithText("Show less")
+        .assertIsDisplayed()
+        .assertIsEnabled()
+        .performClick()
+      assertInlineCollapsed(tail)
       viewAll().assertIsDisplayed()
-      assertNativeReaderAbsent()
       assertEquals(
         gateway.preview(FULL_MESSAGE_SECOND_CHAT),
         runtime.chatMessages.value
@@ -528,12 +559,20 @@ class ChatFullMessageOwnershipLayoutTest {
       )
       assertEquals(2, gateway.fullReads.size)
       viewAll().assertIsDisplayed().assertIsEnabled().performClick()
-      awaitExpanded(expectedPages.first())
+      showEndOfCode()
+      awaitInlineExpanded(tail, fullText)
+      assertInlineTailDisplayed(tail)
       assertEquals("Reopening preserves the complete loaded answer without refetching", 2, gateway.fullReads.size)
-      composeRule.onNodeWithText("Close").assertIsEnabled().performClick()
-      assertNativeReaderAbsent()
+      composeRule.onNodeWithText("Show less", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+      composeRule
+        .onNodeWithText("Show less")
+        .assertIsDisplayed()
+        .assertIsEnabled()
+        .performClick()
+      assertInlineCollapsed(tail)
       phase = "complete"
     } finally {
+      clipboard.clearPrimaryClip()
       println("FULL_MESSAGE_BOUNDARY targetUtf16=809650 codeLines=400001 phase=$phase fullReads=${gateway.fullReads.size}")
     }
   }
@@ -560,7 +599,7 @@ class ChatFullMessageOwnershipLayoutTest {
       )
     cases.forEach { (label, expectedPages) ->
       val text = expectedPages.joinToString("")
-      val ranges = chatTextReaderPages(text)
+      val ranges = chatTextLayoutRanges(text)
       assertEquals(label, expectedPages, ranges.map { text.substring(it) })
       var nextOffset = 0
       val stitched = StringBuilder()
@@ -585,10 +624,10 @@ class ChatFullMessageOwnershipLayoutTest {
     viewAll().assertIsDisplayed().assertIsEnabled().performClick()
     awaitExpanded()
     composeRule.runOnIdle {
-      val reader = nativeReaders().single()
-      checkNotNull(reader.findViewTreeOnBackPressedDispatcherOwner()).onBackPressedDispatcher.onBackPressed()
+      val owner = WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull { it.findViewTreeOnBackPressedDispatcherOwner() }
+      checkNotNull(owner).onBackPressedDispatcher.onBackPressed()
     }
-    assertNativeReaderAbsent()
+    assertInlineCollapsed()
     viewAll().assertIsDisplayed().assertIsEnabled().performClick()
     awaitExpanded()
     assertEquals("Back must not discard the completed read", listOf(expectedRequest()), gateway.fullReads.toList())
@@ -601,10 +640,15 @@ class ChatFullMessageOwnershipLayoutTest {
     viewAll().assertIsDisplayed().assertIsEnabled().performClick()
     awaitExpanded(fullText)
     appendBackgroundHistoryAndShowLatest()
+    scrollToOriginalMessage()
     awaitExpanded(fullText)
     assertEquals("Background history must not replace or reload the open reader", listOf(request), gateway.fullReads.toList())
-    composeRule.onNodeWithText("Close").assertIsDisplayed().performClick()
-    assertNativeReaderAbsent()
+    composeRule
+      .onNodeWithText("Show less")
+      .performScrollTo()
+      .assertIsDisplayed()
+      .performClick()
+    assertExpandedTextAbsent()
   }
 
   @Test
@@ -625,20 +669,107 @@ class ChatFullMessageOwnershipLayoutTest {
       assertEquals(catalog, runtime.gatewayCatalogRevision.value)
       assertEquals(preview, runtime.chatMessages.value.first())
       composeRule.onNode(hasText("...(truncated)...", substring = true)).assertDoesNotExist()
-      assertNativeReaderAbsent()
+      assertExpandedTextAbsent()
 
       gateway.releaseFullResponses()
+      scrollToOriginalMessage()
       awaitExpanded()
       assertEquals("The original pending read must complete without another click or request", listOf(request), gateway.fullReads.toList())
       composeRule
-        .onNodeWithText("Close")
+        .onNodeWithText("Show less")
+        .performScrollTo()
         .assertIsDisplayed()
         .assertIsEnabled()
         .performClick()
-      assertNativeReaderAbsent()
+      assertExpandedTextAbsent()
     } finally {
       gateway.releaseFullResponses()
     }
+  }
+
+  @Test
+  fun readingInsideExpandedCodePausesFollowingUntilJumpToLatest() {
+    val code = (0 until 700).joinToString("\n") { "Code line $it: keep this reading position." }
+    val full = "```\n$code\n```"
+    val response = gateway.fullResponse(FULL_MESSAGE_FIRST_CHAT)
+    val message = response.getValue("message").jsonObject
+    gateway.fullResponseOverride = JsonObject(response + ("message" to JsonObject(message + ("content" to JsonPrimitive(full)))))
+    gateway.historyTextOverride = full.take(8_000) + "\n...(truncated)..."
+    gateway.historyAppendRole = "assistant"
+    refreshSelectedChat()
+    val preview = runtime.chatMessages.value.single()
+    val selection = runtime.chatSelectionGeneration.value
+    val catalog = runtime.gatewayCatalogRevision.value
+    viewAll().assertIsDisplayed().assertIsEnabled().performClick()
+    composeRule.waitUntil(FULL_MESSAGE_READY_TIMEOUT_MS) {
+      gateway.fullReads.size == 1 && composeRule.onAllNodes(hasText("Loading full message…")).fetchSemanticsNodes().isEmpty()
+    }
+    composeRule.onNodeWithText("Show less").assertIsDisplayed()
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+    composeRule.onNode(hasContentDescription("OpenClaw")).performSemanticsAction(SemanticsActions.OnLongClick) { it() }
+    composeRule.onNodeWithText("Copy").performClick()
+    val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    assertEquals(
+      "The gesture must read the full answer, not its capped history",
+      full,
+      clipboard.primaryClip
+        ?.getItemAt(0)
+        ?.text
+        ?.toString(),
+    )
+    val insideMessage = hasAnyAncestor(hasContentDescription("OpenClaw"))
+    val codeViewport = composeRule.onNode(hasScrollToNodeAction() and insideMessage, useUnmergedTree = true)
+    val transcript = composeRule.onNode(hasScrollToNodeAction() and insideMessage.not(), useUnmergedTree = true)
+    val jump = composeRule.onNode(hasContentDescription("Jump to latest") and hasClickAction())
+
+    fun appendAssistant(count: Int) {
+      val before = gateway.historyReads.value.size
+      gateway.historyAppendCount = count
+      composeRule.runOnIdle { model.refreshChat() }
+      composeRule.waitUntil(FULL_MESSAGE_READY_TIMEOUT_MS) {
+        shadowOf(Looper.getMainLooper()).idle()
+        gateway.historyReads.value.size > before && !model.chatHistoryLoading.value && model.chatHealthOk.value && model.chatMessages.value.size == count + 1
+      }
+      composeRule.waitForIdle()
+      assertEquals(preview, runtime.chatMessages.value.first())
+      assertEquals(selection, runtime.chatSelectionGeneration.value)
+      assertEquals(catalog, runtime.gatewayCatalogRevision.value)
+      assertNull(model.chatError.value)
+    }
+
+    // Prove live-follow through consecutive updates, not an assumed Jump affordance after layout settles.
+    appendAssistant(1)
+    composeRule.onNodeWithText(gateway.backgroundText(0)).assertIsDisplayed()
+    assertEquals("The first assistant update must settle at latest", 0f, transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), 0f)
+    appendAssistant(2)
+    composeRule.onNodeWithText(gateway.backgroundText(1)).assertIsDisplayed()
+    assertEquals("Following must bring the next update to latest without interaction", 0f, transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), 0f)
+    codeViewport.assertIsDisplayed()
+    val initialCode = codeViewport.fetchSemanticsNode()
+    assertEquals("The touch must stay inside the fully visible code viewport", initialCode.size.height.toFloat(), initialCode.boundsInRoot.height, 0.01f)
+    val outerBefore = transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+    assertEquals("Start in live-follow at the latest message", 0f, outerBefore, 0f)
+    jump.assertDoesNotExist()
+    val innerBefore = initialCode.config[SemanticsProperties.VerticalScrollAxisRange].value()
+    codeViewport.performTouchInput { swipeUp(durationMillis = 500) }
+    composeRule.waitForIdle()
+    val reading = codeViewport.fetchSemanticsNode()
+    val readingOffset = reading.config[SemanticsProperties.VerticalScrollAxisRange].value()
+    assertTrue("The real touch must move within the code, not its outer transcript", readingOffset > innerBefore)
+    assertEquals("The child must consume this gesture without moving the transcript", outerBefore, transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), 0f)
+
+    appendAssistant(3)
+    codeViewport.assertIsDisplayed()
+    val afterAppend = codeViewport.fetchSemanticsNode()
+    assertEquals("New assistant output must preserve the code reading offset", readingOffset, afterAppend.config[SemanticsProperties.VerticalScrollAxisRange].value(), 0f)
+    assertEquals("New assistant output must not pull the code out of its reading position", reading.positionInRoot.y, afterAppend.positionInRoot.y, 0.01f)
+    jump.assertIsDisplayed().assertIsEnabled().performClick()
+    composeRule.onNodeWithText(gateway.backgroundText(2)).assertIsDisplayed()
+    jump.assertDoesNotExist()
+    appendAssistant(4)
+    composeRule.onNodeWithText(gateway.backgroundText(3)).assertIsDisplayed()
+    jump.assertDoesNotExist()
+    assertEquals("Reading and resuming live-follow must reuse the loaded canonical entry", listOf(expectedRequest()), gateway.fullReads.toList())
   }
 
   @Test
@@ -742,14 +873,15 @@ class ChatFullMessageOwnershipLayoutTest {
     viewAll().performClick()
     composeRule.onNodeWithText("Loading full message…").assertIsDisplayed()
     runBlocking { withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { gateway.heldResponses.first { it.isNotEmpty() } } }
-    composeRule.onNodeWithText("Close").performClick()
-    assertNativeReaderAbsent()
+    composeRule.onNodeWithText("Show less").performScrollTo().performClick()
+    assertExpandedTextAbsent()
     gateway.releaseFullResponses()
     viewAll().performClick()
     awaitExpanded()
     assertEquals("Closing does not cache the canceled response", 2, gateway.fullReads.size)
     composeRule
-      .onNodeWithText("Close")
+      .onNodeWithText("Show less")
+      .performScrollTo()
       .assertIsDisplayed()
       .assertIsEnabled()
       .performClick()
@@ -776,7 +908,7 @@ class ChatFullMessageOwnershipLayoutTest {
       val close =
         checkNotNull(
           composeRule
-            .onNodeWithText("Close")
+            .onNodeWithText("Show less")
             .assertIsDisplayed()
             .assertIsEnabled()
             .fetchSemanticsNode()
@@ -805,17 +937,18 @@ class ChatFullMessageOwnershipLayoutTest {
       composeRule.mainClock.autoAdvance = autoAdvance
       awaitRuntimeReady(FULL_MESSAGE_SECOND_CHAT)
       composeRule.waitForIdle()
-      assertNativeReaderAbsent()
+      assertExpandedTextAbsent()
       viewAll().assertIsDisplayed().assertIsEnabled().performClick()
       awaitExpanded()
       assertEquals("Close must cancel the pending read before the next composition frame", beforeClose, packetsBeforeFrame)
       assertEquals("Only the fresh reopening may enqueue a read", beforeClose + expectedRequest(), gateway.fullReads.toList())
       composeRule
-        .onNodeWithText("Close")
+        .onNodeWithText("Show less")
+        .performScrollTo()
         .assertIsDisplayed()
         .assertIsEnabled()
         .performClick()
-      assertNativeReaderAbsent()
+      assertExpandedTextAbsent()
     } finally {
       if (writeLock.holdsLock(lockOwner)) writeLock.unlock(lockOwner)
       composeRule.mainClock.autoAdvance = autoAdvance
@@ -846,9 +979,9 @@ class ChatFullMessageOwnershipLayoutTest {
       viewAll().performClick()
       composeRule.waitUntil(FULL_MESSAGE_READY_TIMEOUT_MS) { composeRule.onAllNodes(hasText(expectedText)).fetchSemanticsNodes().isNotEmpty() }
       composeRule.onNodeWithText(expectedText).assertIsDisplayed()
-      assertNativeReaderAbsent()
+      assertExpandedTextAbsent()
       composeRule.onNodeWithText("Retry").assertDoesNotExist()
-      composeRule.onNodeWithText("Close").performClick()
+      composeRule.onNodeWithText("Show less").performScrollTo().performClick()
       assertEquals(index + 1, gateway.fullReads.size)
     }
   }
@@ -862,13 +995,13 @@ class ChatFullMessageOwnershipLayoutTest {
     }
     composeRule.onNodeWithText("The full message could not be loaded.").assertIsDisplayed()
     composeRule.onNode(hasText("...(truncated)...", substring = true)).assertExists()
-    assertNativeReaderAbsent()
+    assertExpandedTextAbsent()
     assertEquals(listOf(expectedRequest()), gateway.fullReads.toList())
     gateway.fullReadRpcError = false
     composeRule.onNodeWithText("Retry").performClick()
     awaitExpanded()
     assertEquals(listOf(expectedRequest(), expectedRequest()), gateway.fullReads.toList())
-    composeRule.onNodeWithText("Close").performClick()
+    composeRule.onNodeWithText("Show less").performScrollTo().performClick()
     selectChat(FULL_MESSAGE_SECOND_CHAT)
     gateway.fullReadRpcError = true
     viewAll().performClick()
@@ -889,7 +1022,7 @@ class ChatFullMessageOwnershipLayoutTest {
     val close =
       checkNotNull(
         composeRule
-          .onNodeWithText("Close")
+          .onNodeWithText("Show less")
           .assertIsDisplayed()
           .assertIsEnabled()
           .fetchSemanticsNode()
@@ -905,8 +1038,8 @@ class ChatFullMessageOwnershipLayoutTest {
         assertTrue(close())
       }
       composeRule.waitForIdle()
-      assertNativeReaderAbsent()
-      composeRule.onNodeWithText("Close").assertDoesNotExist()
+      assertExpandedTextAbsent()
+      composeRule.onNodeWithText("Show less").assertDoesNotExist()
       viewAll().assertIsDisplayed().assertIsEnabled()
       refreshSelectedChat()
       val beforeReopen = gateway.fullReads.toList()
@@ -917,8 +1050,12 @@ class ChatFullMessageOwnershipLayoutTest {
       assertEquals("Close must discard the pending retry, so reopening requests a fresh read", beforeReopen + expectedRequest(), gateway.fullReads.toList())
       gateway.releaseFullResponses()
       awaitExpanded()
-      composeRule.onNodeWithText("Close").assertIsDisplayed().performClick()
-      assertNativeReaderAbsent()
+      composeRule
+        .onNodeWithText("Show less")
+        .performScrollTo()
+        .assertIsDisplayed()
+        .performClick()
+      assertExpandedTextAbsent()
     } finally {
       gateway.releaseFullResponses()
     }
@@ -941,6 +1078,20 @@ class ChatFullMessageOwnershipLayoutTest {
         JsonObject(valid + ("message" to JsonObject(validMessage + ("__openclaw" to buildJsonObject { put("id", JsonPrimitive(12)) })))),
         JsonObject(valid + ("message" to JsonObject(validMessage + ("content" to JsonPrimitive(""))))),
         JsonObject(valid + ("message" to JsonObject(validMessage + ("openclawMessageToolMirror" to buildJsonObject { put("toolName", JsonPrimitive("message")) })))),
+        JsonObject(
+          valid + (
+            "message" to
+              JsonObject(
+                validMessage + (
+                  "openclawStreamFallback" to
+                    buildJsonObject {
+                      put("source", JsonPrimitive("segment"))
+                      put("itemId", JsonPrimitive("segment-qa"))
+                    }
+                ),
+              )
+          ),
+        ),
       )
     variants.forEachIndexed { index, payload ->
       if (index > 0) selectChat(if (index % 2 == 0) FULL_MESSAGE_FIRST_CHAT else FULL_MESSAGE_SECOND_CHAT)
@@ -949,9 +1100,9 @@ class ChatFullMessageOwnershipLayoutTest {
       composeRule.waitUntil(FULL_MESSAGE_READY_TIMEOUT_MS) {
         composeRule.onAllNodes(hasText("The full message could not be loaded.")).fetchSemanticsNodes().isNotEmpty()
       }
-      assertNativeReaderAbsent()
+      assertExpandedTextAbsent()
       composeRule.onNode(hasText("...(truncated)...", substring = true)).assertExists()
-      composeRule.onNodeWithText("Close").performClick()
+      composeRule.onNodeWithText("Show less").performScrollTo().performClick()
       gateway.fullResponseOverride = null
       viewAll().assertIsDisplayed().performClick()
       composeRule.onNodeWithText("The full message could not be loaded.").assertIsDisplayed()
@@ -963,46 +1114,96 @@ class ChatFullMessageOwnershipLayoutTest {
         .performClick()
       awaitExpanded()
       assertEquals("Only the explicit Retry may recover the canonical answer", index * 2 + 2, gateway.fullReads.size)
-      composeRule.onNodeWithText("Close").performClick()
+      composeRule.onNodeWithText("Show less").performScrollTo().performClick()
     }
   }
 
   @Test
+  @Config(sdk = [36])
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
   fun closingFullReaderPreservesPreviewActionsAndCachedReopening() {
-    viewAll().performClick()
-    awaitExpanded()
-    composeRule.onNodeWithText("Message actions").assertDoesNotExist()
-    composeRule.onNodeWithText("Close").performClick()
-    assertNativeReaderAbsent()
-    val preview = gateway.preview(FULL_MESSAGE_FIRST_CHAT)
-    openMessageActions()
-    composeRule.onNodeWithText("Copy").performClick()
+    gateway.includeMedia = true
+    refreshSelectedChat()
+    val history = runtime.chatMessages.value.single()
+    assertEquals(listOf("image", "text", "file", "text", "audio"), history.content.map { it.type })
+    val full = gateway.fullText(FULL_MESSAGE_FIRST_CHAT) + "\n\n" + FULL_MESSAGE_MEDIA_TEXT
+    val preview = gateway.preview(FULL_MESSAGE_FIRST_CHAT) + "\n\n" + FULL_MESSAGE_MEDIA_TEXT
     val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    assertEquals(
-      preview,
-      clipboard.primaryClip
-        ?.getItemAt(0)
-        ?.text
-        ?.toString(),
-    )
-    openMessageActions()
-    composeRule.onNodeWithText("Listen").performClick()
-    runBlocking { withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { gateway.speechReads.first { it.isNotEmpty() } } }
-    assertEquals(listOf(preview), gateway.speechReads.value)
-    composeRule.runOnIdle { model.stopChatMessageSpeech() }
-    openMessageActions()
-    composeRule.onNodeWithText("Reply").performClick()
-    val expectedReply = quoteChatMessage(preview)
-    composeRule.waitUntil(FULL_MESSAGE_READY_TIMEOUT_MS) {
-      composeRule.onAllNodes(hasSetTextAction() and hasText(expectedReply)).fetchSemanticsNodes().isNotEmpty()
+
+    fun assertMediaOrder() {
+      val labels = listOf(FULL_MESSAGE_IMAGE, FULL_MESSAGE_FIRST_CHAT, FULL_MESSAGE_FILE, FULL_MESSAGE_MEDIA_TEXT, FULL_MESSAGE_AUDIO)
+      val tops =
+        labels.map { label ->
+          val matcher = hasText(label, substring = true) and hasAnyAncestor(hasContentDescription("OpenClaw"))
+          composeRule.onAllNodes(matcher, useUnmergedTree = true).assertCountEquals(1)
+          composeRule
+            .onNode(matcher, useUnmergedTree = true)
+            .fetchSemanticsNode()
+            .positionInRoot.y
+        }
+      assertTrue("Expansion must preserve image/text/file/text/history-audio order without duplicates", tops.all { it.isFinite() } && tops.zipWithNext().all { (before, after) -> before < after })
+      composeRule.onAllNodes(hasContentDescription("Play audio") and hasClickAction()).assertCountEquals(1)
+      labels.forEach { label ->
+        composeRule.onNode(hasText(label, substring = true) and hasAnyAncestor(hasContentDescription("OpenClaw")), useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+      }
     }
-    composeRule.onNode(hasSetTextAction() and hasText(expectedReply)).assertExists()
-    assertNativeReaderAbsent()
-    viewAll().assertIsDisplayed().assertIsEnabled().performClick()
-    awaitExpanded()
-    assertEquals("Preview actions and cached re-opening must not fetch the message again", 1, gateway.fullReads.size)
-    composeRule.onNodeWithText("Close").performClick()
-    assertNativeReaderAbsent()
+
+    fun assertActions(text: String) {
+      // Reply prepends to an existing draft; exercise each content state independently.
+      composeRule.onNode(hasSetTextAction()).performTextClearance()
+      openMessageActions()
+      composeRule.onNodeWithText("Copy").performClick()
+      assertEquals(
+        text,
+        clipboard.primaryClip
+          ?.getItemAt(0)
+          ?.text
+          ?.toString(),
+      )
+      val beforeSpeech = gateway.speechReads.value.size
+      openMessageActions()
+      composeRule.onNodeWithText("Listen").performClick()
+      runBlocking { withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { gateway.speechReads.first { it.size > beforeSpeech } } }
+      assertEquals(text, gateway.speechReads.value.last())
+      composeRule.runOnIdle { model.stopChatMessageSpeech() }
+      openMessageActions()
+      composeRule.onNodeWithText("Reply").performClick()
+      val expectedReply = quoteChatMessage(text)
+      composeRule.waitUntil(FULL_MESSAGE_READY_TIMEOUT_MS) {
+        composeRule.onAllNodes(hasSetTextAction() and hasText(expectedReply)).fetchSemanticsNodes().isNotEmpty()
+      }
+      composeRule.onNode(hasSetTextAction() and hasText(expectedReply)).assertExists()
+    }
+
+    assertMediaOrder()
+    viewAll().performScrollTo().assertIsDisplayed().performClick()
+    awaitExpanded(full)
+    assertMediaOrder()
+    assertActions(full)
+    openMessageActions()
+    composeRule.onNodeWithText("Select text").performClick()
+    awaitSelectionText(full)
+    assertNativeTailAndSelection(full, FULL_MESSAGE_MEDIA_TEXT)
+    composeRule.onNodeWithText("Done").performClick()
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+    composeRule.runOnIdle { assertTrue(nativeReaders().isEmpty()) }
+    awaitExpanded(full)
+    composeRule.onNodeWithText("Show less").performScrollTo().performClick()
+    assertInlineCollapsed()
+    assertMediaOrder()
+    assertActions(preview)
+    assertExpandedTextAbsent()
+    viewAll()
+      .performScrollTo()
+      .assertIsDisplayed()
+      .assertIsEnabled()
+      .performClick()
+    awaitExpanded(full)
+    assertMediaOrder()
+    assertEquals("Full and preview actions plus cached reopening must not fetch again", 1, gateway.fullReads.size)
+    composeRule.onNodeWithText("Show less").performScrollTo().performClick()
+    assertInlineCollapsed()
+    assertEquals(history, runtime.chatMessages.value.single())
   }
 
   @Test
@@ -1016,7 +1217,7 @@ class ChatFullMessageOwnershipLayoutTest {
       composeRule.onAllNodes(hasText(FULL_MESSAGE_TAIL, substring = true)).fetchSemanticsNodes().isNotEmpty()
     }
     composeRule.onNodeWithText("Close").assertIsDisplayed()
-    assertNativeReaderAbsent()
+    assertExpandedTextAbsent()
     composeRule.runOnIdle { replaceConnectionBeforeRecomposition() }
     composeRule.waitForIdle()
     composeRule.onNode(hasText(FULL_MESSAGE_TAIL, substring = true)).assertExists()
@@ -1040,7 +1241,7 @@ class ChatFullMessageOwnershipLayoutTest {
     composeRule.runOnIdle { replaceConnectionBeforeRecomposition() }
     composeRule.waitForIdle()
     assertTrue(runtime.gatewayCatalogRevision.value > catalog)
-    composeRule.onNodeWithText("Close").assertDoesNotExist()
+    composeRule.onNodeWithText("Show less").assertDoesNotExist()
     assertDisconnectedReaderSurvivesFailedReconnect()
   }
 
@@ -1172,7 +1373,7 @@ class ChatFullMessageOwnershipLayoutTest {
     if (preload) {
       viewAll().performClick()
       awaitExpanded()
-      composeRule.onNodeWithText("Close").performClick()
+      composeRule.onNodeWithText("Show less").performScrollTo().performClick()
     }
     val priorReads = gateway.fullReads.toList()
     val oldAction =
@@ -1193,7 +1394,7 @@ class ChatFullMessageOwnershipLayoutTest {
       oldAction()
     }
     composeRule.waitForIdle()
-    assertNativeReaderAbsent()
+    assertExpandedTextAbsent()
     val previousHistoryCount = gateway.historyReads.value.size
     val currentConnection = gateway.operatorConnection.get()
     val currentSession = runtime.chatSessionKey.value
@@ -1225,7 +1426,7 @@ class ChatFullMessageOwnershipLayoutTest {
           model.chatMessages.value
             .singleOrNull()
             ?.content
-            ?.singleOrNull()
+            ?.firstOrNull { it.type == "text" }
             ?.text == gateway.historyText(key)
       }
     } catch (failure: Exception) {
@@ -1236,12 +1437,12 @@ class ChatFullMessageOwnershipLayoutTest {
           "textMatches=${runtime.chatMessages.value
             .singleOrNull()
             ?.content
-            ?.singleOrNull()
+            ?.firstOrNull { it.type == "text" }
             ?.text == gateway.historyText(key)}/" +
           "${model.chatMessages.value
             .singleOrNull()
             ?.content
-            ?.singleOrNull()
+            ?.firstOrNull { it.type == "text" }
             ?.text == gateway.historyText(key)}; " +
           "error=${runtime.chatError.value}/${model.chatError.value}; " +
           "connected=${runtime.gatewayConnectionDisplay.value.isConnected}; " +
@@ -1269,7 +1470,7 @@ class ChatFullMessageOwnershipLayoutTest {
             messages
               .singleOrNull()
               ?.content
-              ?.singleOrNull()
+              ?.firstOrNull { it.type == "text" }
               ?.text == gateway.historyText(key)
         }.first { it }
       }
@@ -1277,21 +1478,88 @@ class ChatFullMessageOwnershipLayoutTest {
     assertNull(runtime.chatError.value)
   }
 
+  private fun awaitInlineExpanded(
+    tail: String = FULL_MESSAGE_TAIL,
+    expected: String = gateway.fullText(runtime.chatSessionKey.value),
+  ) {
+    assertTrue("View all must expand the transcript bubble without opening a dialog", composeRule.onAllNodes(isDialog()).fetchSemanticsNodes().isEmpty())
+    val assistant = hasAnyAncestor(hasContentDescription("OpenClaw"))
+    val firstParagraph = expected.substringBefore("\n\n").trimEnd()
+    val inlineTail = hasText(tail, substring = true) and assistant
+    composeRule.waitUntil(FULL_MESSAGE_READY_TIMEOUT_MS) {
+      composeRule.onAllNodes(inlineTail, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() &&
+        composeRule.onAllNodes(hasText(firstParagraph, substring = true) and assistant, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+    }
+    composeRule.onNode(hasText(firstParagraph, substring = true) and assistant, useUnmergedTree = true).assertExists()
+    composeRule.onNode(inlineTail, useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+    composeRule.onNode(hasText("...(truncated)...", substring = true) and assistant, useUnmergedTree = true).assertDoesNotExist()
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+  }
+
+  private fun assertInlineCollapsed(tail: String = FULL_MESSAGE_TAIL) {
+    composeRule.onNode(hasText(tail, substring = true) and hasAnyAncestor(hasContentDescription("OpenClaw")), useUnmergedTree = true).assertDoesNotExist()
+    composeRule.onNode(hasText("...(truncated)...", substring = true) and hasAnyAncestor(hasContentDescription("OpenClaw")), useUnmergedTree = true).assertExists()
+    composeRule.onNodeWithText("Show less").assertDoesNotExist()
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+  }
+
   private fun awaitExpanded(expected: String = gateway.fullText(runtime.chatSessionKey.value)) {
+    awaitInlineExpanded(tail = expected.lineSequence().last { it.isNotBlank() }.takeLast(128), expected = expected)
+  }
+
+  private fun assertInlineTailDisplayed(tail: String) {
+    val target = composeRule.onNode(hasText(tail, substring = true) and hasAnyAncestor(hasContentDescription("OpenClaw")), useUnmergedTree = true)
+    target.performScrollTo().assertIsDisplayed()
+    val layouts = mutableListOf<TextLayoutResult>()
+    target.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> assertTrue(action(layouts)) }
+    val layout = layouts.single()
+    val start =
+      layout.layoutInput.text.text
+        .lastIndexOf(tail)
+    assertTrue("The rendered text layout must contain the requested ending", start >= 0)
+    val node = target.fetchSemanticsNode()
+    for (index in tail.indices) {
+      if (tail[index].isWhitespace()) continue
+      val glyph = layout.getBoundingBox(start + index).translate(node.positionInRoot)
+      assertTrue("Ending glyph $index must have finite positive geometry", glyph.left.isFinite() && glyph.top.isFinite() && glyph.width > 0 && glyph.height > 0)
+      assertTrue(
+        "Ending glyph $index must be visible inside the transcript: $glyph vs ${node.boundsInRoot}",
+        node.boundsInRoot.contains(glyph.topLeft) &&
+          node.boundsInRoot.contains(
+            glyph.bottomRight -
+              androidx.compose.ui.geometry
+                .Offset(0.01f, 0.01f),
+          ),
+      )
+    }
+  }
+
+  private fun showEndOfCode() {
+    val end = hasText("End of code") and hasClickAction()
+    composeRule.waitUntil(FULL_MESSAGE_READY_TIMEOUT_MS) { composeRule.onAllNodes(end).fetchSemanticsNodes().isNotEmpty() }
+    // A merged message can inherit the inner code scroller, which does not own this toolbar.
+    composeRule.onNodeWithText("End of code", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+    composeRule
+      .onNode(end)
+      .assertIsDisplayed()
+      .assertIsEnabled()
+      .performClick()
+    // Bring the bounded code viewport into the transcript viewport using public scrolling.
+    composeRule.onNode(hasScrollToNodeAction() and hasAnyAncestor(hasContentDescription("OpenClaw")), useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+  }
+
+  private fun scrollToOriginalMessage() {
+    composeRule.onNode(hasScrollToNodeAction()).performScrollToNode(hasContentDescription("OpenClaw") and hasText("An ordinary paragraph", substring = true))
+  }
+
+  private fun awaitSelectionText(expected: String) {
     composeRule.waitUntil(FULL_MESSAGE_READY_TIMEOUT_MS) {
       composeRule.runOnIdle {
-        nativeReaders().singleOrNull()?.let { reader ->
-          reader.text.toString() == expected &&
-            reader.isShown &&
-            reader.width > 0 &&
-            reader.height > 0 &&
-            !reader.isLayoutRequested &&
-            reader.layout != null
-        } == true
+        nativeReaders().singleOrNull()?.let { it.text.toString() == expected && it.isShown && it.width > 0 && it.height > 0 && !it.isLayoutRequested && it.layout != null } == true
       }
     }
-    composeRule.onNodeWithText("Close").assertIsDisplayed()
-    composeRule.waitForIdle()
+    composeRule.onNode(isDialog()).assertExists()
+    composeRule.onNodeWithText("Done").assertIsDisplayed()
     composeRule.runOnIdle {
       val reader = nativeReaders().single()
       assertEquals(expected, reader.text.toString())
@@ -1300,8 +1568,7 @@ class ChatFullMessageOwnershipLayoutTest {
   }
 
   private fun nativeReaders(): List<TextView> {
-    // Inspect every attached window, including dialogs: a Compose text surrogate cannot
-    // establish page-buffer retention or rule out a retired native reader left behind.
+    // Select text remains a native dialog; inspect its real buffer and every attached window.
     fun descendants(view: View): Sequence<View> =
       sequence {
         yield(view)
@@ -1318,9 +1585,11 @@ class ChatFullMessageOwnershipLayoutTest {
       .toList()
   }
 
-  private fun assertNativeReaderAbsent() {
+  private fun assertExpandedTextAbsent(tail: String = FULL_MESSAGE_TAIL) {
+    composeRule.onNode(hasText(tail, substring = true) and hasAnyAncestor(hasContentDescription("OpenClaw")), useUnmergedTree = true).assertDoesNotExist()
+    composeRule.onNode(isDialog()).assertDoesNotExist()
     composeRule.runOnIdle {
-      assertTrue("No retired native text buffer may remain in an attached window", nativeReaders().isEmpty())
+      assertTrue("No retired selection buffer may remain in an attached window", nativeReaders().isEmpty())
     }
   }
 
@@ -1328,6 +1597,7 @@ class ChatFullMessageOwnershipLayoutTest {
     expected: String,
     tail: String,
   ) {
+    assertEquals(GraphicsMode.Mode.NATIVE, ConfigurationRegistry.get(GraphicsMode.Mode::class.java))
     composeRule.runOnIdle {
       val reader = nativeReaders().single()
       assertEquals(expected, reader.text.toString())
@@ -1399,8 +1669,6 @@ class ChatFullMessageOwnershipLayoutTest {
 
   private fun viewAll() = composeRule.onNode(hasText("View all") and hasClickAction())
 
-  private fun pageButton(label: String) = composeRule.onNode(hasContentDescription(label) and hasClickAction())
-
   private fun expectedRequest() = FullMessageRead(gateway.operatorConnection.get(), model.chatSessionKey.value, "main", FULL_MESSAGE_ENTRY)
 
   private fun bindRuntime(value: NodeRuntime?) {
@@ -1446,13 +1714,19 @@ internal class FullMessageGateway : AutoCloseable {
 
   @Volatile var historyMessageToolMirror = false
 
+  @Volatile var historySyntheticMarker = "openclawMessageToolMirror"
+
   @Volatile var emitTruncationMarker = true
 
   @Volatile var contentAsBlocks = false
 
+  @Volatile var includeMedia = false
+
   @Volatile var historyTextOverride: String? = null
 
   @Volatile var historyAppendCount = 0
+
+  @Volatile var historyAppendRole: String? = null
 
   @Volatile var advertiseFullRead = true
 
@@ -1577,11 +1851,11 @@ internal class FullMessageGateway : AutoCloseable {
                   "messages",
                   JsonArray(
                     buildList {
-                      add(message(session, truncated = historyTruncated, role = historyRole, text = historyText(session), mirror = historyMessageToolMirror))
+                      add(message(session, truncated = historyTruncated, role = historyRole, text = historyText(session), mirror = historyMessageToolMirror, history = true))
                       repeat(historyAppendCount) { index ->
                         add(
                           buildJsonObject {
-                            put("role", JsonPrimitive(if (index % 2 == 0) "user" else "assistant"))
+                            put("role", JsonPrimitive(historyAppendRole ?: if (index % 2 == 0) "user" else "assistant"))
                             put("content", JsonPrimitive(backgroundText(index)))
                             put("__openclaw", buildJsonObject { put("id", JsonPrimitive("background-$index")) })
                           },
@@ -1645,14 +1919,68 @@ internal class FullMessageGateway : AutoCloseable {
     role: String = "assistant",
     text: String = if (truncated) preview(session) else fullText(session),
     mirror: Boolean = false,
+    history: Boolean = false,
   ) = buildJsonObject {
     put("role", JsonPrimitive(role))
     if (mirror) {
-      put("openclawMessageToolMirror", buildJsonObject { put("toolName", JsonPrimitive("message")) })
+      put(
+        historySyntheticMarker,
+        buildJsonObject {
+          if (historySyntheticMarker == "openclawStreamFallback") {
+            put("source", JsonPrimitive("segment"))
+            put("itemId", JsonPrimitive("segment-qa"))
+            put("replacementText", JsonPrimitive(text))
+          } else {
+            put("toolName", JsonPrimitive("message"))
+          }
+        },
+      )
     }
     put(
       "content",
-      if (contentAsBlocks) {
+      if (includeMedia) {
+        JsonArray(
+          buildList {
+            add(
+              buildJsonObject {
+                put("type", JsonPrimitive("image"))
+                put("mimeType", JsonPrimitive("image/png"))
+                put("fileName", JsonPrimitive(FULL_MESSAGE_IMAGE))
+                put("omitted", JsonPrimitive(true))
+              },
+            )
+            add(
+              buildJsonObject {
+                put("type", JsonPrimitive("text"))
+                put("text", JsonPrimitive(text))
+              },
+            )
+            add(
+              buildJsonObject {
+                put("type", JsonPrimitive("file"))
+                put("fileName", JsonPrimitive(FULL_MESSAGE_FILE))
+              },
+            )
+            add(
+              buildJsonObject {
+                put("type", JsonPrimitive("text"))
+                put("text", JsonPrimitive(FULL_MESSAGE_MEDIA_TEXT))
+              },
+            )
+            if (history) {
+              // The history owner appends generated TTS audio; canonical full-get does not.
+              add(
+                buildJsonObject {
+                  put("type", JsonPrimitive("audio"))
+                  put("mimeType", JsonPrimitive("audio/mpeg"))
+                  put("fileName", JsonPrimitive(FULL_MESSAGE_AUDIO))
+                  put("artifactId", JsonPrimitive("history-tts-audio"))
+                },
+              )
+            }
+          },
+        )
+      } else if (contentAsBlocks) {
         JsonArray(
           listOf(
             buildJsonObject {
