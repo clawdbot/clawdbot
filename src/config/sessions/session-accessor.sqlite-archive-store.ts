@@ -207,6 +207,7 @@ export async function publishSessionStateArchives(
         return plan
           ? [
               {
+                agentId: plan.agentId,
                 archivedPath: result.archivedPath,
                 generation: result.generation,
                 sessionId: result.sessionId,

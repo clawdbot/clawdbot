@@ -72,6 +72,10 @@ export type MemorySessionSyncTarget = {
   sessionId: string;
   /** Optional visible session-store key for callers that already carry it. */
   sessionKey?: string;
+  /** Authoritative store that owns this SQLite transcript identity. */
+  storePath?: string;
+  /** Authoritative archive file produced for this transcript identity. */
+  sessionFile?: string;
 };
 
 export type MemorySyncParams = {

@@ -27,6 +27,8 @@ export type SessionLifecycleStoreTarget = {
 };
 
 export type SessionLifecycleArchivedTranscript = {
+  /** Agent that owns the archived transcript. */
+  agentId: string;
   /** Canonical SQLite archive identity used for idempotent derived-file publication. */
   generation: string;
   sessionId: string;

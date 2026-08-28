@@ -58,7 +58,9 @@ type SyncParams = {
 
 type MemorySessionTranscriptUpdate = {
   agentId?: string;
+  archiveFile?: true;
   sessionFile?: string;
+  sessionId?: string;
   sessionKey?: string;
   target?: {
     agentId: string;
@@ -260,7 +262,12 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
 
   addPendingSessionTarget(target: NonNullable<MemorySyncParams["sessions"]>[number]): void {
     this.sessionPendingTargets.set(
-      [target.agentId ?? "", target.sessionId, target.sessionKey ?? ""].join("\0"),
+      [
+        target.agentId ?? "",
+        target.sessionId,
+        target.sessionKey ?? "",
+        target.sessionFile ?? "",
+      ].join("\0"),
       target,
     );
   }
@@ -346,10 +353,16 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
 
   protected async sync(params?: MemorySyncParams): Promise<void> {
     this.syncCalls.push(params ?? {});
+    const targeted =
+      params?.sessions?.length || params?.archiveFiles?.length
+        ? await this.resolveTargetSessionSyncPlan(params)
+        : null;
     this.pendingSyncWork = this.indexSessionUpdates
       ? this.syncArchiveFiles({
           needsFullReindex: false,
           deferIndex: this.deferSessionIndex,
+          corpusEntries: targeted?.corpusEntries,
+          targetArchiveFiles: targeted ? Array.from(targeted.targetArchiveFiles) : undefined,
         }).then(() => undefined)
       : Promise.resolve();
     await this.pendingSyncWork;
@@ -835,27 +848,13 @@ describe("session startup catch-up", () => {
     expect(restarted.getSourceMetadataUpdateCount()).toBe(1);
   });
 
-  it("does not fall back to full session sync when identity targets normalize away", async () => {
+  it.each([
+    { agentId: "other", sessionId: "thread" },
+    { agentId: "main", sessionId: "bad/nested" },
+  ])("does not fall back to full session sync for invalid target $sessionId", async (target) => {
     await writeSessionFile("thread.jsonl");
     const harness = new SessionStartupCatchupHarness([]);
-
-    await harness.runSyncForTest({
-      reason: "queued-sessions",
-      sessions: [{ agentId: "other", sessionId: "thread" }],
-    });
-
-    expect(harness.indexedPaths).toEqual([]);
-  });
-
-  it("does not fall back to full session sync for malformed identity session ids", async () => {
-    await writeSessionFile("thread.jsonl");
-    const harness = new SessionStartupCatchupHarness([]);
-
-    await harness.runSyncForTest({
-      reason: "queued-sessions",
-      sessions: [{ agentId: "main", sessionId: "bad/nested" }],
-    });
-
+    await harness.runSyncForTest({ reason: "queued-sessions", sessions: [target] });
     expect(harness.indexedPaths).toEqual([]);
   });
 
@@ -869,7 +868,7 @@ describe("session startup catch-up", () => {
 
   it("resolves identity-targeted updates through a custom session store", async () => {
     const storePath = path.join(stateDir, "custom-sessions", "sessions.json");
-    const session = await writeSqliteSession({
+    await writeSqliteSession({
       storePath,
       sessionId: "custom-thread",
       sessionKey: "agent:main:chat:custom",
@@ -883,10 +882,6 @@ describe("session startup catch-up", () => {
     });
 
     await harness.processPendingSessionUpdates();
-    await Promise.resolve();
-
-    expect(harness.getDirtyArchiveFiles()).toEqual([session.sessionKey]);
-    expect(harness.syncCalls[0]?.archiveFiles).toEqual([session.sessionKey]);
     expect(harness.syncCalls[0]?.sessions).toHaveLength(1);
   });
 
@@ -1020,7 +1015,7 @@ describe("session startup catch-up", () => {
         }),
       ).resolves.toBe(true);
       await harness.waitForCorpusList();
-      expect(harness.getPendingArchiveFiles()).toHaveLength(1);
+      expect(harness.corpusListCalls).toBe(0);
 
       await vi.advanceTimersByTimeAsync(6000);
       await harness.waitForSessionSync();

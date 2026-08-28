@@ -121,13 +121,23 @@ function normalizeQueuedMemorySessionSyncTarget(
   }
   const agentId = target.agentId?.trim();
   const sessionKey = target.sessionKey?.trim();
+  const storePath = target.storePath?.trim();
+  const sessionFile = target.sessionFile?.trim();
   return {
     ...(agentId ? { agentId } : {}),
     sessionId,
     ...(sessionKey ? { sessionKey } : {}),
+    ...(storePath ? { storePath } : {}),
+    ...(sessionFile ? { sessionFile } : {}),
   };
 }
 
 function memorySessionSyncTargetKey(target: MemorySessionSyncTarget): string {
-  return [target.agentId ?? "", target.sessionId, target.sessionKey ?? ""].join("\0");
+  return [
+    target.agentId ?? "",
+    target.sessionId,
+    target.sessionKey ?? "",
+    target.storePath ?? "",
+    target.sessionFile ?? "",
+  ].join("\0");
 }

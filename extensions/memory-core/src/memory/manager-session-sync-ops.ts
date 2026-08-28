@@ -36,12 +36,15 @@ const log = createSubsystemLogger("memory");
 
 type MemorySessionTranscriptUpdate = {
   agentId?: string;
+  archiveFile?: true;
   sessionFile?: string;
+  sessionId?: string;
   sessionKey?: string;
   target?: {
     agentId: string;
     sessionId: string;
     sessionKey: string;
+    storePath?: string;
   };
 };
 
@@ -112,8 +115,8 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
 
   protected buildSessionEntryOptions(entry: SessionTranscriptCorpusEntry) {
     return {
-      generatedByDreamingNarrative: entry.generatedByDreamingNarrative === true,
-      generatedByCronRun: entry.generatedByCronRun === true,
+      ...(entry.generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
+      ...(entry.generatedByCronRun ? { generatedByCronRun: true } : {}),
       ...(entry.sessionKind ? { sessionKind: entry.sessionKind } : {}),
       ...(entry.transcriptSource === "sqlite" && entry.storePath
         ? {
@@ -284,14 +287,11 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     const pendingTargets = Array.from(this.sessionPendingTargets.values());
     this.sessionPendingFiles.clear();
     this.sessionPendingTargets.clear();
-    pending.push(...Array.from(await this.resolveArchiveFilesForSyncTargets(pendingTargets)));
     for (const sessionFile of pending) {
       this.sessionsDirtyFiles.add(sessionFile);
     }
-    if (pending.length > 0) {
+    if (pending.length > 0 || pendingTargets.length > 0) {
       this.sessionsDirty = true;
-      // Keep both identity and file keys so every transcript backend enters the
-      // targeted queue instead of letting an active sync clear this newer event.
       void this.sync({
         reason: "session-delta",
         sessions: pendingTargets,
@@ -305,19 +305,21 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
   private resolveSessionTranscriptUpdateSyncTarget(
     update: MemorySessionTranscriptUpdate,
   ): MemorySessionSyncTarget | null {
-    if (!update.target) {
-      return null;
-    }
-    const agentId = update.target.agentId.trim();
-    const sessionId = update.target.sessionId.trim();
-    const sessionKey = update.target.sessionKey.trim();
+    const agentId = (update.target?.agentId ?? update.agentId)?.trim();
+    const sessionId = (update.target?.sessionId ?? update.sessionId)?.trim();
+    const sessionKey = update.target?.sessionKey.trim();
+    const storePath = update.target?.storePath?.trim();
     if (!agentId || !sessionId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
       return null;
     }
+    const sessionFile =
+      !update.target && update.archiveFile === true ? update.sessionFile?.trim() : undefined;
     return {
       agentId,
       sessionId,
       ...(sessionKey ? { sessionKey } : {}),
+      ...(storePath ? { storePath } : {}),
+      ...(sessionFile ? { sessionFile: path.resolve(sessionFile) } : {}),
     };
   }
 
@@ -351,23 +353,48 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     return normalized.size > 0 ? normalized : null;
   }
 
-  private async resolveArchiveFilesForSyncTargets(
-    sessions?: Iterable<MemorySessionSyncTarget> | null,
-    knownCorpusEntries?: readonly SessionTranscriptCorpusEntry[],
-  ): Promise<Set<string>> {
-    const files = new Set<string>();
-    const targets = Array.from(sessions ?? []);
-    if (targets.length === 0) {
-      return files;
-    }
-    const corpusEntries = knownCorpusEntries ?? (await this.listSessionCorpusEntries());
-    for (const rawSession of targets) {
+  private resolveSessionSyncTargets(
+    sessions: readonly MemorySessionSyncTarget[],
+    corpusEntries: readonly SessionTranscriptCorpusEntry[],
+  ): { corpusEntries: SessionTranscriptCorpusEntry[]; targetArchiveFiles: Set<string> } {
+    const entries = new Map(corpusEntries.map((entry) => [entry.sessionFile, entry]));
+    const targetArchiveFiles = new Set<string>();
+    for (const rawSession of sessions) {
       const sessionId = rawSession.sessionId.trim();
       const agentId = rawSession.agentId?.trim() || this.agentId;
       if (!sessionId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
         continue;
       }
+      const sessionFile = rawSession.sessionFile?.trim();
+      if (sessionFile) {
+        const resolvedSessionFile = path.resolve(sessionFile);
+        entries.set(resolvedSessionFile, {
+          agentId,
+          artifactKind: "archive-artifact",
+          sessionFile: resolvedSessionFile,
+          sessionId,
+          sessionKind: "unknown",
+        });
+        targetArchiveFiles.add(resolvedSessionFile);
+        continue;
+      }
       const sessionKey = rawSession.sessionKey?.trim();
+      const storePath = rawSession.storePath?.trim();
+      if (storePath && sessionKey) {
+        const entry: SessionTranscriptCorpusEntry = {
+          agentId,
+          artifactKind: "active-session",
+          sessionFile: sessionKey,
+          sessionId,
+          sessionKey,
+          sessionKind: "unknown",
+          storePath,
+          transcriptSource: "sqlite",
+        };
+        entries.set(sessionKey, entry);
+        targetArchiveFiles.add(sessionKey);
+        continue;
+      }
       const matchingEntries = corpusEntries.filter(
         (entry) =>
           normalizeAgentId(entry.agentId) === normalizeAgentId(this.agentId) &&
@@ -375,34 +402,46 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
           (!sessionKey || entry.sessionKey === sessionKey),
       );
       for (const entry of matchingEntries) {
-        files.add(
+        entries.set(entry.sessionFile, entry);
+        targetArchiveFiles.add(
           entry.transcriptSource === "sqlite" ? entry.sessionFile : path.resolve(entry.sessionFile),
         );
       }
     }
-    return files;
+    return { corpusEntries: Array.from(entries.values()), targetArchiveFiles };
   }
 
   protected async resolveTargetSessionSyncPlan(params: {
     sessions?: MemorySessionSyncTarget[];
     archiveFiles?: string[];
   }) {
-    const files = new Set<string>();
-    const corpusEntries = await this.listSessionCorpusEntries();
+    const sessions = params.sessions ?? [];
+    const needsCorpusDiscovery =
+      params.archiveFiles?.some((sessionFile) => sessionFile.trim().length > 0) === true ||
+      sessions.some(
+        (session) =>
+          !session.sessionFile?.trim() &&
+          !(session.storePath?.trim() && session.sessionKey?.trim()),
+      );
+    const discoveredEntries = needsCorpusDiscovery ? await this.listSessionCorpusEntries() : [];
+    const { corpusEntries, targetArchiveFiles } = this.resolveSessionSyncTargets(
+      sessions,
+      discoveredEntries,
+    );
     for (const file of this.normalizeTargetArchiveFiles(params.archiveFiles, corpusEntries) ?? []) {
-      files.add(file);
+      targetArchiveFiles.add(file);
     }
-    for (const file of await this.resolveArchiveFilesForSyncTargets(
-      params.sessions,
-      corpusEntries,
-    )) {
-      files.add(file);
-    }
-    return files.size > 0 ? { corpusEntries, targetArchiveFiles: files } : null;
+    return targetArchiveFiles.size > 0 ? { corpusEntries, targetArchiveFiles } : null;
   }
 
   private memorySessionSyncTargetKey(target: MemorySessionSyncTarget): string {
-    return [target.agentId ?? "", target.sessionId, target.sessionKey ?? ""].join("\0");
+    return [
+      target.agentId ?? "",
+      target.sessionId,
+      target.sessionKey ?? "",
+      target.storePath ?? "",
+      target.sessionFile ?? "",
+    ].join("\0");
   }
 
   protected shouldSyncSessions(params?: MemorySyncParams, needsFullReindex = false) {

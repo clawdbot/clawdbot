@@ -129,7 +129,14 @@ describe("memory manager sync control", () => {
     });
 
     const queued = enqueueMemoryTargetedSessionSync(harness.state, {
-      sessions: [{ agentId: "main", sessionId: "targeted", sessionKey: "agent:main:targeted" }],
+      sessions: [
+        {
+          agentId: "main",
+          sessionId: "targeted",
+          sessionKey: "agent:main:targeted",
+          storePath: "  /tmp/targeted-sessions.json  ",
+        },
+      ],
       force: true,
       progress,
     });
@@ -140,7 +147,14 @@ describe("memory manager sync control", () => {
     expect(harness.sync).toHaveBeenCalledWith({
       reason: "queued-sessions",
       force: true,
-      sessions: [{ agentId: "main", sessionId: "targeted", sessionKey: "agent:main:targeted" }],
+      sessions: [
+        {
+          agentId: "main",
+          sessionId: "targeted",
+          sessionKey: "agent:main:targeted",
+          storePath: "/tmp/targeted-sessions.json",
+        },
+      ],
       archiveFiles: [],
       progress: expect.any(Function),
     });

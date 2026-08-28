@@ -296,27 +296,25 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
   return uniqueStrings(archives.map((archive) => archive.archivePath));
 }
 
-function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
+function archiveFileOnDisk(
+  filePath: string,
+  reason: ArchiveFileReason,
+  target?: { agentId: string; sessionId: string },
+): string {
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
   clearSessionTranscriptResetArchiveDiscoveryCache();
-  // Notify the session transcript subscribers (memory index, sessions-history
-  // HTTP, etc.) that a mutation landed on a session-owned path. Without this
-  // emit the memory sync's incremental path never learns the new archive
-  // exists: chokidar does not watch the sessions directory, and the event bus
-  // is the only channel gateway code uses to signal session-file mutations.
-  // All other in-process mutations (append, compaction, tool-result rewrite,
-  // chat inject, command execution) already emit here; archive was the sole
-  // remaining gap, which is why `.jsonl.reset.<iso>` / `.jsonl.deleted.<iso>`
-  // files only surfaced in the index after a full reindex.
-  emitSessionTranscriptUpdate({ sessionFile: archived });
+  // Archive creation already owns the transcript identity. Carry it with the
+  // path so targeted memory indexing never needs gateway-loop corpus discovery.
+  emitSessionTranscriptUpdate({ archiveFile: true, sessionFile: archived, ...target });
   return archived;
 }
 
 export function archiveSessionTranscriptPaths(opts: {
   paths: Iterable<string>;
   reason: ArchiveFileReason;
+  target?: { agentId: string; sessionId: string };
   onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
   const archived: ArchivedSessionTranscript[] = [];
@@ -330,7 +328,7 @@ export function archiveSessionTranscriptPaths(opts: {
     try {
       archived.push({
         sourcePath,
-        archivedPath: archiveFileOnDisk(sourcePath, opts.reason),
+        archivedPath: archiveFileOnDisk(sourcePath, opts.reason, opts.target),
       });
     } catch (err) {
       opts.onArchiveError?.(err, sourcePath);
@@ -395,6 +393,7 @@ export function archiveSessionTranscriptsDetailed(opts: {
   return archiveSessionTranscriptPaths({
     paths: candidatePaths,
     reason: opts.reason,
+    ...(opts.agentId ? { target: { agentId: opts.agentId, sessionId: opts.sessionId } } : {}),
     onArchiveError: opts.onArchiveError,
   });
 }

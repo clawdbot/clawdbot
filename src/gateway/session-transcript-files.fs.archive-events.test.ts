@@ -1,10 +1,11 @@
-// Transcript archive event tests ensure file archive/delete operations emit
-// path-only internal transcript update notifications.
+// Transcript archive event tests ensure file archive/delete operations publish
+// their authoritative session identity after the file mutation.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { archiveSessionTranscriptsDetailed } from "./session-transcript-files.fs.js";
 
 afterEach(() => {
@@ -55,23 +56,38 @@ describe("archiveSessionTranscriptsDetailed failure surface", () => {
       const sessionId = "22222222-2222-4222-8222-222222222222";
       const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
       fs.writeFileSync(sessionFile, '{"type":"session-meta","agentId":"main"}\n');
+      const updates: Array<{
+        agentId?: string;
+        archiveFile?: true;
+        sessionFile?: string;
+        sessionId?: string;
+      }> = [];
+      const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
 
-      const archived = archiveSessionTranscriptsDetailed({
-        sessionId,
-        storePath: path.join(tmpDir, "store.json"),
-        sessionFile,
-        agentId: "main",
-        reason: "reset",
-      });
+      let archived: ReturnType<typeof archiveSessionTranscriptsDetailed>;
+      try {
+        archived = archiveSessionTranscriptsDetailed({
+          sessionId,
+          storePath: path.join(tmpDir, "store.json"),
+          sessionFile,
+          agentId: "main",
+          reason: "reset",
+        });
+      } finally {
+        unsubscribe();
+      }
 
       expect(archived.length).toBe(1);
-      expect(expectDefined(archived[0], "archived[0] test invariant").archivedPath).toContain(
-        ".jsonl.reset.",
-      );
-      expect(
-        fs.existsSync(expectDefined(archived[0], "archived[0] test invariant").archivedPath),
-      ).toBe(true);
+      const archivedPath = expectDefined(archived[0], "archived[0] test invariant").archivedPath;
+      expect(archivedPath).toContain(".jsonl.reset.");
+      expect(fs.existsSync(archivedPath)).toBe(true);
       expect(fs.existsSync(sessionFile)).toBe(false);
+      expect(updates).toContainEqual({
+        agentId: "main",
+        archiveFile: true,
+        sessionFile: archivedPath,
+        sessionId,
+      });
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

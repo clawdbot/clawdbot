@@ -435,6 +435,7 @@ export async function materializeSessionStateDeletePlans(
     const archivedTranscript =
       result.archive && generation
         ? {
+            agentId: plan.agentId,
             generation,
             sessionId: plan.sessionId,
             archivedPath: path.join(plan.archiveDirectory, result.archive.archiveName),

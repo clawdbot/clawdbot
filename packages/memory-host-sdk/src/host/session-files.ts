@@ -810,14 +810,14 @@ export async function buildSessionEntry(
     const messageTimestampsMs: number[] = [];
     const lineProvenance: MemoryEntryProvenance[] = [];
     const parseYieldEveryLines = resolveSessionEntryParseYieldLines(opts);
-    const sqliteSessionKey =
-      sqliteIdentity && !opts.sessionKey
-        ? resolveTranscriptSessionKeyBySessionId({
-            agentId: sqliteIdentity.agentId,
-            sessionId: sqliteIdentity.sessionId,
-            storePath: sqliteIdentity.storePath,
-          })
-        : undefined;
+    const sqliteSessionKey = sqliteIdentity
+      ? (opts.sessionKey ??
+        resolveTranscriptSessionKeyBySessionId({
+          agentId: sqliteIdentity.agentId,
+          sessionId: sqliteIdentity.sessionId,
+          storePath: sqliteIdentity.storePath,
+        }))
+      : undefined;
     const sessionStoreClassification =
       !sqliteIdentity &&
       (opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined)

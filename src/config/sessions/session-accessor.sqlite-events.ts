@@ -12,7 +12,12 @@ export function emitArchivedTranscriptUpdates(
   archivedTranscripts: readonly SessionLifecycleArchivedTranscript[],
 ): void {
   for (const archived of archivedTranscripts) {
-    emitSessionTranscriptUpdate({ sessionFile: archived.archivedPath });
+    emitSessionTranscriptUpdate({
+      agentId: archived.agentId,
+      archiveFile: true,
+      sessionFile: archived.archivedPath,
+      sessionId: archived.sessionId,
+    });
   }
 }
 

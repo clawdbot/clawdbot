@@ -37,10 +37,13 @@ describe("transcript events", () => {
     const listener = vi.fn();
     cleanup.push(onInternalSessionTranscriptUpdate(listener));
 
-    emitSessionTranscriptUpdate({ sessionFile: "  /tmp/session.jsonl  " });
+    emitSessionTranscriptUpdate({ archiveFile: true, sessionFile: "  /tmp/session.jsonl  " });
 
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith({ sessionFile: "/tmp/session.jsonl" });
+    expect(listener).toHaveBeenCalledWith({
+      archiveFile: true,
+      sessionFile: "/tmp/session.jsonl",
+    });
   });
 
   it("does not expose file-only archive updates to public listeners", () => {

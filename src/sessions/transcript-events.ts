@@ -14,6 +14,8 @@ type SessionTranscriptUpdateTarget = {
 };
 
 type SessionTranscriptUpdateFields = {
+  /** The session file was just created by an archive lifecycle owner. */
+  archiveFile?: true;
   sessionFile?: string;
   target?: SessionTranscriptUpdateTarget;
   sessionKey?: string;
@@ -30,7 +32,7 @@ type SessionTranscriptUpdateFields = {
 /** Normalized transcript update emitted after a session transcript changes. */
 export type SessionTranscriptUpdate = Omit<
   SessionTranscriptUpdateFields,
-  "sessionFile" | "lifecycleRevision" | "target"
+  "archiveFile" | "sessionFile" | "lifecycleRevision" | "target"
 > & {
   target: Omit<SessionTranscriptUpdateTarget, "storePath">;
 };
@@ -153,6 +155,7 @@ function normalizeSessionTranscriptUpdate(
   const messageId = normalizeOptionalString(update.messageId);
   const runId = normalizeOptionalString(update.runId);
   return {
+    ...(update.archiveFile === true ? { archiveFile: true } : {}),
     ...(trimmed ? { sessionFile: trimmed } : {}),
     ...(target ? { target } : {}),
     ...(sessionKey ? { sessionKey } : {}),
