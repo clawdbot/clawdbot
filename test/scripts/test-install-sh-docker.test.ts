@@ -568,10 +568,15 @@ function extractInstallSmokePackHelper(name: string, nextName: string): string {
   return script.slice(start, end);
 }
 
-function runInstallSmokePackHelpers(packJson: unknown, budgetBytes = 204 * 1024 * 1024) {
+function runInstallSmokePackHelpers(packJson: unknown, budgetBytes?: number) {
   const root = tempDirs.make("openclaw-install-pack-helper-");
   const packJsonPath = join(root, "pack.json");
   writeFileSync(packJsonPath, JSON.stringify(packJson), "utf8");
+  const env: NodeJS.ProcessEnv = { ...process.env, PACK_JSON_PATH: packJsonPath };
+  delete env.OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES;
+  if (budgetBytes !== undefined) {
+    env.OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES = String(budgetBytes);
+  }
   const result = spawnSync(
     "bash",
     [
@@ -586,11 +591,7 @@ assert_pack_unpacked_size_budget "fixture" "$PACK_JSON_PATH"`,
     ],
     {
       encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES: String(budgetBytes),
-        PACK_JSON_PATH: packJsonPath,
-      },
+      env,
     },
   );
   return { normalized: JSON.parse(readFileSync(packJsonPath, "utf8")), result };
@@ -1243,15 +1244,31 @@ printf 'status=%s\\n' "$status"
     expect(script).toContain("normalize_npm_pack_json_file");
     expect(script).toContain('normalize_npm_pack_json_file "$pack_json_file"');
     expect(script).toContain('normalize_npm_pack_json_file "$baseline_pack_json_file"');
+    expect(script).toContain('assert_pack_unpacked_size_budget "update" "$pack_json_file"');
   });
 
-  it("fails the update smoke when the candidate npm pack exceeds the release budget", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
+  it.each([
+    { label: "required native payload", unpackedSize: 243_066_603, exitCode: 0 },
+    { label: "exact budget", unpackedSize: 235 * 1024 * 1024, exitCode: 0 },
+    { label: "one byte over budget", unpackedSize: 235 * 1024 * 1024 + 1, exitCode: 1 },
+  ])("enforces the default pack budget for $label", ({ unpackedSize, exitCode }) => {
+    const { result } = runInstallSmokePackHelpers([{ filename: "candidate.tgz", unpackedSize }]);
 
-    expect(script).toContain("assert_pack_unpacked_size_budget");
-    expect(script).toContain('assert_pack_unpacked_size_budget "update" "$pack_json_file"');
-    expect(script).toContain("204 * 1024 * 1024");
-    expect(script).toContain("install smoke cannot verify pack budget");
+    expect(result.status).toBe(exitCode);
+    if (exitCode === 0) {
+      expect(result.stderr).toBe("");
+    } else {
+      expect(result.stderr).toContain(
+        `candidate.tgz unpackedSize ${unpackedSize} bytes exceeds budget 246415360 bytes`,
+      );
+    }
+  });
+
+  it("fails closed when install smoke pack metadata has no size", () => {
+    const { result } = runInstallSmokePackHelpers([{ filename: "candidate.tgz" }]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("install smoke cannot verify pack budget");
   });
 
   it("normalizes npm 12 pack output and enforces the budget without tsx", () => {
@@ -2235,9 +2252,13 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
+      let runnerStderr = "";
+      runner.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+        runnerStderr = `${runnerStderr}${chunk}`.slice(-16_384);
+      });
       const runnerExit = new Promise<{ status: number | null; signal: NodeJS.Signals | null }>(
         (resolve) => {
-          runner.once("exit", (status, signal) => resolve({ status, signal }));
+          runner.once("close", (status, signal) => resolve({ status, signal }));
         },
       );
 
@@ -2260,9 +2281,11 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
         expect(descendantPid).toBeGreaterThan(0);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
-        runner.kill("SIGTERM");
+        const signalSent = runner.kill("SIGTERM");
+        const result = await runnerExit;
 
-        await expect(runnerExit).resolves.toEqual({ status: 143, signal: null });
+        expect(signalSent, runnerStderr).toBe(true);
+        expect(result, runnerStderr).toEqual({ status: 143, signal: null });
         await waitForCondition(
           () => !isProcessAlive(descendantPid),
           "Bun global smoke descendant cleanup",
