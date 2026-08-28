@@ -911,9 +911,20 @@ suite.define(() => {
     await expect.poll(() => navigation.getAttribute("class")).not.toContain("nav-drawer");
   });
 
-  it.each(["dark", "light"] as const)(
-    "keeps the toast above the mobile drawer in %s mode",
-    async (colorScheme) => {
+  it.each([
+    {
+      colorScheme: "dark",
+      finalLayout: "compact",
+      finalViewport: { height: 844, width: 390 },
+    },
+    {
+      colorScheme: "light",
+      finalLayout: "desktop",
+      finalViewport: { height: 900, width: 1280 },
+    },
+  ] as const)(
+    "keeps the toast above the mobile drawer in $colorScheme mode",
+    async ({ colorScheme, finalLayout, finalViewport }) => {
       const page = await openPage({
         colorScheme,
         height: 844,
@@ -944,13 +955,14 @@ suite.define(() => {
         animations: "disabled",
         path: path.join(TOAST_PROOF_DIR, `mobile-drawer-toast-${colorScheme}.png`),
       });
-      if (colorScheme === "dark") {
+      if (finalLayout === "compact") {
         await page.keyboard.press("Escape");
         await expect.poll(() => dialog.isVisible()).toBe(false);
       } else {
-        await page.setViewportSize({ width: 1280, height: 900 });
+        await page.setViewportSize(finalViewport);
         await expect.poll(() => drawer.count()).toBe(0);
       }
+      expect(page.viewportSize()).toEqual(finalViewport);
       const retainedToast = page.locator(".shell > openclaw-toast-host .app-toast");
       await expect.poll(() => retainedToast.textContent()).toContain("Codex hidden");
       const [toastBounds, composerBounds] = await Promise.all([
@@ -960,7 +972,15 @@ suite.define(() => {
       if (!toastBounds || !composerBounds) {
         throw new Error("expected the handed-off toast and chat composer to have layout boxes");
       }
-      expect(Math.round(toastBounds.y)).toBe(20);
+      if (finalLayout === "compact") {
+        const headerBounds = await page.locator(".chat-pane__header:visible").first().boundingBox();
+        if (!headerBounds) {
+          throw new Error("expected the visible compact chat header to have a layout box");
+        }
+        expect(toastBounds.y).toBeGreaterThanOrEqual(headerBounds.y + headerBounds.height);
+      } else {
+        expect(Math.round(toastBounds.y)).toBe(20);
+      }
       expect(toastBounds.y + toastBounds.height).toBeLessThan(composerBounds.y);
       await retainedToast.getByRole("button", { name: "Dismiss" }).click();
       await expect.poll(() => retainedToast.isVisible()).toBe(false);
