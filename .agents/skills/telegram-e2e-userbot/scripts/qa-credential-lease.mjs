@@ -86,17 +86,22 @@ function parseChunkedPayloadMarker(payload, { payloadMaxBytes, payloadMaxChunks 
   return { chunkCount: payload.chunkCount, byteLength: payload.byteLength };
 }
 
-async function resolveCredentialPayload(acquired, identity, requestOptions, limits) {
+async function resolveCredentialPayload(acquired, identity, requestOptions, limits, leaseHealth) {
   const marker = parseChunkedPayloadMarker(acquired.payload, limits);
   if (!marker) return acquired.payload;
   const chunks = [];
   let byteLength = 0;
   for (let index = 0; index < marker.chunkCount; index += 1) {
-    const chunk = await callBroker(
-      "payload-chunk",
-      { ...identity, index },
-      { ...requestOptions, maxResponseBytes: limits.payloadMaxBytes },
-    );
+    leaseHealth.assertHealthy();
+    const chunk = await Promise.race([
+      callBroker(
+        "payload-chunk",
+        { ...identity, index },
+        { ...requestOptions, maxResponseBytes: limits.payloadMaxBytes },
+      ),
+      leaseHealth.whenUnhealthy.then((error) => Promise.reject(error)),
+    ]);
+    leaseHealth.assertHealthy();
     if (typeof chunk.data !== "string") {
       throw new Error("Broker payload chunk is missing data.");
     }
@@ -158,30 +163,16 @@ export async function acquireQaLease({
   if (!identity.credentialId || !identity.leaseToken) {
     throw new Error("Broker acquire response is missing lease identity.");
   }
-  let payload;
-  try {
-    payload = await resolveCredentialPayload(acquired, identity, requestOptions, {
-      payloadMaxBytes,
-      payloadMaxChunks,
-    });
-  } catch (error) {
-    try {
-      await callBroker("release", identity, requestOptions);
-    } catch (releaseError) {
-      throw new AggregateError(
-        [error, releaseError],
-        "Credential payload hydration and lease release failed.",
-      );
-    }
-    throw error;
-  }
   let heartbeatError;
   let heartbeatInFlight;
   let resolveUnhealthy;
   const whenUnhealthy = new Promise((resolve) => {
     resolveUnhealthy = resolve;
   });
-  const timer = setInterval(() => {
+  const assertHealthy = () => {
+    if (heartbeatError) throw heartbeatError;
+  };
+  const heartbeat = () => {
     if (heartbeatInFlight || heartbeatError) return;
     heartbeatInFlight = callBroker("heartbeat", { ...identity, leaseTtlMs }, requestOptions)
       .catch((error) => {
@@ -191,21 +182,50 @@ export async function acquireQaLease({
       .finally(() => {
         heartbeatInFlight = undefined;
       });
-  }, heartbeatIntervalMs);
+  };
+  heartbeat();
+  const timer = setInterval(heartbeat, heartbeatIntervalMs);
   timer.unref?.();
+  const stopHeartbeat = async () => {
+    clearInterval(timer);
+    const inFlight = heartbeatInFlight;
+    await inFlight;
+  };
+  let payload;
+  try {
+    payload = await resolveCredentialPayload(
+      acquired,
+      identity,
+      requestOptions,
+      {
+        payloadMaxBytes,
+        payloadMaxChunks,
+      },
+      { assertHealthy, whenUnhealthy },
+    );
+    assertHealthy();
+  } catch (error) {
+    try {
+      await stopHeartbeat();
+      await callBroker("release", identity, requestOptions);
+    } catch (releaseError) {
+      throw new AggregateError(
+        [error, releaseError],
+        "Credential payload hydration and lease release failed.",
+      );
+    }
+    throw error;
+  }
   let released = false;
   return {
     payload,
     credentialId: acquired.credentialId,
     whenUnhealthy,
-    assertHealthy: () => {
-      if (heartbeatError) throw heartbeatError;
-    },
+    assertHealthy,
     release: async () => {
       if (released) return;
       released = true;
-      clearInterval(timer);
-      await heartbeatInFlight;
+      await stopHeartbeat();
       await callBroker("release", identity, requestOptions);
     },
   };

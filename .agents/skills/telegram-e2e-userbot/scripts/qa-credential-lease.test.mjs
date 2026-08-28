@@ -116,6 +116,50 @@ test("hydrates an authenticated broker payload above the inline threshold", asyn
   await lease.release();
 });
 
+test("heartbeat loss stops delayed chunk hydration before returning credentials", async () => {
+  let finishHeartbeat;
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push(url);
+    if (url.endsWith("/acquire")) {
+      return Response.json({
+        status: "ok",
+        credentialId: "credential-delayed-chunk",
+        leaseToken: "lease-token-delayed-chunk",
+        payload: {
+          __openclawQaCredentialPayloadChunksV1: true,
+          chunkCount: 2,
+          byteLength: 4,
+        },
+      });
+    }
+    if (url.endsWith("/heartbeat")) {
+      return await new Promise((resolve) => {
+        finishHeartbeat = resolve;
+      });
+    }
+    if (url.endsWith("/payload-chunk")) {
+      queueMicrotask(() =>
+        finishHeartbeat(
+          Response.json(
+            { status: "error", code: "LEASE_EXPIRED", message: "Lease expired." },
+            { status: 409 },
+          ),
+        ),
+      );
+      return await new Promise(() => {});
+    }
+    return Response.json({ status: "ok" });
+  };
+
+  await assert.rejects(
+    acquireQaLease({ kind: "telegram-test-userbot", env, fetchImpl }),
+    (error) => error instanceof QaCredentialBrokerError && error.code === "LEASE_EXPIRED",
+  );
+  assert.equal(calls.filter((url) => url.endsWith("/payload-chunk")).length, 1);
+  assert.equal(calls.filter((url) => url.endsWith("/release")).length, 1);
+});
+
 test("reports pool exhaustion after the acquire budget", async () => {
   const fetchImpl = async () =>
     Response.json(
