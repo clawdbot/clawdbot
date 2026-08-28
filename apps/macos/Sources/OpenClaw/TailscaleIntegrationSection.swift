@@ -69,6 +69,7 @@ struct TailscaleIntegrationSection: View {
     let connectionMode: AppState.ConnectionMode
     let isPaused: Bool
     let isActive: Bool
+    let isConfigReadOnly: Bool
 
     @Environment(TailscaleService.self) private var tailscaleService
 
@@ -80,10 +81,11 @@ struct TailscaleIntegrationSection: View {
     @State private var validationMessage: String?
     @State private var lastAppliedSettings: GatewayTailscaleSettingsSnapshot?
 
-    init(connectionMode: AppState.ConnectionMode, isPaused: Bool, isActive: Bool) {
+    init(connectionMode: AppState.ConnectionMode, isPaused: Bool, isActive: Bool, isConfigReadOnly: Bool = false) {
         self.connectionMode = connectionMode
         self.isPaused = isPaused
         self.isActive = isActive
+        self.isConfigReadOnly = isConfigReadOnly
     }
 
     var body: some View {
@@ -109,17 +111,21 @@ struct TailscaleIntegrationSection: View {
                         Text(mode.label).tag(mode)
                     }
                 }
+                .disabled(self.isConfigReadOnly)
                 if self.tailscaleMode != .off {
                     self.accessURLRow
                 }
                 if self.tailscaleMode == .serve {
                     Toggle("Require credentials", isOn: self.$requireCredentialsForServe)
+                        .disabled(self.isConfigReadOnly)
                     if self.requireCredentialsForServe {
                         self.passwordRow
+                            .disabled(self.isConfigReadOnly)
                     }
                 }
                 if self.tailscaleMode == .funnel {
                     self.passwordRow
+                        .disabled(self.isConfigReadOnly)
                 }
             }
         } header: {
@@ -258,7 +264,7 @@ struct TailscaleIntegrationSection: View {
     }
 
     private func applySettings() async {
-        guard self.hasLoaded else { return }
+        guard self.hasLoaded, !self.isConfigReadOnly else { return }
         let currentSettings = self.currentSettingsSnapshot()
         let result = await TailscaleIntegrationSection.applySettingsIfChanged(
             currentSettings: currentSettings,

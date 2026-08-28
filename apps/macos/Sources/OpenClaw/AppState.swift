@@ -62,7 +62,7 @@ final class AppState {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app-state")
 
     let isPreview: Bool
-    @ObservationIgnored private let gatewayConfigSaver: ([String: Any]) -> Bool
+    @ObservationIgnored private let gatewayConfigSaver: ([String: Any]) -> OpenClawConfigFile.ConfigWriteResult
     @ObservationIgnored let bundleLocationAllowsPersistentIntegration: Bool
     @ObservationIgnored private var isHydratingLaunchAtLogin = false
     private var isInitializing = true
@@ -70,10 +70,16 @@ final class AppState {
     private enum GatewayConfigSyncState: Equatable {
         case current
         case pending
-        case failed
+        case failed(GatewayConfigSyncFailure)
     }
 
-    @ObservationIgnored private var gatewayConfigSyncState = GatewayConfigSyncState.current
+    private enum GatewayConfigSyncFailure: Equatable {
+        case conflict
+        case invalidDraft
+        case write(OpenClawConfigFile.ConfigWriteFailure)
+    }
+
+    private var gatewayConfigSyncState = GatewayConfigSyncState.current
     @ObservationIgnored private var gatewayConfigSyncTask: Task<Void, Never>?
     @ObservationIgnored private(set) var gatewayRoutingGeneration: UInt64 = 0
     #if DEBUG
@@ -431,6 +437,16 @@ final class AppState {
             message: message)
     }
 
+    var gatewayConfigWriteError: String? {
+        guard case let .failed(.write(failure)) = self.gatewayConfigSyncState else { return nil }
+        return failure.message
+    }
+
+    var gatewayConfigWriteCanRetry: Bool {
+        guard case .failed(.write(.managedByNix)) = self.gatewayConfigSyncState else { return true }
+        return false
+    }
+
     private(set) var remoteTokenUnsupported = false
 
     var remoteIdentity: String {
@@ -453,7 +469,9 @@ final class AppState {
 
     init(
         preview: Bool = false,
-        gatewayConfigSaver: @escaping ([String: Any]) -> Bool = { OpenClawConfigFile.saveDict($0) })
+        gatewayConfigSaver: @escaping ([String: Any]) -> OpenClawConfigFile.ConfigWriteResult = {
+            OpenClawConfigFile.saveDictResult($0)
+        })
     {
         let isPreview = preview || ProcessInfo.processInfo.isRunningTests
         self.isPreview = isPreview
@@ -968,11 +986,14 @@ extension AppState {
         }
     }
 
-    private func applyConfigOverrides(_ root: [String: Any]) {
+    private func applyConfigOverrides(
+        _ root: [String: Any],
+        forcing forcedFields: Set<GatewayConfigField> = [])
+    {
         advanceGatewayRoutingGeneration()
         let previousSelection = self.gatewaySelectionSnapshot()
         let priorConflicts = self.reconcileGatewayConfigOwnership(root)
-        self.applyGatewayConfigView(root)
+        self.applyGatewayConfigView(root, forcing: forcedFields)
 
         if self.gatewaySelectionSnapshot() != previousSelection {
             // Discovery ids describe one concrete endpoint. An external config
@@ -988,8 +1009,8 @@ extension AppState {
             Self.logger.warning("gateway config sync conflict fields=\(names)")
         }
         if !self.conflictedGatewayConfigFields.isEmpty {
-            self.setGatewayConfigSyncState(.failed)
-        } else if !priorConflicts.isEmpty, self.dirtyGatewayConfigFields.isEmpty {
+            self.setGatewayConfigSyncState(.failed(.conflict))
+        } else if self.dirtyGatewayConfigFields.isEmpty {
             self.setGatewayConfigSyncState(.current)
         }
     }
@@ -1315,7 +1336,7 @@ extension AppState {
             draft.dirtyFields.formUnion([.mode, .remoteTransport, .remoteUrl, .remoteToken])
         }
         guard Self.gatewayDraftCanPersist(draft) else {
-            self.setGatewayConfigSyncState(primaryGateway == nil ? .failed : previousSyncState)
+            self.setGatewayConfigSyncState(primaryGateway == nil ? .failed(.invalidDraft) : previousSyncState)
             return false
         }
 
@@ -1324,9 +1345,9 @@ extension AppState {
             currentRoot: currentRoot,
             draft: draft,
             primaryGateway: primaryGateway)
-        guard !synced.changed || self.gatewayConfigSaver(synced.root) else {
-            self.setGatewayConfigSyncState(primaryGateway == nil ? .failed : previousSyncState)
-            Self.logger.warning("gateway config sync rejected to protect persisted gateway auth/mode")
+        if synced.changed, case let .failure(failure) = self.gatewayConfigSaver(synced.root) {
+            self.setGatewayConfigSyncState(primaryGateway == nil ? .failed(.write(failure)) : previousSyncState)
+            Self.logger.warning("gateway config sync write failed")
             return false
         }
         self.acknowledgeGatewayConfigPersistence(draft, root: synced.root)
@@ -1356,6 +1377,20 @@ extension AppState {
     }
 
     @discardableResult
+    func retryGatewayConfigSave() -> Bool {
+        self.syncGatewayConfigNow()
+    }
+
+    func reloadGatewayConfigFromFile() {
+        self.gatewayConfigSyncTask?.cancel()
+        guard case let .success(root) = OpenClawConfigFile.loadDictResult() else { return }
+        self.dirtyGatewayConfigFields.removeAll()
+        self.conflictedGatewayConfigFields.removeAll()
+        self.lastConfigFingerprint = Self.configFingerprint(root)
+        self.applyConfigOverrides(root, forcing: Set(GatewayConfigField.allCases))
+    }
+
+    @discardableResult
     func useFileGatewayConfigConflict() -> Bool {
         let fields = self.conflictedGatewayConfigFields
         guard !fields.isEmpty else { return true }
@@ -1372,7 +1407,6 @@ extension AppState {
             self.remoteTokenUnsupported = priorRemoteTokenUnsupported
             self.dirtyGatewayConfigFields.formUnion(fields)
             self.conflictedGatewayConfigFields.formUnion(fields)
-            self.setGatewayConfigSyncState(.failed)
             return false
         }
         return true
@@ -1389,7 +1423,6 @@ extension AppState {
               self.dirtyGatewayConfigFields.isDisjoint(with: fields)
         else {
             self.conflictedGatewayConfigFields.formUnion(fields)
-            self.setGatewayConfigSyncState(.failed)
             return false
         }
         return true

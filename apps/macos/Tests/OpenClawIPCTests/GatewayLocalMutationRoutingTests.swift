@@ -22,7 +22,7 @@ struct GatewayLocalMutationRoutingTests {
         ]) {
             var canPersist = false
             let state = AppState(preview: true, gatewayConfigSaver: { root in
-                canPersist && OpenClawConfigFile.saveDict(root)
+                canPersist ? OpenClawConfigFile.saveDictResult(root) : .failure(.rejected)
             })
             try #require(state.remoteTransport == .direct)
             state._testEnableGatewayConfigSync()

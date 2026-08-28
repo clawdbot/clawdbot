@@ -129,3 +129,37 @@ struct GatewayConfigConflictRecoveryView: View {
         }
     }
 }
+
+struct GatewayConfigWriteRecoveryView: View {
+    @Bindable var state: AppState
+
+    var body: some View {
+        if let message = state.gatewayConfigWriteError {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Changes were not saved")
+                        .font(.footnote.weight(.semibold))
+                    Text(message)
+                        .font(.footnote)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        Button("Reload file") { self.state.reloadGatewayConfigFromFile() }
+                            .buttonStyle(.bordered)
+                        if self.state.gatewayConfigWriteCanRetry {
+                            Button("Retry") { self.state.retryGatewayConfigSave() }
+                                .buttonStyle(.borderedProminent)
+                        }
+                    }
+                    .controlSize(.small)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(.orange.opacity(0.08))
+        }
+    }
+}
