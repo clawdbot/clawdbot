@@ -81,8 +81,8 @@ reconcile dependencies before the remote wrapper starts.
 
 Maintained JavaScript tooling wrappers and root package commands use tsx's
 in-process transform cache. They skip its shared disk cache before the loader
-starts, and child tooling inherits that policy. This does not relocate or clean
-temporary directories, Node or Vitest caches, or other global caches. Standalone
+starts, and child tooling inherits that policy. This cache policy does not clean
+existing temporary directories, Node or Vitest caches, or other global caches. Standalone
 `pnpm ui:build` keeps native startup and applies the same preload to its post-build
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
 external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
@@ -124,6 +124,14 @@ Python helper coverage remains separate, including macOS; these fixture gates
 do not restrict the [SSH backend's Gateway host](/gateway/sandboxing#ssh-backend).
 
 ## Shared test state and process helpers
+
+On POSIX hosts, the Vitest wrapper gives each invocation an owned temporary
+namespace through `TMPDIR`, `TMP`, and `TEMP`. Fallback SQLite state stays available
+across shared-worker files and module resets, then the wrapper removes the namespace
+after its child process group has stopped, including failed test runs. Explicit state
+and artifact paths outside that namespace are unchanged. Windows and raw invocations
+outside the wrapper are unchanged; interrupted wrappers or unverified process-group
+teardown can retain their temporary files. The wrapper never sweeps old PID directories.
 
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - `pnpm test:env-mutations:report`: non-blocking report of tests/harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related env keys directly. Use it to find migration candidates for the shared test-state helper.
