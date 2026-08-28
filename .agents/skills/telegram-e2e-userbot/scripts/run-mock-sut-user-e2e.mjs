@@ -557,45 +557,43 @@ function spawnProcess(command, args, options) {
 }
 
 export async function runCommand(command, args, options) {
-  let child;
+  assertRunnerActive();
+  const child = ownChild(
+    spawn(command, args, {
+      cwd: options.cwd,
+      detached: true,
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    stdout = `${stdout}${chunk}`.slice(-1024 * 1024);
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr = `${stderr}${chunk}`.slice(-1024 * 1024);
+  });
   const completion = new Promise((resolveRun) => {
-    assertRunnerActive();
-    child = ownChild(
-      spawn(command, args, {
-        cwd: options.cwd,
-        detached: true,
-        env: options.env,
-        stdio: ["ignore", "pipe", "pipe"],
-      }),
-    );
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout = `${stdout}${chunk}`.slice(-1024 * 1024);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr = `${stderr}${chunk}`.slice(-1024 * 1024);
-    });
-    let timedOut = false;
-    const timeout = options.timeoutMs
-      ? setTimeout(() => {
-          timedOut = true;
-          child.kill("SIGTERM");
-        }, options.timeoutMs)
-      : null;
     child.on("exit", (status) => {
       ownedChildren.delete(child);
-      if (timeout) clearTimeout(timeout);
-      resolveRun({ status, stdout, stderr, timedOut });
+      resolveRun({ status, stdout, stderr, timedOut: false });
     });
   });
-  if (!options.leaseFailure) return await completion;
-  const outcome = await Promise.race([
-    completion.then((result) => ({ type: "exit", result })),
-    options.leaseFailure,
-  ]);
+  let timeout;
+  const outcomes = [completion.then((result) => ({ type: "exit", result }))];
+  if (options.leaseFailure) outcomes.push(options.leaseFailure);
+  if (options.timeoutMs) {
+    outcomes.push(
+      new Promise((resolveTimeout) => {
+        timeout = setTimeout(() => resolveTimeout({ type: "timeout" }), options.timeoutMs);
+      }),
+    );
+  }
+  const outcome = await Promise.race(outcomes);
+  if (timeout) clearTimeout(timeout);
   if (outcome.type === "lease-failure") {
     await fenceLeaseFailure({
       error: outcome.error,
@@ -604,6 +602,11 @@ export async function runCommand(command, args, options) {
       controlWork: [],
       persistLogs: () => {},
     });
+  }
+  if (outcome.type === "timeout") {
+    await stopChild(child);
+    const result = await completion;
+    return { ...result, timedOut: true };
   }
   return outcome.result;
 }
@@ -1115,6 +1118,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
     const probe = ownChild(
       spawn("uv", probeArgs, {
         cwd: repoRoot,
+        detached: true,
         env: driverEnv,
         stdio: ["inherit", "pipe", "pipe"],
       }),

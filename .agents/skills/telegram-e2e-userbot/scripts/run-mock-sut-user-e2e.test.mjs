@@ -188,6 +188,38 @@ test("lease loss during a credential command stops every owned child before its 
   assert.equal(fs.existsSync(sideEffect), false);
 });
 
+test("credential command timeout stops a nested wrapper before its side effect", async (context) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-command-timeout-fence-"));
+  const sideEffect = path.join(temp, "sent");
+  const wrapperReady = path.join(temp, "wrapper-ready");
+  const childScript = path.join(temp, "child.cjs");
+  const wrapperScript = path.join(temp, "wrapper.cjs");
+  context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  fs.writeFileSync(
+    childScript,
+    'const fs=require("node:fs"); setTimeout(()=>fs.writeFileSync(process.env.SIDE_EFFECT,"sent"),1000); setInterval(()=>{},1000);',
+  );
+  fs.writeFileSync(
+    wrapperScript,
+    'const fs=require("node:fs"); const {spawn}=require("node:child_process"); spawn(process.execPath,[process.env.CHILD_SCRIPT],{env:process.env,stdio:"ignore"}); fs.writeFileSync(process.env.WRAPPER_READY,"ready"); setInterval(()=>{},1000);',
+  );
+
+  const result = await runCommand(process.execPath, [wrapperScript], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      CHILD_SCRIPT: childScript,
+      SIDE_EFFECT: sideEffect,
+      WRAPPER_READY: wrapperReady,
+    },
+    timeoutMs: 500,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal(result.timedOut, true);
+  assert.equal(fs.existsSync(wrapperReady), true);
+  assert.equal(fs.existsSync(sideEffect), false);
+});
+
 test("credential-bearing child processes receive no parent control secrets", () => {
   const env = sanitizeChildEnvironment({
     PATH: "/safe/bin",
