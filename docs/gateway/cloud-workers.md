@@ -29,7 +29,7 @@ Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud 
 
 The bundled Crabbox cloud provider advertises both `worker-turn` and `remote-exec` through its enrolled node transport, so the same cloud profile is available to both harnesses. Codex can also use an explicitly authorized paired device or a provider that retains an SSH-backed remote-execution carrier. A profile that advertises only one mode remains unavailable to the other runtime.
 
-After Crabbox setup, the cloud node dials the Gateway's public TLS endpoint over outbound WebSocket. Worker control, Codex remote execution, and workspace transfer use authenticated node or worker channels, not a Gateway-created reverse tunnel or rsync. Crabbox itself may still require SSH reachability while its CLI runs the provider-owned setup command. Outbound internet access is provider policy; the default AWS profile can reach the internet unless you restrict its network or security group.
+After Crabbox setup, the cloud node dials the Gateway's public TLS endpoint over outbound WebSocket. Worker control, Codex remote execution, and workspace transfer use authenticated node or worker channels, not a Gateway-created reverse tunnel or rsync. Crabbox itself may still require SSH reachability while its CLI runs the provider-owned setup command. Outbound internet access and setup reachability follow the selected backend's network policy; configure them in Crabbox.
 
 OpenClaw `worker-turn` sessions can open [portals](/gateway/portals) on node-backed cloud workers, including the bundled Crabbox provider. For each proxied HTTP or WebSocket connection, the enrolled node redeems a single-use ticket over a TLS-pinned WebSocket to the Gateway and connects to the worker's selected loopback port. This preserves the existing **Control UI → Portals** experience, authentication, and live reload without opening inbound worker ports or creating an SSH tunnel. The tool is available only when the node advertises portal-stream support; older node bundles do not receive it. SSH-backed `remote-exec` placements, including Codex sessions, do not run the OpenClaw worker tool loop, so the `portal` tool does not apply there. Update an unsupported node or move the session back to the Gateway with `sessions.move` when a Gateway-hosted portal is needed.
 
@@ -37,60 +37,28 @@ For a loopback Gateway behind public HTTPS ingress, set `gateway.publicOrigin` t
 
 ## Requirements
 
-- A worker provider plugin. The bundled `crabbox` plugin drives the [Crabbox](https://github.com/openclaw/crabbox) CLI, which brokers leases across cloud backends (AWS, Hetzner, and others). Install Crabbox 0.41.1 or newer for the operating-system user that runs the Gateway and put it on that user's `PATH`, or set `settings.binary` to its absolute path. Keeping placed workers alive also requires a release that includes `crabbox heartbeat` (added after v0.43.0). Versions through 0.43.0 can allocate fixed-ID worker leases but lack heartbeat support; OpenClaw continues operating with one warning, and the coordinator may reap a placed worker after its `idleTimeout`.
+- A worker provider plugin. The bundled `crabbox` plugin drives the [Crabbox](https://crabbox.sh/) CLI; Crabbox owns the supported cloud backends and their configuration. Install Crabbox 0.41.1 or newer for the operating-system user that runs the Gateway and put it on that user's `PATH`, or set `settings.binary` to its absolute path. Keeping placed workers alive also requires a release that includes `crabbox heartbeat` (added after v0.43.0). Versions through 0.43.0 can allocate fixed-ID worker leases but lack heartbeat support; OpenClaw continues operating with one warning, and the coordinator may reap a placed worker after its `idleTimeout`.
 - For Crabbox AWS workers, the effective `aws.instanceProfile` must be empty. The provider checks `crabbox config show --json` before allocation, then requires `crabbox inspect --json` to report `providerMetadata.instanceProfileAttached: false` from EC2 `DescribeInstances`. Leases with an instance role or without authoritative metadata are stopped and rejected.
 - Node.js on the leased machine. Bare cloud images usually lack it — install it in the profile's `setup` command.
 - A live, registry-owned session managed worktree (create one with `worktree: true`). Cloud dispatch does not accept an arbitrary plain directory. After dispatch admission, the workspace transport may use manifest mirroring if Git metadata later becomes unavailable; this transport behavior does not make plain directories dispatchable.
 
-### Coordinator-backed Crabbox
+### Crabbox provider support
 
-In managed mode, the Crabbox coordinator owns the cloud-provider credentials and provisions AWS on the Gateway user's behalf. Local AWS keys are not required. Authenticate interactively, then verify the stored coordinator and provider state:
+Select a Crabbox backend with `settings.provider`. Use the [Crabbox provider reference](https://crabbox.sh/providers/index.html) for supported providers, authentication, sizing, snapshots, networking, and provider-specific limitations. OpenClaw does not maintain a separate backend catalog; accepting a profile does not establish that the backend can host a cloud session.
 
-Crabbox normally discovers the Gateway host's outbound IPv4 when a lease is requested and sends that `/32` as the effective SSH ingress policy. This discovered value is request-scoped, so `crabbox config show --json` can legitimately continue to show an empty `aws.sshCIDRs` list.
+The installed Crabbox version and selected backend must support fixed-ID `warmup --lease-id`, POSIX script execution through `run --script-stdin` for setup and enrollment, lease inspection, and teardown by canonical lease ID. Never remove `--lease-id` to bypass a backend capability rejection: it prevents duplicate allocations after an interrupted dispatch. OpenClaw preserves unsupported-backend diagnostics; upgrading the CLI alone does not establish backend support. Heartbeat support keeps placed workers alive under the configured idle policy. Optional desktop and warm-image features have additional requirements described below.
 
-For a fixed ingress policy, determine the outbound IPv4 yourself:
+Configure Crabbox for the operating-system user that runs the Gateway. Follow its [authentication guide](https://crabbox.sh/features/auth-admin.html) for coordinator access or the selected provider's guide for direct credentials. Keep credentials out of OpenClaw profile settings and command arguments, and preserve Crabbox's state directory across Gateway restarts so allocation and cleanup can resume safely.
 
-```bash
-curl -fsS https://checkip.amazonaws.com
-```
-
-Then add that address as a `/32` to Crabbox's own configuration. For example, if the command prints `203.0.113.10`:
-
-```yaml
-aws:
-  sshCIDRs:
-    - 203.0.113.10/32
-```
-
-Crabbox setup transport originates from the Gateway host, while the coordinator API may see a reverse-proxy or request-source address. Explicit pinning is useful when outbound detection is unavailable or a fixed policy is required.
+Inspect the installed provider contract and check readiness without allocating a machine:
 
 ```bash
-crabbox login --url <coordinator-url> --provider aws
-crabbox config show --json
-crabbox whoami --json
-crabbox doctor --provider aws --json
+crabbox providers --json
+crabbox providers describe <backend> --json
+crabbox doctor --provider <backend> --json
 ```
 
-Before provisioning, review `crabbox doctor --provider aws --json` for provider-readiness failures. If `aws.sshCIDRs` is explicitly configured, also confirm `crabbox config show --json` reports the expected `/32`; an empty list is valid when using request-time discovery. `doctor` is non-mutating: it checks the coordinator, broker identity, local tools, and read-only AWS control-plane access without creating or changing a lease. It cannot prove mutating IAM permissions such as key-pair import, instance launch, tagging, or termination; a direct-provider report containing `mutation=false` is not a write-access attestation. Trusted automation can pipe an approved coordinator token through stdin instead of placing it on the command line:
-
-```bash
-printf '%s' "$CRABBOX_COORDINATOR_TOKEN" | crabbox login \
-  --url <coordinator-url> \
-  --provider aws \
-  --token-stdin
-```
-
-Keep the token out of repository config and shell arguments.
-
-### Daytona
-
-<Warning>
-Direct Daytona cloud-worker dispatch remains unsupported. With `settings.class` omitted, Crabbox 0.46.0 rejects OpenClaw's fixed `--lease-id` before allocation. OpenClaw preserves that backend incompatibility diagnostic instead of treating it as an outdated CLI; upgrading alone does not establish direct-backend support. Setting a class such as `beast` is not a workaround: Crabbox's Daytona backend rejects `--class` because the snapshot controls sizing.
-</Warning>
-
-For managed Daytona evaluation, use Crabbox 0.46.0 with an authenticated managed coordinator configured for Daytona. Omit `settings.class`, leave `settings.warmImage` and `settings.desktop` disabled, and prepare Node.js, `npx`, and the matching OpenClaw installation through the existing [setup prerequisites](/gateway/cloud-workers#the-setup-command). Keep provider credentials and snapshot selection in Crabbox's configuration, not OpenClaw profile settings.
-
-These are prerequisites, not proof that a profile is usable. Verify actual OpenClaw dispatch, node enrollment, a session turn, and reclaim with provider-side deletion before relying on the profile. Read-only discovery or a standalone Crabbox command does not establish that result. For an already supported path, use the AWS profile in [Configuration](/gateway/cloud-workers#configuration). Crabbox's [Daytona provider documentation](https://github.com/openclaw/crabbox/blob/main/docs/providers/daytona.md) describes its native provider; standalone instructions are not an OpenClaw cloud-worker acceptance recipe.
+Read-only readiness does not prove allocation, setup, enrollment, or cleanup. Verify the complete session flow before relying on a new profile; see [Verify the profile](/gateway/cloud-workers#verify-the-profile).
 
 ## Configuration
 
@@ -238,6 +206,8 @@ crabbox list --provider aws --json
 ```
 
 The `environments.list` response must include the configured id under `profiles`. `crabbox list` is non-mutating. By contrast, `crabbox warmup` provisions a lease, and `crabbox stop` or `crabbox release` tears one down; use those mutating commands only when you intend to create or destroy cloud resources.
+
+Before relying on a new profile, authorize provider spend and test allocation, setup, node enrollment, a turn in the selected runtime, and a workspace edit reconciled back to the Gateway. Test cancellation and interrupted-dispatch replay against the same lease, then stop the session and verify teardown using Crabbox's provider-specific cleanup contract. Read-only readiness checks and mocked tests are not substitutes for this end-to-end verification.
 
 ## Dispatching a session
 
@@ -441,12 +411,12 @@ The desktop never gains public ingress. The node reads `/var/lib/crabbox/vnc.pas
 - **"Worker bootstrap requires Node.js on the leased host"** — add a Node install to `settings.setup` (see above).
 - **AWS instance-role attestation fails** — clear `aws.instanceProfile` (and `CRABBOX_AWS_INSTANCE_PROFILE`, if set). Install Crabbox 0.41.1 or newer; older binaries do not satisfy the fixed-ID and authoritative `providerMetadata.instanceProfileAttached` contracts required for AWS admission.
 - **Dispatch or workspace recovery fails** — inspect `environments.list` and `sessions.describe`. A failed environment exposes its bounded environment error. A failed placement exposes `recoveryError` plus its durable per-session `terminalReason`; the selected Control UI chat shows that terminal reason above the composer. When deeper diagnosis is necessary, an operator on the Gateway host can inspect the durable worker state read-only. Do not edit the state database to bypass lifecycle fencing.
-- **Crabbox setup cannot reach the lease** — compare the Gateway host's current outbound IPv4 with an explicitly configured `aws.sshCIDRs` policy in `crabbox config show --json`. If the matching `/32` is absent, correct Crabbox's configuration and rerun `crabbox doctor --provider aws --json` before retrying. An empty configured list is valid when Crabbox discovers and injects the caller's `/32` for the request.
+- **Crabbox setup cannot reach the lease** — check the selected backend's networking and setup-transport requirements in the [Crabbox provider reference](https://crabbox.sh/providers/index.html). Correct Crabbox's configuration and rerun `crabbox doctor --provider <backend> --json` before retrying.
 - **Session shows a reclaimed or suspended badge after being idle** — this is expected when its profile sets `suspendAfter`. The next message provisions a replacement worker, warm when an image exists.
 - **A warm image was stale or missing** — dispatch falls back to normal cold provisioning automatically. This is expected behavior and does not require a retry.
 - **Node enrollment times out** — inspect the package selection, node process state, and bounded node-log tail included in the enrollment error. Verify that profile setup installed Node.js and `npx` and that the box can reach the Gateway's advertised TLS URL and public worker/node WebSocket route. If the error contains `proxy_attribution_required`, add the reverse proxy's source address to `gateway.trustedProxies`.
 - **Client timeout while dispatching** — `openclaw gateway call` defaults to a 10s timeout; pass `--timeout` generously. Dispatch keeps running server-side either way, and an identical retry on the same Gateway joins that in-flight operation instead of provisioning another worker. A retry with a different profile or session identity is rejected.
-- **Direct AWS authorization fails after `doctor` passes** — `doctor` proves read-only AWS access, not the complete mutation policy. Inspect the named denied action and grant only Crabbox's required provisioning/cleanup actions, or configure coordinator-backed Crabbox instead. A fresh direct AWS lease normally needs key-pair import before `RunInstances`; an authorization failure there creates no instance.
+- **Provider authorization fails after `doctor` passes** — read-only readiness does not prove permission to allocate or tear down a lease. Inspect the denied action and follow the selected provider's provisioning and cleanup requirements in the [Crabbox provider reference](https://crabbox.sh/providers/index.html).
 - **Worker reclaimed after upgrading from a 2026.7.2 beta** — those betas used the older worker launch contract. On restart, OpenClaw destroys an idle incompatible worker, keeps the session and workspace, marks the placement reclaimed, and provisions a current worker on the next dispatch or turn. A beta worker interrupted while still starting is marked failed after cleanup; retry the dispatch to provision it with the current contract.
 - **Cloud workspace conflict notice** — the turn completed and kept the local version of each listed path. Use the staged-ref commands in the notice to inspect or take the cloud version; no retry is required for the non-conflicting changes, which are already applied.
 - **Cloud session disk-space warning** — delete unneeded files from the remote workspace or stop the cloud worker before large writes. The warning clears automatically after the next successful sample shows enough free space; a failed sample leaves the last successful warning visible and does not affect the session lifecycle.
