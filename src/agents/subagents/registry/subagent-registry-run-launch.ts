@@ -96,6 +96,7 @@ export type RegisterSubagentRunParams = {
   continuationTargetSessionKey?: string;
   continuationTargetSessionKeys?: string[];
   continuationFanoutMode?: "tree" | "all";
+  continuationRecipientAuthorityBinding?: import("../../../config/sessions/session-recipient-authority-types.js").ContinuationRecipientAuthorityBinding;
   traceparent?: string;
   gatewayContextResolver?: GatewayContextResolver;
 };
@@ -237,6 +238,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       continuationTargetSessionKey: registerParams.continuationTargetSessionKey,
       continuationTargetSessionKeys: registerParams.continuationTargetSessionKeys,
       continuationFanoutMode: registerParams.continuationFanoutMode,
+      continuationRecipientAuthorityBinding: registerParams.continuationRecipientAuthorityBinding,
       ...(registerParams.traceparent ? { traceparent: registerParams.traceparent } : {}),
     });
     const previousEntry = this.options.runs.get(runId);

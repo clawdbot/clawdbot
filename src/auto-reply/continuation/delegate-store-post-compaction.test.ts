@@ -347,6 +347,14 @@ describe("post-compaction delegate staging", () => {
       task: "targeted compaction shard",
       mode: "post-compaction",
       targetSessionKeys: ["agent:main:root", "agent:main:sibling"],
+      recipientAuthorityBinding: {
+        version: 1,
+        selection: "selected",
+        recipients: [
+          { sessionKey: "agent:main:root", authority: { state: "absent" } },
+          { sessionKey: "agent:main:sibling", authority: { state: "absent" } },
+        ],
+      },
     });
   });
 
@@ -405,6 +413,11 @@ describe("session post-compaction delegate contract", () => {
       postCompaction: true,
       firstArmedAt: 10_000,
       targetSessionKey: "agent:main:root",
+      recipientAuthorityBinding: {
+        version: 1,
+        selection: "selected",
+        recipients: [{ sessionKey: "agent:main:root", authority: { state: "absent" } }],
+      },
       traceparent: VALID_TRACEPARENT,
       traceparentProvenance: "internal",
       model: "github-copilot/claude-sonnet-4.6",

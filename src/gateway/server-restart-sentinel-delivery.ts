@@ -13,6 +13,10 @@ import { dispatchReplyWithBufferedBlockDispatcherCore } from "../auto-reply/repl
 import { recordInboundSession } from "../channels/session.js";
 import { dispatchAssembledChannelTurn } from "../channels/turn/lifecycle.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import {
+  sessionRecipientAuthorityMatches,
+  type SessionRecipientAuthority,
+} from "../config/sessions/session-recipient-authority-types.js";
 import { toErrorObject } from "../infra/errors.js";
 import { requestHeartbeatRaw as requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
@@ -24,7 +28,10 @@ import {
   type QueuedSessionDelivery,
 } from "../infra/session-delivery-queue-storage.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEventRaw as enqueueSystemEvent } from "../infra/system-events.js";
+import {
+  enqueueSystemEventRaw as enqueueSystemEvent,
+  removeSystemEvents,
+} from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -55,11 +62,13 @@ function enqueueRestartSentinelWake(params: {
   sessionDeliveryAckId?: string;
   sessionDeliveryAckStateDir?: string;
   expectedSessionId?: string;
+  recipientAuthority?: SessionRecipientAuthority;
   delegateArtifactReceipt?: NonNullable<
     Extract<QueuedSessionDelivery, { kind: "systemEvent" }>["managedDelegateArtifactDelivery"]
   >["receipt"];
   awaitsTurnAdoption?: boolean;
-}) {
+  isRecipientAuthorityCurrent?: () => boolean;
+}): boolean {
   const eventOptions = {
     sessionKey: params.sessionKey,
     trusted: true,
@@ -73,6 +82,7 @@ function enqueueRestartSentinelWake(params: {
       ? { sessionDeliveryAckStateDir: params.sessionDeliveryAckStateDir }
       : {}),
     ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
+    ...(params.recipientAuthority ? { recipientAuthority: params.recipientAuthority } : {}),
     ...(params.delegateArtifactReceipt
       ? { delegateArtifactReceipt: params.delegateArtifactReceipt }
       : {}),
@@ -81,6 +91,15 @@ function enqueueRestartSentinelWake(params: {
     params.message,
     params.agentId ? withSystemEventOwner(eventOptions, params.agentId) : eventOptions,
   );
+  if (params.recipientAuthority && params.isRecipientAuthorityCurrent?.() !== true) {
+    removeSystemEvents(
+      params.sessionKey,
+      (event) =>
+        event.sessionDeliveryAckId === params.sessionDeliveryAckId &&
+        event.sessionDeliveryAckStateDir === params.sessionDeliveryAckStateDir,
+    );
+    return false;
+  }
   requestHeartbeat({
     source: "restart-sentinel",
     intent: "immediate",
@@ -88,6 +107,7 @@ function enqueueRestartSentinelWake(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionKey: params.sessionKey,
   });
+  return true;
 }
 
 function isRestartContinuationBusyPayload(payload: OutboundReplyPayload): boolean {
@@ -154,6 +174,20 @@ async function deliverResolvedQueuedSessionDelivery(params: {
   const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
 
   if (params.entry.kind === "systemEvent") {
+    const recipientAuthority = params.entry.recipientAuthority;
+    const recipientAuthorityCurrent = () =>
+      !recipientAuthority ||
+      sessionRecipientAuthorityMatches(
+        recipientAuthority,
+        loadSessionEntry(params.entry.sessionKey).entry,
+      );
+    if (!recipientAuthorityCurrent()) {
+      log.warn("session event delivery skipped: recipient authority changed", {
+        sessionKey: canonicalKey,
+        queueId: params.entry.id,
+      });
+      return;
+    }
     if (
       params.entry.expectedSessionId &&
       (!entry?.sessionId || entry.sessionId !== params.entry.expectedSessionId)
@@ -272,7 +306,7 @@ async function deliverResolvedQueuedSessionDelivery(params: {
       }
       deliveryText = replaceManagedDelegateReturnInPrompt(params.entry.text, refreshed.projection);
     }
-    enqueueRestartSentinelWake({
+    const replayed = enqueueRestartSentinelWake({
       message: deliveryText,
       sessionKey: canonicalKey,
       agentId: params.entry.agentId,
@@ -281,9 +315,18 @@ async function deliverResolvedQueuedSessionDelivery(params: {
       sessionDeliveryAckId: params.entry.id,
       sessionDeliveryAckStateDir: params.stateDir,
       expectedSessionId: params.entry.expectedSessionId,
+      recipientAuthority,
       delegateArtifactReceipt: params.entry.managedDelegateArtifactDelivery?.receipt,
       awaitsTurnAdoption: params.entry.awaitPromptAdoption,
+      isRecipientAuthorityCurrent: recipientAuthorityCurrent,
     });
+    if (!replayed) {
+      log.warn("session event delivery wake skipped: recipient authority changed", {
+        sessionKey: canonicalKey,
+        queueId: params.entry.id,
+      });
+      return;
+    }
     if (managedDelivery) {
       // In-memory enqueue only makes the prompt eligible. The durable queue row
       // remains pending until transcript admission adopts and acknowledges it.

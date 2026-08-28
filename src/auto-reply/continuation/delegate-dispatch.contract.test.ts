@@ -50,6 +50,7 @@ vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (impo
 
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEventRaw: (text: string, options: unknown) => enqueueSystemEventMock(text, options),
+  removeSystemEvents: vi.fn(),
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
@@ -672,10 +673,22 @@ describe("tool delegate dispatch contract", () => {
     expect(spawnParams[0]).not.toHaveProperty("continuationTargetSessionKey");
     expect(spawnParams[0]).not.toHaveProperty("continuationTargetSessionKeys");
     expect(spawnParams[0]).not.toHaveProperty("continuationFanoutMode");
+    expect(spawnParams[0]).toMatchObject({
+      continuationRecipientAuthorityBinding: {
+        version: 1,
+        selection: "selected",
+        recipients: [{ sessionKey, authority: { state: "absent" } }],
+      },
+    });
     expect(spawnParams[1]).toMatchObject({
       task: expect.stringContaining("wake default"),
       silentAnnounce: true,
       wakeOnReturn: true,
+      continuationRecipientAuthorityBinding: {
+        version: 1,
+        selection: "selected",
+        recipients: [{ sessionKey, authority: { state: "absent" } }],
+      },
     });
     expect(spawnParams[1]).not.toHaveProperty("continuationTargetSessionKey");
     expect(spawnParams[1]).not.toHaveProperty("continuationTargetSessionKeys");
@@ -706,6 +719,14 @@ describe("tool delegate dispatch contract", () => {
         silentAnnounce: true,
         wakeOnReturn: true,
         continuationTargetSessionKeys: ["agent:main:root", "agent:main:sibling"],
+        continuationRecipientAuthorityBinding: {
+          version: 1,
+          selection: "selected",
+          recipients: [
+            { sessionKey: "agent:main:root", authority: { state: "absent" } },
+            { sessionKey: "agent:main:sibling", authority: { state: "absent" } },
+          ],
+        },
       }),
       expect.objectContaining({
         agentSessionKey: sessionKey,

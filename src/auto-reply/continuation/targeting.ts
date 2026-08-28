@@ -2,6 +2,8 @@ import {
   recordDelegateArtifactDeliveryBinding,
   type DelegateArtifactRecipientProjectionV1,
 } from "../../agents/delegate-artifacts.js";
+import { isSessionRecipientAuthorityCurrent } from "../../config/sessions/session-accessor.js";
+import type { SessionRecipientAuthority } from "../../config/sessions/session-recipient-authority-types.js";
 import { emitContinuationFanoutSpan } from "../../infra/continuation-tracer.js";
 import {
   markTrustedContinuationHeartbeatWake,
@@ -16,7 +18,10 @@ import type {
   QueuedSessionDeliveryPayload,
   SessionDeliveryContext,
 } from "../../infra/session-delivery-queue-storage.js";
-import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
+import {
+  enqueueSystemEventRaw as enqueueSystemEvent,
+  removeSystemEvents,
+} from "../../infra/system-events.js";
 import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
   hasCrossSessionDelegateTargeting,
@@ -70,6 +75,11 @@ type ContinuationReturnDeliveryDeps = {
   ackSessionDelivery: typeof ackSessionDelivery;
   enqueueSystemEvent: typeof enqueueSystemEvent;
   requestHeartbeatNow: typeof requestHeartbeatNow;
+  isRecipientAuthorityCurrent?: (
+    sessionKey: string,
+    authority: SessionRecipientAuthority,
+  ) => boolean;
+  removeSystemEvents?: typeof removeSystemEvents;
   recordDelegateArtifactDeliveryBinding?: typeof recordDelegateArtifactDeliveryBinding;
 };
 
@@ -88,6 +98,7 @@ export async function enqueueContinuationReturnDeliveries(
     textBySessionKey?: ReadonlyMap<string, string>;
     idempotencyKeyBase: string;
     expectedSessionIds?: ReadonlyMap<string, string>;
+    recipientAuthorities?: ReadonlyMap<string, SessionRecipientAuthority>;
     delegateArtifactReceipts?: ReadonlyMap<string, DelegateArtifactDeliveryReceipt>;
     delegateArtifactProjections?: ReadonlyMap<string, DelegateArtifactRecipientProjectionV1>;
     deliveryContext?: SessionDeliveryContext;
@@ -109,6 +120,7 @@ export async function enqueueContinuationReturnDeliveries(
     const expectedSessionId = params.expectedSessionIds?.get(sessionKey);
     const delegateArtifactReceipt = params.delegateArtifactReceipts?.get(sessionKey);
     const delegateArtifactProjection = params.delegateArtifactProjections?.get(sessionKey);
+    const recipientAuthority = params.recipientAuthorities?.get(sessionKey);
     const hasManagedArtifactDelivery =
       delegateArtifactReceipt !== undefined || delegateArtifactProjection !== undefined;
     if (
@@ -119,6 +131,18 @@ export async function enqueueContinuationReturnDeliveries(
         sessionKey !== delegateArtifactReceipt.recipientSessionKey)
     ) {
       throw new Error("managed delegate artifact delivery binding mismatch");
+    }
+    if (recipientAuthority && hasManagedArtifactDelivery) {
+      throw new Error("managed delegate artifact delivery cannot use logical recipient authority");
+    }
+    const recipientAuthorityCurrent = () =>
+      !recipientAuthority ||
+      (
+        deps.isRecipientAuthorityCurrent ??
+        ((key, authority) => isSessionRecipientAuthorityCurrent({ sessionKey: key }, authority))
+      )(sessionKey, recipientAuthority);
+    if (!recipientAuthorityCurrent()) {
+      continue;
     }
     const commonPayload = {
       kind: "systemEvent" as const,
@@ -144,9 +168,13 @@ export async function enqueueContinuationReturnDeliveries(
         : {
             ...commonPayload,
             ...(expectedSessionId ? { expectedSessionId } : {}),
+            ...(recipientAuthority ? { recipientAuthority, awaitPromptAdoption: true } : {}),
           };
     const deliveryId = await deps.enqueueSessionDelivery(payload, params.stateDir);
-    deliveryIds.push(deliveryId);
+    if (!recipientAuthorityCurrent()) {
+      await deps.ackSessionDelivery(deliveryId, params.stateDir);
+      continue;
+    }
 
     const enqueued = deps.enqueueSystemEvent(text, {
       sessionKey,
@@ -156,6 +184,12 @@ export async function enqueueContinuationReturnDeliveries(
       sessionDeliveryAckId: deliveryId,
       ...(params.stateDir ? { sessionDeliveryAckStateDir: params.stateDir } : {}),
       ...(expectedSessionId ? { expectedSessionId } : {}),
+      ...(recipientAuthority
+        ? {
+            recipientAuthority,
+            sessionDeliveryAwaitsTurnAdoption: true,
+          }
+        : {}),
       ...(delegateArtifactReceipt ? { delegateArtifactReceipt } : {}),
     });
     if (enqueued && delegateArtifactProjection && delegateArtifactReceipt) {
@@ -177,6 +211,16 @@ export async function enqueueContinuationReturnDeliveries(
       // the durable backing row for the surviving queued event before the
       // prompt-drain path consumes it. The surviving event carries the ack id.
     }
+    if (!recipientAuthorityCurrent()) {
+      (deps.removeSystemEvents ?? removeSystemEvents)(
+        sessionKey,
+        (event) =>
+          event.sessionDeliveryAckId === deliveryId &&
+          event.sessionDeliveryAckStateDir === params.stateDir,
+      );
+      await deps.ackSessionDelivery(deliveryId, params.stateDir);
+      continue;
+    }
     if (params.wakeRecipients) {
       deps.requestHeartbeatNow(
         markTrustedContinuationHeartbeatWake({
@@ -190,6 +234,7 @@ export async function enqueueContinuationReturnDeliveries(
     // carries the ack id and the prompt-drain path acknowledges it only after
     // recipient consumption; non-attached recipients still need restart recovery
     // to replay this file.
+    deliveryIds.push(deliveryId);
     delivered += 1;
   }
 

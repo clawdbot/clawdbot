@@ -33,12 +33,12 @@ import { readPostCompactionContext } from "./post-compaction-context.js";
 import {
   deliverQueuedPostCompactionDelegate,
   formatPostCompactionDelegateTaskPreview,
-  normalizePostCompactionDelegate,
   persistPendingPostCompactionDelegates,
   resolvePostCompactionDelegateDeliveryContext,
   takePendingPostCompactionDelegates,
   type PostCompactionDelegateDeliveryDeps,
 } from "./post-compaction-delegate-delivery.js";
+import { normalizePostCompactionDelegate } from "./post-compaction-delegate-normalize.js";
 import type { FollowupRun } from "./queue/types.js";
 
 export type PostCompactionDelegateDispatchDeps = {

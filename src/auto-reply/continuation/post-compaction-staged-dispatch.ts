@@ -8,6 +8,7 @@ import {
   UnavailableDelegateArtifactPolicyError,
 } from "../../agents/delegate-artifacts.js";
 import { spawnSubagentDirect } from "../../agents/subagents/spawn/subagent-spawn.js";
+import type { ContinuationRecipientAuthorityBinding } from "../../config/sessions/session-recipient-authority-types.js";
 import {
   emitContinuationDisabledSpan,
   resolveContinuationTraceparent,
@@ -59,6 +60,7 @@ export async function dispatchStagedPostCompactionDelegates(
     targetSessionKey?: string;
     targetSessionKeys?: string[];
     fanoutMode?: "tree" | "all";
+    recipientAuthorityBinding?: ContinuationRecipientAuthorityBinding;
     returnOptions?: {
       artifacts?: "forbidden" | "optional" | "required";
     };
@@ -398,6 +400,9 @@ export async function dispatchStagedPostCompactionDelegates(
             ? { continuationTargetSessionKeys: delegate.targetSessionKeys }
             : {}),
           ...(delegate.fanoutMode ? { continuationFanoutMode: delegate.fanoutMode } : {}),
+          ...(delegate.recipientAuthorityBinding
+            ? { continuationRecipientAuthorityBinding: delegate.recipientAuthorityBinding }
+            : {}),
           ...(spawnTraceparent ? { traceparent: spawnTraceparent } : {}),
         },
         {

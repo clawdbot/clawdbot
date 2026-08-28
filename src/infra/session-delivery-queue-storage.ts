@@ -254,6 +254,9 @@ export function buildPostCompactionDelegateDeliveryPayload(params: {
       ? { targetSessionKeys: params.delegate.targetSessionKeys }
       : {}),
     ...(params.delegate.fanoutMode ? { fanoutMode: params.delegate.fanoutMode } : {}),
+    ...(params.delegate.recipientAuthorityBinding
+      ? { recipientAuthorityBinding: params.delegate.recipientAuthorityBinding }
+      : {}),
     ...(params.delegate.returnOptions ? { returnOptions: params.delegate.returnOptions } : {}),
     ...(params.delegate.recipientContext
       ? { recipientContext: params.delegate.recipientContext }

@@ -8,6 +8,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { SessionRecipientAuthority } from "../config/sessions/session-recipient-authority-types.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
@@ -46,6 +47,7 @@ export type SystemEvent = {
    */
   sessionDeliveryAwaitsTurnAdoption?: boolean;
   expectedSessionId?: string;
+  recipientAuthority?: SessionRecipientAuthority;
   delegateArtifactReceipt?: DelegateArtifactDeliveryReceipt;
   /**
    * W3C `traceparent` captured at enqueue-time so the substrate-queue drain can
@@ -79,6 +81,7 @@ type SystemEventOptions = {
   /** Defer the durable ack to turn adoption; see the SystemEvent field. */
   sessionDeliveryAwaitsTurnAdoption?: boolean;
   expectedSessionId?: string;
+  recipientAuthority?: SessionRecipientAuthority;
   delegateArtifactReceipt?: DelegateArtifactDeliveryReceipt;
   /**
    * @deprecated Legacy no-op retained for plugin compatibility. System event
@@ -143,6 +146,7 @@ function cloneSystemEvent(event: SystemEvent): SystemEvent {
     ...(event.delegateArtifactReceipt
       ? { delegateArtifactReceipt: { ...event.delegateArtifactReceipt } }
       : {}),
+    ...(event.recipientAuthority ? { recipientAuthority: { ...event.recipientAuthority } } : {}),
   };
   cloneSystemEventOwner(event, clone);
   return clone;
@@ -165,6 +169,7 @@ function findDuplicateInQueue(
   sessionDeliveryAckId: string | undefined,
   sessionDeliveryAckStateDir: string | undefined,
   expectedSessionId: string | undefined,
+  recipientAuthority: SessionRecipientAuthority | undefined,
   delegateArtifactReceipt: DelegateArtifactDeliveryReceipt | undefined,
   ownerAgentId: string | null,
 ): boolean {
@@ -175,6 +180,7 @@ function findDuplicateInQueue(
     sessionDeliveryAckId,
     sessionDeliveryAckStateDir,
     expectedSessionId,
+    recipientAuthority,
     delegateArtifactReceipt,
     ownerAgentId,
   };
@@ -233,6 +239,9 @@ function enqueueOwnedSystemEventEntry(
     ...(options.trusted === true && options.expectedSessionId
       ? { expectedSessionId: options.expectedSessionId }
       : {}),
+    ...(options.trusted === true && options.recipientAuthority
+      ? { recipientAuthority: { ...options.recipientAuthority } }
+      : {}),
     ...(options.trusted === true && options.delegateArtifactReceipt
       ? { delegateArtifactReceipt: { ...options.delegateArtifactReceipt } }
       : {}),
@@ -273,6 +282,7 @@ function enqueueOwnedSystemEventEntry(
       event.sessionDeliveryAckId,
       event.sessionDeliveryAckStateDir,
       event.expectedSessionId,
+      event.recipientAuthority,
       event.delegateArtifactReceipt,
       normalizedOwnerAgentId,
     )
@@ -341,6 +351,16 @@ function areDelegateArtifactReceiptsEqual(
   );
 }
 
+function areRecipientAuthoritiesEqual(
+  left?: SessionRecipientAuthority,
+  right?: SessionRecipientAuthority,
+): boolean {
+  return (
+    left?.state === right?.state &&
+    (left?.state !== "bound" || (right?.state === "bound" && left.epoch === right.epoch))
+  );
+}
+
 function replaceSystemEventEntry(text: string, options: SystemEventOptions): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
@@ -368,6 +388,9 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
     ...(options.trusted === true && options.expectedSessionId
       ? { expectedSessionId: options.expectedSessionId }
       : {}),
+    ...(options.trusted === true && options.recipientAuthority
+      ? { recipientAuthority: { ...options.recipientAuthority } }
+      : {}),
     ...(options.trusted === true && options.delegateArtifactReceipt
       ? { delegateArtifactReceipt: { ...options.delegateArtifactReceipt } }
       : {}),
@@ -386,6 +409,7 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
     matching[0]?.sessionDeliveryAckId === replacement.sessionDeliveryAckId &&
     matching[0]?.sessionDeliveryAckStateDir === replacement.sessionDeliveryAckStateDir &&
     matching[0]?.expectedSessionId === replacement.expectedSessionId &&
+    areRecipientAuthoritiesEqual(matching[0]?.recipientAuthority, replacement.recipientAuthority) &&
     areDelegateArtifactReceiptsEqual(
       matching[0]?.delegateArtifactReceipt,
       replacement.delegateArtifactReceipt,
@@ -421,6 +445,7 @@ function isDuplicateSystemEvent(
     | "sessionDeliveryAckId"
     | "sessionDeliveryAckStateDir"
     | "expectedSessionId"
+    | "recipientAuthority"
     | "delegateArtifactReceipt"
   > & {
     ownerAgentId: string | null;
@@ -432,6 +457,7 @@ function isDuplicateSystemEvent(
     existing.sessionDeliveryAckId === incoming.sessionDeliveryAckId &&
     existing.sessionDeliveryAckStateDir === incoming.sessionDeliveryAckStateDir &&
     existing.expectedSessionId === incoming.expectedSessionId &&
+    areRecipientAuthoritiesEqual(existing.recipientAuthority, incoming.recipientAuthority) &&
     areDelegateArtifactReceiptsEqual(
       existing.delegateArtifactReceipt,
       incoming.delegateArtifactReceipt,
@@ -449,6 +475,7 @@ function areLegacySystemEventsEqual(left: SystemEvent, right: SystemEvent): bool
     left.sessionDeliveryAckId === right.sessionDeliveryAckId &&
     left.sessionDeliveryAckStateDir === right.sessionDeliveryAckStateDir &&
     left.expectedSessionId === right.expectedSessionId &&
+    areRecipientAuthoritiesEqual(left.recipientAuthority, right.recipientAuthority) &&
     areDelegateArtifactReceiptsEqual(left.delegateArtifactReceipt, right.delegateArtifactReceipt) &&
     (left.traceparent ?? undefined) === (right.traceparent ?? undefined) &&
     resolveSystemEventOwnerAgentId(left) === resolveSystemEventOwnerAgentId(right) &&

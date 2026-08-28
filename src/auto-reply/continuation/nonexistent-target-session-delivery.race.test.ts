@@ -30,7 +30,7 @@ import {
   type Tracer,
 } from "../../infra/continuation-tracer.js";
 import type { QueuedSessionDeliveryPayload } from "../../infra/session-delivery-queue-storage.js";
-import { resetSystemEventsForTest } from "../../infra/system-events.js";
+import { resetSystemEventsForTest, type SystemEvent } from "../../infra/system-events.js";
 import { enqueueContinuationReturnDeliveries } from "./targeting.js";
 
 type EnqueueSystemEvent = typeof import("../../infra/system-events.js").enqueueSystemEventRaw;
@@ -180,6 +180,107 @@ describe("branch 2 — target session deleted before dispatch", () => {
 });
 
 describe("branch 3 — target deleted during dispatch race", () => {
+  it("removes the durable row and emits no event or wake when bound authority changes during enqueue", async () => {
+    let authorityCurrent = true;
+    const enqueueSessionDelivery = vi.fn(async () => {
+      authorityCurrent = false;
+      return "delivery-stale-authority";
+    });
+    const ackSessionDelivery = vi.fn(async () => undefined);
+    const enqueueSystemEvent = vi.fn<EnqueueSystemEvent>(() => true);
+    const requestHeartbeatNow = vi.fn();
+    const isRecipientAuthorityCurrent = vi.fn(() => authorityCurrent);
+    const recipientAuthorities = new Map([
+      [
+        EXISTING_TARGET,
+        {
+          state: "bound" as const,
+          epoch: "40a495e3-6a33-48a8-a154-7bfbf701704b",
+        },
+      ],
+    ]);
+
+    const result = await enqueueContinuationReturnDeliveries(
+      {
+        targetSessionKeys: [EXISTING_TARGET],
+        text: "[continuation:enrichment-return] stale authority",
+        idempotencyKeyBase: "continuation-return:stale-authority",
+        wakeRecipients: true,
+        recipientAuthorities,
+      },
+      {
+        enqueueSessionDelivery,
+        ackSessionDelivery,
+        enqueueSystemEvent,
+        requestHeartbeatNow,
+        isRecipientAuthorityCurrent,
+      },
+    );
+
+    expect(result).toEqual({ enqueued: 0, delivered: 0, deliveryIds: [] });
+    expect(ackSessionDelivery).toHaveBeenCalledWith("delivery-stale-authority", undefined);
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+  });
+
+  it("removes the trusted event and durable row when authority changes before wake", async () => {
+    let authorityChecks = 0;
+    const systemEvents: SystemEvent[] = [{ text: "unrelated", ts: 1 }];
+    const enqueueSessionDelivery = vi.fn(async () => "delivery-stale-before-wake");
+    const ackSessionDelivery = vi.fn(async () => undefined);
+    const enqueueSystemEvent = vi.fn<EnqueueSystemEvent>((text, options) => {
+      systemEvents.push({ text, ts: 2, ...options });
+      return true;
+    });
+    const removeSystemEvents = vi.fn(
+      (_sessionKey: string, predicate: (event: SystemEvent) => boolean) => {
+        const removed = systemEvents.filter(predicate);
+        const retained = systemEvents.filter((event) => !predicate(event));
+        systemEvents.splice(0, systemEvents.length, ...retained);
+        return removed;
+      },
+    );
+    const requestHeartbeatNow = vi.fn();
+    const isRecipientAuthorityCurrent = vi.fn(() => {
+      authorityChecks += 1;
+      return authorityChecks < 3;
+    });
+    const recipientAuthorities = new Map([
+      [
+        EXISTING_TARGET,
+        {
+          state: "bound" as const,
+          epoch: "40a495e3-6a33-48a8-a154-7bfbf701704b",
+        },
+      ],
+    ]);
+
+    const result = await enqueueContinuationReturnDeliveries(
+      {
+        targetSessionKeys: [EXISTING_TARGET],
+        text: "[continuation:enrichment-return] stale before wake",
+        idempotencyKeyBase: "continuation-return:stale-before-wake",
+        wakeRecipients: true,
+        recipientAuthorities,
+      },
+      {
+        enqueueSessionDelivery,
+        ackSessionDelivery,
+        enqueueSystemEvent,
+        removeSystemEvents,
+        requestHeartbeatNow,
+        isRecipientAuthorityCurrent,
+      },
+    );
+
+    expect(result).toEqual({ enqueued: 0, delivered: 0, deliveryIds: [] });
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(removeSystemEvents).toHaveBeenCalledWith(EXISTING_TARGET, expect.any(Function));
+    expect(ackSessionDelivery).toHaveBeenCalledWith("delivery-stale-before-wake", undefined);
+    expect(systemEvents).toEqual([{ text: "unrelated", ts: 1 }]);
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+  });
+
   it("propagates the underlying error as clean-error rather than panicking when a mid-loop dep throws", async () => {
     let call = 0;
     const enqueueSessionDelivery = vi.fn(async (payload: QueuedSessionDeliveryPayload) => {

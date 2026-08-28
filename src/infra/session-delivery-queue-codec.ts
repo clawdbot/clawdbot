@@ -13,6 +13,12 @@ import type { ContinuationTrigger } from "../auto-reply/get-reply-options.types.
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/source-reply-delivery-mode.types.js";
 import type { ChatType } from "../channels/chat-type.js";
+import {
+  ContinuationRecipientAuthorityBindingSchema,
+  type ContinuationRecipientAuthorityBinding,
+  SessionRecipientAuthoritySchema,
+  type SessionRecipientAuthority,
+} from "../config/sessions/session-recipient-authority-types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import {
   parseInlineAttachmentMountPath,
@@ -88,6 +94,7 @@ type QueuedSessionDeliveryGenericPayload =
       sessionKey: string;
       text: string;
       expectedSessionId?: string;
+      recipientAuthority?: SessionRecipientAuthority;
       managedDelegateArtifactDelivery?: never;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
@@ -106,6 +113,7 @@ type QueuedSessionDeliveryGenericPayload =
       sessionKey: string;
       text: string;
       expectedSessionId: string;
+      recipientAuthority?: never;
       managedDelegateArtifactDelivery: ManagedDelegateArtifactDelivery;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
@@ -147,6 +155,7 @@ type QueuedPostCompactionDelegatePayload = {
   targetSessionKey?: string;
   targetSessionKeys?: string[];
   fanoutMode?: "tree" | "all";
+  recipientAuthorityBinding?: ContinuationRecipientAuthorityBinding;
   returnOptions?: {
     artifacts?: "forbidden" | "optional" | "required";
   };
@@ -318,12 +327,22 @@ const QueuedPlainSystemEventSchema = z
     sessionKey: z.string(),
     text: z.string(),
     expectedSessionId: z.string().optional(),
+    recipientAuthority: SessionRecipientAuthoritySchema.optional(),
     managedDelegateArtifactDelivery: z.never().optional(),
     deliveryContext: QueuedGenericDeliveryContextSchema.optional(),
     idempotencyKey: z.string().optional(),
     awaitPromptAdoption: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((entry, ctx) => {
+    if (entry.recipientAuthority && entry.awaitPromptAdoption !== true) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["awaitPromptAdoption"],
+        message: "recipient authority requires durable prompt adoption",
+      });
+    }
+  });
 
 const QueuedManagedSystemEventSchema = z
   .object({
@@ -332,6 +351,7 @@ const QueuedManagedSystemEventSchema = z
     sessionKey: z.string(),
     text: z.string(),
     expectedSessionId: z.string().min(1),
+    recipientAuthority: z.never().optional(),
     managedDelegateArtifactDelivery: z
       .object({
         receipt: DelegateArtifactDeliveryReceiptSchema,
@@ -432,6 +452,7 @@ const QueuedPostCompactionDelegateSchema = z
     targetSessionKey: QueuedContinuationTargetKeySchema.optional(),
     targetSessionKeys: QueuedContinuationTargetKeysSchema.optional(),
     fanoutMode: z.enum(["tree", "all"]).optional(),
+    recipientAuthorityBinding: ContinuationRecipientAuthorityBindingSchema.optional(),
     returnOptions: z
       .object({
         artifacts: z.enum(["forbidden", "optional", "required"]).optional(),

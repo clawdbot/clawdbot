@@ -324,6 +324,17 @@ describe("subagent registry persistence", () => {
       wakeOnReturn: true,
       continuationTargetSessionKeys: ["agent:main:subagent:silent-test", "agent:main:main"],
       continuationFanoutMode: "tree",
+      continuationRecipientAuthorityBinding: {
+        version: 1,
+        selection: "selected",
+        recipients: [
+          {
+            sessionKey: "agent:main:subagent:silent-test",
+            authority: { state: "absent" },
+          },
+          { sessionKey: "agent:main:main", authority: { state: "absent" } },
+        ],
+      },
       traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
     });
     await writeChildSessionEntry({
@@ -336,6 +347,7 @@ describe("subagent registry persistence", () => {
       wakeOnReturn?: boolean;
       continuationTargetSessionKeys?: string[];
       continuationFanoutMode?: "tree" | "all";
+      continuationRecipientAuthorityBinding?: unknown;
       traceparent?: string;
     }>(registryPath, "run-silent");
     expect(run).toMatchObject({
@@ -343,6 +355,17 @@ describe("subagent registry persistence", () => {
       wakeOnReturn: true,
       continuationTargetSessionKeys: ["agent:main:subagent:silent-test", "agent:main:main"],
       continuationFanoutMode: "tree",
+      continuationRecipientAuthorityBinding: {
+        version: 1,
+        selection: "selected",
+        recipients: [
+          {
+            sessionKey: "agent:main:subagent:silent-test",
+            authority: { state: "absent" },
+          },
+          { sessionKey: "agent:main:main", authority: { state: "absent" } },
+        ],
+      },
       traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
     });
     restartRegistry();
@@ -359,6 +382,17 @@ describe("subagent registry persistence", () => {
           wakeOnReturn: true,
           continuationTargetSessionKeys: ["agent:main:subagent:silent-test", "agent:main:main"],
           continuationFanoutMode: "tree",
+          continuationRecipientAuthorityBinding: {
+            version: 1,
+            selection: "selected",
+            recipients: [
+              {
+                sessionKey: "agent:main:subagent:silent-test",
+                authority: { state: "absent" },
+              },
+              { sessionKey: "agent:main:main", authority: { state: "absent" } },
+            ],
+          },
           traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
         }),
       );

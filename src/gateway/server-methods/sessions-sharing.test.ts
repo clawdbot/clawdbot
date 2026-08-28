@@ -11,6 +11,8 @@ import {
 import {
   loadSessionEntry,
   loadTranscriptEvents,
+  captureSessionRecipientAuthority,
+  isSessionRecipientAuthorityCurrent,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -126,6 +128,33 @@ function sharingEvidenceEvents(broadcast: ReturnType<typeof vi.fn>): SessionShar
 }
 
 describe("session sharing handlers", () => {
+  it("revokes recipient authority only when visibility becomes more restrictive", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:visibility-authority";
+      const scope = { agentId: "main", sessionKey };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "session-visibility-authority",
+        updatedAt: 1,
+        visibility: "shared",
+      });
+      const requestContext = context(vi.fn());
+      let authority = captureSessionRecipientAuthority(scope);
+
+      for (const visibility of ["suggest", "read-only", "draft"] as const) {
+        expect(
+          await call("session.visibility.set", { sessionKey, visibility }, requestContext),
+        ).toMatchObject([[true, { ok: true, sessionKey, visibility }, undefined]]);
+        expect(isSessionRecipientAuthorityCurrent(scope, authority)).toBe(false);
+        authority = captureSessionRecipientAuthority(scope);
+      }
+
+      expect(
+        await call("session.visibility.set", { sessionKey, visibility: "shared" }, requestContext),
+      ).toMatchObject([[true, { ok: true, sessionKey, visibility: "shared" }, undefined]]);
+      expect(isSessionRecipientAuthorityCurrent(scope, authority)).toBe(true);
+    });
+  });
+
   it("preserves profile actors and distinguishes unknown from absent profileless evidence", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const member = ensureProfileForEmail("sharing-evidence-member@example.com");

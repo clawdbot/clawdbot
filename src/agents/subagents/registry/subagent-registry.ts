@@ -204,6 +204,23 @@ const subagentLifecycleController = new SubagentLifecycleController({
       continuationTargetSessionKey: entry?.continuationTargetSessionKey,
       continuationTargetSessionKeys: entry?.continuationTargetSessionKeys,
       continuationFanoutMode: entry?.continuationFanoutMode,
+      continuationRecipientAuthorityBinding: entry?.continuationRecipientAuthorityBinding,
+      persistContinuationRecipientAuthorityBinding: (binding) => {
+        if (!entry || subagentRuns.get(entry.runId) !== entry) {
+          return false;
+        }
+        const previous = entry.continuationRecipientAuthorityBinding;
+        entry.continuationRecipientAuthorityBinding = binding;
+        try {
+          persistSubagentRunsOrThrow(entry.runId);
+        } catch (error) {
+          // Persistence owns completion-time selection. Restore pending state so
+          // a retry cannot enqueue from memory-only authority.
+          entry.continuationRecipientAuthorityBinding = previous;
+          throw error;
+        }
+        return subagentRuns.get(entry.runId) === entry;
+      },
       ...(entry?.traceparent ? { traceparent: entry.traceparent } : {}),
     });
   },

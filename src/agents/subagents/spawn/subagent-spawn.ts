@@ -136,6 +136,7 @@ export async function spawnSubagentDirect(
       childDepth,
       maxSpawnDepth,
       continuationTargetSessionKeys,
+      continuationRecipientAuthorityBinding,
     },
     childIdem: resolvedChildIdem,
   } = requestResolution.resolved;
@@ -591,6 +592,9 @@ export async function spawnSubagentDirect(
           ...(continuationTargetSessionKeys?.length ? { continuationTargetSessionKeys } : {}),
           ...(params.continuationFanoutMode
             ? { continuationFanoutMode: params.continuationFanoutMode }
+            : {}),
+          ...(continuationRecipientAuthorityBinding
+            ? { continuationRecipientAuthorityBinding }
             : {}),
           ...(params.traceparent ? { traceparent: params.traceparent } : {}),
         };

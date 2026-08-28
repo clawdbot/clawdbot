@@ -49,6 +49,7 @@ import {
 import { failReleasedPostCompactionDelegate } from "../continuation/post-compaction-taskflow-rejection.js";
 import { hasCrossSessionDelegateTargeting } from "../continuation/targeting-pure.js";
 import type { ChainState, ContinuationRuntimeConfig } from "../continuation/types.js";
+import { normalizePostCompactionDelegate } from "./post-compaction-delegate-normalize.js";
 
 export type QueuedPostCompactionDelegateDelivery = Extract<
   QueuedSessionDelivery,
@@ -139,43 +140,6 @@ function syncPendingPostCompactionDelegates(params: {
       }
     }
   }
-}
-
-export function normalizePostCompactionDelegate(
-  delegate: SessionPostCompactionDelegate,
-): SessionPostCompactionDelegate {
-  const legacySilentWake = delegate.silent == null && delegate.silentWake == null;
-  const silentWake = legacySilentWake ? true : delegate.silentWake === true;
-  const silent = legacySilentWake ? true : delegate.silent === true || silentWake;
-  const firstArmedAt = delegate.firstArmedAt ?? delegate.createdAt;
-  const internalTraceparent =
-    delegate.traceparentProvenance === "internal"
-      ? resolveContinuationTraceparent(delegate.traceparent)
-      : undefined;
-
-  return {
-    task: delegate.task,
-    createdAt: delegate.createdAt,
-    firstArmedAt,
-    ...(delegate.silent != null || legacySilentWake ? { silent } : {}),
-    ...(delegate.silentWake != null || legacySilentWake ? { silentWake } : {}),
-    ...(delegate.targetSessionKey ? { targetSessionKey: delegate.targetSessionKey } : {}),
-    ...(delegate.targetSessionKeys && delegate.targetSessionKeys.length > 0
-      ? { targetSessionKeys: delegate.targetSessionKeys }
-      : {}),
-    ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
-    ...(delegate.returnOptions ? { returnOptions: delegate.returnOptions } : {}),
-    ...(delegate.recipientContext ? { recipientContext: delegate.recipientContext } : {}),
-    ...(delegate.attachments ? { attachments: delegate.attachments } : {}),
-    ...(delegate.attachAs ? { attachAs: delegate.attachAs } : {}),
-    ...(internalTraceparent
-      ? {
-          traceparent: internalTraceparent,
-          traceparentProvenance: "internal" as const,
-        }
-      : {}),
-    ...(delegate.model ? { model: delegate.model } : {}),
-  };
 }
 
 export function formatPostCompactionDelegateTaskPreview(task: string): string {
@@ -680,6 +644,9 @@ export async function deliverQueuedPostCompactionDelegate(
           ? { continuationTargetSessionKeys: params.entry.targetSessionKeys }
           : {}),
         ...(params.entry.fanoutMode ? { continuationFanoutMode: params.entry.fanoutMode } : {}),
+        ...(params.entry.recipientAuthorityBinding
+          ? { continuationRecipientAuthorityBinding: params.entry.recipientAuthorityBinding }
+          : {}),
         drainsContinuationDelegateQueue: true,
         continuationDelegateFlowId: resolveQueuedPostCompactionContinuationFlowId(params.entry),
         continuationChainState: {

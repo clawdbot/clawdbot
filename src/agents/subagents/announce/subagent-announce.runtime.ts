@@ -30,6 +30,7 @@ export type ContinuationSpawnParams = Pick<
   | "continuationTargetSessionKey"
   | "continuationTargetSessionKeys"
   | "continuationFanoutMode"
+  | "continuationRecipientAuthorityBinding"
   | "traceparent"
 > & {
   continuationDelegateFlowId?: string;

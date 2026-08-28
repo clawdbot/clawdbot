@@ -29,7 +29,6 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { ChainState, ContinuationRuntimeConfig } from "../continuation/types.js";
 import {
   deliverQueuedPostCompactionDelegate,
-  normalizePostCompactionDelegate,
   persistPendingPostCompactionDelegates,
   takePendingPostCompactionDelegates,
   type PostCompactionDelegateDeliveryDeps,
@@ -41,6 +40,7 @@ import {
   dispatchPostCompactionDelegates,
   type PostCompactionDelegateDispatchDeps,
 } from "./post-compaction-delegate-dispatch.js";
+import { normalizePostCompactionDelegate } from "./post-compaction-delegate-normalize.js";
 import type { FollowupRun } from "./queue/types.js";
 
 const mockRegistryState = vi.hoisted(() => ({

@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemEvent } from "../../infra/system-events.js";
 
+const RECIPIENT_AUTHORITY_EPOCH = "11111111-1111-4111-8111-111111111111";
+const REPLACEMENT_AUTHORITY_EPOCH = "22222222-2222-4222-8222-222222222222";
+
 const mocks = vi.hoisted(() => ({
   emitContinuationQueueDrainSpan: vi.fn(),
   peekSystemEventEntries: vi.fn(),
@@ -142,6 +145,77 @@ describe("drainFormattedSystemEvents trace context", () => {
     expect(mocks.emitContinuationQueueDrainSpan).toHaveBeenCalledWith(
       expect.not.objectContaining({ traceparent: expect.any(String) }),
     );
+  });
+
+  it("preserves a bound logical recipient across a session id rollover", async () => {
+    const event: SystemEvent = {
+      text: "accepted delegate result",
+      ts: 1,
+      sessionDeliveryAckId: "delivery-rollover",
+      sessionDeliveryAwaitsTurnAdoption: true,
+      recipientAuthority: {
+        state: "bound",
+        epoch: RECIPIENT_AUTHORITY_EPOCH,
+      },
+    };
+    mocks.peekSystemEventEntries.mockReturnValue([event]);
+    mocks.consumeSelectedSystemEventEntries.mockImplementation(
+      (_sessionKey: string, entries: SystemEvent[]) => entries,
+    );
+    mocks.loadSessionEntry.mockReturnValue({
+      sessionId: "new-session-incarnation",
+      recipientAuthorityEpoch: RECIPIENT_AUTHORITY_EPOCH,
+    });
+
+    const prepared = await prepareFormattedSystemEvents({
+      cfg: {},
+      agentId: "main",
+      sessionKey: "main",
+      isMainSession: false,
+      isNewSession: false,
+    });
+
+    expect(prepared.blocks).toEqual([
+      expect.objectContaining({
+        key: "session-delivery:delivery-rollover",
+        text: expect.stringContaining("accepted delegate result"),
+      }),
+    ]);
+    expect(prepared.managedDeliveries).toHaveLength(1);
+    expect(mocks.ackSessionDelivery).not.toHaveBeenCalled();
+  });
+
+  it("settles a stale bound recipient before prompt adoption", async () => {
+    const event: SystemEvent = {
+      text: "stale delegate result",
+      ts: 1,
+      sessionDeliveryAckId: "delivery-stale-authority",
+      sessionDeliveryAwaitsTurnAdoption: true,
+      recipientAuthority: {
+        state: "bound",
+        epoch: RECIPIENT_AUTHORITY_EPOCH,
+      },
+    };
+    mocks.peekSystemEventEntries.mockReturnValue([event]);
+    mocks.consumeSelectedSystemEventEntries.mockImplementation(
+      (_sessionKey: string, entries: SystemEvent[]) => entries,
+    );
+    mocks.loadSessionEntry.mockReturnValue({
+      sessionId: "replacement-session",
+      recipientAuthorityEpoch: REPLACEMENT_AUTHORITY_EPOCH,
+    });
+
+    const prepared = await prepareFormattedSystemEvents({
+      cfg: {},
+      agentId: "main",
+      sessionKey: "main",
+      isMainSession: false,
+      isNewSession: false,
+    });
+
+    expect(prepared).toEqual({ blocks: [], managedDeliveries: [] });
+    expect(mocks.ackSessionDelivery).toHaveBeenCalledWith("delivery-stale-authority", undefined);
+    expect(mocks.consumeSelectedSystemEventEntries).toHaveBeenCalledWith("main", [event]);
   });
 
   it("terminalizes a managed delivery before settling a stale-incarnation queue row", async () => {

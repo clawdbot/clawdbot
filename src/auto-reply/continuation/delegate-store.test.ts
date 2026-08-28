@@ -785,6 +785,14 @@ describe("delegate store — TaskFlow-backed", () => {
       task: "targeted task",
       targetSessionKey: "agent:main:root",
       targetSessionKeys: ["agent:main:sibling", "agent:main:root"],
+      recipientAuthorityBinding: {
+        version: 1,
+        selection: "selected",
+        recipients: [
+          { sessionKey: "agent:main:root", authority: { state: "absent" } },
+          { sessionKey: "agent:main:sibling", authority: { state: "absent" } },
+        ],
+      },
     });
   });
 
@@ -797,7 +805,32 @@ describe("delegate store — TaskFlow-backed", () => {
     expect(consumePendingDelegates("session-1")[0]).toMatchObject({
       task: "tree task",
       fanoutMode: "tree",
+      recipientAuthorityBinding: {
+        version: 1,
+        selection: "pending",
+        fanoutMode: "tree",
+      },
     });
+  });
+
+  it("fails closed when a persisted authority binding is malformed", () => {
+    const flowId = queueRawPendingFlow("session-1", {
+      kind: "continuation_delegate",
+      task: "malformed authority",
+      recipientAuthorityBinding: {
+        version: 1,
+        selection: "selected",
+        recipients: [
+          {
+            sessionKey: "agent:main:root",
+            authority: { state: "bound", epoch: "not-a-uuid" },
+          },
+        ],
+      },
+    });
+
+    expect(consumePendingDelegates("session-1")).toEqual([]);
+    expect(mockFlows.get(flowId)?.status).toBe("failed");
   });
 
   it("preserves traceparent through TaskFlow round-trip", () => {

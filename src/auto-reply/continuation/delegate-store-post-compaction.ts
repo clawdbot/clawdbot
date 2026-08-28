@@ -29,6 +29,9 @@ export function stagePostCompactionTaskFlowDelegate(
     ...(delegate.targetSessionKey ? { targetSessionKey: delegate.targetSessionKey } : {}),
     ...(delegate.targetSessionKeys ? { targetSessionKeys: delegate.targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
+    ...(delegate.recipientAuthorityBinding
+      ? { recipientAuthorityBinding: delegate.recipientAuthorityBinding }
+      : {}),
     ...(delegate.returnOptions ? { returnOptions: delegate.returnOptions } : {}),
     ...(delegate.recipientContext ? { recipientContext: delegate.recipientContext } : {}),
     ...(delegate.traceparent ? { traceparent: delegate.traceparent } : {}),
@@ -270,6 +273,9 @@ export function stagePostCompactionDelegate(
     ...(delegate.targetSessionKey ? { targetSessionKey: delegate.targetSessionKey } : {}),
     ...(delegate.targetSessionKeys ? { targetSessionKeys: delegate.targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
+    ...(delegate.recipientAuthorityBinding
+      ? { recipientAuthorityBinding: delegate.recipientAuthorityBinding }
+      : {}),
     ...(delegate.returnOptions ? { returnOptions: delegate.returnOptions } : {}),
     ...(delegate.recipientContext ? { recipientContext: delegate.recipientContext } : {}),
     ...(delegate.traceparent && delegate.traceparentProvenance === "internal"
@@ -304,6 +310,9 @@ export function consumeStagedPostCompactionDelegates(
     }
     if (claimed.fanoutMode) {
       delegate.fanoutMode = claimed.fanoutMode;
+    }
+    if (claimed.recipientAuthorityBinding) {
+      delegate.recipientAuthorityBinding = claimed.recipientAuthorityBinding;
     }
     if (claimed.returnOptions) {
       delegate.returnOptions = claimed.returnOptions;

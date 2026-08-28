@@ -604,6 +604,12 @@ export function writeSessionEntry(
     options.previousEntry === undefined
       ? canonicalPreviousEntry
       : (options.previousEntry ?? undefined);
+  if (
+    previousEntry?.recipientAuthorityEpoch !== undefined &&
+    normalizedEntry.recipientAuthorityEpoch === undefined
+  ) {
+    normalizedEntry.recipientAuthorityEpoch = previousEntry.recipientAuthorityEpoch;
+  }
   // The lifecycle-selected entry owns visibility copy-forward semantics.
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
     delete normalizedEntry.visibility;

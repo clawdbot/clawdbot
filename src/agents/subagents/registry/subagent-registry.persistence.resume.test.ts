@@ -19,8 +19,12 @@ import {
 } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+type SubagentAnnounceParams = Parameters<
+  typeof import("../announce/subagent-announce.js").runSubagentAnnounceFlow
+>[0];
+
 const { announceSpy } = vi.hoisted(() => ({
-  announceSpy: vi.fn(async () => "delivered" as const),
+  announceSpy: vi.fn(async (_params: SubagentAnnounceParams) => "delivered" as const),
 }));
 vi.mock("../announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
@@ -183,6 +187,66 @@ describe("subagent registry persistence resume", () => {
         childSessionKey: run.childSessionKey,
         requesterOrigin: { channel: "whatsapp", accountId: "acct-main" },
       });
+    });
+  });
+
+  it("persists completion-time all-recipient authority selection on the authoritative run", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    const stateDir = tempStateDir;
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const childSessionKey = "agent:main:subagent:all-authority";
+      await writeSubagentSessionEntry({
+        stateDir,
+        agentId: "main",
+        sessionKey: childSessionKey,
+        sessionId: "sess-all-authority",
+        defaultSessionId: "sess-all-authority",
+      });
+      mod.registerSubagentRun({
+        runId: "run-all-authority",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "fan out at completion",
+        cleanup: "keep",
+        silentAnnounce: true,
+        continuationFanoutMode: "all",
+        continuationRecipientAuthorityBinding: {
+          version: 1,
+          selection: "pending",
+          fanoutMode: "all",
+        },
+      });
+
+      await vi.waitFor(
+        () =>
+          expect(
+            announceSpy.mock.calls.some(([params]) => params.childRunId === "run-all-authority"),
+          ).toBe(true),
+        { timeout: 5_000, interval: 10 },
+      );
+      const announceParams = announceSpy.mock.calls.find(
+        ([params]) => params.childRunId === "run-all-authority",
+      )?.[0];
+      expect(announceParams).toBeDefined();
+      const selectedBinding = {
+        version: 1 as const,
+        selection: "selected" as const,
+        recipients: [
+          {
+            sessionKey: "agent:main:main",
+            authority: { state: "absent" as const },
+          },
+        ],
+      };
+
+      expect(announceParams?.persistContinuationRecipientAuthorityBinding?.(selectedBinding)).toBe(
+        true,
+      );
+      expect(
+        loadSubagentRegistryFromSqlite().get("run-all-authority")
+          ?.continuationRecipientAuthorityBinding,
+      ).toEqual(selectedBinding);
     });
   });
 

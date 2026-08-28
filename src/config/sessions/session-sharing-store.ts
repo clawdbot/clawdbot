@@ -11,6 +11,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { advanceSessionRecipientAuthorityInTransaction } from "./session-accessor.sqlite-recipient-authority.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 
 type SessionMemberDatabase = Pick<OpenClawAgentKyselyDatabase, "session_members">;
@@ -226,6 +227,7 @@ export function removeSessionMember(
         .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
         .where("identity_id", "=", normalizedIdentityId),
     );
+    advanceSessionRecipientAuthorityInTransaction(database, resolveSqliteScope(scope).sessionKey);
     return { identityId: row.identity_id, addedBy: row.added_by, addedAt: row.added_at };
   }, options);
 }

@@ -34,6 +34,7 @@ import type {
 } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 import type { SessionSkillSnapshot } from "./session-prompt-types.js";
+import type { ContinuationRecipientAuthorityBinding } from "./session-recipient-authority-types.js";
 import type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
 import type { SessionToolOverrides } from "./session-tool-overrides.js";
 
@@ -310,6 +311,8 @@ export type SessionPostCompactionDelegate = {
   targetSessionKey?: string;
   targetSessionKeys?: string[];
   fanoutMode?: "tree" | "all";
+  /** Durable logical-mailbox authority captured before this delegate was accepted. */
+  recipientAuthorityBinding?: ContinuationRecipientAuthorityBinding;
   returnOptions?: {
     artifacts?: "forbidden" | "optional" | "required";
   };
@@ -371,6 +374,11 @@ type SessionEntryCore = SessionRestartRecoveryState &
     incognito?: true;
     /** Opaque owner revision used to reject stale lifecycle mutations. */
     lifecycleRevision?: string;
+    /**
+     * Durable logical-mailbox authority. Runtime consumers must validate this
+     * unknown value before comparing it so malformed persisted state fails closed.
+     */
+    recipientAuthorityEpoch?: unknown;
     // archivedAt/pinnedAt mirror the Codex thread-management shape (state DB
     // threads.archived_at: the boolean is always derived from the timestamp and
     // stamped server-side). Codex serializes camelCase but in epoch SECONDS;

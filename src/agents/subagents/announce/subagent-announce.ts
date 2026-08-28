@@ -124,6 +124,10 @@ export async function runSubagentAnnounceFlow(params: {
   continuationTargetSessionKey?: string;
   continuationTargetSessionKeys?: string[];
   continuationFanoutMode?: "tree" | "all";
+  continuationRecipientAuthorityBinding?: import("../../../config/sessions/session-recipient-authority-types.js").ContinuationRecipientAuthorityBinding;
+  persistContinuationRecipientAuthorityBinding?: (
+    binding: import("../../../config/sessions/session-recipient-authority-types.js").ContinuationRecipientAuthorityBinding,
+  ) => boolean;
   traceparent?: string;
   onBeforeDeleteChildSession?: () => boolean;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
@@ -611,6 +615,9 @@ export async function runSubagentAnnounceFlow(params: {
       continuationTargetSessionKey: params.continuationTargetSessionKey,
       continuationTargetSessionKeys: params.continuationTargetSessionKeys,
       continuationFanoutMode: params.continuationFanoutMode,
+      continuationRecipientAuthorityBinding: params.continuationRecipientAuthorityBinding,
+      persistContinuationRecipientAuthorityBinding:
+        params.persistContinuationRecipientAuthorityBinding,
       traceparent: params.traceparent,
       // Resolve the reads lazily: building this object eagerly would touch the
       // read-module namespace on every announce, including flows that never

@@ -8,6 +8,7 @@
  * the rest of the continuation surface is built on.
  */
 
+import type { ContinuationRecipientAuthorityBinding } from "../../config/sessions/session-recipient-authority-types.js";
 import type { InlineAttachment, InlineAttachmentMount } from "../../shared/inline-attachments.js";
 import type {
   ContinuationCrossSessionTargetingPolicy,
@@ -77,6 +78,7 @@ export type PendingContinuationDelegate = {
   targetSessionKey?: string;
   targetSessionKeys?: string[];
   fanoutMode?: ContinuationDelegateFanoutMode;
+  recipientAuthorityBinding?: ContinuationRecipientAuthorityBinding;
   returnOptions?: {
     artifacts?: "forbidden" | "optional" | "required";
   };
@@ -193,6 +195,7 @@ export type StagedPostCompactionDelegate = {
   targetSessionKey?: string;
   targetSessionKeys?: string[];
   fanoutMode?: ContinuationDelegateFanoutMode;
+  recipientAuthorityBinding?: ContinuationRecipientAuthorityBinding;
   returnOptions?: {
     artifacts?: "forbidden" | "optional" | "required";
   };

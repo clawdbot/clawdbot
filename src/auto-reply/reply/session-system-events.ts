@@ -15,6 +15,7 @@ import {
   resolveSessionStorePathCore,
 } from "../../config/sessions.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import { sessionRecipientAuthorityMatches } from "../../config/sessions/session-recipient-authority-types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import { emitContinuationQueueDrainSpan } from "../../infra/continuation-tracer.js";
@@ -272,20 +273,36 @@ export async function prepareFormattedSystemEvents(params: {
   // so the heartbeat path can consume and deliver them.
   // Upstream scopes queued events to the owning agent before generic selection;
   // keep that ownership filter ahead of our delivery-ack/session filtering.
-  const selected = selectGenericSystemEvents(
+  let selected = selectGenericSystemEvents(
     selectAgentSystemEvents(peekSystemEventEntries(params.sessionKey), params.agentId),
     { suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents },
   );
   // Storage must resolve under the SAME agent the ownership filter selected for,
   // or a global-scope key under a non-default agent reads the wrong store.
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey, params.agentId);
-  const currentSessionId = loadSessionEntry({
+  const currentSessionEntry = loadSessionEntry({
     agentId,
     sessionKey: params.sessionKey,
     storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
     readConsistency: "latest",
     hydrateSkillPromptRefs: false,
-  })?.sessionId;
+  });
+  const currentSessionId = currentSessionEntry?.sessionId;
+  const staleAuthorityEvents = selected.filter(
+    (event) =>
+      event.recipientAuthority &&
+      !sessionRecipientAuthorityMatches(event.recipientAuthority, currentSessionEntry),
+  );
+  for (const event of staleAuthorityEvents) {
+    if (event.sessionDeliveryAckId) {
+      await ackSessionDelivery(event.sessionDeliveryAckId, event.sessionDeliveryAckStateDir);
+    }
+  }
+  if (staleAuthorityEvents.length > 0) {
+    consumeSelectedSystemEventEntries(params.sessionKey, staleAuthorityEvents);
+    const stale = new Set(staleAuthorityEvents);
+    selected = selected.filter((event) => !stale.has(event));
+  }
   // Adoption-scoped events settle only after the turn is durably adopted, so a
   // crash between the transcript write and the queue ack leaves an ack id that
   // IS already adopted but whose row is still pending. Both kinds must consult

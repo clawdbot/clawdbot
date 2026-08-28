@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSpawnRecipientAuthorityBinding } from "../../../auto-reply/continuation/recipient-authority-binding.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
@@ -57,6 +58,7 @@ type ResolvedSubagentSpawnRequest = {
     childDepth: number;
     maxSpawnDepth: number;
     continuationTargetSessionKeys?: string[];
+    continuationRecipientAuthorityBinding?: ContinuationSpawnParams["continuationRecipientAuthorityBinding"];
   };
   childIdem: string;
 };
@@ -267,6 +269,14 @@ export function resolveSubagentSpawnRequest(
     params.continuationFanoutMode === "tree"
       ? listAncestorSessionKeys(ownership.completionRequesterSessionKey)
       : params.continuationTargetSessionKeys;
+  const continuationRecipientAuthorityBinding = resolveSpawnRecipientAuthorityBinding({
+    binding: params.continuationRecipientAuthorityBinding,
+    requesterSessionKey: ownership.completionRequesterSessionKey,
+    targetSessionKey: params.continuationTargetSessionKey,
+    targetSessionKeys: params.continuationTargetSessionKeys,
+    fanoutMode: params.continuationFanoutMode,
+    treeSessionKeys: continuationTargetSessionKeys,
+  });
   const childDepth = admission.childSessionPatch?.spawnDepth ?? 1;
   const maxSpawnDepth = admission.maxSpawnDepth ?? childDepth;
   const swarmLaunchReplayKey = normalizeOptionalString(params.swarmLaunchReplayKey);
@@ -331,6 +341,7 @@ export function resolveSubagentSpawnRequest(
         childDepth,
         maxSpawnDepth,
         continuationTargetSessionKeys,
+        continuationRecipientAuthorityBinding,
       },
       childIdem,
     },

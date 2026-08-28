@@ -20,6 +20,10 @@ import {
   removeSessionMember,
 } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  createSessionRecipientAuthorityEpoch,
+  doesSessionVisibilityRestrictRecipientAuthority,
+} from "../../config/sessions/session-recipient-authority-types.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listProfiles } from "../../state/user-profiles.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
@@ -374,7 +378,12 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           sessionChanged = true;
           return null;
         }
-        return { visibility };
+        return {
+          visibility,
+          ...(doesSessionVisibilityRestrictRecipientAuthority(previous, visibility)
+            ? { recipientAuthorityEpoch: createSessionRecipientAuthorityEpoch() }
+            : {}),
+        };
       });
       if (sessionChanged) {
         throw new Error("session changed before sharing mutation");

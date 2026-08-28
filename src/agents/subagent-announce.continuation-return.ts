@@ -1,9 +1,15 @@
 import {
+  captureContinuationRecipientAuthorities,
+  continuationRecipientAuthorityMap,
+  parseContinuationRecipientAuthorityBinding,
+} from "../auto-reply/continuation/recipient-authority-binding.js";
+import {
   enqueueContinuationReturnDeliveries,
   resolveContinuationReturnTargetSessionKeys,
 } from "../auto-reply/continuation/targeting.js";
 import type { ContinuationTrigger } from "../auto-reply/get-reply-options.types.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
+import type { ContinuationRecipientAuthorityBinding } from "../config/sessions/session-recipient-authority-types.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -78,6 +84,10 @@ export async function routeSubagentContinuationReturn(params: {
   continuationTargetSessionKey?: string;
   continuationTargetSessionKeys?: string[];
   continuationFanoutMode?: "tree" | "all";
+  continuationRecipientAuthorityBinding?: ContinuationRecipientAuthorityBinding;
+  persistContinuationRecipientAuthorityBinding?: (
+    binding: ContinuationRecipientAuthorityBinding,
+  ) => boolean;
   traceparent?: string;
   registryRuntime?: RegistryReturnRuntime;
 }): Promise<{
@@ -98,34 +108,74 @@ export async function routeSubagentContinuationReturn(params: {
     params.managedArtifactReturn ||
     params.continuationTargetSessionKey ||
     (params.continuationTargetSessionKeys && params.continuationTargetSessionKeys.length > 0) ||
-    params.continuationFanoutMode,
+    params.continuationFanoutMode ||
+    params.continuationRecipientAuthorityBinding,
   );
   if (hasTargeting) {
+    const parsedAuthorityBinding = parseContinuationRecipientAuthorityBinding(
+      params.continuationRecipientAuthorityBinding,
+    );
+    if (parsedAuthorityBinding.state === "invalid") {
+      throw new Error("Invalid persisted continuation recipient authority binding");
+    }
+    let recipientAuthorityBinding =
+      parsedAuthorityBinding.state === "valid" ? parsedAuthorityBinding.binding : undefined;
     // Tree recipients were frozen by spawn admission while ancestry was live.
     // Never re-derive them after parent cleanup or registry retirement.
     const treeSessionKeys =
       !params.managedArtifactReturn && params.continuationFanoutMode === "tree"
         ? params.continuationTargetSessionKeys
         : undefined;
-    const allSessionKeys =
-      !params.managedArtifactReturn && params.continuationFanoutMode === "all"
-        ? await listKnownSessionKeysOnHost(params.cfg)
+    const selectAllRecipients =
+      !params.managedArtifactReturn &&
+      params.continuationFanoutMode === "all" &&
+      recipientAuthorityBinding?.selection !== "selected";
+    const allSessionKeys = selectAllRecipients
+      ? await listKnownSessionKeysOnHost(params.cfg)
+      : undefined;
+    const frozenRecipientSessionKeys =
+      !params.managedArtifactReturn &&
+      params.continuationFanoutMode === "all" &&
+      recipientAuthorityBinding?.selection === "selected"
+        ? recipientAuthorityBinding.recipients.map((recipient) => recipient.sessionKey)
         : undefined;
-    const resolvedTargetSessionKeys = params.managedArtifactReturn
-      ? [...(params.triggerMessagesBySessionKey?.keys() ?? [])]
-      : resolveContinuationReturnTargetSessionKeys({
-          defaultSessionKey: params.targetRequesterSessionKey,
-          targetSessionKey: params.continuationTargetSessionKey,
-          targetSessionKeys: params.continuationTargetSessionKeys,
-          fanoutMode: params.continuationFanoutMode,
-          treeSessionKeys,
-          allSessionKeys,
-          childSessionKey: params.childSessionKey,
-        });
+    const resolvedTargetSessionKeys = frozenRecipientSessionKeys
+      ? frozenRecipientSessionKeys
+      : params.managedArtifactReturn
+        ? [...(params.triggerMessagesBySessionKey?.keys() ?? [])]
+        : resolveContinuationReturnTargetSessionKeys({
+            defaultSessionKey: params.targetRequesterSessionKey,
+            targetSessionKey: params.continuationTargetSessionKey,
+            targetSessionKeys: params.continuationTargetSessionKeys,
+            fanoutMode: params.continuationFanoutMode,
+            treeSessionKeys,
+            allSessionKeys,
+            childSessionKey: params.childSessionKey,
+          });
     const targetSessionKeys = resolvedTargetSessionKeys.filter(
       (sessionKey) =>
         !params.registryRuntime?.shouldIgnorePostCompletionAnnounceForSession(sessionKey),
     );
+    if (
+      recipientAuthorityBinding?.selection === "pending" &&
+      recipientAuthorityBinding.fanoutMode === "tree"
+    ) {
+      throw new Error("Tree recipient authority was not selected before spawn acceptance");
+    }
+    if (
+      recipientAuthorityBinding?.selection === "pending" &&
+      recipientAuthorityBinding.fanoutMode === "all"
+    ) {
+      const selected = captureContinuationRecipientAuthorities(targetSessionKeys);
+      if (!params.persistContinuationRecipientAuthorityBinding?.(selected)) {
+        throw new Error("Continuation all-recipient authority selection was not durably committed");
+      }
+      recipientAuthorityBinding = selected;
+    }
+    const recipientAuthorities =
+      !params.managedArtifactReturn && recipientAuthorityBinding
+        ? continuationRecipientAuthorityMap(recipientAuthorityBinding, targetSessionKeys)
+        : undefined;
     if (params.managedArtifactReturn) {
       const deliverable = new Set(targetSessionKeys);
       for (const sessionKey of resolvedTargetSessionKeys) {
@@ -174,6 +224,7 @@ export async function routeSubagentContinuationReturn(params: {
         wakeRecipients: params.wakeOnReturn === true || params.silentAnnounce !== true,
         childRunId: params.childRunId,
         ...(expectedSessionIds.size > 0 ? { expectedSessionIds } : {}),
+        ...(recipientAuthorities ? { recipientAuthorities } : {}),
         ...(delegateArtifactReceipts.size > 0 ? { delegateArtifactReceipts } : {}),
         ...(delegateArtifactProjections.size > 0 ? { delegateArtifactProjections } : {}),
         ...(params.continuationFanoutMode ? { fanoutMode: params.continuationFanoutMode } : {}),

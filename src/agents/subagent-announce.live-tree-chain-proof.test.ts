@@ -349,7 +349,14 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     reloadTaskFlowRegistryFromStore();
     expect(listTaskFlowsForOwnerKey(hop1ChildSessionKey)).toEqual([
       expect.objectContaining({
-        stateJson: expect.objectContaining({ originRunId: hop1RunId }),
+        stateJson: expect.objectContaining({
+          originRunId: hop1RunId,
+          recipientAuthorityBinding: {
+            version: 1,
+            selection: "pending",
+            fanoutMode: "tree",
+          },
+        }),
       }),
     ]);
 
@@ -392,6 +399,20 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     expect(hop2Run.continuationTargetSessionKey).toBeUndefined();
     expect(hop2Run.continuationTargetSessionKeys).toEqual([hop1ChildSessionKey, rootSessionKey]);
     expect(hop2Run.continuationFanoutMode).toBe("tree");
+    expect(hop2Run.continuationRecipientAuthorityBinding).toEqual({
+      version: 1,
+      selection: "selected",
+      recipients: [
+        {
+          sessionKey: hop1ChildSessionKey,
+          authority: { state: "bound", epoch: expect.any(String) },
+        },
+        {
+          sessionKey: rootSessionKey,
+          authority: { state: "bound", epoch: expect.any(String) },
+        },
+      ],
+    });
 
     await waitFor(() => {
       const intermediate = getSubagentRunByChildSessionKey(hop1ChildSessionKey);
@@ -664,6 +685,9 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
       },
     ]);
     const countReturns = (sessionKey: string) => {
+      const durableMailboxReturns = peekSystemEventEntries(sessionKey).filter((entry) =>
+        entry.text.includes(delegateSentinel),
+      ).length;
       const gatewayReturns = callGatewayMock.mock.calls.filter(
         ([request]) =>
           request.method === "agent" &&
@@ -678,7 +702,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
           typeof params.message === "string" &&
           params.message.includes(delegateSentinel),
       ).length;
-      return gatewayReturns + inProcessReturns;
+      return durableMailboxReturns + gatewayReturns + inProcessReturns;
     };
     const originReturnsBefore = countReturns(originChildSessionKey);
     const rootReturnsBefore = countReturns(rootSessionKey);

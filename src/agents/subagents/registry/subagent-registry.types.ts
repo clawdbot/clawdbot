@@ -315,6 +315,8 @@ export type SubagentRunRecord = {
   continuationTargetSessionKeys?: string[];
   /** Continuation: computed fan-out over the local session graph. */
   continuationFanoutMode?: "tree" | "all";
+  /** Durable logical-mailbox authority captured before this run was accepted. */
+  continuationRecipientAuthorityBinding?: import("../../../config/sessions/session-recipient-authority-types.js").ContinuationRecipientAuthorityBinding;
   /** Continuation: producer span carrier available to child completion paths. */
   traceparent?: string;
   /** Collector-mode runs remain waitable and never announce to the requester. */

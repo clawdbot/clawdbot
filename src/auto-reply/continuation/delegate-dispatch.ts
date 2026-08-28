@@ -115,8 +115,7 @@ export async function dispatchToolDelegates(
   // the cost only in memory and lose it (later hops rebuild from the stale entry
   // and bypass the cost cap), so force immediate dispatch here instead of arming
   // a lossy hedge.
-  const foldWithoutPersist =
-    params.applyDelegateChainTokensFold === true && !params.persistChainState;
+  const foldWithoutPersist = params.applyDelegateChainTokensFold && !params.persistChainState;
   const ignoreDelay = params.dispatchQueuedRegardlessOfDelay === true || foldWithoutPersist;
   const toolDelegates = consumePendingDelegates(sessionKey, {
     includeRunning: params.recoverRunningDelegates === true,
@@ -320,11 +319,11 @@ export async function dispatchToolDelegates(
       deferManagedDelegate(delegate);
       continue;
     }
-    const effectiveCrossSessionTargeting =
+    const effectiveTargeting =
       currentArtifactRuntime?.crossSessionTargeting ?? crossSessionTargeting;
     if (
       !acceptedChildAlreadyKnown &&
-      effectiveCrossSessionTargeting === "disabled" &&
+      effectiveTargeting === "disabled" &&
       hasCrossSessionDelegateTargeting(delegate, sessionKey)
     ) {
       if (managedArtifacts) {
@@ -335,8 +334,7 @@ export async function dispatchToolDelegates(
         continue;
       }
       const delegateMode = delegate.mode ?? "normal";
-      const delegateDelivery: "immediate" | "timer" =
-        delegate.delayMs && delegate.delayMs > 0 ? "timer" : "immediate";
+      const delegateDelivery = delegate.delayMs && delegate.delayMs > 0 ? "timer" : "immediate";
       const summary = "Tool delegate rejected: cross-session targeting is disabled by policy.";
       log.info(
         `[continuation:delegate-rejected] policy.cross_session_targeting task=${delegate.task.slice(0, 80)} session=${sessionKey}`,
@@ -427,20 +425,19 @@ export async function dispatchToolDelegates(
       delegate.persistedChainState && persistedChainStateKind === "advanced"
         ? delegate.persistedChainState.currentChainCount
         : currentChainCount + 1;
-    const delegateAccumulatedTokens =
-      delegate.persistedChainState?.accumulatedChainTokens ?? currentAccumulatedTokens;
+    const tokens = delegate.persistedChainState?.accumulatedChainTokens ?? currentAccumulatedTokens;
     const dispatchChainId =
       delegate.persistedChainState?.chainId ?? currentChainId ?? generateChainId();
     const plannedTerminalChainState: ChainState = {
       currentChainCount: nextHop,
       chainStartedAt: delegate.persistedChainState?.chainStartedAt ?? chainState.chainStartedAt,
-      accumulatedChainTokens: delegateAccumulatedTokens,
+      accumulatedChainTokens: tokens,
       ...(dispatchChainId ? { chainId: dispatchChainId } : {}),
     };
     const commitPlannedChainState = (chainId: string | undefined): void => {
       dispatched++;
       currentChainCount = nextHop;
-      currentAccumulatedTokens = delegateAccumulatedTokens;
+      currentAccumulatedTokens = tokens;
       currentChainId = chainId ?? currentChainId;
     };
 
@@ -562,7 +559,7 @@ export async function dispatchToolDelegates(
           continuationChainState: {
             count: nextHop,
             startedAt: plannedTerminalChainState.chainStartedAt,
-            tokens: delegateAccumulatedTokens,
+            tokens,
             chainId: dispatchChainId,
           },
           ...(delegate.model ? { model: delegate.model } : {}),
@@ -578,6 +575,9 @@ export async function dispatchToolDelegates(
             ? { continuationTargetSessionKeys: delegate.targetSessionKeys }
             : {}),
           ...(delegate.fanoutMode ? { continuationFanoutMode: delegate.fanoutMode } : {}),
+          ...(delegate.recipientAuthorityBinding
+            ? { continuationRecipientAuthorityBinding: delegate.recipientAuthorityBinding }
+            : {}),
           ...(spawnTraceparent ? { traceparent: spawnTraceparent } : {}),
         },
         {

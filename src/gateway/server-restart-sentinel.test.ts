@@ -54,6 +54,9 @@ type CreateManagedOutgoingMediaBlocksMock =
 type AttachManagedOutgoingMediaToMessageMock =
   typeof import("./managed-image-attachments.js").attachManagedOutgoingMediaToMessage;
 
+const RECIPIENT_AUTHORITY_EPOCH = "11111111-1111-4111-8111-111111111111";
+const REPLACEMENT_AUTHORITY_EPOCH = "22222222-2222-4222-8222-222222222222";
+
 const mocks = vi.hoisted(() => {
   const state = {
     queuedSessionDeliveries: new Map<string, Record<string, unknown>>(),
@@ -179,6 +182,7 @@ const mocks = vi.hoisted(() => {
     })),
     withStableDeliveryPreparation: vi.fn(),
     enqueueSystemEvent: vi.fn(),
+    removeSystemEvents: vi.fn(),
     requestHeartbeat: vi.fn(),
     enqueueSessionDelivery: vi.fn(),
     advanceSessionDeliveryAgentRun: vi.fn<AdvanceSessionDeliveryAgentRunMock>(async () => {}),
@@ -494,6 +498,7 @@ vi.mock("../channels/message/runtime.js", () => ({
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEventRaw: mocks.enqueueSystemEvent,
+  removeSystemEvents: mocks.removeSystemEvents,
 }));
 
 vi.mock("../infra/heartbeat-wake.js", async () => {
@@ -760,6 +765,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.reserveDeliveryAttempt.mockClear();
     mocks.withActiveDeliveryClaim.mockClear();
     mocks.enqueueSystemEvent.mockClear();
+    mocks.removeSystemEvents.mockClear();
     mocks.requestHeartbeat.mockClear();
     mocks.enqueueSessionDelivery.mockClear();
     mocks.advanceSessionDeliveryAgentRun.mockClear();
@@ -2713,6 +2719,98 @@ describe("scheduleRestartSentinelWake", () => {
       "restart continuation skipped: session changed",
       expect.anything(),
     );
+  });
+
+  it("replays a bound logical recipient after a session id rollover", async () => {
+    const recipientAuthority = {
+      state: "bound" as const,
+      epoch: RECIPIENT_AUTHORITY_EPOCH,
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      agentId: "main",
+      entry: {
+        sessionId: "new-session-incarnation",
+        updatedAt: 2,
+        recipientAuthorityEpoch: RECIPIENT_AUTHORITY_EPOCH,
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
+      legacyKey: undefined,
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        stateDir: testState.stateDir,
+        entry: {
+          id: "delivery-authority-rollover",
+          kind: "systemEvent",
+          sessionKey: "agent:main:main",
+          text: "accepted delegate result",
+          enqueuedAt: 1,
+          retryCount: 0,
+          recipientAuthority,
+          awaitPromptAdoption: true,
+        },
+      }),
+    ).rejects.toThrow("system event is awaiting durable prompt adoption");
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("accepted delegate result", {
+      sessionKey: "agent:main:main",
+      sessionDeliveryAckId: "delivery-authority-rollover",
+      sessionDeliveryAckStateDir: testState.stateDir,
+      sessionDeliveryAwaitsTurnAdoption: true,
+      recipientAuthority,
+      trusted: true,
+    });
+    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
+      source: "restart-sentinel",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("does not replay a stale bound recipient after authority replacement", async () => {
+    const recipientAuthority = {
+      state: "bound" as const,
+      epoch: RECIPIENT_AUTHORITY_EPOCH,
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      agentId: "main",
+      entry: {
+        sessionId: "replacement-session",
+        updatedAt: 2,
+        recipientAuthorityEpoch: REPLACEMENT_AUTHORITY_EPOCH,
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
+      legacyKey: undefined,
+    });
+
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      stateDir: testState.stateDir,
+      entry: {
+        id: "delivery-stale-authority",
+        kind: "systemEvent",
+        sessionKey: "agent:main:main",
+        text: "stale delegate result",
+        enqueuedAt: 1,
+        retryCount: 0,
+        recipientAuthority,
+        awaitPromptAdoption: true,
+      },
+    });
+
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
   });
 
   it("preserves distinct durable identities for identical recovered system events", async () => {

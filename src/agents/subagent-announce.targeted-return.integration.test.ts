@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
+import type { ContinuationRecipientAuthorityBinding } from "../config/sessions/session-recipient-authority-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import type { QueuedSessionDelivery } from "../infra/session-delivery-queue-storage.js";
@@ -397,6 +398,75 @@ describe("subagent announce targeted continuation return integration", () => {
       expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
         expect.objectContaining({ sessionKey: liveSessionKey }),
       );
+    });
+  });
+
+  it("freezes completion-time all recipients and reuses them on retry", async () => {
+    await withTestDir({ prefix: "openclaw-targeted-return-all-authority-" }, async (stateDir) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const firstRecipient = "agent:main:all-authority-first";
+      const secondRecipient = "agent:main:all-authority-second";
+      allSessionKeysMock.mockReturnValue([firstRecipient, secondRecipient]);
+      let selectedBinding: ContinuationRecipientAuthorityBinding | undefined;
+      const persistBinding = vi.fn((binding: ContinuationRecipientAuthorityBinding) => {
+        selectedBinding = binding;
+        return true;
+      });
+      const baseParams = {
+        childSessionKey: "agent:main:subagent:all-authority-child",
+        requesterSessionKey: "agent:main:all-authority-requester",
+        requesterDisplayKey: "all-authority-requester",
+        task: "[continuation:chain-hop:1] all authority",
+        timeoutMs: 100,
+        cleanup: "keep" as const,
+        waitForCompletion: false,
+        startedAt: 10,
+        endedAt: 20,
+        outcome: { status: "ok" as const },
+        roundOneReply: "delegate completed",
+        silentAnnounce: true,
+        wakeOnReturn: true,
+        continuationFanoutMode: "all" as const,
+      };
+
+      const firstResult = await runSubagentAnnounceFlow({
+        ...baseParams,
+        childRunId: "run-all-authority-first",
+        continuationRecipientAuthorityBinding: {
+          version: 1,
+          selection: "pending",
+          fanoutMode: "all",
+        },
+        persistContinuationRecipientAuthorityBinding: persistBinding,
+      });
+
+      expect(firstResult).toBe("delivered");
+      expect(selectedBinding).toEqual({
+        version: 1,
+        selection: "selected",
+        recipients: [
+          { sessionKey: firstRecipient, authority: { state: "absent" } },
+          { sessionKey: secondRecipient, authority: { state: "absent" } },
+        ],
+      });
+      allSessionKeysMock.mockImplementation(() => {
+        throw new Error("retry must not enumerate current recipients");
+      });
+
+      const retryResult = await runSubagentAnnounceFlow({
+        ...baseParams,
+        childRunId: "run-all-authority-retry",
+        continuationRecipientAuthorityBinding: selectedBinding,
+        persistContinuationRecipientAuthorityBinding: persistBinding,
+      });
+
+      expect(retryResult).toBe("delivered");
+      expect(persistBinding).toHaveBeenCalledTimes(1);
+      expect(
+        (await readQueuedSystemEventDeliveries(stateDir))
+          .map((entry) => entry.sessionKey)
+          .toSorted(),
+      ).toEqual([firstRecipient, firstRecipient, secondRecipient, secondRecipient]);
     });
   });
 

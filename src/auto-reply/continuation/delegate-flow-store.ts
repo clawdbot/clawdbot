@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { validateSubagentAttachments } from "../../agents/subagents/spawn/subagent-attachments.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { ContinuationRecipientAuthorityBindingSchema } from "../../config/sessions/session-recipient-authority-types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   DIAGNOSTIC_TRACEPARENT_PATTERN,
@@ -32,6 +33,7 @@ import {
   updateFlowRecordByIdExpectedRevision,
 } from "../../tasks/task-flow-runtime-internal.js";
 import * as delegateFlowDiagnostics from "./delegate-flow-diagnostics.js";
+import { createContinuationRecipientAuthorityBinding } from "./recipient-authority-binding.js";
 import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
   normalizeContinuationTargetKey,
@@ -132,6 +134,7 @@ const PendingDelegateStateSchema = z
     targetSessionKey: z.string().min(1).optional(),
     targetSessionKeys: z.array(z.string().min(1)).optional(),
     fanoutMode: z.enum(CONTINUATION_DELEGATE_FANOUT_MODES).optional(),
+    recipientAuthorityBinding: ContinuationRecipientAuthorityBindingSchema.optional(),
     returnOptions: z
       .object({
         artifacts: z.enum(["forbidden", "optional", "required"]).optional(),
@@ -307,6 +310,9 @@ function encodeDelegateState(
     ...(targetSessionKey ? { targetSessionKey } : {}),
     ...(targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
+    ...(delegate.recipientAuthorityBinding
+      ? { recipientAuthorityBinding: delegate.recipientAuthorityBinding }
+      : {}),
     ...(delegate.returnOptions ? { returnOptions: delegate.returnOptions } : {}),
     ...(delegate.recipientContext ? { recipientContext: delegate.recipientContext } : {}),
     ...(traceparent ? { traceparent, traceparentProvenance: "internal" as const } : {}),
@@ -403,6 +409,9 @@ export function decodeDelegateFlow(flow: TaskFlowRecord): PendingContinuationDel
       ? { targetSessionKeys: state.targetSessionKeys }
       : {}),
     ...(state.fanoutMode ? { fanoutMode: state.fanoutMode } : {}),
+    ...(state.recipientAuthorityBinding
+      ? { recipientAuthorityBinding: state.recipientAuthorityBinding }
+      : {}),
     ...(state.returnOptions ? { returnOptions: state.returnOptions } : {}),
     ...(state.recipientContext ? { recipientContext: state.recipientContext } : {}),
     ...(state.traceparent && state.traceparentProvenance === "internal"
@@ -599,6 +608,17 @@ export const delegateFlowRecords = {
     /** Tests and non-tool producers can inject their resolved runtime policy. */
     attachmentConfig?: OpenClawConfig;
   }) {
+    const delegate = params.delegate.recipientAuthorityBinding
+      ? params.delegate
+      : {
+          ...params.delegate,
+          recipientAuthorityBinding: createContinuationRecipientAuthorityBinding({
+            requesterSessionKey: params.ownerKey,
+            targetSessionKey: params.delegate.targetSessionKey,
+            targetSessionKeys: params.delegate.targetSessionKeys,
+            fanoutMode: params.delegate.fanoutMode,
+          }),
+        };
     return createManagedTaskFlow({
       ownerKey: params.ownerKey,
       controllerId:
@@ -606,9 +626,9 @@ export const delegateFlowRecords = {
           ? CONTINUATION_POST_COMPACTION_CONTROLLER_ID
           : CONTINUATION_DELEGATE_CONTROLLER_ID,
       notifyPolicy: "silent",
-      goal: delegateGoal(params.delegate),
+      goal: delegateGoal(delegate),
       currentStep: params.currentStep,
-      stateJson: encodeDelegateState(params.delegate, params.attachmentConfig),
+      stateJson: encodeDelegateState(delegate, params.attachmentConfig),
     });
   },
   update(params: {
