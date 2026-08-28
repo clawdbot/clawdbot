@@ -1147,6 +1147,7 @@ describe("sendMessageMatrix mentions", () => {
     expect(content.msgtype).toBe("m.notice");
     expect(content.body).toBe("@room hi @alice:example.org");
     expect(content["m.mentions"]).toEqual({});
+    expect(content.formatted_body).not.toContain("matrix.to");
   });
 
   it("marks room mentions via m.mentions.room", async () => {

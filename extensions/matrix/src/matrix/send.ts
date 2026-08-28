@@ -307,6 +307,7 @@ export async function sendMessageMatrix(
             content,
             markdown: captionMarkdown,
             preparedBody: captionMarkdown === convertedText ? singleEventBody : undefined,
+            includeMentions: opts.disableMentions ? false : undefined,
             tableMode,
           });
           prepareContent(content, receiptKind);
@@ -322,6 +323,7 @@ export async function sendMessageMatrix(
               content: followup,
               markdown: chunk,
               preparedBody: chunk === convertedText ? singleEventBody : undefined,
+              includeMentions: opts.disableMentions ? false : undefined,
               tableMode,
             });
             prepareContent(followup, "text");
@@ -337,6 +339,7 @@ export async function sendMessageMatrix(
               content,
               markdown: chunk,
               preparedBody: chunk === convertedText ? singleEventBody : undefined,
+              includeMentions: opts.disableMentions ? false : undefined,
               tableMode,
             });
             prepareContent(content, "text");
