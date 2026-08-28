@@ -466,6 +466,8 @@ export function createExecTool(
             turnSourceTo: defaults?.currentChannelId,
             turnSourceAccountId: defaults?.accountId,
             turnSourceThreadId: defaults?.currentThreadTs,
+            turnSourceSenderId: defaults?.senderId,
+            config: defaults?.config,
             agentId,
             security,
             ask,

@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 /**
  * Node-host exec command parameter contracts.
  * Centralizes the full host/runtime boundary so node exec callers and handlers
@@ -28,6 +29,8 @@ export type ExecuteNodeHostCommandParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  turnSourceSenderId?: string;
+  config?: OpenClawConfig;
   trigger?: string;
   agentId?: string;
   security: ExecSecurity;
