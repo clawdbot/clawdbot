@@ -96,6 +96,11 @@ describe("groupSidebarSessionRows", () => {
           ...row({ key: "oc-wt" }),
           workContext: { name: "c7c338", path: "/repos/openclaw/.claude/worktrees/c7c338" },
         },
+        // A trailing separator must not mint a second identical section.
+        {
+          ...row({ key: "oc-slash" }),
+          workContext: { name: "openclaw", path: "/repos/openclaw/" },
+        },
         { ...row({ key: "pin", pinned: true }), workContext: openclaw },
       ],
       { grouping: "project", knownGroups: ["Ignored"] },
@@ -111,7 +116,12 @@ describe("groupSidebarSessionRows", () => {
       "work",
     ]);
     expect(sections[2]?.project).toEqual(openclaw);
-    expect(sections[2]?.rows.map((item) => item.key)).toEqual(["oc-1", "oc-2", "oc-wt"]);
+    expect(sections[2]?.rows.map((item) => item.key)).toEqual([
+      "oc-1",
+      "oc-2",
+      "oc-wt",
+      "oc-slash",
+    ]);
     expect(sections[4]?.rows.map((item) => item.key)).toEqual(["thread"]);
     expect(sections[5]?.rows.map((item) => item.key)).toEqual(["grp"]);
     expect(sections[6]?.rows.map((item) => item.key)).toEqual(["no-repo"]);

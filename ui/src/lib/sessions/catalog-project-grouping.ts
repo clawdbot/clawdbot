@@ -6,13 +6,18 @@ export function normalizeCatalogProjectGrouping(raw: unknown): CatalogProjectGro
   return raw === "none" || raw === "person" ? raw : "project";
 }
 
-// Mirror Claude Code desktop: any cwd at or under `.claude/worktrees/<name>`
-// folds into the origin repo; the lazy prefix picks the outermost repo root.
-// Returns null for a filesystem-root worktree parent, which is not a real
-// project root.
+// Canonicalize a checkout path for grouping: strip trailing separators so
+// `/repo` and `/repo/` key one section, then mirror Claude Code desktop by
+// folding any cwd at or under `.claude/worktrees/<name>` into the origin repo
+// (the lazy prefix picks the outermost repo root). Returns null when nothing
+// project-like remains (filesystem roots, bare worktree parents).
 export function foldWorktreeCheckoutPath(path: string): string | null {
-  const match = path.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
-  return match ? match[1] || null : path;
+  const trimmed = path.replace(/[\\/]+$/, "");
+  if (!trimmed) {
+    return null;
+  }
+  const match = trimmed.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
+  return match ? match[1] || null : trimmed;
 }
 
 /** Basename shown for a checkout path in project sections. */
@@ -65,8 +70,8 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
       continue;
     }
     // Accepted tradeoff: filesystem-root cwds ("/", "C:\") are not real harness
-    // session roots; after trimming they fall to the ungrouped flat tail by design.
-    const trimmedPath = session.cwd?.trim().replace(/[\\/]+$/, "");
+    // session roots; after canonicalization they fall to the ungrouped flat tail.
+    const trimmedPath = session.cwd?.trim();
     const projectPath = trimmedPath ? foldWorktreeCheckoutPath(trimmedPath) : null;
     if (!projectPath) {
       ungrouped.push(session);
