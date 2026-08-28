@@ -42,8 +42,8 @@ function readStatedTokenCount(digits: string | undefined): number | undefined {
  *
  * The ceiling belongs to the request and to the refusing provider's quota, not to the model's
  * context window, so compaction budgeted against that window cannot satisfy it either. Overflow
- * recovery declines it and failover keeps advancing candidates, because a differently
- * provisioned one may still admit the request.
+ * Embedded recovery surfaces reset guidance without retrying. If a transport-owning harness
+ * bypasses that recovery, model failover may advance to a differently provisioned candidate.
  */
 export function isProviderRequestSizeCeilingError(errorMessage?: string): boolean {
   if (!errorMessage || !hasRateLimitTpmHint(errorMessage)) {
