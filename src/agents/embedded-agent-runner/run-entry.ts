@@ -125,6 +125,8 @@ type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
   sessionOverride: RunEntrySessionOverride;
   abortSignal?: AbortSignal;
   onFallbackStep?: (step: ModelFallbackStepFields) => void | Promise<void>;
+  /** Runs once after the successful winner is accepted, before post-turn context commit. */
+  onAcceptedTerminal?: () => void | Promise<void>;
   runCandidate: (provider: string, model: string, options: RunEntryCandidateOptions) => Promise<T>;
 };
 
@@ -550,14 +552,16 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       behavior: params.behavior,
       runId: params.identity.runId,
     });
+    const acceptedTerminal = canAdvanceContextEngineTurn({
+      result,
+      fallbackOutcome: settledResult.outcome,
+      terminal,
+    });
+    if (acceptedTerminal && !params.abortSignal?.aborted) {
+      await params.onAcceptedTerminal?.();
+    }
     if (fallbackResult.result.turnAttempt) {
-      if (
-        canAdvanceContextEngineTurn({
-          result,
-          fallbackOutcome: settledResult.outcome,
-          terminal,
-        })
-      ) {
+      if (acceptedTerminal) {
         await finalizeAcceptedContextEngineTurn({
           facts: fallbackResult.result.turnAttempt,
           lease: contextEngineLogicalTurnLease,

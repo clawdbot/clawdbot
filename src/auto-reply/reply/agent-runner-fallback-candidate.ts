@@ -191,6 +191,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         kind: "reconcile-completed",
         reconcile: params.clearRecoveredAutoFallbackPrimaryProbe,
       },
+      onAcceptedTerminal: params.commitTerminalOutcome,
       abortSignal: params.runAbortSignal,
       onFallbackStep: (step) => {
         emitModelFallbackStepLifecycle({ runId: params.runId, sessionKey: turn.sessionKey, step });
