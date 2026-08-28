@@ -40,6 +40,7 @@ const CHILD_ENV_DENIED_KEYS = new Set(["TELEGRAM_E2E_STATE_DIR", "TELEGRAM_USER_
 const CHILD_ENV_SECRET_KEY =
   /(?:^|_)(?:ACCESS_KEY|API_KEY|AUTH|COOKIE|CREDENTIAL|PASS|PASSWORD|PRIVATE_KEY|SECRET|SESSION|TOKEN)(?:_|$)/u;
 let activeCredential;
+let activeCredentialPromise;
 let shutdownPromise;
 let shuttingDown = false;
 
@@ -95,11 +96,21 @@ export function ownChild(child) {
   return child;
 }
 
+export function ownCredentialAcquisition(promise) {
+  activeCredentialPromise = promise;
+  return promise;
+}
+
 async function stopOwnedChildren() {
   await Promise.allSettled([...ownedChildren].map((child) => stopChild(child)));
 }
 
 export async function cleanupOwnedRuntime(credential = activeCredential) {
+  const pendingCredential = activeCredentialPromise;
+  if (!credential && pendingCredential) {
+    credential = await pendingCredential.catch(() => undefined);
+    if (activeCredentialPromise === pendingCredential) activeCredentialPromise = undefined;
+  }
   await stopOwnedChildren();
   await credential?.release();
 }
@@ -882,13 +893,18 @@ async function main() {
     throw new Error("Run from the OpenClaw repo root; missing scripts/e2e/mock-openai-server.mjs.");
   }
 
-  const credential = await acquireTelegramTestCredential();
-  activeCredential = credential;
+  const credentialPromise = ownCredentialAcquisition(acquireTelegramTestCredential());
+  let credential;
   try {
+    credential = await credentialPromise;
+    activeCredential = credential;
+    if (activeCredentialPromise === credentialPromise) activeCredentialPromise = undefined;
+    assertRunnerActive();
     credential.assertLeaseHealthy();
     await drive(args, repoRoot, credential);
     credential.assertLeaseHealthy();
   } finally {
+    if (activeCredentialPromise === credentialPromise) activeCredentialPromise = undefined;
     try {
       await cleanupOwnedRuntime(credential);
     } finally {

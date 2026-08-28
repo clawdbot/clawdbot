@@ -13,6 +13,7 @@ import {
   drainSutUpdates,
   fenceLeaseFailure,
   ownChild,
+  ownCredentialAcquisition,
   removeRunnerScratch,
   runCommand,
   sanitizeChildEnvironment,
@@ -96,6 +97,29 @@ test("termination joins credential-bearing children before lease release", async
     },
   });
   assert.equal(released, true);
+});
+
+test("signal cleanup waits for credential acquisition before releasing scratch", async (context) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-pending-acquire-"));
+  context.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
+  let resolveCredential;
+  const credentialPromise = ownCredentialAcquisition(
+    new Promise((resolve) => {
+      resolveCredential = resolve;
+    }),
+  );
+  const cleanup = cleanupOwnedRuntime();
+  let released = false;
+  resolveCredential({
+    async release() {
+      released = true;
+      fs.rmSync(scratch, { recursive: true, force: true });
+    },
+  });
+  await credentialPromise;
+  await cleanup;
+  assert.equal(released, true);
+  assert.equal(fs.existsSync(scratch), false);
 });
 
 test("lease loss signals active Telegram process groups before waiting", async (context) => {
