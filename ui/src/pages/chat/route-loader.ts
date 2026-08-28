@@ -419,7 +419,7 @@ export async function loadChatRoute(
           signal,
         );
         if (slugResolution?.kind === "not-found") {
-          return missingSessionRouteData(context, face);
+          return missingSessionRouteData(context, face, target.agentId);
         }
         if (slugResolution?.kind === "ambiguous") {
           return {
@@ -517,7 +517,7 @@ export async function loadChatRoute(
       return literal ?? notFound({ routeId: face });
     }
     return literalResolution?.kind === "not-found"
-      ? missingSessionRouteData(context, face)
+      ? missingSessionRouteData(context, face, target.agentId)
       : notFound({ routeId: face });
   }
   if (resolution.kind === "ambiguous") {

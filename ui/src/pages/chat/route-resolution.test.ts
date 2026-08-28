@@ -763,8 +763,9 @@ describe("gateway-backed session route resolution", () => {
     expect(loaded).toMatchObject({ kind: "ambiguous", shortId: "12345678", truncated: true });
   });
 
-  it("returns a persistent missing-session state when the gateway has no short-id match", async () => {
+  it("routes a missing-session exit to the route agent's main session", async () => {
     const { context, list } = contextFor(() => result([]));
+    context.gateway.snapshot.sessionKey = "agent:main:saved-active-session";
     const request = installShortResolver(context, [], { ok: false });
 
     const loaded = await loadChatRoute(

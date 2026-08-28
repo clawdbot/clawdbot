@@ -15,6 +15,7 @@ const suite = createControlUiE2eSuite({
 suite.define(() => {
   it("keeps an explicitly requested missing session as a visible dead end", async () => {
     const mainKey = "agent:main:main";
+    const savedActiveKey = "agent:main:saved-active-session";
     const attemptedPath = "/chat/main/deadbeef";
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
@@ -24,7 +25,8 @@ suite.define(() => {
             "sessions.list": sessionsListResponse([sessionRow(mainKey, "Main", 1)]),
             "sessions.resolve": { ok: false },
           },
-          sessionKey: mainKey,
+          mainSessionKey: mainKey,
+          sessionKey: savedActiveKey,
         });
 
         await page.goto(`${suite.server.baseUrl}${attemptedPath.slice(1)}`);

@@ -7,10 +7,12 @@ import type { BoardFace } from "../../lib/board/settings.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
+  buildAgentMainSessionKey,
   isUiGlobalScopeConfigured,
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
   resolveUiGlobalAliasAgentId,
 } from "../../lib/sessions/session-key.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
@@ -43,14 +45,22 @@ const resolutionCache = new WeakMap<GatewayBrowserClient, Map<string, PendingSes
 export function missingSessionRouteData(
   context: ApplicationContext,
   face: BoardFace,
+  agentId: string,
 ): MissingSessionRouteData {
-  const currentSessionKey = context.gateway.snapshot.sessionKey.trim();
+  const mainKey = resolveUiConfiguredMainKey({
+    agentsList: context.agents.state.agentsList,
+    hello: context.gateway.snapshot.hello,
+  });
+  const mainSessionKey = buildAgentMainSessionKey({ agentId, mainKey });
   return {
     kind: "missing-session",
     face,
-    currentSessionHref: currentSessionKey
-      ? sessionNavigationTarget({ context, face, sessionKey: currentSessionKey }).href
-      : pathForRoute(face, context.basePath),
+    currentSessionHref: sessionNavigationTarget({
+      context,
+      face,
+      sessionKey: mainSessionKey,
+      agentId,
+    }).href,
     sessionsHref: pathForRoute("sessions", context.basePath),
   };
 }
