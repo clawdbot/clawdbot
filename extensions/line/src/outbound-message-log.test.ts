@@ -27,6 +27,18 @@ describe("outbound message log", () => {
     expect(quotesLineBotMessage("bulk", "bulk-599")).toBe(true);
   });
 
+  it("keeps a quiet account's ids while a busy account fills its own bound", () => {
+    recordLineSentMessages("quiet", ["quiet-1"]);
+    recordLineSentMessages(
+      "busy",
+      Array.from({ length: 2000 }, (_, index) => `busy-${index}`),
+    );
+
+    expect(quotesLineBotMessage("quiet", "quiet-1")).toBe(true);
+    expect(quotesLineBotMessage("busy", "busy-1999")).toBe(true);
+    expect(quotesLineBotMessage("busy", "busy-0")).toBe(false);
+  });
+
   it("re-sending an id moves it back out of eviction range", () => {
     recordLineSentMessages("refresh", ["kept"]);
     recordLineSentMessages(
