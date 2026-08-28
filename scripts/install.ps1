@@ -1312,8 +1312,14 @@ function Test-NpmConfigFileKey {
 }
 
 function Test-NpmConfigRawKey {
-    param([string]$Key)
+    param(
+        [string]$Key,
+        [string]$ProjectDir
+    )
     $files = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($ProjectDir)) {
+        $files.Add((Join-Path $ProjectDir ".npmrc"))
+    }
     $userConfig = if ($env:NPM_CONFIG_USERCONFIG) { $env:NPM_CONFIG_USERCONFIG } else { $env:npm_config_userconfig }
     if ($userConfig) {
         $resolvedUserConfig = Resolve-NpmConfigPath $userConfig
@@ -1340,6 +1346,17 @@ function Test-NpmConfigRawKey {
         }
     }
     return $false
+}
+
+function Test-ShouldPreferOfflinePnpmInstall {
+    param([string]$ProjectDir)
+    if (
+        (Test-Path -LiteralPath "Env:PNPM_CONFIG_PREFER_OFFLINE") -or
+        (Test-Path -LiteralPath "Env:pnpm_config_prefer_offline")
+    ) {
+        return $false
+    }
+    return -not (Test-NpmConfigRawKey -Key "prefer-offline" -ProjectDir $ProjectDir)
 }
 
 function Add-NpmCacheCandidate {
@@ -1758,9 +1775,11 @@ function Install-OpenClawFromGit {
     try {
         Push-Location -LiteralPath $RepoDir
         $pushedRepoLocation = $true
-        $sourceInstallArgs = @(
-            "install",
-            "--prefer-offline",
+        $sourceInstallArgs = @("install")
+        if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $RepoDir) {
+            $sourceInstallArgs += "--prefer-offline"
+        }
+        $sourceInstallArgs += @(
             "--config.node-linker=hoisted",
             "--config.engine-strict=false",
             "--config.enable-pre-post-scripts=true",
