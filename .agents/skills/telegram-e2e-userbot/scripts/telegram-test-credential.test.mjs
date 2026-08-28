@@ -82,6 +82,37 @@ test("rejects an archive hash mismatch and production credentials", () => {
   fs.rmSync(fixture, { recursive: true, force: true });
 });
 
+test(
+  "rejects symbolic links in a leased TDLib archive",
+  { skip: process.platform === "win32" },
+  () => {
+    const { fixture, payload } = makeCredential();
+    fs.rmSync(path.join(fixture, "db", "td_test.binlog"));
+    fs.symlinkSync("../config.local.json", path.join(fixture, "db", "td_test.binlog"));
+    const archivePath = path.join(fixture, "linked-session.tgz");
+    const packed = spawnSync(
+      "tar",
+      ["-czf", archivePath, "config.local.json", "db/td_test.binlog"],
+      { cwd: fixture },
+    );
+    assert.equal(packed.status, 0);
+    const archive = fs.readFileSync(archivePath);
+    assert.throws(
+      () =>
+        restoreTelegramTestCredential(
+          {
+            ...payload,
+            tdlibArchiveBase64: archive.toString("base64"),
+            tdlibArchiveSha256: createHash("sha256").update(archive).digest("hex"),
+          },
+          path.join(fixture, "linked-restored"),
+        ),
+      /unexpected layout/u,
+    );
+    fs.rmSync(fixture, { recursive: true, force: true });
+  },
+);
+
 test("removes restored Convex state before releasing the lease", async () => {
   const { fixture, payload } = makeCredential();
   const originalFetch = globalThis.fetch;

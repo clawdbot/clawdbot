@@ -253,7 +253,7 @@ A run's on-disk artifact layout:
 Screenshots are evidence, not secrets, but still need redaction discipline:
 private channel names, usernames, or message content may appear. Set
 `OPENCLAW_QA_REDACT_PUBLIC_METADATA=1` for public artifact uploads; it is
-enabled by default in the Discord/Slack/Telegram GitHub workflows.
+enabled by default in the Discord and Slack GitHub workflows.
 
 ## GitHub automation
 

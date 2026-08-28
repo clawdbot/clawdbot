@@ -77,11 +77,25 @@ function verifyArchiveEntries(archivePath) {
     throw new Error("Telegram Test Server TDLib archive cannot be listed.");
   }
   const entries = listed.stdout.split(/\r?\n/u).filter(Boolean).map(normalizeArchiveEntry);
+  const typed = spawnSync("tar", ["-tvzf", archivePath], {
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+  });
+  if (typed.status !== 0) {
+    throw new Error("Telegram Test Server TDLib archive types cannot be inspected.");
+  }
+  const memberTypes = typed.stdout
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .map((line) => line.trimStart()[0]);
   const allowed = new Set(["config.local.json", "db", "db/td_test.binlog"]);
   if (
+    new Set(entries).size !== entries.length ||
+    memberTypes.length !== entries.length ||
     !entries.includes("config.local.json") ||
     !entries.includes("db/td_test.binlog") ||
-    entries.some((entry) => !allowed.has(entry))
+    entries.some((entry) => !allowed.has(entry)) ||
+    entries.some((entry, index) => memberTypes[index] !== (entry === "db" ? "d" : "-"))
   ) {
     throw new Error("Telegram Test Server TDLib archive has an unexpected layout.");
   }
