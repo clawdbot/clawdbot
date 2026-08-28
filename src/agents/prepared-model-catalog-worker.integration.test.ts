@@ -42,9 +42,14 @@ import {
 } from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
+import {
+  markPluginMetadataSnapshotProvided,
+  writeSyntheticAuthDiscoveryFixture,
+} from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 const PROVIDER_ID = "worker-catalog-fixture";
 const HARNESS_ID = "worker-catalog-fixture-harness";
+const UNRELATED_SYNTHETIC_AUTH_ID = `${PROVIDER_ID}-unrelated-harness`;
 const SHARED_AUTH_PROVIDER_ID = `${PROVIDER_ID}-shared-auth`;
 const PLUGIN_ID = "worker-catalog-fixture";
 const PROFILE_ID = `${SHARED_AUTH_PROVIDER_ID}:named`;
@@ -99,6 +104,12 @@ function writeFixturePlugin(params: {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
   const pluginFile = path.join(pluginDir, "index.cjs");
+  writeSyntheticAuthDiscoveryFixture({
+    root: params.root,
+    pluginDir,
+    harnessId: HARNESS_ID,
+    unrelatedId: UNRELATED_SYNTHETIC_AUTH_ID,
+  });
   fs.writeFileSync(
     pluginFile,
     `const fs = require("node:fs");
@@ -205,6 +216,9 @@ module.exports = {
     JSON.stringify({
       id: PLUGIN_ID,
       providers: [PROVIDER_ID],
+      cliBackends: [HARNESS_ID, UNRELATED_SYNTHETIC_AUTH_ID],
+      syntheticAuthRefs: [HARNESS_ID, UNRELATED_SYNTHETIC_AUTH_ID],
+      providerCatalogEntry: "./provider-discovery.cjs",
       configSchema: { type: "object", additionalProperties: false, properties: {} },
       contracts: { externalAuthProviders: [PROVIDER_ID] },
       modelCatalog: { discovery: { [PROVIDER_ID]: "runtime" }, runtimeAugment: true },
@@ -313,11 +327,28 @@ async function createStaticSnapshot(
   options?: {
     hydrateExternalCliProviderIds?: readonly string[];
     metadataWorkspace?: "gateway" | "none" | "activation";
+    provideMetadataToWorker?: boolean;
   },
 ) {
   const fixture = createCatalogFixture(spinMs, envOverride, options);
   const { agentDir, workspaceDir, config, env, root } = fixture;
   let current = true;
+  const loadedMetadataSnapshot = options?.metadataWorkspace
+    ? loadPluginMetadataSnapshot({
+        config:
+          options.metadataWorkspace === "activation"
+            ? { ...config, plugins: { ...config.plugins, entries: {} } }
+            : config,
+        env,
+        ...(options.metadataWorkspace === "gateway"
+          ? { workspaceDir: path.join(root, "gateway-workspace") }
+          : {}),
+      })
+    : undefined;
+  const providedMetadataSnapshot =
+    options?.provideMetadataToWorker && loadedMetadataSnapshot
+      ? markPluginMetadataSnapshotProvided(loadedMetadataSnapshot)
+      : loadedMetadataSnapshot;
   const build = await startSerializedSnapshotBuild(
     { agentId: "main", agentDir, inheritedAuthDir: agentDir, workspaceDir, config, env },
     new Map(),
@@ -326,18 +357,7 @@ async function createStaticSnapshot(
     () => current,
     false,
     undefined,
-    options?.metadataWorkspace
-      ? loadPluginMetadataSnapshot({
-          config:
-            options.metadataWorkspace === "activation"
-              ? { ...config, plugins: { ...config.plugins, entries: {} } }
-              : config,
-          env,
-          ...(options.metadataWorkspace === "gateway"
-            ? { workspaceDir: path.join(root, "gateway-workspace") }
-            : {}),
-        })
-      : undefined,
+    providedMetadataSnapshot,
   ).pending;
   return {
     ...fixture,
@@ -507,6 +527,34 @@ describe("prepared model catalog worker boundary", () => {
         id: "account-scoped-model",
       }),
     );
+  });
+
+  it("preserves exact configured native auth across a full catalog refresh", async () => {
+    const fixture = await createStaticSnapshot(
+      0,
+      {},
+      {
+        metadataWorkspace: "none",
+        provideMetadataToWorker: true,
+      },
+    );
+    const syntheticAuthProbePath = path.join(fixture.root, "synthetic-auth-probes.txt");
+
+    expect(fixture.snapshot.authModes[HARNESS_ID]).toBe("api_key");
+    expect(fixture.snapshot.authModes[PROVIDER_ID]).toBeUndefined();
+    fs.rmSync(fixture.externalAuthPath);
+    fs.writeFileSync(syntheticAuthProbePath, "", "utf8");
+    await loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] });
+    fs.writeFileSync(syntheticAuthProbePath, "", "utf8");
+
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
+    const fullAuth = getPreparedModelFullCatalogAuth(catalog!);
+
+    expect(fs.readFileSync(syntheticAuthProbePath, "utf8").trim().split("\n")).toEqual([
+      HARNESS_ID,
+    ]);
+    expect(fullAuth?.authModes[HARNESS_ID]).toBe("api_key");
+    expect(fullAuth?.authModes[PROVIDER_ID]).toBeUndefined();
   });
 
   it("refreshes durable auth before provider hooks decide catalog membership", async () => {

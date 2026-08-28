@@ -52,14 +52,14 @@ function replaceBindingRequest(
   const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput(overrides));
   binding.request = request;
   binding.requestSha256 = canonicalTestSha256(request);
-  binding.evidenceArtifact.name = `full-release-candidate-v1-${binding.requestSha256}`;
+  binding.evidenceArtifact.name = `full-release-candidate-v2-${binding.requestSha256}`;
 }
 
 describe("full release candidate contract", () => {
   it("uses the canonical request digest directly in the evidence artifact name", () => {
     const requestSha256 = "a".repeat(64);
     expect(fullReleaseCandidateArtifactName(requestSha256)).toBe(
-      `full-release-candidate-v1-${requestSha256}`,
+      `full-release-candidate-v2-${requestSha256}`,
     );
   });
 
@@ -193,7 +193,7 @@ describe("full release candidate contract", () => {
     });
 
     const evidenceArtifact = fullReleaseCandidateArtifact(
-      `full-release-candidate-v1-${manifestValue.requestSha256 as string}`,
+      `full-release-candidate-v2-${manifestValue.requestSha256 as string}`,
       {
         id: "104",
         digest: "4".repeat(64),
@@ -250,7 +250,7 @@ describe("full release candidate contract", () => {
       "--manifest",
       manifestOutputPath,
       "--artifact-name",
-      "full-release-candidate-v1-deadbeef",
+      "full-release-candidate-v2-deadbeef",
       "--artifact-id",
       "104",
       "--artifact-digest",
@@ -268,6 +268,12 @@ describe("full release candidate contract", () => {
 
   it("fails closed on cross-request, cross-package, and cross-attempt evidence", () => {
     const value = manifest();
+    expect(
+      runManifestContract({
+        ...value,
+        schema: "openclaw.full-release-candidate/v1",
+      }).stderr,
+    ).toContain("manifest schema is invalid");
     expect(
       runManifestContract({
         ...value,
@@ -292,6 +298,12 @@ describe("full release candidate contract", () => {
     expect(
       runManifestContract({
         ...value,
+        publisher: { ...value.publisher, runAttempt: "2" },
+      }).stderr,
+    ).toContain("publisher was not bound to the declared producer attempt");
+    expect(
+      runManifestContract({
+        ...value,
         producer: { ...value.producer, jobId: "prepare_docker_e2e_image" },
       }).stderr,
     ).toContain("positive decimal string");
@@ -300,6 +312,16 @@ describe("full release candidate contract", () => {
   it.each([
     ["producer job id", (binding) => void (binding.producer.jobId = "202")],
     ["producer job name", (binding) => void (binding.producer.jobName = "different producer job")],
+    ["publisher job id", (binding) => void (binding.publisher.jobId = "203")],
+    [
+      "publisher job name",
+      (binding) => void (binding.publisher.jobName = "different publisher job"),
+    ],
+    [
+      "publisher workflow path",
+      (binding) =>
+        void (binding.publisher.workflowPath = ".github/workflows/candidate-evidence-test.yml"),
+    ],
     [
       "producer workflow path",
       (binding) =>
@@ -309,6 +331,7 @@ describe("full release candidate contract", () => {
       "producer run id tuple",
       (binding) => {
         binding.producer.runId = "78";
+        binding.publisher.runId = "78";
         binding.package.artifact.runId = "78";
         binding.prepublishPluginRegistry.artifact.runId = "78";
         binding.sharedImage.artifact.runId = "78";
@@ -319,6 +342,7 @@ describe("full release candidate contract", () => {
       "producer run attempt tuple",
       (binding) => {
         binding.producer.runAttempt = "2";
+        binding.publisher.runAttempt = "2";
         binding.package.artifact.runAttempt = "2";
         binding.prepublishPluginRegistry.artifact.runAttempt = "2";
         binding.sharedImage.artifact.runAttempt = "2";
@@ -330,6 +354,7 @@ describe("full release candidate contract", () => {
       (binding) => {
         replaceBindingRequest(binding, { repository: "openclaw/other" });
         binding.producer.repository = binding.request.repository;
+        binding.publisher.repository = binding.request.repository;
       },
     ],
     [
@@ -337,6 +362,7 @@ describe("full release candidate contract", () => {
       (binding) => {
         replaceBindingRequest(binding, { toolingSha: "8".repeat(40) });
         binding.producer.workflowSha = binding.request.toolingSha;
+        binding.publisher.workflowSha = binding.request.toolingSha;
       },
     ],
     [

@@ -68,6 +68,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     entries: [],
     routeVariants: [],
   })),
+  runtimeSyntheticAuthProviderRefs: [] as string[],
   resolveAmbientCredentials: vi.fn((..._args: unknown[]) => ({})),
   resolveStaticCatalogModel: vi.fn<StaticCatalogResolver>(() => undefined),
   warn: vi.fn(),
@@ -168,7 +169,8 @@ vi.mock("./agent-model-discovery.js", () => ({
 }));
 
 vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
-  resolveRuntimeSyntheticAuthProviderRefs: () => [],
+  resolveRuntimeSyntheticAuthProviderRefs: () =>
+    preparedModelRuntimeMocks.runtimeSyntheticAuthProviderRefs,
 }));
 
 vi.mock("./agent-scope.js", () => ({
@@ -374,6 +376,7 @@ export function resetPreparedModelRuntimeHarness(): void {
     entries: [],
     routeVariants: [],
   });
+  preparedModelRuntimeMocks.runtimeSyntheticAuthProviderRefs = [];
   preparedModelRuntimeMocks.resolveAmbientCredentials.mockReset().mockReturnValue({});
   preparedModelRuntimeMocks.resolveStaticCatalogModel.mockReset().mockReturnValue(undefined);
   preparedModelRuntimeMocks.createStaticCatalogResolver

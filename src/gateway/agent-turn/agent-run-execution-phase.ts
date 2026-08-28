@@ -349,6 +349,7 @@ export function startAgentRunExecution(params: {
                     toolsAllow: params.restoredCronContinuation.toolsAllow,
                     scheduledToolPolicy: params.restoredCronContinuation.scheduledToolPolicy,
                     callerOrigin: params.restoredCronContinuation.scheduledToolCallerOrigin,
+                    execTarget: params.restoredCronContinuation.toolsAllowExecTarget,
                   })
                 : undefined,
               requireExplicitMessageTarget:

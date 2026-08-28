@@ -703,6 +703,7 @@ function readSqliteMainSessionEntry(): Record<string, any> | undefined {
 async function appendSourceReplyMirrorEntry(params: {
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
+  openclawDelivery?: Record<string, unknown>;
   text: string;
   provider?: string;
   model?: string;
@@ -719,6 +720,7 @@ async function appendSourceReplyMirrorEntry(params: {
       provider: params.provider ?? "openclaw",
       model: params.model ?? "delivery-mirror",
       ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+      ...(params.openclawDelivery ? { openclawDelivery: params.openclawDelivery } : {}),
       usage: {
         input: 0,
         output: 0,
@@ -1226,11 +1228,18 @@ function createSourceReply(
 function createMainSourceReply(params: {
   idempotencyKey: string;
   mediaUrls?: string[];
+  replyToCurrent?: boolean;
+  replyToId?: string;
   text?: string;
 }): TestReply {
-  const { idempotencyKey, mediaUrls, text } = params;
+  const { idempotencyKey, mediaUrls, replyToCurrent, replyToId, text } = params;
   return createSourceReply(
-    { ...(text ? { text } : {}), ...(mediaUrls ? { mediaUrls } : {}) },
+    {
+      ...(text ? { text } : {}),
+      ...(mediaUrls ? { mediaUrls } : {}),
+      ...(replyToCurrent ? { replyToCurrent } : {}),
+      ...(replyToId ? { replyToId } : {}),
+    },
     {
       sessionKey: "main",
       ...(text ? { text } : {}),
@@ -3285,7 +3294,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("replaces a runtime-owned media reply instead of appending a duplicate assistant", async () => {
+  it("replaces reply-to-current with an explicit id on a runtime-owned media rewrite", async () => {
     await withTranscriptFixtureState("openclaw-chat-send-owned-media-", async (fixtureDir) => {
       const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
       writeSavedPng(fixtureDir, "reply.png");
@@ -3297,6 +3306,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       });
       await appendSourceReplyMirrorEntry({
         idempotencyKey: "runtime-owned-assistant",
+        openclawDelivery: { audioAsVoice: true, replyToCurrent: true },
         text: `Dinner options\nMEDIA:${mediaUrl}`,
         provider: "openai",
         model: "codex",
@@ -3309,6 +3319,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
               text: "Dinner options",
               mediaUrl,
               mediaUrls: [mediaUrl],
+              replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
             },
             {
               assistantTranscriptOwned: true,
@@ -3336,6 +3347,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         : [];
       expect(content[0]).toEqual({ type: "text", text: "Dinner options" });
       expect(content.filter((block) => block.type === "image")).toHaveLength(1);
+      expect(rewritten?.openclawDelivery).toEqual({
+        audioAsVoice: true,
+        replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
+      });
+      expect(JSON.stringify(rewritten)).not.toContain("[[reply_to:");
       expect(JSON.stringify(messages)).not.toContain(":assistant-media");
     });
   });
@@ -3674,7 +3690,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(await readActiveAssistantTranscriptMessages()).toStrictEqual([]);
   });
 
-  it("does not duplicate media-bearing internal-ui source replies in the transcript", async () => {
+  it("replaces an explicit reply id with reply-to-current on a source reply rewrite", async () => {
     await withTranscriptFixtureState(
       "openclaw-chat-send-agent-source-reply-media-",
       async (fixtureDir) => {
@@ -3690,12 +3706,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         });
         await appendSourceReplyMirrorEntry({
           idempotencyKey: mirrorIdempotencyKey,
+          openclawDelivery: { audioAsVoice: true, replyToId: "stale-reply-id" },
           text: "Codex source reply with media",
         });
         const sourceReply = createMainSourceReply({
           idempotencyKey: mirrorIdempotencyKey,
           text: "Codex source reply with media",
           mediaUrls: [mediaUrl],
+          replyToCurrent: true,
         });
         setAgentRunReplies([sourceReply]);
         const { send } = createChatRequestFixture();
@@ -3724,6 +3742,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
           expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
           expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
+          expect(assistantEntries[0]?.openclawDelivery).toEqual({
+            audioAsVoice: true,
+            replyToCurrent: true,
+          });
+          expect(JSON.stringify(assistantEntries[0])).not.toContain("[[reply_to:");
           const entry = readSqliteMainSessionEntry();
           expect(entry?.updatedAt).toBeGreaterThanOrEqual(rewrittenAt);
           expect(entry?.updatedAt).toBeGreaterThan(updatedAt);

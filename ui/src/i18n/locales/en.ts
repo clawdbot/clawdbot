@@ -4993,6 +4993,7 @@ export const en: TranslationMap = {
     },
     export: {
       label: "Export",
+      changed: "Session context changed while preparing the export. Refresh usage and try again.",
       sessionsCsv: "Sessions CSV",
       dailyCsv: "Daily CSV",
       json: "JSON",
@@ -5300,6 +5301,10 @@ export const en: TranslationMap = {
       chooseTitle: "Choose a session",
       multipleMatches: "More than one session matches {shortId}.",
       additionalMatches: "Search results remain. Use a longer id prefix.",
+      notFoundTitle: "Session not found",
+      notFoundExplanation: "The session may have been removed, or the link may be incorrect.",
+      goToMain: "Go to main session",
+      viewSessions: "View sessions",
     },
     commandResults: {
       startingNewThread: "Starting new session...",
@@ -5911,7 +5916,6 @@ export const en: TranslationMap = {
       volume: "Volume",
       download: "Download {filename}",
       preparing: "Preparing playback…",
-      videoUnavailable: "Can't play this format — download instead.",
     },
     modelControls: {
       default: "Default",

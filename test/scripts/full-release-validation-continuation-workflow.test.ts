@@ -24,12 +24,12 @@ describe("full release same-parent recovery workflow", () => {
     expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty("continuation_plan_json");
     for (const job of [
       "docker_runtime_assets_preflight",
-      "candidate_discovery",
-      "prepare_release_candidate",
-      "candidate_binding",
+      "candidate_acquisition",
       "normal_ci",
-      "plugin_prerelease",
-      "release_checks",
+      "plugin_prerelease_independent",
+      "plugin_prerelease_candidate",
+      "release_checks_independent",
+      "release_checks_candidate",
       "npm_telegram",
       "performance",
     ]) {

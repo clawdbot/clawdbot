@@ -68,7 +68,14 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
     });
   }
   if (facts) {
-    Object.assign(message, { openclawDelivery: facts });
+    const currentFacts = isRecord(message.openclawDelivery) ? message.openclawDelivery : undefined;
+    const mergedFacts = { ...currentFacts, ...facts };
+    if (facts.replyToId) {
+      delete mergedFacts.replyToCurrent;
+    } else if (facts.replyToCurrent) {
+      delete mergedFacts.replyToId;
+    }
+    Object.assign(message, { openclawDelivery: mergedFacts });
   }
   return message;
 }

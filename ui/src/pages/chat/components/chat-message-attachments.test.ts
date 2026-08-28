@@ -755,8 +755,62 @@ describe("attachment sidebar source ownership", () => {
   });
 
   it.each([
-    ["audio", "recording.mp3", "audio/mpeg"],
-    ["video", "demo.mp4", "video/mp4"],
+    ["audio", "recording.mp3", "audio/mpeg", "openclaw-chat-audio-player", undefined],
+    ["audio", "recording.ogg", "audio/ogg", "openclaw-chat-audio-player", "transcode"],
+    ["audio", "recording.m4a", "audio/x-m4a", "openclaw-chat-audio-player", undefined],
+    ["audio", "recording.flac", "audio/flac", "openclaw-chat-audio-player", "transcode"],
+    ["video", "demo.mp4", "video/mp4", "openclaw-chat-video-player", undefined],
+    ["video", "demo.webm", "video/webm", "openclaw-chat-video-player", "transcode"],
+  ] as const)(
+    "renders %s attachment %s with inline playback",
+    (kind, label, mimeType, player, requestedPlayback) => {
+      const source = `https://example.com/${label}`;
+      const playback = requestedPlayback ?? "native";
+      const container = document.body.appendChild(document.createElement("div"));
+      const onOpenSidebar = vi.fn();
+      render(
+        renderAssistantAttachments(
+          [
+            {
+              type: "attachment",
+              attachment: { kind, label, mimeType, playback, url: source },
+            },
+          ],
+          {},
+          onOpenSidebar,
+        ),
+        container,
+      );
+
+      const mediaPlayer = container.querySelector(player);
+      expect(mediaPlayer).toMatchObject({ playback, sourceIdentity: source, src: source });
+      container.remove();
+    },
+  );
+
+  it.each([
+    ["audio", "unsafe.mp3", "audio/mpeg", "javascript:alert(1)"],
+    ["video", "unsafe.mp4", "video/mp4", "data:text/html;base64,PHNjcmlwdD4="],
+  ] as const)("blocks unsafe %s player source %s", (kind, label, mimeType, url) => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments(
+        [{ type: "attachment", attachment: { kind, label, mimeType, url } }],
+        {},
+      ),
+      container,
+    );
+
+    expect(container.querySelector("openclaw-chat-audio-player")).toBeNull();
+    expect(container.querySelector("openclaw-chat-video-player")).toBeNull();
+    expect(container.querySelector("audio, video")).toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card--blocked")).not.toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card__download")).toBeNull();
+    expect(container.textContent).toContain(label);
+    container.remove();
+  });
+
+  it.each([
     ["document", "preview.html", "text/html"],
     ["document", "brief.pdf", "application/pdf"],
     ["document", "rows.csv", "text/csv"],
@@ -841,7 +895,7 @@ describe("attachment sidebar source ownership", () => {
     container.remove();
   });
 
-  it("keeps normalized base64 audio compact with download and Files actions", () => {
+  it("renders normalized base64 audio with inline playback and Files actions", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenSidebar = vi.fn();
     render(
@@ -863,18 +917,60 @@ describe("attachment sidebar source ownership", () => {
       container,
     );
 
-    expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
-    expect(container.querySelector("audio, openclaw-chat-audio-player")).toBeNull();
-    const download = container.querySelector<HTMLAnchorElement>(
-      ".chat-assistant-attachment-card__download",
-    );
-    expect(download?.href).toBe("data:audio/wav;base64,UklGRg==");
-    container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+    const player = container.querySelector("openclaw-chat-audio-player");
+    expect(player).toMatchObject({
+      label: "inline.wav",
+      mimeType: "audio/wav",
+      onExpand: expect.any(Function),
+      sourceIdentity: "data:audio/wav;base64,UklGRg==",
+      src: "data:audio/wav;base64,UklGRg==",
+    });
+    expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
+    (player as HTMLElement & { onExpand: () => void }).onExpand();
     expect(onOpenSidebar).toHaveBeenCalledWith(
       expect.objectContaining({
         attachmentKind: "audio",
         src: "data:audio/wav;base64,UklGRg==",
       }),
+    );
+    container.remove();
+  });
+
+  it("renders normalized base64 video with inline playback and Files actions", () => {
+    const source = "data:video/mp4;base64,AAAA";
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenSidebar = vi.fn();
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "video",
+              label: "inline.mp4",
+              mimeType: "video/mp4",
+              url: source,
+            },
+          },
+        ],
+        {},
+        onOpenSidebar,
+      ),
+      container,
+    );
+
+    const player = container.querySelector("openclaw-chat-video-player");
+    expect(player).toMatchObject({
+      label: "inline.mp4",
+      mimeType: "video/mp4",
+      onExpand: expect.any(Function),
+      sourceIdentity: source,
+      src: source,
+    });
+    expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
+    (player as HTMLElement & { onExpand: () => void }).onExpand();
+    expect(onOpenSidebar).toHaveBeenCalledWith(
+      expect.objectContaining({ attachmentKind: "video", src: source }),
     );
     container.remove();
   });
