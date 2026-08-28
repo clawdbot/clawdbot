@@ -290,7 +290,7 @@ Runner choice follows contributor trust, not whether a pull request came from a 
 
 ### Runner backend modes
 
-The `macos-swift` lane runs its first Blacksmith test attempt in parallel. If that attempt fails, its two in-job retries run serially to escape process and timer contention; manual dispatches, hosted fallbacks, and workflow-level reruns remain serial from their first attempt.
+The `macos-swift` lane runs Swift tests once per job. Automatic first attempts use parallel execution; manual dispatches and rerun attempts use serial execution. A failing test fails the job without an in-job retry.
 
 The repository variable `OPENCLAW_CI_RUNNER_BACKEND` controls the runner backend for `ci.yml`:
 
