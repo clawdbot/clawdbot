@@ -32,6 +32,18 @@ function registerDisplayRetirement(message: object) {
   return retire;
 }
 
+type SteeringMessage = Parameters<typeof setSteeringMessageIdentity>[0];
+type CancelableAgent = NonNullable<EmbeddedAgentActiveSessionSteerTarget["agent"]>;
+
+function createCancelableAgent(messages: object[]): CancelableAgent {
+  return {
+    cancelSteeringMessage: (predicate: (message: SteeringMessage) => boolean) => {
+      const index = messages.findIndex((message) => predicate(message as SteeringMessage));
+      return index < 0 ? undefined : (messages.splice(index, 1)[0] as SteeringMessage | undefined);
+    },
+  };
+}
+
 function steerWithDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
@@ -203,7 +215,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     setSteeringMessageIdentity(survivingMessage, "surviving-turn");
     const listeners = new Set<(event: unknown) => void>();
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
-      agent: { steeringQueue: { messages: [] } },
+      agent: createCancelableAgent([]),
       steer: async () => {},
       subscribe: (listener) => {
         listeners.add(listener);
@@ -267,11 +279,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const queueMessages = [unrelatedMessage, targetMessage, trailingMessage];
     const retireDisplay = registerDisplayRetirement(targetMessage);
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
-      agent: {
-        steeringQueue: {
-          messages: queueMessages,
-        },
-      },
+      agent: createCancelableAgent(queueMessages),
       steer: createIdentityAwareSteer(targetMessage),
       subscribe: () => () => {},
     };
@@ -312,11 +320,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const retireDisplay = registerDisplayRetirement(targetMessage);
     let unsubscribed = false;
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
-      agent: {
-        steeringQueue: {
-          messages: queueMessages,
-        },
-      },
+      agent: createCancelableAgent(queueMessages),
       steer: createIdentityAwareSteer(targetMessage),
       subscribe: (listener) => {
         emit = listener;
@@ -419,7 +423,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const retireDisplay = registerDisplayRetirement(targetMessage);
     const onQueueAccepted = vi.fn();
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
-      agent: { steeringQueue: { messages: queueMessages } },
+      agent: createCancelableAgent(queueMessages),
       steer: async (_text, _images, _recorder, _media, _imageOrder, queueIdentity) => {
         setSteeringMessageIdentity(targetMessage, queueIdentity);
         reportEnqueued();
@@ -467,7 +471,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       throw new Error("display cleanup failed");
     });
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
-      agent: { steeringQueue: { messages: queueMessages } },
+      agent: createCancelableAgent(queueMessages),
       steer: createIdentityAwareSteer(targetMessage),
       subscribe: (listener) => {
         emit = listener;
@@ -539,7 +543,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     setSteeringMessageIdentity(first, "steer-a");
     setSteeringMessageIdentity(second, "steer-b");
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
-      agent: { steeringQueue: { messages: [first, second] } },
+      agent: createCancelableAgent([first, second]),
       steer: async () => {},
       subscribe: (listener) => {
         emit = listener;
@@ -575,7 +579,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const controller = new AbortController();
     const retireDisplay = registerDisplayRetirement(first);
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
-      agent: { steeringQueue: { messages: queueMessages } },
+      agent: createCancelableAgent(queueMessages),
       steer: async () => {},
       subscribe: () => () => {},
     };
@@ -605,7 +609,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const controller = new AbortController();
     const retireDisplay = registerDisplayRetirement(second);
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
-      agent: { steeringQueue: { messages: queueMessages } },
+      agent: createCancelableAgent(queueMessages),
       steer: async () => {},
       subscribe: () => () => {},
     };
@@ -630,7 +634,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const controller = new AbortController();
     const retireDisplay = registerDisplayRetirement(message);
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
-      agent: { steeringQueue: { messages: queueMessages } },
+      agent: createCancelableAgent(queueMessages),
       steer: async () => {},
       subscribe: () => () => {},
     };
@@ -653,7 +657,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
   it("marks a missing queued message as accepted without transcript confirmation", async () => {
     vi.useFakeTimers();
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
-      agent: { steeringQueue: { messages: [] } },
+      agent: createCancelableAgent([]),
       steer: async () => {},
       subscribe: () => () => {},
     };
@@ -685,11 +689,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       };
       const queueMessages = [targetMessage];
       const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
-        agent: {
-          steeringQueue: {
-            messages: queueMessages,
-          },
-        },
+        agent: createCancelableAgent(queueMessages),
         steer: createIdentityAwareSteer(targetMessage),
         subscribe: (listener) => {
           emit = listener;
@@ -732,11 +732,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       };
       const queueMessages = [targetMessage];
       const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
-        agent: {
-          steeringQueue: {
-            messages: queueMessages,
-          },
-        },
+        agent: createCancelableAgent(queueMessages),
         steer: createIdentityAwareSteer(targetMessage),
         subscribe: (listener) => {
           emit = listener;

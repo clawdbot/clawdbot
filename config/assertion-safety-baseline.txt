@@ -1816,7 +1816,7 @@ src/agents/embedded-agent-runner/run/attempt-normalization.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-build.ts	2
 src/agents/embedded-agent-runner/run/attempt-prompt-helpers.ts	4
 src/agents/embedded-agent-runner/run/attempt-prompt-submit.ts	2
-src/agents/embedded-agent-runner/run/attempt-queue-message.ts	5
+src/agents/embedded-agent-runner/run/attempt-queue-message.ts	3
 src/agents/embedded-agent-runner/run/attempt-session-prepare.ts	4
 src/agents/embedded-agent-runner/run/attempt-sessions-yield.ts	1
 src/agents/embedded-agent-runner/run/attempt-setup.ts	1

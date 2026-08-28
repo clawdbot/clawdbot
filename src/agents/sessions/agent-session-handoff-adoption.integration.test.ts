@@ -11,10 +11,8 @@ import {
 } from "../../auto-reply/reply/queue.js";
 import { resetRecentQueuedMessageIdDedupe } from "../../auto-reply/reply/queue/enqueue.test-support.js";
 import type { ReplyOperationRunState } from "../../auto-reply/reply/reply-operation-run-state.js";
-import {
-  createReplyOperation,
-  type ReplyBackendHandle,
-} from "../../auto-reply/reply/reply-run-registry.js";
+import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import {
   createMockFollowupRun,

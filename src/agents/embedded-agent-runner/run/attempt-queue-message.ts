@@ -27,7 +27,11 @@ import type {
  * whether the queued user message reached the transcript.
  */
 type EmbeddedAgentActiveSessionSteerTarget = {
-  agent?: unknown;
+  agent?: {
+    cancelSteeringMessage?: (
+      predicate: (message: AgentMessage) => boolean,
+    ) => AgentMessage | undefined;
+  };
   steer(
     text: string,
     images?: ImageContent[],
@@ -107,18 +111,6 @@ function getTerminalActiveSessionEvent(event: unknown): "settled" | "handoff" | 
   return type === "agent_handoff" ? "handoff" : undefined;
 }
 
-function getAgentSteeringQueueMessages(agent: unknown): unknown[] | undefined {
-  if (!agent || typeof agent !== "object") {
-    return undefined;
-  }
-  const queue = (agent as { steeringQueue?: unknown }).steeringQueue;
-  if (!queue || typeof queue !== "object") {
-    return undefined;
-  }
-  const messages = (queue as { messages?: unknown }).messages;
-  return Array.isArray(messages) ? messages : undefined;
-}
-
 /**
  * Removes one pending steered user message from both the runtime queue and its
  * exact identity-owned display entry.
@@ -127,23 +119,17 @@ async function cancelQueuedSteeringMessage(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   queueIdentity: string,
 ): Promise<boolean> {
-  const queuedMessages = getAgentSteeringQueueMessages(activeSession.agent);
-  if (!queuedMessages) {
+  const cancelSteeringMessage = activeSession.agent?.cancelSteeringMessage;
+  if (!cancelSteeringMessage) {
     return false;
   }
-  // The session runtime exposes only all-queue clears publicly; mutate the exact pending message
-  // so unrelated queued messages keep their full payloads.
-  const queueIndex = queuedMessages.findIndex(
-    (message) => getSteeringMessageIdentity(message) === queueIdentity,
+  const message = cancelSteeringMessage.call(
+    activeSession.agent,
+    (queuedMessage) => getSteeringMessageIdentity(queuedMessage) === queueIdentity,
   );
-  if (queueIndex === -1) {
-    return false;
-  }
-  const message = queuedMessages[queueIndex];
   if (!message) {
     return false;
   }
-  queuedMessages.splice(queueIndex, 1);
   try {
     if (!retireQueuedUserMessage(message as AgentMessage)) {
       log.warn("failed to retire queued steering display entry during cancellation");

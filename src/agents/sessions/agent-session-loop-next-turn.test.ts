@@ -110,6 +110,134 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(lifecycleEvents).toEqual(["agent_end", "agent_end", "agent_settled"]);
   });
 
+  it("publishes settlement when deferred bash persistence fails", async () => {
+    let finishResponse: (() => void) | undefined;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
+      const stream = createAssistantMessageEventStream();
+      finishResponse = () => {
+        const message = createAssistant(activeModel, [{ type: "text", text: "finished" }]);
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end();
+      };
+      return stream;
+    });
+    const { session, sessionManager } = await createTestSession();
+    const settled = vi.fn();
+    session.subscribe((event) => {
+      if (event.type === "agent_end") {
+        vi.spyOn(sessionManager, "appendMessage").mockImplementation(() => {
+          throw new Error("deferred bash persistence failed");
+        });
+      } else if (event.type === "agent_settled") {
+        settled();
+      }
+    });
+
+    const prompt = session.prompt("run until the response is released");
+    await vi.waitFor(() => expect(finishResponse).toBeTypeOf("function"));
+    session.recordBashResult("printf done", {
+      output: "done",
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+    });
+    finishResponse?.();
+
+    await expect(prompt).rejects.toThrow("deferred bash persistence failed");
+    expect(settled).toHaveBeenCalledOnce();
+  });
+
+  it("does not settle an active run when a concurrent prompt loses admission", async () => {
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    let admissionCount = 0;
+    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
+      ["before_agent_start", [async () => await (admissionCount++ === 0 ? firstGate : secondGate)]],
+    ]);
+    let finishResponse: (() => void) | undefined;
+    const requests: Context[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      requests.push(context);
+      const stream = createAssistantMessageEventStream();
+      finishResponse = () => {
+        const message = createAssistant(activeModel, [{ type: "text", text: "finished" }]);
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end();
+      };
+      return stream;
+    });
+    const { session } = await createTestSession({ resourceLoader: createResourceLoader(handlers) });
+    const settled = vi.fn();
+    session.subscribe((event) => {
+      if (event.type === "agent_settled") {
+        settled();
+      }
+    });
+
+    const firstPrompt = session.prompt("first");
+    await vi.waitFor(() => expect(admissionCount).toBe(1));
+    const secondPrompt = session.prompt("second");
+    await vi.waitFor(() => expect(admissionCount).toBe(2));
+    releaseFirst();
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    releaseSecond();
+
+    await expect(secondPrompt).rejects.toThrow("Agent is already processing a prompt");
+    expect(settled).not.toHaveBeenCalled();
+    finishResponse?.();
+    await firstPrompt;
+    expect(settled).toHaveBeenCalledOnce();
+  });
+
+  it("keeps one logical prompt owner across an automatic retry gap", async () => {
+    vi.useFakeTimers();
+    try {
+      const requests: Context[] = [];
+      streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+        requests.push(context);
+        if (requests.length === 1) {
+          return createAssistantResultStream({
+            ...createAssistant(activeModel, [], "error"),
+            errorMessage: "HTTP 503 temporary provider response",
+          });
+        }
+        return createAssistantResultStream(
+          createAssistant(activeModel, [{ type: "text", text: "retry recovered" }]),
+        );
+      });
+      const settingsManager = SettingsManager.inMemory({
+        compaction: { enabled: false },
+        retry: { enabled: true, baseDelayMs: 10_000, maxRetries: 1 },
+      });
+      const { session } = await createTestSession({ settingsManager });
+      const lifecycleEvents: string[] = [];
+      session.subscribe((event) => lifecycleEvents.push(event.type));
+
+      const prompt = session.prompt("initial prompt");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requests).toHaveLength(1);
+      expect(lifecycleEvents).toContain("auto_retry_start");
+
+      await session.prompt("steer during retry", { streamingBehavior: "steer" });
+      expect(requests).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await prompt;
+
+      expect(requests).toHaveLength(2);
+      expect(JSON.stringify(requests[1]?.messages)).toContain("steer during retry");
+      expect(lifecycleEvents.filter((type) => type === "agent_settled")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     {
       kind: "steering",
@@ -341,6 +469,65 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(session.getSteeringMessages()).toEqual(["keep unrelated steering"]);
     expect(session.getFollowUpMessages()).toEqual(["keep unrelated follow-up"]);
     expect(session.agent.hasQueuedMessages()).toBe(true);
+  });
+
+  it("cancels a steering confirmation after the runtime drains it", async () => {
+    const requests: Context[] = [];
+    let finishInitialResponse: (() => void) | undefined;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      requests.push(context);
+      if (requests.length === 1) {
+        const stream = createAssistantMessageEventStream();
+        finishInitialResponse = () => {
+          const message = createAssistant(activeModel, [{ type: "text", text: "first answer" }]);
+          stream.push({ type: "done", reason: "stop", message });
+          stream.end();
+        };
+        return stream;
+      }
+      return createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "stale steering ran" }]),
+      );
+    });
+    const { session } = await createTestSession();
+    let releaseTurn!: () => void;
+    const turnRelease = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    let reportTurnStarted!: () => void;
+    const turnStarted = new Promise<void>((resolve) => {
+      reportTurnStarted = resolve;
+    });
+    let turnStartCount = 0;
+    session.agent.subscribe(async (event) => {
+      if (event.type === "turn_start" && ++turnStartCount === 2) {
+        reportTurnStarted();
+        await turnRelease;
+      }
+    });
+    const sourceAbort = new AbortController();
+    const prompt = session.prompt("wait for steering");
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    const delivery = steerActiveSessionWithOptionalDeliveryWait(session, "cancel after drain", {
+      abortSignal: sourceAbort.signal,
+      deliveryTimeoutMs: 10_000,
+      waitForTranscriptCommit: true,
+    });
+    const rejection = expect(delivery).rejects.toThrow(
+      "queued steering message was cancelled before delivery",
+    );
+    await vi.waitFor(() => expect(session.getSteeringMessages()).toEqual(["cancel after drain"]));
+
+    finishInitialResponse?.();
+    await turnStarted;
+    sourceAbort.abort();
+    await rejection;
+    releaseTurn();
+    await prompt;
+
+    expect(requests).toHaveLength(1);
+    expect(session.getSteeringMessages()).toEqual([]);
+    expect(session.agent.hasQueuedMessages()).toBe(false);
   });
 
   it("applies session model, tool, and prompt changes on the following tool turn", async () => {
