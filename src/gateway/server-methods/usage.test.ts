@@ -133,6 +133,26 @@ describe("gateway usage helpers", () => {
     vi.clearAllMocks();
   });
 
+  it.each(["usage.cost", "sessions.usage"] as const)(
+    "rejects an explicit invalid utcOffset with INVALID_REQUEST",
+    async (method) => {
+      const respond = vi.fn();
+      await expectDefined(
+        usageHandlers[method],
+        "usageHandlers[method] test invariant",
+      )({
+        respond,
+        params: { mode: "specific", utcOffset: "UTC+14:30" },
+        context: { getRuntimeConfig: vi.fn(() => ({})) },
+      } as unknown as Parameters<(typeof usageHandlers)[typeof method]>[0]);
+
+      expect(respond).toHaveBeenCalledTimes(1);
+      expect(respond.mock.calls[0]?.[0]).toBe(false);
+      expect(JSON.stringify(respond.mock.calls[0]?.[2])).toContain("invalid utcOffset");
+      expect(vi.mocked(loadCostUsageSummaryFromCache)).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     [{ startDate: "2026-02-30" }, "invalid startDate"],
     [{ endDate: "2026-2-5" }, "invalid endDate"],
@@ -187,26 +207,6 @@ describe("gateway usage helpers", () => {
       expect(respond).toHaveBeenCalledTimes(1);
       expect(respond.mock.calls[0]?.[0]).toBe(false);
       expect(JSON.stringify(respond.mock.calls[0]?.[2])).toContain("invalid timeZone");
-      expect(vi.mocked(loadCostUsageSummaryFromCache)).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["usage.cost", "sessions.usage"] as const)(
-    "%s rejects an explicit invalid utcOffset with INVALID_REQUEST",
-    async (method) => {
-      const respond = vi.fn();
-      await expectDefined(
-        usageHandlers[method],
-        "usageHandlers[method] test invariant",
-      )({
-        respond,
-        params: { mode: "specific", utcOffset: "UTC+14:30" },
-        context: { getRuntimeConfig: vi.fn(() => ({})) },
-      } as unknown as Parameters<(typeof usageHandlers)[typeof method]>[0]);
-
-      expect(respond).toHaveBeenCalledTimes(1);
-      expect(respond.mock.calls[0]?.[0]).toBe(false);
-      expect(JSON.stringify(respond.mock.calls[0]?.[2])).toContain("invalid utcOffset");
       expect(vi.mocked(loadCostUsageSummaryFromCache)).not.toHaveBeenCalled();
     },
   );
