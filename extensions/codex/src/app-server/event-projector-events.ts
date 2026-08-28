@@ -275,7 +275,15 @@ export class CodexEventProjection {
     const summary = readString(params, "summary") ?? readString(params, "message");
     const details = readString(params, "details");
     const message = [summary, details].filter(Boolean).join("\n");
-    if (message) {
+    // Codex's unsupported_service_tier_warning has no structured code. Match its
+    // complete template so this routine diagnostic stays log-only, not other warnings.
+    if (
+      /^Configured service tier `[^`\r\n]+` is not advertised as supported for model `[^`\r\n]+` and will be omitted from requests\.$/.test(
+        message,
+      )
+    ) {
+      embeddedAgentLog.warn(message);
+    } else if (message) {
       this.emitAgentEvent({ stream: "notice", data: { phase: "warning", message } });
     }
   }

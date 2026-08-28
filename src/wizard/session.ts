@@ -217,7 +217,8 @@ class WizardSessionPrompter implements WizardPrompter {
       initialValue: params.initialValue,
       executor: "client",
     });
-    return Boolean(res);
+    // Answers cross the wire as unknown values; truthy strings are not consent.
+    return res === true;
   }
 
   progress(label: string): WizardProgress {

@@ -11,7 +11,11 @@ import { configMocks, offsetMocks, secretMocks } from "./channels.mock-harness.j
 import { channelsAddCommand } from "./channels/add.js";
 import { channelsRemoveCommand } from "./channels/remove.js";
 import { formatGatewayChannelsStatusLines } from "./channels/status.runtime.js";
-import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+import {
+  baseConfigSnapshot,
+  createTestConfigSnapshot,
+  createTestRuntime,
+} from "./test-runtime-config-helpers.js";
 
 const runtime = createTestRuntime();
 let minimalChannelsCommandRegistry: ReturnType<typeof createTestRegistry>;
@@ -491,9 +495,8 @@ describe("channels command", () => {
   });
 
   it("deletes a non-default discord account", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
         channels: {
           discord: {
             accounts: {
@@ -502,8 +505,8 @@ describe("channels command", () => {
             },
           },
         },
-      },
-    });
+      }),
+    );
 
     await channelsRemoveCommand({ channel: "discord", account: "work", delete: true }, runtime, {
       hasFlags: true,
@@ -572,12 +575,11 @@ describe("channels command", () => {
   });
 
   it("disables a default provider account when remove has no delete flag", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
         channels: { discord: { token: "d0", enabled: true } },
-      },
-    });
+      }),
+    );
 
     await runRemoveWithConfirm({ channel: "discord", account: "default" });
 
@@ -832,14 +834,13 @@ describe("channels command", () => {
   });
 
   it("cleans up telegram update offset when deleting a telegram account", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
         channels: {
           telegram: { botToken: "123:abc", enabled: true },
         },
-      },
-    });
+      }),
+    );
 
     await channelsRemoveCommand(
       { channel: "telegram", account: "default", delete: true },
@@ -853,9 +854,8 @@ describe("channels command", () => {
   });
 
   it("does not clean up offset when deleting a non-telegram channel", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
         channels: {
           discord: {
             accounts: {
@@ -863,8 +863,8 @@ describe("channels command", () => {
             },
           },
         },
-      },
-    });
+      }),
+    );
 
     await channelsRemoveCommand({ channel: "discord", account: "default", delete: true }, runtime, {
       hasFlags: true,
@@ -874,14 +874,13 @@ describe("channels command", () => {
   });
 
   it("does not clean up offset when disabling (not deleting) a telegram account", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
         channels: {
           telegram: { botToken: "123:abc", enabled: true },
         },
-      },
-    });
+      }),
+    );
 
     await runRemoveWithConfirm({ channel: "telegram", account: "default" });
 

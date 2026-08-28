@@ -166,7 +166,16 @@ function ownershipFor(dependencyOwnership: JsonObject, name: string) {
     ? dependencyOwnership.dependencies
     : {};
   const ownership = dependencies[name];
-  return isRecord(ownership) ? ownership : undefined;
+  if (!isRecord(ownership)) {
+    return undefined;
+  }
+  return {
+    owner: typeof ownership.owner === "string" ? ownership.owner : undefined,
+    class: typeof ownership.class === "string" ? ownership.class : undefined,
+    risk: Array.isArray(ownership.risk)
+      ? ownership.risk.filter((value): value is string => typeof value === "string")
+      : [],
+  };
 }
 
 function gitValue(repoRoot: string, args: string[]) {
@@ -405,7 +414,7 @@ export function renderDependencyOwnershipSurfaceMarkdownReport(
     for (const warning of typedReport.ownershipWarnings) {
       lines.push(
         `- ${markdownCode(warning.name)}: ${warning.message}; source sections: ` +
-          `${warning.sourceSections.join(", ")}`,
+          warning.sourceSections.join(", "),
       );
     }
   }

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { takeWorkspaceHashMemo } from "../gateway/worker-environments/workspace-hash-memo.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -281,6 +282,8 @@ export class NodeWorkerWorkspaceRuntime {
   private readonly acceptedSnapshots = new Map<string, AcceptedRetainSnapshot>();
   private readonly activeWorkspaceOperations = new Map<string, number>();
   private readonly latestTransferredManifest = new Map<string, string>();
+  // Per-generation capture hash memo; lets upload captures skip re-hashing unchanged trees.
+  private readonly workspaceHashMemos = new Map<string, Map<string, string>>();
   private readonly deletingWorkspaceGenerations = new Set<string>();
   private readonly activeRetainProtections = new Map<string, Set<Set<string>>>();
 
@@ -533,6 +536,7 @@ export class NodeWorkerWorkspaceRuntime {
             deleted += 1;
             if (parseGenerationName(path.basename(candidate.path)) !== undefined) {
               this.latestTransferredManifest.delete(candidate.generationKey);
+              this.workspaceHashMemos.delete(candidate.generationKey);
             }
           }
         }
@@ -673,6 +677,7 @@ export class NodeWorkerWorkspaceRuntime {
           if (!gateway?.url) {
             throw new Error("INVALID_REQUEST: workspace transfer gateway is unavailable");
           }
+          const hashMemo = takeWorkspaceHashMemo(this.workspaceHashMemos, generationKey);
           const stdout = await runNodeWorkerWorkspaceTransfer({
             gatewayUrl: gateway.url,
             gatewayTlsFingerprint: gateway.tlsFingerprint,
@@ -681,6 +686,7 @@ export class NodeWorkerWorkspaceRuntime {
             workspaceDir: workspacePath,
             manifestHome: sessionRoot,
             transfer: input.transfer,
+            hashMemo,
             signal,
           });
           // A snapshot sent before this transfer knows only the old base. Keep the latest

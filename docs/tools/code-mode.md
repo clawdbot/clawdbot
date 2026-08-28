@@ -562,6 +562,10 @@ QuickJS-WASI snapshot/restore is the resume mechanism:
 Snapshots are runtime state, not user artifacts: they live only in an
 in-process map (no database or disk write), are size-limited, expire, and are
 scoped to the run and session that created them.
+Canceling the owning run or tool call, or closing its tool catalog at attempt
+teardown, immediately releases parked snapshots and cancels their pending host
+work, even if no `wait` call follows. Catalog description refreshes and client
+tool additions do not close the owner.
 
 `wait` fails (as a `failed` result) when:
 
@@ -590,6 +594,8 @@ declare function yield_control(reason?: string): Promise<void>;
 ```
 
 Guest timers are bridged through the host, so they survive QuickJS snapshot/resume and remain bounded by the Code Mode execution and snapshot limits.
+`clearTimeout` also cancels a timer created before an earlier suspension; this
+applies to interactive Code Mode and headless automation scripts.
 
 Every effective non-MCP tool is also installed as an async global function.
 The model-visible `exec` description includes a bounded, deterministic subset

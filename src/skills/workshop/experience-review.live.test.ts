@@ -6,6 +6,7 @@ import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
 } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import type { Message } from "../../llm/types.js";
 import {
   createOpenClawTestState,
@@ -51,6 +52,22 @@ function toolRound(
     },
   ];
 }
+
+beforeAll(async () => {
+  // Full home isolation: the embedded review resolves the shared-main auth
+  // store via HOME, and a real ~/.openclaw with pending doctor migration
+  // must never leak into (or fail) this live run.
+  testState = await createOpenClawTestState({
+    layout: "home",
+    prefix: "openclaw-live-skill-review-state-",
+  });
+  workspaceDir = await tempDirs.make("openclaw-live-skill-review-workspace-");
+});
+
+afterAll(async () => {
+  await testState.cleanup();
+  await tempDirs.cleanup();
+});
 
 async function candidate(
   runId: string,
@@ -128,23 +145,43 @@ async function candidate(
     sessionId,
     sessionKey,
   });
-  const manager = SessionManager.open(target, workspaceDir);
+  const created = await createSessionEntryWithTranscript(
+    target,
+    () => ({ ok: true, entry: { sessionId, updatedAt: Date.now() } }),
+    { cwd: workspaceDir },
+  );
+  if (!created.ok) {
+    throw new Error(`Failed to create live review session: ${created.error}`);
+  }
   for (const message of messages) {
-    manager.appendMessage(message, { config: result.config });
+    SessionManager.appendMessageToTranscript(target, message, { config: result.config });
   }
   return result;
 }
 
+describe("skill experience review transcript fixture", () => {
+  it("persists messages through a canonical session", async () => {
+    const runId = "transcript-fixture";
+    const sessionId = `live-skill-review-${runId}`;
+    const sessionKey = `agent:main:${sessionId}`;
+    const message = makeAgentUserMessage({ content: "Review this completed task." });
+    const seeded = await candidate(runId, [message]);
+    const target = await resolveAgentRunSessionTarget({
+      agentId: "main",
+      config: seeded.config,
+      missingSessionKey: "resolve-existing",
+      sessionId,
+      sessionKey,
+    });
+
+    expect(SessionManager.open(target, workspaceDir).buildSessionContext().messages).toEqual([
+      message,
+    ]);
+  });
+});
+
 describeLive("skill experience review live OpenAI eval", () => {
   beforeAll(async () => {
-    // Full home isolation: the embedded review resolves the shared-main auth
-    // store via HOME, and a real ~/.openclaw with pending doctor migration
-    // must never leak into (or fail) this live run.
-    testState = await createOpenClawTestState({
-      layout: "home",
-      prefix: "openclaw-live-skill-review-state-",
-    });
-    workspaceDir = await tempDirs.make("openclaw-live-skill-review-workspace-");
     // Warm the plugin runtime outside the review lane: the first load compiles
     // extensions synchronously and can exceed the lane's no-progress watchdog
     // on a loaded machine.
@@ -156,11 +193,6 @@ describeLive("skill experience review live OpenAI eval", () => {
       workspaceDir,
     });
   }, 600_000);
-
-  afterAll(async () => {
-    await testState.cleanup();
-    await tempDirs.cleanup();
-  });
 
   it("proposes a recovered preflight procedure but ignores routine one-off work", async () => {
     const positiveMessages: Message[] = [

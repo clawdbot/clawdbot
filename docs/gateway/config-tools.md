@@ -309,7 +309,7 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
     web: {
       search: {
         enabled: true,
-        apiKey: "brave_api_key", // or BRAVE_API_KEY env (Brave provider)
+        provider: "brave", // optional; omit for auto-detect
         maxResults: 5,
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
@@ -328,10 +328,19 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
       },
     },
   },
+  plugins: {
+    entries: {
+      brave: {
+        config: {
+          webSearch: { apiKey: "brave_api_key" }, // or BRAVE_API_KEY env
+        },
+      },
+    },
+  },
 }
 ```
 
-Values shown are defaults except `provider` and `userAgent`. `maxResponseBytes` clamps to 32000–10000000; `maxChars` clamps to `maxCharsCap` (raise `maxCharsCap` to allow larger responses).
+Web-search provider credentials belong under `plugins.entries.<plugin>.config.webSearch`, as shown for Brave; see [Web search](/tools/web#storing-api-keys). The `tools.web` values shown are defaults except `provider` and `userAgent`. `maxResponseBytes` clamps to 32000–10000000; `maxChars` clamps to `maxCharsCap` (raise `maxCharsCap` to allow larger responses).
 
 ### `tools.media`
 

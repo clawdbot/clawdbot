@@ -238,7 +238,7 @@ class McpServersCard extends OpenClawLightDomElement {
             title: t("mcpPage.configuredServers"),
             description: html`
               ${t("mcpPage.runtimeHint")}
-              <a href=${this.pluginsHref}>${t("mcpPage.connectorsLink")}</a>
+              <a href=${this.pluginsHref}>${t("common.learnMore")}</a>
             `,
             actions: html`
               <button

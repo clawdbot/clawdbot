@@ -462,7 +462,13 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       return;
     }
     outboundRoutePersisted = true;
-    await ensureOutboundSessionEntry({ cfg, channel, accountId, route: outboundRoute });
+    await ensureOutboundSessionEntry({
+      cfg,
+      channel,
+      accountId,
+      route: outboundRoute,
+      sourceSessionKey: input.sessionKey,
+    });
   };
   throwIfAborted(abortSignal);
 

@@ -24,7 +24,7 @@ import { upsertCronJobRow } from "../store/row-codec.js";
 import {
   claimCronRunReceiptInDatabase,
   inspectActiveCronRunReceipt,
-  isCronRunReceiptOwnerDefinitelyStale,
+  isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
@@ -445,7 +445,7 @@ describe("cron durable run ownership", () => {
 
       const active = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
       expect(active?.receiptId).toBe(receipt!.receiptId);
-      expect(isCronRunReceiptOwnerDefinitelyStale(active!)).toBe(true);
+      expect(isCronRunReceiptOwnerStale(active!)).toBe(true);
     } finally {
       cron.stop();
     }

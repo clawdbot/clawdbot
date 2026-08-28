@@ -62,7 +62,11 @@ import type { CronJob, CronPayload } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner-run.js";
-import { requestHeartbeat, type HeartbeatWakeRequest } from "../infra/heartbeat-wake.js";
+import {
+  requestHeartbeat,
+  requestHeartbeatRetry,
+  type HeartbeatWakeRequest,
+} from "../infra/heartbeat-wake.js";
 import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
 import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
@@ -854,15 +858,20 @@ export function buildGatewayCronService(params: {
             }),
         }
       : {}),
-    requestHeartbeat: (opts) => {
+    requestHeartbeat: (opts, retry) => {
       const { wake } = resolveCronHeartbeatWake(opts);
-      requestHeartbeat({
+      const request = {
         ...wake,
         ...(opts?.scheduledEveryMs !== undefined
           ? { scheduledEveryMs: opts.scheduledEveryMs }
           : {}),
         ...(opts.tasks?.length ? { tasks: opts.tasks } : {}),
-      });
+      };
+      if (retry) {
+        requestHeartbeatRetry(request, retry);
+      } else {
+        requestHeartbeat(request);
+      }
     },
     runHeartbeatOnce: async (opts) => {
       const { runtimeConfig, wake } = resolveCronHeartbeatWake(opts, true);

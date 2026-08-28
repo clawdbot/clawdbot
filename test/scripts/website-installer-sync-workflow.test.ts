@@ -18,7 +18,11 @@ describe("website installer sync workflow", () => {
 
   it("verifies installers across Linux privilege and package-manager paths", () => {
     expect(workflow).toContain("linux-docker:");
-    expect(workflow.match(/timeout --kill-after=30s 20m docker run --rm/g)?.length).toBe(5);
+    expect(workflow).toContain("debian-installer:");
+    expect(workflow).toContain("debian:bookworm-slim");
+    expect(workflow).toContain("node --version | grep -E '^v24\\.[0-9]+\\.[0-9]+$'");
+    expect(workflow).toContain('require("node:sqlite")');
+    expect(workflow.match(/timeout --kill-after=30s 20m docker run --rm/g)?.length).toBe(6);
     expect(workflow).toContain("linux-build-tools-failure:");
     expect(workflow).toContain("/tmp/build-tools-stub-triggered");
     expect(workflow).toContain('grep -aFq "Installing build tools failed"');
@@ -57,6 +61,7 @@ describe("website installer sync workflow", () => {
       [
         "static",
         "linux-docker",
+        "debian-installer",
         "linux-build-tools-failure",
         "linux-non-root",
         "fedora-installer",

@@ -170,15 +170,9 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   // Hosted search needs a private Codex home and cwd so inherited native tools
   // cannot escape the bounded turn. Media calls retain configured transport
   // compatibility while still using an isolated ephemeral thread.
-  const isolatedStartOptions = workspace.codexHome
+  const startOptions = workspace.codexHome
     ? buildPrivateCodexAppServerStartOptions(appServer.start, workspace.codexHome)
     : appServer.start;
-  // A prepared credential is scoped to the fresh private home even when the
-  // operator's configured app-server normally points at their user home.
-  const startOptions =
-    workspace.codexHome && params.preparedAuth
-      ? { ...isolatedStartOptions, homeScope: "agent" as const }
-      : isolatedStartOptions;
   const ownsClient = !params.options.clientFactory;
   const authSelection = params.preparedAuth
     ? { preparedAuth: params.preparedAuth }
@@ -431,6 +425,9 @@ function buildPrivateCodexAppServerStartOptions(
   });
   return {
     ...start,
+    // A fresh private home has no native account; bridge OpenClaw auth even
+    // when the operator's ordinary harness uses their native Codex home.
+    homeScope: "agent",
     args: ["app-server", ...providerArgs, "--listen", "stdio://"],
     env: {
       ...privateEnv,

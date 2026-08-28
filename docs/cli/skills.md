@@ -34,14 +34,12 @@ openclaw skills install git:owner/repo@main
 openclaw skills install ./path/to/skill --as custom-name
 openclaw skills install @owner/<slug> --force
 openclaw skills install @owner/<slug> --force-install
-openclaw skills install @owner/<slug> --acknowledge-clawhub-risk
 openclaw skills install @owner/<slug> --acknowledge-install-policy-warning
 openclaw skills install @owner/<slug> --agent <id>
 openclaw skills install @owner/<slug> --global
 openclaw skills update @owner/<slug>
 openclaw skills update @owner/<slug> --force
 openclaw skills update @owner/<slug> --force-install
-openclaw skills update @owner/<slug> --acknowledge-clawhub-risk
 openclaw skills update @owner/<slug> --acknowledge-install-policy-warning
 openclaw skills update @owner/<slug> --global
 openclaw skills update --all
@@ -144,7 +142,7 @@ Notes:
 | `verify @owner/<slug>`           | Prints ClawHub's `clawhub.skill.verify.v1` JSON envelope by default. `--json` is accepted as the explicit machine-output spelling. Bare slugs are accepted for compatibility when the skill is already installed or unambiguous; owner-qualified refs avoid publisher ambiguity.                                                  |
 | `verify` provenance              | When ClawHub returns server-resolved source provenance, verify JSON also includes a commit-pinned `openclaw.verifiedSourceUrl`. Unavailable or self-declared source URLs stay only in the raw provenance envelope and are not promoted.                                                                                           |
 | `verify` version selector        | `verify` uses `.clawhub/origin.json` for installed ClawHub skills, so it verifies the installed version against the registry it came from. `--version` and `--tag` override the version selector but keep that installed registry when origin metadata exists.                                                                    |
-| `verify --card`                  | Prints the generated Skill Card Markdown instead of JSON. Exits non-zero when ClawHub returns `ok: false` or `decision: "fail"`; unsigned signatures are informational unless ClawHub policy changes.                                                                                                                             |
+| `verify --card`                  | Prints the generated Skill Card Markdown instead of JSON. Exits non-zero when ClawHub returns `ok: false` or `decision: "fail".                                                                                                                                                                                                   |
 | Skill Card fingerprint           | Installed ClawHub bundles can include a generated `skill-card.md`. OpenClaw treats verification as a ClawHub server decision and does not reject an installed skill just because that generated card changes the bundle fingerprint.                                                                                              |
 | `check --agent <id>`             | Checks the selected agent's workspace and reports which ready skills are actually visible to that agent's prompt or command surface.                                                                                                                                                                                              |
 | `workshop --agent <id>`          | Accepted before or after a Workshop leaf command, for example `workshop --agent <id> list` or `workshop list --agent <id>`. If both are provided, the leaf value wins.                                                                                                                                                            |
@@ -159,11 +157,10 @@ Versioned community archive releases use exact-release trust metadata.
 Resolver-backed GitHub skills rely on ClawHub's install resolver to enforce
 scan and force-install policy before it returns a pinned commit; use
 `--force-install` to install a pending GitHub-backed skill before that scan
-completes. Malicious or blocked community releases are refused. Risky
-community releases require review and `--acknowledge-clawhub-risk` when a
-non-interactive command should continue after that review. Official ClawHub
-skill publishers and bundled OpenClaw skill sources bypass this release-trust
-prompt.
+completes. Malicious or blocked community releases are refused. Review
+outcomes print the exact ClawHub audit overview and details link, then continue.
+Official ClawHub skill publishers and bundled OpenClaw skill sources bypass
+this release-trust check.
 
 ## Remove a ClawHub skill
 

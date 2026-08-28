@@ -1259,58 +1259,114 @@ describe("cron service timer regressions", () => {
   });
 
   it.each([
-    { label: "retries after idle grace", staysPreempted: false, expectedCalls: 2 },
-    { label: "requeues at the wait budget", staysPreempted: true, expectedCalls: 3 },
-  ])("$label for a preempted wake-now heartbeat", async ({ staysPreempted, expectedCalls }) => {
-    vi.useFakeTimers();
-    try {
-      let heartbeatAttempt = 0;
-      const runHeartbeatOnce = vi.fn<() => Promise<HeartbeatRunResult>>(async () =>
-        staysPreempted || ++heartbeatAttempt === 1
-          ? { status: "skipped", reason: HEARTBEAT_SKIP_PREEMPTED }
-          : { status: "ran", durationMs: 1 },
-      );
-      const requestHeartbeat = vi.fn();
-      const mainJob: CronJob = {
-        id: "main-preempted",
-        name: "main preempted",
-        enabled: true,
-        createdAtMs: Date.now(),
-        updatedAtMs: Date.now(),
-        schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
-        sessionTarget: "main",
-        wakeMode: "now",
-        payload: { kind: "systemEvent", text: "tick" },
-        state: {},
-      };
-      const state = createCronServiceState({
-        cronEnabled: true,
-        storePath: "/tmp/openclaw-cron-preempted-test/jobs.json",
-        log: noopLogger,
-        nowMs: () => Date.now(),
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat,
-        runHeartbeatOnce,
-        wakeNowHeartbeatBusyMaxWaitMs: 2 * HEARTBEAT_IDLE_RETRY_GRACE_MS,
-        wakeNowHeartbeatBusyRetryDelayMs: 1,
-        runIsolatedAgentJob: createDefaultIsolatedRunner(),
-      });
+    {
+      label: "retries preemption after idle grace",
+      staysSkipped: false,
+      explicitDeadline: false,
+      expectedCalls: 2,
+    },
+    {
+      label: "requeues preemption at the wait budget",
+      staysSkipped: true,
+      explicitDeadline: false,
+      expectedCalls: 3,
+    },
+    {
+      label: "retries busy work at its explicit deadline",
+      staysSkipped: false,
+      explicitDeadline: true,
+      expectedCalls: 2,
+    },
+    {
+      label: "requeues busy work without extending the wait budget",
+      staysSkipped: true,
+      explicitDeadline: true,
+      expectedCalls: 3,
+    },
+    {
+      label: "hands off a deadline beyond the remaining wait budget",
+      staysSkipped: true,
+      explicitDeadline: true,
+      maxWaitMs: 90_000,
+      expectedCalls: 2,
+    },
+    {
+      label: "hands off a deadline beyond the entire wait budget",
+      staysSkipped: true,
+      explicitDeadline: true,
+      maxWaitMs: 30_000,
+      expectedCalls: 1,
+    },
+  ])(
+    "$label for a wake-now heartbeat",
+    async ({ staysSkipped, explicitDeadline, maxWaitMs, expectedCalls }) => {
+      vi.useFakeTimers();
+      try {
+        let heartbeatAttempt = 0;
+        const runHeartbeatOnce = vi.fn<() => Promise<HeartbeatRunResult>>(async () =>
+          staysSkipped || ++heartbeatAttempt === 1
+            ? {
+                status: "skipped",
+                reason: explicitDeadline
+                  ? HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT
+                  : HEARTBEAT_SKIP_PREEMPTED,
+                ...(explicitDeadline
+                  ? { retryAtMs: Date.now() + HEARTBEAT_IDLE_RETRY_GRACE_MS }
+                  : {}),
+              }
+            : { status: "ran", durationMs: 1 },
+        );
+        const requestHeartbeat = vi.fn();
+        const mainJob: CronJob = {
+          id: "main-preempted",
+          name: "main preempted",
+          enabled: true,
+          createdAtMs: Date.now(),
+          updatedAtMs: Date.now(),
+          schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "systemEvent", text: "tick" },
+          state: {},
+        };
+        const state = createCronServiceState({
+          cronEnabled: true,
+          storePath: "/tmp/openclaw-cron-preempted-test/jobs.json",
+          log: noopLogger,
+          nowMs: () => Date.now(),
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat,
+          runHeartbeatOnce,
+          wakeNowHeartbeatBusyMaxWaitMs: maxWaitMs ?? 2 * HEARTBEAT_IDLE_RETRY_GRACE_MS,
+          wakeNowHeartbeatBusyRetryDelayMs: 1,
+          runIsolatedAgentJob: createDefaultIsolatedRunner(),
+        });
 
-      const resultPromise = executeJobCore(state, mainJob);
-      await vi.advanceTimersByTimeAsync(HEARTBEAT_IDLE_RETRY_GRACE_MS - 1);
-      expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+        const resultPromise = executeJobCore(state, mainJob);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(HEARTBEAT_IDLE_RETRY_GRACE_MS - 2);
+        expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
 
-      await vi.advanceTimersByTimeAsync(1);
-      if (staysPreempted) {
-        await vi.advanceTimersByTimeAsync(HEARTBEAT_IDLE_RETRY_GRACE_MS);
+        await vi.advanceTimersByTimeAsync(1);
+        if (staysSkipped) {
+          await vi.advanceTimersByTimeAsync(HEARTBEAT_IDLE_RETRY_GRACE_MS);
+        }
+        await expect(resultPromise).resolves.toMatchObject({ status: "ok" });
+        expect(runHeartbeatOnce).toHaveBeenCalledTimes(expectedCalls);
+        expect(requestHeartbeat).toHaveBeenCalledTimes(staysSkipped ? 1 : 0);
+        if (staysSkipped && explicitDeadline) {
+          const finalSkip = await runHeartbeatOnce.mock.results.at(-1)?.value;
+          expect(requestHeartbeat).toHaveBeenCalledWith(
+            expect.objectContaining({ reason: `cron:${mainJob.id}`, intent: "immediate" }),
+            finalSkip,
+          );
+        }
+      } finally {
+        vi.useRealTimers();
       }
-      await expect(resultPromise).resolves.toMatchObject({ status: "ok" });
-      expect(runHeartbeatOnce).toHaveBeenCalledTimes(expectedCalls);
-      expect(requestHeartbeat).toHaveBeenCalledTimes(staysPreempted ? 1 : 0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
   it("keeps user cancellation disabled for main-session cron wrappers", async () => {
     vi.useFakeTimers();
@@ -1402,6 +1458,7 @@ describe("cron service timer regressions", () => {
           agentId: "main",
           reason: "cron:main-session-cancel-boundary",
         }),
+        { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT },
       );
       expect(requestHeartbeat.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
     } finally {
@@ -1577,6 +1634,7 @@ describe("cron service timer regressions", () => {
         expect.objectContaining({
           reason: "cron:main-session-generation-visible",
         }),
+        { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT },
       );
       expect(isCronJobActive(cronJob.id)).toBe(false);
     } finally {

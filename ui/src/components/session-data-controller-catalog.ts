@@ -19,7 +19,10 @@ import {
   sessionCatalogRequestError,
 } from "./app-sidebar-session-catalog-state.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
-import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
+import type {
+  SidebarSessionOwnerFilter,
+  SidebarSessionStatusFilter,
+} from "./app-sidebar-session-types.ts";
 import {
   completePanelRefresh,
   failPanelRefresh,
@@ -35,6 +38,7 @@ export interface SessionDataControllerHost extends ReactiveControllerHost {
   promoteCreatedSession(sessionKey: string): void;
   selectedAgentIdForSessions(): string;
   sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
+  sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
   querySelector(selectors: string): Element | null;
 }
 

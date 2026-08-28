@@ -6,6 +6,14 @@ import {
 } from "./node-worker-workspace-fallback.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerWorkspaceCommand, WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
+import { runInstrumentedWorkspaceReconcile } from "./workspace-finalize.js";
+import {
+  measureLocalWorkspaceReconciliation,
+  pruneWorkspaceHashMemo,
+  withWorkspaceHashMemo,
+  type WorkspaceHashMemo,
+  type WorkspaceReconcileMetrics,
+} from "./workspace-hash-memo.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 import {
@@ -86,9 +94,22 @@ export function createNodeWorkerWorkspaceActions(params: {
       await quiescence.resume();
     }
   };
-  const reconcileWorkspace = async (
+  // Same placement-lifetime memo contract as the SSH tunnel owner: stat-identity
+  // keys self-invalidate on change, and without this owner every turn re-hashes
+  // the full managed worktree during prepare/apply/verify.
+  const placementHashMemo: WorkspaceHashMemo = new Map();
+  const reconcileWorkspace = (
     request: Parameters<WorkerWorkspaceTunnelHandle["reconcileWorkspace"]>[0],
+  ) => runInstrumentedWorkspaceReconcile((metrics) => reconcileWorkspaceRun(request, metrics));
+  const reconcileWorkspaceRun = async (
+    request: Parameters<WorkerWorkspaceTunnelHandle["reconcileWorkspace"]>[0],
+    metrics: WorkspaceReconcileMetrics,
   ) => {
+    pruneWorkspaceHashMemo(placementHashMemo);
+    const runLocalReconciliation = <T>(operation: () => Promise<T>): Promise<T> =>
+      measureLocalWorkspaceReconciliation(metrics, () =>
+        withWorkspaceHashMemo(placementHashMemo, operation, metrics.gateway),
+      );
     const pending = request.journal.load();
     if (pending) {
       await recoverWorkerWorkspaceReconciliation({ root: request.localPath, journal: pending });
@@ -173,27 +194,33 @@ export function createNodeWorkerWorkspaceActions(params: {
         }
       };
       const preparedStagedResult = request.stagedResult
-        ? await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
-            request,
-            stagingRoot: uploaded.stagingRoot,
-            currentManifestRef: uploaded.currentManifestRef,
-            baseManifestRaw: uploaded.baseRaw,
-            currentManifestRaw: uploaded.currentRaw,
-            publishAcceptedManifest,
-          })
+        ? await runLocalReconciliation(
+            async () =>
+              await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
+                request,
+                stagingRoot: uploaded.stagingRoot,
+                currentManifestRef: uploaded.currentManifestRef,
+                baseManifestRaw: uploaded.baseRaw,
+                currentManifestRaw: uploaded.currentRaw,
+                publishAcceptedManifest,
+              }),
+          )
         : undefined;
       let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
       if (!preparedStagedResult) {
-        appliedWorkspaceResult = await applyStagedWorkerWorkspace({
-          root: request.localPath,
-          stagingRoot: uploaded.stagingRoot,
-          baseManifestRef: request.baseManifestRef,
-          currentManifestRef: uploaded.currentManifestRef,
-          base: uploaded.base,
-          current: uploaded.current,
-          journal: request.journal,
-          publishAcceptedManifest,
-        });
+        appliedWorkspaceResult = await runLocalReconciliation(
+          async () =>
+            await applyStagedWorkerWorkspace({
+              root: request.localPath,
+              stagingRoot: uploaded.stagingRoot,
+              baseManifestRef: request.baseManifestRef,
+              currentManifestRef: uploaded.currentManifestRef,
+              base: uploaded.base,
+              current: uploaded.current,
+              journal: request.journal,
+              publishAcceptedManifest,
+            }),
+        );
       }
       return {
         get manifestRef() {
@@ -202,18 +229,23 @@ export function createNodeWorkerWorkspaceActions(params: {
         changed,
         verifyStable,
         verifyLocalStable: async () =>
-          await (appliedWorkspaceResult?.verifyLocalStable() ??
-            assertWorkspaceResultStable({
-              root: request.localPath,
-              base: uploaded.base,
-              current: uploaded.current,
-            })),
+          await runLocalReconciliation(
+            async () =>
+              await (appliedWorkspaceResult?.verifyLocalStable() ??
+                assertWorkspaceResultStable({
+                  root: request.localPath,
+                  base: uploaded.base,
+                  current: uploaded.current,
+                })),
+          ),
         getAppliedWorkspaceResult: () => appliedWorkspaceResult,
         ...(preparedStagedResult
           ? {
               ...preparedStagedResult,
               applyPreparedStagedResult: async () => {
-                await preparedStagedResult.applyPreparedStagedResult();
+                await runLocalReconciliation(
+                  async () => await preparedStagedResult.applyPreparedStagedResult(),
+                );
                 appliedWorkspaceResult = preparedStagedResult.getAppliedWorkspaceResult();
               },
             }

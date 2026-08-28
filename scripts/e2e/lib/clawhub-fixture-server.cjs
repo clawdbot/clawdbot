@@ -184,6 +184,8 @@ function startPrepublishArtifactServer() {
           npmTarballName: entry.tarball,
           createdAt: 0,
         },
+        overview: "No security concerns found in the fixture release.",
+        securityAuditUrl: `http://${request.headers.host}${url.pathname}`,
         trust: {
           scanStatus: "clean",
           moderationState: null,

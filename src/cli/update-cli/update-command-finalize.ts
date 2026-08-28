@@ -240,7 +240,6 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
               timeout: opts.timeout,
               yes: opts.yes,
               restart: false,
-              acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
             },
             timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
             pluginInstallRecords,

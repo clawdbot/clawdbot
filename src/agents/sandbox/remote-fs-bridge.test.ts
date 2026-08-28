@@ -2,7 +2,10 @@
 // the pinned mutation helper and remote stat/path guards.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createSandboxedReadTool, createSandboxedWriteTool } from "../agent-tools.read.js";
+import { resolveSandboxFileMutationQueueKey } from "./file-mutation-identity.js";
 import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-helper.js";
 import { createSandbox } from "./fs-bridge.test-helpers.js";
 import {
@@ -101,6 +104,87 @@ describe("remote sandbox fs bridge", () => {
       }),
     ).resolves.toMatchObject({ code: SANDBOX_CREATE_EXISTS_EXIT_CODE });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "orders sandbox tools through one remote alias identity",
+    async () => {
+      await withTempDir("openclaw-remote-fs-queue-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "host-workspace");
+        const remoteWorkspaceDir = path.join(stateDir, "remote-workspace");
+        await fs.mkdir(workspaceDir);
+        await fs.mkdir(remoteWorkspaceDir);
+        const sandbox = createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir });
+        const { runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir,
+          remoteAgentWorkspaceDir: remoteWorkspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({ sandbox, runtime });
+        const remotePath = path.join(remoteWorkspaceDir, "race-target.txt");
+        const hostPath = path.join(workspaceDir, "race-target.txt");
+        const aliasIdentity = await resolveSandboxFileMutationQueueKey({
+          bridge,
+          root: workspaceDir,
+          filePath: remotePath,
+          cwd: workspaceDir,
+        });
+        await expect(
+          resolveSandboxFileMutationQueueKey({
+            bridge,
+            root: workspaceDir,
+            filePath: hostPath,
+            cwd: workspaceDir,
+          }),
+        ).resolves.toBe(aliasIdentity);
+
+        const writeIdentityStarted = createDeferred();
+        const releaseWriteIdentity = createDeferred();
+        const readIdentityResolved = createDeferred();
+        const runRemoteShellScript = runtime.runRemoteShellScript.bind(runtime);
+        let identityCallCount = 0;
+        runtime.runRemoteShellScript = async (command) => {
+          const isTargetIdentity =
+            command.script.includes('target="$1"') && command.args?.[0] === remotePath;
+          if (!isTargetIdentity) {
+            return await runRemoteShellScript(command);
+          }
+          const identityCall = ++identityCallCount;
+          if (identityCall === 1) {
+            writeIdentityStarted.resolve();
+            await releaseWriteIdentity.promise;
+          }
+          const result = await runRemoteShellScript(command);
+          if (identityCall === 2) {
+            readIdentityResolved.resolve();
+          }
+          return result;
+        };
+        const statSpy = vi.spyOn(bridge, "stat");
+        const writeTool = createSandboxedWriteTool({ root: workspaceDir, bridge });
+        const readTool = createSandboxedReadTool({ root: workspaceDir, bridge });
+        const writeResult = writeTool.execute("write", {
+          path: remotePath,
+          content: "remote snapshot",
+        });
+        await writeIdentityStarted.promise;
+        const readResult = readTool.execute("read", { path: hostPath });
+        void readResult.catch(() => {});
+        await readIdentityResolved.promise;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(statSpy).not.toHaveBeenCalled();
+
+        releaseWriteIdentity.resolve();
+        const [, result] = await Promise.all([writeResult, readResult]);
+        expect(statSpy).toHaveBeenCalled();
+        expect(result.content).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ type: "text", text: "remote snapshot" }),
+          ]),
+        );
+      });
+    },
+  );
 
   it.each([
     {

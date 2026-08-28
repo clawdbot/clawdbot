@@ -233,7 +233,7 @@ extensions/codex/src/app-server/scheduled-app-authority.ts	5
 extensions/codex/src/app-server/session-binding.ts	4
 extensions/codex/src/app-server/session-history.ts	6
 extensions/codex/src/app-server/settled-turn-context.ts	3
-extensions/codex/src/app-server/shared-client.ts	5
+extensions/codex/src/app-server/shared-client.ts	4
 extensions/codex/src/app-server/shell-dynamic-tools.ts	2
 extensions/codex/src/app-server/side-question.ts	8
 extensions/codex/src/app-server/startup-binding.ts	2
@@ -2490,7 +2490,6 @@ src/commands/channels/add-wizard.ts	2
 src/commands/channels/add.ts	3
 src/commands/channels/capabilities.ts	4
 src/commands/channels/list.ts	1
-src/commands/channels/remove.ts	1
 src/commands/channels/status.runtime.ts	9
 src/commands/cleanup-utils.ts	1
 src/commands/configure.channels.ts	1

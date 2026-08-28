@@ -353,13 +353,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-model-picker-options.ts",
-      "text": "i"
-    },
-    {
-      "count": 1,
       "kind": "object-property",
       "name": "title",
       "path": "ui/src/pages/chat/components/chat-pane-header.test-support.ts",
@@ -462,13 +455,6 @@
       "name": "text",
       "path": "ui/src/pages/devices/view-exec-approvals.ts",
       "text": "exec host=gateway/node"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/model-providers/default-models-view.ts",
-      "text": "i"
     },
     {
       "count": 4,

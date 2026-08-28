@@ -3400,8 +3400,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         });
         expect(composerFontSizes).toEqual({
           labels: [14, 14, 14],
-          placeholder: 14,
-          textarea: 14,
+          placeholder: 16,
+          textarea: 16,
         });
         if (width <= 480) {
           const modelSettings = expectControlRect(
@@ -3439,6 +3439,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           }
           expect(footer.height).toBeLessThanOrEqual(53);
         } else {
+          // The editor reads at input size, while the controls around it stay
+          // chrome-sized — that difference is what marks the text as the
+          // subject of the surface.
           expect(send.width).toBeCloseTo(32, 2);
           expect(send.height).toBeCloseTo(32, 2);
         }
@@ -4095,36 +4098,62 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const card = page.locator(".session-progress-card--composer");
       const list = page.locator(".session-progress-card__steps");
       const widthBefore = (await card.boundingBox())?.width;
-      const expandedBefore = await page.evaluate(() => {
-        const style = (selector: string) =>
-          getComputedStyle(document.querySelector<HTMLElement>(selector)!);
-        const bounds = (selector: string) =>
-          document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
-        return {
-          cardBackground: style(".session-progress-card--composer").backgroundColor,
-          summaryBackground: style(".session-progress-card__summary").backgroundColor,
-          titleColor: style(".session-progress-card__summary-title").color,
-          actionsColor: style(".session-progress-card__heading-actions").color,
-          chevronColor: style(".session-progress-card__summary-chevron").color,
-          titleLeft: bounds(".session-progress-card__summary-title").left,
-          firstMarkerLeft: bounds(".session-progress-card__step-marker").left,
-          y: bounds(".session-progress-card__summary").y,
-        };
-      });
+      const readSummaryState = () =>
+        page.evaluate(() => {
+          const style = (selector: string) =>
+            getComputedStyle(document.querySelector<HTMLElement>(selector)!);
+          const bounds = (selector: string) =>
+            document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+          const spinner = style(".session-progress-card__summary-indicator .session-run-spinner");
+          return {
+            cardBackground: style(".session-progress-card--composer").backgroundColor,
+            summaryBackground: style(".session-progress-card__summary").backgroundColor,
+            titleColor: style(".session-progress-card__summary-title").color,
+            actionsColor: style(".session-progress-card__heading-actions").color,
+            currentColor: style(".session-progress-card__current").color,
+            countColor: style(".session-progress-card__summary-count--collapsed").color,
+            chevronColor: style(".session-progress-card__summary-chevron").color,
+            spinnerBorderColor: spinner.borderColor,
+            spinnerBorderTopColor: spinner.borderTopColor,
+            titleLeft: bounds(".session-progress-card__summary-title").left,
+            firstMarkerLeft: bounds(".session-progress-card__step-marker").left,
+            y: bounds(".session-progress-card__summary").y,
+          };
+        });
+      const waitForSummaryColors = async (
+        selectors: string[],
+        colors: string[],
+        comparison: "equal" | "different",
+      ) => {
+        const match = await page.waitForFunction(
+          ({ expectedColors, expectedComparison, targetSelectors }) =>
+            targetSelectors.every((selector, index) => {
+              const current = getComputedStyle(
+                document.querySelector<HTMLElement>(selector)!,
+              ).color;
+              return (current === expectedColors[index]) === (expectedComparison === "equal");
+            }),
+          {
+            expectedColors: colors,
+            expectedComparison: comparison,
+            targetSelectors: selectors,
+          },
+        );
+        await match.dispose();
+      };
+      const expandedBefore = await readSummaryState();
       await summary.hover();
-      await page.waitForTimeout(180);
+      await waitForSummaryColors(
+        [
+          ".session-progress-card__summary-title",
+          ".session-progress-card__heading-actions",
+          ".session-progress-card__summary-chevron",
+        ],
+        [expandedBefore.titleColor, expandedBefore.actionsColor, expandedBefore.chevronColor],
+        "different",
+      );
       const widthAfter = (await card.boundingBox())?.width;
-      const expandedAfter = await page.evaluate(() => {
-        const style = (selector: string) =>
-          getComputedStyle(document.querySelector<HTMLElement>(selector)!);
-        return {
-          cardBackground: style(".session-progress-card--composer").backgroundColor,
-          summaryBackground: style(".session-progress-card__summary").backgroundColor,
-          titleColor: style(".session-progress-card__summary-title").color,
-          actionsColor: style(".session-progress-card__heading-actions").color,
-          chevronColor: style(".session-progress-card__summary-chevron").color,
-        };
-      });
+      const expandedAfter = await readSummaryState();
       expect(widthBefore).toBeCloseTo(760, 1);
       expect(widthAfter).toBeCloseTo(widthBefore ?? 0, 1);
       expect(expandedBefore.titleLeft).toBeCloseTo(expandedBefore.firstMarkerLeft, 1);
@@ -4212,37 +4241,24 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
       await page.mouse.move(0, 0);
       await card.evaluate((node) => node.removeAttribute("open"));
-      await page.waitForTimeout(180);
-      const collapsedBefore = await page.evaluate(() => {
-        const style = (selector: string) =>
-          getComputedStyle(document.querySelector<HTMLElement>(selector)!);
-        const spinner = style(".session-progress-card__summary-indicator .session-run-spinner");
-        return {
-          cardBackground: style(".session-progress-card--composer").backgroundColor,
-          summaryBackground: style(".session-progress-card__summary").backgroundColor,
-          currentColor: style(".session-progress-card__current").color,
-          countColor: style(".session-progress-card__summary-count--collapsed").color,
-          chevronColor: style(".session-progress-card__summary-chevron").color,
-          spinnerBorderColor: spinner.borderColor,
-          spinnerBorderTopColor: spinner.borderTopColor,
-        };
-      });
+      const collapsedColorSelectors = [
+        ".session-progress-card__current",
+        ".session-progress-card__summary-count--collapsed",
+        ".session-progress-card__summary-chevron",
+      ];
+      await waitForSummaryColors(
+        collapsedColorSelectors,
+        [expandedBefore.currentColor, expandedBefore.countColor, expandedBefore.chevronColor],
+        "equal",
+      );
+      const collapsedBefore = await readSummaryState();
       await summary.hover();
-      await page.waitForTimeout(180);
-      const collapsedAfter = await page.evaluate(() => {
-        const style = (selector: string) =>
-          getComputedStyle(document.querySelector<HTMLElement>(selector)!);
-        const spinner = style(".session-progress-card__summary-indicator .session-run-spinner");
-        return {
-          cardBackground: style(".session-progress-card--composer").backgroundColor,
-          summaryBackground: style(".session-progress-card__summary").backgroundColor,
-          currentColor: style(".session-progress-card__current").color,
-          countColor: style(".session-progress-card__summary-count--collapsed").color,
-          chevronColor: style(".session-progress-card__summary-chevron").color,
-          spinnerBorderColor: spinner.borderColor,
-          spinnerBorderTopColor: spinner.borderTopColor,
-        };
-      });
+      await waitForSummaryColors(
+        collapsedColorSelectors,
+        [collapsedBefore.currentColor, collapsedBefore.countColor, collapsedBefore.chevronColor],
+        "different",
+      );
+      const collapsedAfter = await readSummaryState();
       expect(collapsedAfter.cardBackground).toBe(collapsedBefore.cardBackground);
       expect(collapsedAfter.summaryBackground).toBe(collapsedBefore.summaryBackground);
       expect(collapsedAfter.currentColor).not.toBe(collapsedBefore.currentColor);
