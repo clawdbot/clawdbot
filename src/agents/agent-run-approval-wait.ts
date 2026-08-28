@@ -1,4 +1,4 @@
-import { onAgentEventForRun } from "../infra/agent-events.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 
 export type AgentRunApprovalWait = {
   pending: boolean;
@@ -22,14 +22,13 @@ export function observeAgentRunApprovalWait(params: {
       state.onChange = undefined;
     },
   };
-  const runId = params.runId;
-  if (!runId) {
+  if (!params.runId) {
     return state;
   }
   // Lifecycle facts pause scheduling only; the original admitted run retains all authority.
-  unsubscribe = onAgentEventForRun(runId, (event) => {
+  unsubscribe = onAgentEvent((event) => {
     if (
-      event.runId !== runId ||
+      event.runId !== params.runId ||
       event.stream !== "lifecycle" ||
       (params.sessionId && event.sessionId && event.sessionId !== params.sessionId)
     ) {
