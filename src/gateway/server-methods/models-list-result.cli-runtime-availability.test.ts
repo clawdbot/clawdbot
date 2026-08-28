@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   listModels,
@@ -44,9 +45,21 @@ async function listClaudeCliModel(
 describe("models.list CLI runtime availability", () => {
   beforeEach(() => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
+    // Prepared runtime metadata must not cold-load the plugin's executable setup entry.
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
   });
 
   afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
     vi.unstubAllEnvs();
   });
 
