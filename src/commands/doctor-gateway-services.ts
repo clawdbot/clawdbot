@@ -6,6 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
 import { isDefaultInstallIdentity, resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
@@ -604,14 +605,14 @@ export async function maybeRepairGatewayServiceConfig(
   const systemNodeInfo = needsNodeRuntime
     ? await resolveSystemNodeInfo({ env: process.env })
     : null;
-  const systemNodePath = systemNodeInfo?.supported ? systemNodeInfo.path : null;
+  const systemNodePath = systemNodeInfo?.status === "supported" ? systemNodeInfo.path : null;
   if (needsNodeRuntime && !systemNodePath && runtimeChoice !== "node") {
     const warning = renderSystemNodeWarning(systemNodeInfo);
     if (warning) {
       note(warning, "Gateway runtime");
     } else {
       note(
-        "System Node 22 LTS (22.22.3+) or Node 24.15+ not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
+        `System Node ${SUPPORTED_NODE_VERSIONS} not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.`,
         "Gateway runtime",
       );
     }
@@ -683,6 +684,9 @@ export async function maybeRepairGatewayServiceConfig(
     ),
   );
   note(consolidatedLines.join("\n"), "Gateway service config");
+  if (audit.issues.every((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed)) {
+    return cfg;
+  }
 
   const aggressiveIssues = audit.issues.filter((issue) => issue.level === "aggressive");
   const needsAggressive = aggressiveIssues.length > 0;

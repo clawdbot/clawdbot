@@ -126,7 +126,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     defaultRuntimeLogMock.mockClear();
     assertGatewayServiceMutationAllowedMock.mockReset();
     resolveBunRuntimeInfoMock.mockReset();
-    resolveBunRuntimeInfoMock.mockResolvedValue({ supported: true });
+    resolveBunRuntimeInfoMock.mockResolvedValue({ status: "supported" });
 
     resolveGatewayInstallTokenMock.mockResolvedValue({
       tokenRefConfigured: false,
@@ -254,12 +254,14 @@ describe("repairLoadedGatewayServiceForStart", () => {
   });
 
   it.each([
-    { supported: true, expectedRuntime: "bun" },
-    { supported: false, expectedRuntime: "node" },
+    { status: "supported", expectedRuntime: "bun" },
+    { status: "unsupported", expectedRuntime: "node" },
+    { status: "probe-failed", expectedRuntime: null },
   ])(
-    "$expectedRuntime is selected when repairing an installed Bun Gateway with supported=$supported",
-    async ({ supported, expectedRuntime }) => {
-      resolveBunRuntimeInfoMock.mockResolvedValue({ supported });
+    "repairs an installed Bun Gateway only when its probe result is known ($status)",
+    async ({ status, expectedRuntime }) => {
+      const error = new Error("Bun runtime probe failed (cwd /root): EACCES");
+      resolveBunRuntimeInfoMock.mockResolvedValue({ status, error });
       const service = {
         install: vi.fn(async () => {}),
         isLoaded: vi.fn(async () => true),
@@ -281,13 +283,20 @@ describe("repairLoadedGatewayServiceForStart", () => {
         },
       };
 
-      await repairLoadedGatewayServiceForStart({
+      const repair = repairLoadedGatewayServiceForStart({
         service,
         state,
         issues: [{ code: "port-mismatch", message: "old port" }],
         json: true,
         stdout: process.stdout,
       });
+      if (status === "probe-failed") {
+        await expect(repair).rejects.toBe(error);
+        expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
+        expect(service.install).not.toHaveBeenCalled();
+        return;
+      }
+      await repair;
 
       const plan = readFirstInstallPlanArg();
       expect(plan.runtime).toBe(expectedRuntime);
