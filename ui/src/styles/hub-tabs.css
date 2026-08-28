@@ -146,3 +146,40 @@ wa-tab.hub-tab:focus-visible::part(base) {
     justify-self: center;
   }
 }
+
+.content-header.hub-page-header--stacked {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-5);
+  max-height: none;
+}
+
+.hub-page-header__intro {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  width: 100%;
+  min-width: 0;
+}
+
+.hub-page-header--stacked + .settings-workspace {
+  margin-top: 0;
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .content-header.hub-page-header--stacked {
+    gap: var(--space-4);
+  }
+}
+
+@media (max-width: 640px) {
+  .content-header.hub-page-header--stacked {
+    padding-inline: var(--space-3);
+  }
+}

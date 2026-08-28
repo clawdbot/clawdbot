@@ -11,15 +11,19 @@ type SessionsHubHeaderProps = {
 
 export function renderSessionsHubHeader(props: SessionsHubHeaderProps): TemplateResult {
   return html`
-    <section class="content-header content-header--page hub-page-header sessions-hub-header">
-      <div class="hub-page-header__title">
-        <div class="page-title">${props.title}</div>
-        ${props.subtitle ? html`<div class="page-subtitle">${props.subtitle}</div>` : nothing}
+    <section
+      class="content-header content-header--page hub-page-header hub-page-header--stacked sessions-hub-header"
+    >
+      <div class="hub-page-header__intro">
+        <div class="hub-page-header__title">
+          <div class="page-title">${props.title}</div>
+          ${props.subtitle ? html`<div class="page-subtitle">${props.subtitle}</div>` : nothing}
+        </div>
+        <div class="hub-page-header__actions">${props.actions ?? nothing}</div>
       </div>
       <div class="hub-page-header__tabs">
         ${renderSessionsHubTabs({ active: props.active, onSelect: props.onSelect })}
       </div>
-      <div class="hub-page-header__actions">${props.actions ?? nothing}</div>
     </section>
   `;
 }
