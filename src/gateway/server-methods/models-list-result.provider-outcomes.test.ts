@@ -60,8 +60,21 @@ describe("models.list provider catalog outcomes", () => {
     });
   });
 
-  it("marks configured rows unavailable when stored credentials were rejected", async () => {
+  it.each([
+    { name: "provider auth", rejectionScope: undefined, usageStats: undefined },
+    {
+      name: "model-route auth",
+      rejectionScope: "catalog" as const,
+      usageStats: {
+        "openai:chatgpt": {
+          disabledUntil: 2_000_000_000_000,
+          disabledReason: "auth_permanent" as const,
+        },
+      },
+    },
+  ])("marks configured API-key rows unavailable after $name rejection", async (testCase) => {
     const config = {
+      auth: { order: { openai: ["openai:chatgpt"] } },
       agents: {
         defaults: {
           model: { primary: "openai/gpt-5.6-sol" },
@@ -83,6 +96,7 @@ describe("models.list provider catalog outcomes", () => {
         {
           provider: "openai",
           profileId: "openai:chatgpt",
+          ...(testCase.rejectionScope ? { rejectionScope: testCase.rejectionScope } : {}),
           status: "auth-rejected" as const,
         },
       ],
@@ -108,6 +122,7 @@ describe("models.list provider catalog outcomes", () => {
             expires: Date.now() + 30 * 60_000,
           },
         },
+        ...(testCase.usageStats ? { usageStats: testCase.usageStats } : {}),
       },
       preferredProfileId: "openai:chatgpt",
     });

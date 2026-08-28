@@ -1,6 +1,9 @@
 // Resolves public model catalogs without exposing runtime-only provider params.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type {
+  ModelCatalogProviderOutcome,
+  ModelChoice,
+} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import {
   resolveAgentDir,
@@ -71,7 +74,7 @@ type ApiKeyProviderCapabilities = {
 };
 type ModelsListResult = {
   models: ModelsListEntryWithCapabilities[];
-  providerOutcomes?: readonly ProviderCatalogOutcome[];
+  providerOutcomes?: readonly ModelCatalogProviderOutcome[];
 };
 type PreparedModelsListResult = {
   read: () => ModelsListResult;
@@ -552,7 +555,15 @@ export async function prepareModelsListResult(
   // so account publication/revocation never repeats host preparation or discovery.
   const isCurrent = () => params.context.getRuntimeConfig() === initialConfig;
   const { routeVariants, providerOutcomes } = snapshot;
-  const outcomeProjection = providerOutcomes?.length ? { providerOutcomes } : {};
+  const outcomeProjection = providerOutcomes?.length
+    ? {
+        providerOutcomes: providerOutcomes.map(({ provider, profileId, status }) => ({
+          provider,
+          ...(profileId ? { profileId } : {}),
+          status,
+        })),
+      }
+    : {};
   const preparedRuntimeAuthModes = preparedProjectionOwner?.authModes;
   const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;
   const includeProviderCapabilities = params.params.includeProviderCapabilities === true;
