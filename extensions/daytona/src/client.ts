@@ -1,5 +1,6 @@
 // Daytona API client construction, credential resolution, and transient-error retry.
 import type { Daytona, Sandbox } from "@daytona/sdk";
+import { isTransientNetworkError } from "openclaw/plugin-sdk/retry-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/sandbox";
 import { resolveConfiguredSecretInputWithFallback } from "openclaw/plugin-sdk/secret-input-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -83,8 +84,9 @@ function isTransientDaytonaError(error: unknown): boolean {
   if (statusCode === 502 || statusCode === 503 || statusCode === 504) {
     return true;
   }
-  const code = isRecord(error) ? error.code : undefined;
-  return code === "ECONNRESET" || code === "ETIMEDOUT" || code === "EAI_AGAIN";
+  // Undici surfaces transport failures on error.cause (e.g. "fetch failed"
+  // with cause.code "UND_ERR_SOCKET"); the shared classifier walks that chain.
+  return isTransientNetworkError(error);
 }
 
 const TRANSIENT_RETRY_DELAYS_MS = [300, 900];
