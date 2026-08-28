@@ -2003,6 +2003,92 @@ describe("Codex app-server dynamic tool build", () => {
     expect(messageOnlyTools.map((tool) => tool.name)).toEqual(["message"]);
   });
 
+  it("resolves an MCP server-glob toolsAllow entry against materialized bundle-mcp tool names", async () => {
+    const outlookSendMail = createRuntimeDynamicTool("outlook__send_mail");
+    const outlookReadMail = createRuntimeDynamicTool("outlook__read_mail");
+    const otherServerTool = createRuntimeDynamicTool("weather__forecast");
+    setOpenClawCodingToolsFactoryForTests(() => [
+      outlookSendMail,
+      outlookReadMail,
+      otherServerTool,
+    ]);
+    const workspaceDir = path.join(tempDir, "mcp-glob-workspace");
+    const params = createParams(path.join(tempDir, "mcp-glob-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["outlook__*"];
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      nativeToolSurfaceEnabled: false,
+    });
+
+    // Documented server-glob syntax (docs/gateway/config-tools.md) must match every tool
+    // materialized under that server's safe name prefix, and must not leak an unrelated
+    // server's tools in (known-bad control for "glob support became allow-everything").
+    expect(tools.map((tool) => tool.name).toSorted()).toEqual([
+      "outlook__read_mail",
+      "outlook__send_mail",
+    ]);
+
+    const exactOnlyTools = await buildDynamicToolsForTest(
+      { ...params, toolsAllow: ["outlook__send_mail"] },
+      workspaceDir,
+      { nativeToolSurfaceEnabled: false },
+    );
+    expect(exactOnlyTools.map((tool) => tool.name)).toEqual(["outlook__send_mail"]);
+
+    // A list with only blank entries allowed nothing before glob support and
+    // must still allow nothing: the policy matcher alone would read it as allow-all.
+    const blankOnlyTools = await buildDynamicToolsForTest(
+      { ...params, toolsAllow: ["   "] },
+      workspaceDir,
+      { nativeToolSurfaceEnabled: false },
+    );
+    expect(blankOnlyTools).toEqual([]);
+  });
+
+  it("does not let a glob allow entry carry shell aliases that only an exact exec entry unlocks", async () => {
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec_helper"),
+      createRuntimeDynamicTool("sandbox_exec"),
+      createRuntimeDynamicTool("sandbox_process"),
+    ]);
+    const workspaceDir = path.join(tempDir, "mcp-glob-alias-workspace");
+    const params = createParams(path.join(tempDir, "mcp-glob-alias-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["exec_*"];
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      nativeToolSurfaceEnabled: false,
+    });
+
+    // `exec_*` matches the MCP-style name but is not the canonical `exec` entry
+    // that preserves the sandbox shell aliases.
+    expect(tools.map((tool) => tool.name)).toEqual(["exec_helper"]);
+  });
+
+  it("preserves shell aliases for a group:runtime allow entry the same way an exact exec entry does", async () => {
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("sandbox_exec"),
+      createRuntimeDynamicTool("weather__forecast"),
+    ]);
+    const workspaceDir = path.join(tempDir, "group-runtime-workspace");
+    const params = createParams(path.join(tempDir, "group-runtime-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["group:runtime"];
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      nativeToolSurfaceEnabled: false,
+    });
+
+    const names = tools.map((tool) => tool.name);
+    expect(names).toEqual(expect.arrayContaining(["exec", "sandbox_exec"]));
+    expect(names).not.toContain("weather__forecast");
+  });
+
   it("exposes Docker sandbox shell tools when native Code Mode cannot honor sandbox paths", async () => {
     setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("exec"),

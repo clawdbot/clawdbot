@@ -54,6 +54,10 @@ export {
   shellEscape,
   uploadDirectoryToSshTarget,
 } from "../agents/sandbox.js";
+// Runtime `toolsAllow` matching (globs, `group:*` expansion, hook-merged
+// intersections, empty list = deny) for plugins that filter their own tool
+// surface against the run's allowlist.
+export { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 
 export {
   runPluginCommandWithTimeout,

@@ -20,7 +20,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { runWithCronCreatorAuthorityCapabilityResolver } from "openclaw/plugin-sdk/codex-mcp-projection";
-import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
+import { isRuntimeToolAllowed, isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import {
   isCodexRemoteExecPlacementSandbox,
   readCodexPluginConfig,
@@ -940,7 +940,14 @@ function resolveCodexNativeExecutionPolicyForDynamicTools(
     readRuntimeSessionEntry: true,
   });
 }
-/** Applies a normalized tool allowlist while preserving shell aliases for exec/process. */
+/**
+ * Applies the run's tool allowlist while preserving shell aliases for exec/process.
+ * Tool names are matched through `isRuntimeToolAllowed`, the same runtime matcher every
+ * other `toolsAllow` consumer uses, so a documented `<server>__*` MCP-server-glob entry
+ * (docs/gateway/config-tools.md), a `group:*` entry and a hook-merged intersection all
+ * resolve here the way they do elsewhere — an exact-string `Set` cannot match a glob
+ * entry against a per-tool materialized MCP name.
+ */
 function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
@@ -954,23 +961,36 @@ function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
   if (hasWildcardCodexToolsAllow(toolsAllow)) {
     return tools;
   }
-  const allowSet = new Set(
-    toolsAllow.map((name) => normalizeCodexDynamicToolName(name)).filter(Boolean),
-  );
+  // A list with only blank entries allowed nothing before glob support and must
+  // still allow nothing: the runtime matcher reads a policy with no usable pattern
+  // as "no allow policy" (allow everything).
+  const allow = toolsAllow.map((name) => normalizeCodexDynamicToolName(name)).filter(Boolean);
+  if (allow.length === 0) {
+    return [];
+  }
+  const matchesAllow = (name: string) => isRuntimeToolAllowed(name, toolsAllow);
+  // Shell aliases stay gated on a canonical `exec` / `process` entry (exact or via a
+  // `group:*`), never on a glob such as `exec*` — and every merged restriction must
+  // still allow the canonical name.
+  const literalAllow = allow.filter((entry) => !entry.includes("*"));
+  const allowsCanonical = (name: string) =>
+    literalAllow.length > 0 &&
+    isRuntimeToolAllowed(name, literalAllow) &&
+    isRuntimeToolAllowed(name, toolsAllow);
+  const execAllowed = allowsCanonical("exec");
+  const processAllowed = execAllowed || allowsCanonical("process");
   return tools.filter((tool) => {
     const normalized = normalizeCodexDynamicToolName(tool.name);
     return (
-      allowSet.has(normalized) ||
-      (normalized === "sandbox_exec" && allowSet.has("exec")) ||
-      (normalized === "sandbox_process" && (allowSet.has("exec") || allowSet.has("process"))) ||
-      (normalized === CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME && allowSet.has("exec")) ||
-      (normalized === CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME &&
-        (allowSet.has("exec") || allowSet.has("process"))) ||
-      (normalized === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME && allowSet.has("exec"))
+      matchesAllow(normalized) ||
+      (normalized === "sandbox_exec" && execAllowed) ||
+      (normalized === "sandbox_process" && processAllowed) ||
+      (normalized === CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME && execAllowed) ||
+      (normalized === CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME && processAllowed) ||
+      (normalized === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME && execAllowed)
     );
   });
 }
-/** Detects the wildcard allowlist marker after Codex tool-name normalization. */
 function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {
   return toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*");
 }
