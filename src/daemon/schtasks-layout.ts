@@ -349,8 +349,14 @@ export function buildHiddenLauncherScript(params: {
     assertNoCmdLineBreak(trimmedDescription, "Hidden launcher description");
     lines.push(`' ${trimmedDescription}`);
   }
+  // `bWaitOnReturn=True` keeps the WScript host alive for the entire lifetime of
+  // the launched process tree (cmd.exe + node.exe). Without it, WScript exits
+  // immediately with code 0, schtask records "Last Result: 0" and considers
+  // the task complete, and the gateway process becomes an orphan — the next
+  // `openclaw gateway start` then wedges with "gateway already running (pid
+  // <orphan>)". See https://github.com/openclaw/openclaw/issues/<this-fix>.
   lines.push(
-    `CreateObject("WScript.Shell").Run ${quoteVbsRunCommand(params.scriptPath)}, 0, False`,
+    `CreateObject("WScript.Shell").Run ${quoteVbsRunCommand(params.scriptPath)}, 0, True`,
   );
   return `${lines.join("\r\n")}\r\n`;
 }

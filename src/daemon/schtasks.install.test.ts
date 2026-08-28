@@ -315,7 +315,7 @@ describe("installScheduledTask", () => {
       expect(schtasksCalls[2]?.slice(6)).toEqual(["/RU", "WORKSTATION\\alice", "/NP"]);
       expect(launcher).toContain("WScript.Shell");
       expect(launcher).toContain(scriptPath);
-      expect(launcher).toContain(`Run """${scriptPath}""", 0, False`);
+      expect(launcher).toContain(`Run """${scriptPath}""", 0, True`);
       expectTaskRunCall(3);
     });
   });
@@ -337,7 +337,7 @@ describe("installScheduledTask", () => {
       expect(scriptPath).toContain("苗振");
       expect(rawLauncher.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]));
       expect(rawLauncher.subarray(2).toString("utf16le")).toContain(
-        `Run """${scriptPath}""", 0, False`,
+        `Run """${scriptPath}""", 0, True`,
       );
     });
   });
@@ -405,7 +405,7 @@ describe("installScheduledTask", () => {
       expect(captured?.xml).toContain("gateway.vbs</Command>");
       expect(script).toContain('set "OPENCLAW_WINDOWS_TASK_NAME=OpenClaw Custom Gateway"');
       expect(launcher).toContain("WScript.Shell");
-      expect(launcher).toContain(`Run """${scriptPath}""", 0, False`);
+      expect(launcher).toContain(`Run """${scriptPath}""", 0, True`);
       expectTaskRunCall(3, "OpenClaw Custom Gateway");
     });
   });
@@ -681,6 +681,33 @@ describe("installScheduledTask", () => {
       expect(
         audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded),
       ).toBe(true);
+    });
+  });
+
+  it("emits a hidden launcher that waits for the cmd tree so the daemon is not orphaned on restart", async () => {
+    // Regression test for the wedge where the WScript launcher exited with
+    // code 0 immediately after launching cmd.exe, schtask recorded "Last
+    // Result: 0", and the gateway process kept holding the bind port with no
+    // schtask-visible handle. The next `openclaw gateway start` would then
+    // fail with "gateway already running (pid <orphan>)". The fix changes
+    // bWaitOnReturn from False to True so schtask tracks the daemon tree
+    // for the entire lifetime of node.exe.
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(okSchtasksResponse, missingTaskResponse);
+
+      const { scriptPath } = await installDefaultGatewayTask({
+        ...env,
+        OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+      });
+      const launcherPath = scriptPath.replace(/\.cmd$/i, ".vbs");
+      const launcher = decodeWindowsLauncherScript({
+        buffer: await fs.readFile(launcherPath),
+      });
+
+      // bWaitOnReturn must be True so the WScript host stays alive while
+      // the gateway runs and schtask tracks the process tree.
+      expect(launcher).toMatch(/, 0, True\b/);
+      expect(launcher).not.toMatch(/, 0, False\b/);
     });
   });
 });
