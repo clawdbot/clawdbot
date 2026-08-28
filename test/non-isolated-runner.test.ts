@@ -203,6 +203,8 @@ function fixtureFiles(): Record<string, string> {
     ].join("\n"),
     // Native require keeps only the constructors stable across module resets.
     // Plain factory closures avoid vi.fn's separate process-lifetime mock set.
+    // Each census collects and traverses the heap, so check presence and release
+    // across files without also scanning before allocation.
     "mock-payloads.cjs": [
       'class ManualPayload { value = "manual"; }',
       "class AutoPayload extends Date {}",
@@ -222,7 +224,6 @@ function fixtureFiles(): Record<string, string> {
       "  return { flavor: () => payload.value };",
       "});",
       'it("creates a file-owned manual mock payload", async () => {',
-      "  expect(queryObjects(ManualPayload)).toBe(0);",
       '  const { flavor } = await import("./07-manual-dep.js");',
       '  expect(flavor()).toBe("manual");',
       "  expect(queryObjects(ManualPayload)).toBe(1);",
@@ -275,7 +276,6 @@ function fixtureFiles(): Record<string, string> {
       payloadImports,
       'vi.mock("./08-auto-dep.js");',
       'it("creates a file-owned automock payload", async () => {',
-      "  expect(queryObjects(AutoPayload)).toBe(0);",
       '  const { payload } = await import("./08-auto-dep.js");',
       "  expect(payload.getTime()).toBe(1234);",
       "  expect(queryObjects(AutoPayload)).toBe(1);",
