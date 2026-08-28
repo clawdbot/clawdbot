@@ -1420,9 +1420,7 @@ describe("grouped chat rendering", () => {
       },
       1_000_000,
     );
-    const meta = cached.querySelector<HTMLDetailsElement>("details.msg-meta");
-    expect(meta?.open).toBe(false);
-    const summary = meta?.querySelector<HTMLElement>(".msg-meta__summary");
+    const summary = cached.querySelector<HTMLButtonElement>(".msg-meta__summary");
     const time = summary?.querySelector<HTMLTimeElement>(".chat-group-timestamp");
     expect(time).not.toBeNull();
     expect(time?.title).toBe("");
@@ -1457,35 +1455,38 @@ describe("grouped chat rendering", () => {
     expect(withCost.querySelector(".msg-meta__cost")?.textContent).toContain("$0.12");
   });
 
-  it("previews message context from the timestamp and pins it on click", () => {
+  it("dismisses message context when the neighboring reply tooltip opens", async () => {
+    vi.useFakeTimers();
+    const provider = document.createElement("openclaw-tooltip-provider");
     const container = document.createElement("div");
+    provider.append(container);
+    document.body.append(provider);
     renderAssistantMessage(
       container,
       createAssistantMessage("Done", {
         usage: { input: 12_000, output: 300 },
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-luna",
         timestamp: 1000,
       }),
-      { contextWindow: 100_000 },
+      { contextWindow: 100_000, onReply: vi.fn() },
     );
 
-    const details = container.querySelector<HTMLDetailsElement>("details.msg-meta")!;
-    const summary = details.querySelector<HTMLElement>("summary")!;
-    const pointerEnter = new Event("pointerenter");
-    Object.defineProperty(pointerEnter, "pointerType", { value: "mouse" });
-    details.dispatchEvent(pointerEnter);
-    expect(details.open).toBe(true);
-
-    details.dispatchEvent(new Event("pointerleave"));
-    expect(details.open).toBe(false);
-
-    details.dispatchEvent(pointerEnter);
-    summary.click();
-    details.dispatchEvent(new Event("pointerleave"));
-    expect(details.open).toBe(true);
-
-    summary.click();
-    expect(details.open).toBe(false);
+    try {
+      await Promise.all(
+        [...container.querySelectorAll("openclaw-tooltip")].map((tip) => tip.updateComplete),
+      );
+      const summary = container.querySelector<HTMLElement>(".msg-meta__summary")!;
+      summary.click();
+      const reply = container.querySelector<HTMLButtonElement>(".chat-reply-btn")!;
+      reply.focus();
+      const replyTooltip = reply.closest("openclaw-tooltip")!;
+      await Promise.resolve();
+      expect(replyTooltip.shadowRoot?.querySelector("wa-tooltip")?.hasAttribute("open")).toBe(true);
+      const metadata = summary.closest("openclaw-tooltip")!;
+      expect(metadata.shadowRoot?.querySelector("wa-tooltip")?.hasAttribute("open")).toBe(false);
+    } finally {
+      provider.remove();
+    }
   });
 
   it("uses the largest single assistant call for grouped context usage", () => {
