@@ -125,6 +125,27 @@ describe("heartbeat outcome store", () => {
     ).toEqual({ count: 1 });
   });
 
+  it("ignores outcomes for transient bases without a durable session node", async () => {
+    const env = await createEnv();
+
+    expect(() =>
+      persistHeartbeatOutcome({
+        agentId: "main",
+        sessionKey: "agent:main:cron:job:run:transient",
+        runSessionKey: "agent:main:cron:job:run:transient:heartbeat",
+        response: { outcome: "progress", notify: false, summary: "Transient heartbeat" },
+        occurredAt: 500,
+        env,
+      }),
+    ).not.toThrow();
+
+    expect(
+      openOpenClawAgentDatabase({ agentId: "main", env })
+        .db.prepare("SELECT COUNT(*) AS count FROM heartbeat_outcomes")
+        .get(),
+    ).toEqual({ count: 0 });
+  });
+
   it("injects once per user run, keeps retries, and resets after a new heartbeat", async () => {
     const env = await createEnv();
     const base = {

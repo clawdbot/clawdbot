@@ -18,7 +18,10 @@ const HEARTBEAT_OUTCOME_TASK_NAME_MAX_CHARS = 200;
 const HEARTBEAT_OUTCOME_MAX_TASKS = 32;
 
 type HeartbeatOutcomeTable = OpenClawAgentKyselyDatabase["heartbeat_outcomes"];
-type HeartbeatOutcomeDatabase = Pick<OpenClawAgentKyselyDatabase, "heartbeat_outcomes">;
+type HeartbeatOutcomeDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "heartbeat_outcomes" | "session_nodes"
+>;
 type HeartbeatOutcomeRow = Selectable<HeartbeatOutcomeTable>;
 type HeartbeatOutcomeInsert = Insertable<HeartbeatOutcomeTable>;
 
@@ -128,6 +131,16 @@ export function persistHeartbeatOutcome(params: {
   runOpenClawAgentWriteTransaction(
     ({ db }) => {
       const agentDb = getNodeSqliteKysely<HeartbeatOutcomeDatabase>(db);
+      const owner = executeSqliteQuerySync(
+        db,
+        agentDb
+          .selectFrom("session_nodes")
+          .select("session_key")
+          .where("session_key", "=", params.sessionKey),
+      ).rows[0];
+      if (!owner) {
+        return;
+      }
       executeSqliteQuerySync(
         db,
         agentDb
