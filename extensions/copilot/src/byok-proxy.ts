@@ -135,7 +135,7 @@ async function handleProxyRequest(
             : undefined,
         }),
         signal: upstreamAbort.signal,
-        ...(body ? { body: toFetchBody(body) } : {}),
+        ...(body ? { body } : {}),
       },
       auditContext: "copilot-byok-provider",
       requireHttps: true,
@@ -222,7 +222,7 @@ function isNonceProtectedProxyRequest(req: IncomingMessage, proxyPathPrefix: str
 async function readGuardedBody(
   req: IncomingMessage,
   res: ServerResponse,
-): Promise<Buffer | undefined> {
+): Promise<Buffer<ArrayBuffer> | undefined> {
   const guard = installRequestBodyLimitGuard(req, res, {
     maxBytes: PROXY_MAX_REQUEST_BODY_BYTES,
     timeoutMs: PROXY_REQUEST_BODY_TIMEOUT_MS,
@@ -234,7 +234,14 @@ async function readGuardedBody(
   try {
     const chunks: Buffer[] = [];
     for await (const chunk of req) {
+      if (guard.isTripped()) {
+        break;
+      }
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      if (guard.isTripped()) {
+        chunks.pop();
+        break;
+      }
     }
     if (guard.isTripped()) {
       return undefined;
@@ -248,12 +255,6 @@ async function readGuardedBody(
   } finally {
     guard.dispose();
   }
-}
-
-function toFetchBody(body: Buffer): Uint8Array<ArrayBuffer> {
-  const copy = new Uint8Array(body.byteLength);
-  copy.set(body);
-  return copy;
 }
 
 function normalizeProxyRequestHeaders(headers: IncomingMessage["headers"]): Record<string, string> {

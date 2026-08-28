@@ -414,6 +414,71 @@ describe("createCopilotByokProxy", () => {
     }
   });
 
+  it("stops collecting after chunked overflow while the sender remains open", async () => {
+    const proxy = await createCopilotByokProxy(
+      resolveCopilotProvider({
+        model: {
+          provider: "custom-proxy",
+          api: "openai-responses",
+          id: "proxy-model",
+          baseUrl: "https://proxy.example/v1",
+        },
+      }),
+    );
+    let request: ReturnType<typeof http.request> | undefined;
+
+    try {
+      const endpoint = new URL(`${proxy?.provider.provider?.baseUrl}/responses`);
+      const response = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          request?.destroy();
+          reject(new Error("timed out waiting for trailing-input rejection"));
+        }, 2_000);
+        timer.unref();
+        request = http.request(
+          {
+            hostname: endpoint.hostname,
+            port: Number(endpoint.port),
+            path: endpoint.pathname,
+            method: "POST",
+            headers: {
+              "transfer-encoding": "chunked",
+              "content-type": "application/octet-stream",
+            },
+          },
+          (incoming) => {
+            let body = "";
+            incoming.setEncoding("utf8");
+            incoming.on("data", (chunk: string) => {
+              body += chunk;
+            });
+            incoming.once("end", () => {
+              settled = true;
+              clearTimeout(timer);
+              resolve({ status: incoming.statusCode ?? 0, body });
+            });
+          },
+        );
+        request.once("error", (error) => {
+          clearTimeout(timer);
+          if (!settled) {
+            reject(error);
+          }
+        });
+        request.write(Buffer.alloc(PROXY_MAX_REQUEST_BODY_BYTES, 0x41));
+        request.write("overflow");
+        // Keep the sender open: the proxy must stop collecting after the guard trips.
+      });
+
+      expect(response).toEqual({ status: 413, body: "Payload too large" });
+      expect(ssrfRuntimeMock.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    } finally {
+      request?.destroy();
+      await proxy?.close();
+    }
+  });
+
   it("forwards a BYOK request containing two supported-size images", async () => {
     let forwardedBody: Buffer | undefined;
     ssrfRuntimeMock.fetchWithSsrFGuard.mockImplementation(
