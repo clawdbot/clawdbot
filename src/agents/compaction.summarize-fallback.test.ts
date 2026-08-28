@@ -137,14 +137,9 @@ describe("summarizeWithFallback", () => {
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry and propagates AbortError immediately when caller signal is already aborted", async () => {
+  it("does not contact the provider when the caller signal is already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
-
-    const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
-      name: "AbortError",
-    });
-    agentSessionMocks.generateSummary.mockRejectedValueOnce(providerAbortErr);
 
     await expect(
       summarizeWithFallback({
@@ -164,8 +159,7 @@ describe("summarizeWithFallback", () => {
       }),
     ).rejects.toMatchObject({ name: "AbortError" });
 
-    // Caller abort is terminal — no retry, no fallback to placeholder.
-    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
+    expect(agentSessionMocks.generateSummary).not.toHaveBeenCalled();
   });
 
   it("stops retry backoff promptly when the caller aborts mid-sleep", async () => {

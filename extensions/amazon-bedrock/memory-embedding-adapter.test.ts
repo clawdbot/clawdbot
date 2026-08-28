@@ -33,7 +33,7 @@ function stubCreate(client: {
     provider: {
       id: "bedrock",
       model: client.model,
-      embedQuery: async () => [],
+      embed: async () => [],
       embedBatch: async () => [],
     },
     client,

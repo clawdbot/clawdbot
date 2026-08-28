@@ -82,7 +82,8 @@ function forkResponse(threadId = "thread-forked") {
     thread: {
       id: threadId,
       sessionId: "session-forked",
-      cliVersion: "0.147.0",
+      projectId: null,
+      cliVersion: "0.149.0",
       createdAt: 1715299200,
       updatedAt: 1715299200,
       cwd: "/tmp",
@@ -212,6 +213,27 @@ describe("forkCodexUpstreamSession", () => {
       editorText: "edit me",
     });
     expect(archiveThread).not.toHaveBeenCalled();
+  });
+
+  it("requests a workspace sandbox when the fork creator requires isolation", async () => {
+    boundaryMocks.listTurns
+      .mockResolvedValueOnce([turn("turn-2", "edit me")])
+      .mockResolvedValueOnce([turn("turn-1", "one")]);
+    const { controlFactory, forkThread } = forkControl();
+    const requiredFork = { ...forkParams(), sandbox: "required" as const };
+
+    const result = await forkCodexUpstreamSession(requiredFork, {
+      bindingStore: { mutate: vi.fn(async () => true) } as unknown as CodexAppServerBindingStore,
+      controlFactory,
+      harnessRuntimeId: "codex-custom",
+      resolveConfig: () => ({}),
+      runtime: createPluginRuntimeMock(),
+    });
+
+    expect(result).toMatchObject({ status: "created" });
+    expect(forkThread).toHaveBeenCalledWith(
+      expect.objectContaining({ sandbox: "workspace-write" }),
+    );
   });
 
   it("forks through the secondary home selected by the upstream fingerprint", async () => {

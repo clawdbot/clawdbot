@@ -1,7 +1,11 @@
 import type { Context, Model, StreamFn } from "@openclaw/llm-core";
 import OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { codeModeToolSurfaceObserver, type OpenAICompletionsOptions } from "../provider-options.js";
+import {
+  codeModeToolSurfaceObserver,
+  reasoningTagTextPolicy,
+  type OpenAICompletionsOptions,
+} from "../provider-options.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
 import { tagUnresolvedTextAsCommentary } from "../utils/assistant-text-phase.js";
 import {
@@ -27,7 +31,8 @@ import {
   resolveCodeModeResponsesVisibleToolNames,
 } from "./openai-transport-params.js";
 import {
-  createOpenAIResponseHook,
+  createOpenAIProviderAcceptanceHook,
+  resolveOpenAIClientBaseUrl,
   type MutableAssistantOutput,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
@@ -128,7 +133,7 @@ function buildOpenAICompletionsClientConfig(
   context: Context,
   optionHeaders?: Record<string, string>,
 ): {
-  baseURL: string;
+  baseURL: string | undefined;
   defaultHeaders: Record<string, string>;
   defaultQuery?: Record<string, string>;
 } {
@@ -165,7 +170,7 @@ function buildOpenAICompletionsClientConfig(
   }
 
   return {
-    baseURL,
+    baseURL: resolveOpenAIClientBaseUrl(model, baseURL),
     defaultHeaders: headers,
     defaultQuery: Object.keys(defaultQuery).length > 0 ? defaultQuery : undefined,
   };
@@ -271,12 +276,13 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           stream: responseStream,
           signal: firstEventAbort.signal,
           abort: firstEventAbort.abort,
-          hook: createOpenAIResponseHook(options?.onResponse, response, model),
+          hook: createOpenAIProviderAcceptanceHook(options, response, model),
           onReady: () => stream.push({ type: "start", partial: output }),
         });
         await processCompletionsStream(hookedResponseStream, output, model, stream, {
           signal: options?.signal,
           emitReasoning,
+          strictReasoningTags: reasoningTagTextPolicy.isStrict(options),
           firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
           abortFirstEventStream: firstEventAbort.abort,
           onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),

@@ -40,6 +40,7 @@ const CONTROL_UI_STATIC_ASSET_EXTENSIONS = new Set([
   ".txt",
   ".wasm",
   ".webmanifest",
+  ".woff2",
 ]);
 
 export function isControlUiStaticAssetExtension(extension: string): boolean {
@@ -91,6 +92,8 @@ function contentTypeForExtension(ext: string): string {
       return "application/wasm";
     case ".webmanifest":
       return "application/manifest+json; charset=utf-8";
+    case ".woff2":
+      return "font/woff2";
     default:
       return "application/octet-stream";
   }
@@ -225,7 +228,7 @@ function setControlUiEncodingHeaders(
 function setControlUiFileHeaders(
   res: ServerResponse,
   filePath: string,
-  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding },
+  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding; lastModifiedMs?: number },
 ) {
   const extension = path.extname(filePath).toLowerCase();
   res.setHeader("Content-Type", contentTypeForExtension(extension));
@@ -233,13 +236,51 @@ function setControlUiFileHeaders(
     "Cache-Control",
     options?.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache",
   );
+  if (options?.lastModifiedMs !== undefined) {
+    res.setHeader("Last-Modified", new Date(options.lastModifiedMs).toUTCString());
+  }
   setControlUiEncodingHeaders(res, extension, options?.encoding ?? "identity");
+}
+
+/**
+ * `no-cache` responses without a validator force a full re-download on every
+ * revisit; fonts and theme CSS are the heavy unhashed assets that hit this.
+ * HTTP-dates carry whole-second precision, so compare on floored seconds.
+ */
+export function isControlUiFileUnmodified(req: IncomingMessage, lastModifiedMs: number): boolean {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    return false;
+  }
+  const header = req.headers?.["if-modified-since"];
+  const since = typeof header === "string" ? Date.parse(header) : Number.NaN;
+  return Number.isFinite(since) && Math.floor(lastModifiedMs / 1000) * 1000 <= since;
+}
+
+export function respondControlUiNotModified(
+  res: ServerResponse,
+  options: { immutable?: boolean; lastModifiedMs: number },
+) {
+  res.statusCode = 304;
+  // A 304 repeats the caching headers of the 200 it stands in for so caches
+  // refresh their freshness metadata alongside the validator.
+  res.setHeader(
+    "Cache-Control",
+    options.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache",
+  );
+  res.setHeader("Last-Modified", new Date(options.lastModifiedMs).toUTCString());
+  res.setHeader("Vary", "Accept-Encoding");
+  res.end();
 }
 
 export function respondHeadForControlUiFile(
   res: ServerResponse,
   filePath: string,
-  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding; contentLength?: number },
+  options?: {
+    immutable?: boolean;
+    encoding?: ControlUiContentEncoding;
+    contentLength?: number;
+    lastModifiedMs?: number;
+  },
 ) {
   res.statusCode = 200;
   setControlUiFileHeaders(res, filePath, options);
@@ -278,7 +319,7 @@ export async function serveControlUiAsset(
   res: ServerResponse,
   filePath: string,
   body: Buffer,
-  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding },
+  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding; lastModifiedMs?: number },
 ) {
   setControlUiFileHeaders(res, filePath, options);
   res.end(body);

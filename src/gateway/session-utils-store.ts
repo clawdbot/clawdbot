@@ -185,11 +185,11 @@ export function loadGatewaySessionEntryReadOnly(
 }
 
 /** Returns the one canonical entry and the exact persisted key that owns it. */
-export function resolveCanonicalSessionStoreMatchFromStoreKeys(
-  store: Record<string, SessionEntry>,
+export function resolveCanonicalSessionStoreMatchFromStoreKeys<TEntry extends SessionEntry>(
+  store: Record<string, TEntry>,
   storeKeys: string[],
-): { key: string; entry: SessionEntry } | undefined {
-  let selected: { key: string; entry: SessionEntry } | undefined;
+): { key: string; entry: TEntry } | undefined {
+  let selected: { key: string; entry: TEntry } | undefined;
   for (const key of storeKeys) {
     const entry = store[key];
     if (!entry) {
@@ -304,7 +304,7 @@ export function listAgentsForGateway(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
   options?: {
-    modelCatalogByAgentId?: ReadonlyMap<string, ModelCatalogEntry[]>;
+    modelCatalogByAgentId?: ReadonlyMap<string, ModelCatalogEntry[] | undefined>;
     includeSystem?: boolean;
   },
 ): {
@@ -357,7 +357,9 @@ export function listAgentsForGateway(
         acpRuntime: false,
       }),
     );
-    const agentModelCatalog = options?.modelCatalogByAgentId?.get(id) ?? modelCatalog;
+    const agentModelCatalog = options?.modelCatalogByAgentId?.has(id)
+      ? options.modelCatalogByAgentId.get(id)
+      : (modelCatalog ?? options?.modelCatalogByAgentId?.get(basic.defaultId));
     const thinkingProfile = resolveGatewayModelThinkingProfile({
       cfg,
       agentId: id,

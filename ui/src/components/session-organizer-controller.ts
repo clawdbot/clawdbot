@@ -24,6 +24,7 @@ import {
   storeCollapsedSessionSections,
   storeSidebarSessionsGrouping,
   storeSidebarSessionsShowCron,
+  storeSidebarSessionsShowPreview,
   storeSidebarSessionsShowSystem,
   type SidebarRecentSession,
   type SidebarSectionDropTarget,
@@ -741,6 +742,15 @@ export class SessionOrganizerController {
     }
   }
 
+  setSessionsShowPreview(show: boolean) {
+    this.host.sessionsShowPreview = show;
+    try {
+      storeSidebarSessionsShowPreview(show);
+    } catch {
+      // Keep the in-memory preference when storage is unavailable.
+    }
+  }
+
   setSessionsShowSystem(show: boolean) {
     this.host.sessionsShowSystem = show;
     try {
@@ -756,7 +766,7 @@ export class SessionOrganizerController {
     }
     this.host.sessionsStatusFilter = statusFilter;
     this.host.clearSessionSelection();
-    this.host.sessionData.resetForStatusFilter(statusFilter);
+    this.host.sessionData.resetSessionList();
     try {
       storeSidebarSessionStatusFilter(statusFilter);
     } catch {

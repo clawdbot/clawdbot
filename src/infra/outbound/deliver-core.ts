@@ -55,6 +55,7 @@ export async function deliverOutboundPayloadsCore(
     throw new Error("Outbound delivery requires a prepared payload batch");
   }
   const accountId = params.accountId;
+  const reply = params.reply;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
   const results: OutboundDeliveryResult[] = [];
@@ -78,8 +79,8 @@ export async function deliverOutboundPayloadsCore(
       to,
       deps,
       accountId,
-      replyToId: params.replyToId,
-      replyToMode: params.replyToMode,
+      replyToId: reply?.replyToId,
+      replyToMode: reply?.source === "implicit" ? reply.mode : undefined,
       formatting: params.formatting,
       threadId: params.threadId,
       identity: params.identity,
@@ -97,6 +98,7 @@ export async function deliverOutboundPayloadsCore(
         // Carry its source index without polluting the persisted platform route.
         await params.onPlatformSendStart?.(route, activeSourceIndex);
       },
+      onDirectAdapterHandoff: params.onDirectAdapterHandoff,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
       onDeliveryResult: reportIdentifiedDeliveryResult,
     });
@@ -138,14 +140,16 @@ export async function deliverOutboundPayloadsCore(
   const textLimit =
     params.formatting?.textLimit ??
     (handler.resolveEffectiveTextChunkLimit
-      ? handler.resolveEffectiveTextChunkLimit(configuredTextLimit)
+      ? handler.resolveEffectiveTextChunkLimit({
+          fallbackLimit: configuredTextLimit,
+          formatting: params.formatting,
+        })
       : configuredTextLimit);
   const chunkMode = handler.chunker
     ? (params.formatting?.chunkMode ?? resolveChunkMode(cfg, channel, accountId))
     : "length";
   const { resolveCurrentReplyTo, applyReplyToConsumption } = createReplyToDeliveryPolicy({
-    replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
+    reply,
   });
 
   const sendTextChunks = async (
@@ -225,6 +229,7 @@ export async function deliverOutboundPayloadsCore(
     activeSourceIndex = payloadIndex;
     const payload = preparedEntry.payload;
     const payloadResultStartIndex = results.length;
+    let effectivePayload: typeof payload | null | undefined;
     let payloadSummary = buildPayloadSummary(payload);
     const originalMediaCount = preparedEntry.preparedMediaCount;
     let deliveryKind: DiagnosticMessageDeliveryKind = "other";
@@ -301,7 +306,7 @@ export async function deliverOutboundPayloadsCore(
         renderedHandler.normalizePayload
           ? renderedHandler.normalizePayload(renderedPayload)
           : renderedPayload;
-      const effectivePayload = normalizedEffectivePayload
+      effectivePayload = normalizedEffectivePayload
         ? normalizeEmptyPayloadForDelivery(
             stripInternalRuntimeScaffoldingFromPayload(normalizedEffectivePayload),
           )
@@ -349,13 +354,15 @@ export async function deliverOutboundPayloadsCore(
         });
       const deliveryTarget = () =>
         deliveryHandler.buildTargetRef({ threadId: preparedTarget.threadId });
+      const beforeCount = results.length;
+      let mirroredPayload = payloadSummary;
+      let mediaMessageIds: { first?: string; last?: string } | undefined;
       if (
         deliveryHandler.sendPayload &&
         payloadRequiresDurablePayloadTransport(effectivePayload, {
           sendTextOnlyErrorPayloads: deliveryHandler.sendTextOnlyErrorPayloads,
         })
       ) {
-        const beforeCount = results.length;
         const delivery = await deliveryHandler.sendPayload(
           effectivePayload,
           withPreparedTarget(applySendReplyToConsumption(sendOverrides)),
@@ -373,35 +380,7 @@ export async function deliverOutboundPayloadsCore(
           );
           continue;
         }
-        recordPayloadOutcome({
-          index: payloadIndex,
-          status: "sent",
-          results: deliveredResults,
-        });
-        recordDeliveredPayload(payloadSummary, deliveredResults);
-        recordMessageSentEvent({
-          success: true,
-          content: payloadSummary.hookContent ?? payloadSummary.text,
-          messageId: deliveredResults.at(-1)?.messageId,
-        });
-        await maybePinDeliveredMessage({
-          handler: deliveryHandler,
-          payload: effectivePayload,
-          target: deliveryTarget(),
-          messageId: deliveredResults.find((entry) => entry.messageId)?.messageId,
-          gatewayClientScopes: params.gatewayClientScopes,
-        });
-        await maybeNotifyAfterDeliveredPayload({
-          handler: deliveryHandler,
-          payload: effectivePayload,
-          target: deliveryTarget(),
-          results: deliveredResults,
-        });
-        completeDeliveryDiagnostics(deliveredResults.length);
-        continue;
-      }
-      if (payloadSummary.mediaUrls.length === 0) {
-        const beforeCount = results.length;
+      } else if (payloadSummary.mediaUrls.length === 0) {
         if (deliveryHandler.sendFormattedText) {
           await recordIdentifiedDeliveryResults(
             await deliveryHandler.sendFormattedText(
@@ -413,47 +392,7 @@ export async function deliverOutboundPayloadsCore(
         } else {
           await sendTextChunks(deliveryHandler, payloadSummary.text, sendOverrides);
         }
-        const deliveredResults = results.slice(beforeCount);
-        if (deliveredResults.length > 0) {
-          recordPayloadOutcome({
-            index: payloadIndex,
-            status: "sent",
-            results: deliveredResults,
-          });
-          recordDeliveredPayload(payloadSummary, deliveredResults);
-        } else {
-          recordPayloadOutcome(
-            suppressedPayloadOutcome({
-              index: payloadIndex,
-              reason: "adapter_returned_no_identity",
-            }),
-          );
-        }
-        const messageId = deliveredResults.at(-1)?.messageId;
-        const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
-        recordMessageSentEvent({
-          success: deliveredResults.length > 0,
-          content: payloadSummary.hookContent ?? payloadSummary.text,
-          messageId,
-        });
-        await maybePinDeliveredMessage({
-          handler: deliveryHandler,
-          payload: effectivePayload,
-          target: deliveryTarget(),
-          messageId: pinMessageId,
-          gatewayClientScopes: params.gatewayClientScopes,
-        });
-        await maybeNotifyAfterDeliveredPayload({
-          handler: deliveryHandler,
-          payload: effectivePayload,
-          target: deliveryTarget(),
-          results: deliveredResults,
-        });
-        completeDeliveryDiagnostics(deliveredResults.length);
-        continue;
-      }
-
-      if (!deliveryHandler.supportsMedia) {
+      } else if (!deliveryHandler.supportsMedia) {
         log.warn(
           "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
           {
@@ -468,84 +407,44 @@ export async function deliverOutboundPayloadsCore(
             "Plugin outbound adapter does not implement sendMedia and no text fallback is available for media payload",
           );
         }
-        const beforeCount = results.length;
         await sendTextChunks(deliveryHandler, fallbackText, sendOverrides);
-        const deliveredResults = results.slice(beforeCount);
-        if (deliveredResults.length > 0) {
-          recordPayloadOutcome({
-            index: payloadIndex,
-            status: "sent",
-            results: deliveredResults,
-          });
-          recordDeliveredPayload(
-            { ...payloadSummary, text: fallbackText, mediaUrls: [] },
-            deliveredResults,
-          );
-        } else {
-          recordPayloadOutcome(
-            suppressedPayloadOutcome({
-              index: payloadIndex,
-              reason: "adapter_returned_no_identity",
-            }),
-          );
+        mirroredPayload = { ...payloadSummary, text: fallbackText, mediaUrls: [] };
+      } else {
+        // Media observers use final adapter identities, not intermediate progress
+        // results that may also remain in the reconciled delivery list.
+        mediaMessageIds = {};
+        const mediaUnits = planOutboundMediaMessageUnits({
+          mediaUrls: payloadSummary.mediaUrls,
+          caption: payloadSummary.text,
+          overrides: sendOverrides,
+          consumeReplyTo: applySendReplyToConsumption,
+        });
+        for (const unit of mediaUnits) {
+          if (unit.kind !== "media") {
+            continue;
+          }
+          throwIfAborted(abortSignal);
+          const resultIndex = results.length;
+          const delivery = deliveryHandler.sendFormattedMedia
+            ? await deliveryHandler.sendFormattedMedia(
+                unit.caption ?? "",
+                unit.mediaUrl,
+                withPreparedTarget(unit.overrides),
+              )
+            : await deliveryHandler.sendMedia(
+                unit.caption ?? "",
+                unit.mediaUrl,
+                withPreparedTarget(unit.overrides),
+              );
+          const recorded = await recordIdentifiedDeliveryResult(delivery);
+          adoptSuccessfulResultsSince(resultIndex);
+          if (recorded) {
+            mediaMessageIds.first ??= delivery.messageId;
+            mediaMessageIds.last = delivery.messageId;
+          }
         }
-        const messageId = deliveredResults.at(-1)?.messageId;
-        const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
-        recordMessageSentEvent({
-          success: deliveredResults.length > 0,
-          content: payloadSummary.hookContent ?? payloadSummary.text,
-          messageId,
-        });
-        await maybePinDeliveredMessage({
-          handler: deliveryHandler,
-          payload: effectivePayload,
-          target: deliveryTarget(),
-          messageId: pinMessageId,
-          gatewayClientScopes: params.gatewayClientScopes,
-        });
-        await maybeNotifyAfterDeliveredPayload({
-          handler: deliveryHandler,
-          payload: effectivePayload,
-          target: deliveryTarget(),
-          results: deliveredResults,
-        });
-        completeDeliveryDiagnostics(deliveredResults.length);
-        continue;
       }
 
-      let firstMessageId: string | undefined;
-      let lastMessageId: string | undefined;
-      const beforeCount = results.length;
-      const mediaUnits = planOutboundMediaMessageUnits({
-        mediaUrls: payloadSummary.mediaUrls,
-        caption: payloadSummary.text,
-        overrides: sendOverrides,
-        consumeReplyTo: applySendReplyToConsumption,
-      });
-      for (const unit of mediaUnits) {
-        if (unit.kind !== "media") {
-          continue;
-        }
-        throwIfAborted(abortSignal);
-        const resultIndex = results.length;
-        const delivery = deliveryHandler.sendFormattedMedia
-          ? await deliveryHandler.sendFormattedMedia(
-              unit.caption ?? "",
-              unit.mediaUrl,
-              withPreparedTarget(unit.overrides),
-            )
-          : await deliveryHandler.sendMedia(
-              unit.caption ?? "",
-              unit.mediaUrl,
-              withPreparedTarget(unit.overrides),
-            );
-        const recorded = await recordIdentifiedDeliveryResult(delivery);
-        adoptSuccessfulResultsSince(resultIndex);
-        if (recorded) {
-          firstMessageId ??= delivery.messageId;
-          lastMessageId = delivery.messageId;
-        }
-      }
       const deliveredResults = results.slice(beforeCount);
       if (deliveredResults.length > 0) {
         recordPayloadOutcome({
@@ -553,7 +452,7 @@ export async function deliverOutboundPayloadsCore(
           status: "sent",
           results: deliveredResults,
         });
-        recordDeliveredPayload(payloadSummary, deliveredResults);
+        recordDeliveredPayload(mirroredPayload, deliveredResults);
       } else {
         recordPayloadOutcome(
           suppressedPayloadOutcome({
@@ -562,6 +461,12 @@ export async function deliverOutboundPayloadsCore(
           }),
         );
       }
+      const firstMessageId = mediaMessageIds
+        ? mediaMessageIds.first
+        : deliveredResults.find((entry) => entry.messageId)?.messageId;
+      const lastMessageId = mediaMessageIds
+        ? mediaMessageIds.last
+        : deliveredResults.at(-1)?.messageId;
       recordMessageSentEvent({
         success: deliveredResults.length > 0,
         content: payloadSummary.hookContent ?? payloadSummary.text,
@@ -580,12 +485,21 @@ export async function deliverOutboundPayloadsCore(
         target: deliveryTarget(),
         results: deliveredResults,
       });
-      completeDeliveryDiagnostics(results.length - beforeCount);
+      completeDeliveryDiagnostics(deliveredResults.length);
     } catch (err) {
       // A rejected adapter has no final return to reconcile with its progress
       // results. Keep the results, but never match them to a later payload.
       resetReportedResults();
       const failedPayloadResults = results.slice(payloadResultStartIndex);
+      adoptSuccessfulResultsSince(payloadResultStartIndex);
+      if (effectivePayload && failedPayloadResults.length > 0) {
+        await maybeNotifyAfterDeliveredPayload({
+          handler: await getDeliveryHandler(buildPayloadSummary(effectivePayload).mediaUrls),
+          payload: effectivePayload,
+          target: baseHandler.buildTargetRef({ threadId: preparedTarget.threadId }),
+          results: failedPayloadResults,
+        });
+      }
       recordPayloadOutcome({
         index: payloadIndex,
         status: "failed",

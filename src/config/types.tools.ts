@@ -182,7 +182,7 @@ export type CodeModeConfig =
   | boolean
   | "auto"
   | {
-      /** Enable generic OpenClaw code mode. Default: "auto", which engages it only for models whose catalog compat flags `codeMode: "preferred"`. */
+      /** Enable generic OpenClaw code mode. Default: false. "auto" engages only models whose catalog flags `codeMode: "preferred"`. */
       enabled?: boolean | "auto";
       /** Guest runtime. Only quickjs-wasi is supported. */
       runtime?: "quickjs-wasi";
@@ -202,9 +202,9 @@ export type CodeModeConfig =
       maxPendingToolCalls?: number;
       /** Retention for suspended snapshots. */
       snapshotTtlSeconds?: number;
-      /** Default search result count for tools.search. */
+      /** Default search result count for catalog.search. */
       searchDefaultLimit?: number;
-      /** Maximum search result count for tools.search. */
+      /** Maximum search result count for catalog.search. */
       maxSearchLimit?: number;
     };
 
@@ -306,6 +306,13 @@ export type ExecToolConfig = {
   strictInlineEval?: boolean;
   /** Render parser-derived command highlights in exec approval prompts (default: false). */
   commandHighlighting?: boolean;
+  /**
+   * Default lifetime, in days, stamped onto standing grants minted by
+   * allow-always on automation approvals. Unset means grants live until
+   * revoked or the owning job changes. Terms freeze at mint; changing this
+   * affects only future grants.
+   */
+  grantExpiryDays?: number;
   /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
   safeBinTrustedDirs?: string[];
   /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
@@ -371,6 +378,8 @@ export type SessionsSpawnToolsConfig = {
 export type GitHubToolIdentityConfig = {
   /** Opaque generated directory version for atomic credential rotation. */
   profileId: string;
+  /** OAuth generations retain a separate rotating refresh credential. */
+  kind?: "oauth";
   /** Optional process-local author identity for commits made by local tools. */
   gitAuthor?: {
     name?: string;
@@ -466,9 +475,9 @@ export type ToolsConfig = {
       provider?: string;
       /** Max characters to return from fetched content. */
       maxChars?: number;
-      /** Hard cap for maxChars (tool or config), defaults to 50000. */
+      /** Hard cap for maxChars (tool or config), defaults to 20000. */
       maxCharsCap?: number;
-      /** Max download size before truncation, defaults to 2000000. */
+      /** Max download size before truncation, defaults to 750000 bytes. */
       maxResponseBytes?: number;
       /** Timeout in seconds for fetch requests. */
       timeoutSeconds?: number;

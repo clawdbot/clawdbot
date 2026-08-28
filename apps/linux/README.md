@@ -1,6 +1,6 @@
 # OpenClaw for Linux
 
-The Linux companion is a Tauri v2 desktop shell for OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when needed, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
+The Linux companion is a Tauri v2 desktop shell for local and remote OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when local setup needs it, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
 
 ## Linux prerequisites
 
@@ -33,8 +33,8 @@ workflow instead of relying on GStreamer packages from the user's system.
 
 ## Develop and build
 
-The companion frontend is static HTML, CSS, and JavaScript. The shared Canvas A2UI renderer is
-generated from the Canvas plugin, so install repository dependencies once before building:
+The companion frontend is static HTML, CSS, and JavaScript. Install repository dependencies once
+before building:
 
 ```bash
 pnpm install
@@ -47,24 +47,56 @@ The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/b
 
 Desktop notifications use each platform's system notification service. macOS 13+ uses Apple's User Notifications framework; Windows uses native system toasts and Linux uses the desktop notification service through `notify-rust`. On macOS, test notifications from a signed `.app` bundle: a direct `cargo run` stays unbundled, so the app disables notifications instead of initializing Apple's framework with no bundle identity.
 
-On first run, release builds automatically install the stable CLI channel, while development builds ask for a release channel and preselect Development. After the CLI install, the app opens the local dashboard once with onboarding mode enabled. Reconnects and later app launches use the normal dashboard URL.
+## First-run setup
+
+The welcome screen explains what OpenClaw can do and asks where your assistant
+should live:
+
+- **On this computer** installs the CLI and managed Node runtime when needed,
+  then starts the Gateway as a systemd user service. Release builds install the
+  stable channel automatically; development builds ask for a release channel
+  and preselect Development.
+- **On another computer** connects to an existing Gateway without installing or
+  starting a local Gateway service. Select a nearby discovered Gateway, enter a
+  Gateway URL directly, or choose **SSH tunnel** and enter `user@gateway-host`.
+  Expand **Gateway authentication** to provide either the Gateway token or its
+  password when the remote host requires one.
+
+Public direct connections must use HTTPS or secure WebSockets. Plain HTTP or
+WebSockets are appropriate only for loopback, trusted private networks, or a
+Tailnet. If the Gateway configuration specifies a TLS certificate fingerprint,
+choose **SSH tunnel**: the embedded browser cannot enforce certificate pins, so
+the app safely refuses direct connections instead of exposing your credentials.
+Saved remote credentials support literal values and environment- or
+file-backed secret references; exec and shared-store references must be
+resolved on their owning Gateway host. SSH connections use your existing
+OpenSSH configuration and host-key verification; keep the remote Gateway bound
+to loopback when possible. See the
+[remote access guide](https://docs.openclaw.ai/gateway/remote) for Gateway
+authentication and network requirements.
+
+After connecting, Model Setup checks existing credentials and verifies a real
+model response before continuing. If no existing credentials work, choose a
+provider and either sign in or enter an API key. The selected Gateway owns the
+provider credentials and model configuration. A working existing model opens
+the normal dashboard; newly configured AI access continues into guided
+onboarding. In-progress model setup and guided onboarding survive Gateway
+restarts. If the app closes while model activation is in progress, reopening it
+resumes the same Gateway, agent, and model without activating the provider
+twice.
+
+For OpenAI, **ChatGPT Login** uses a ChatGPT or Codex subscription, while
+**OpenAI API Key** uses API billing. When the Gateway runs on another host and
+its browser callback is not reachable, choose **ChatGPT Device Pairing** from
+the additional sign-in options.
 
 ## Updates
 
 The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. The macOS and Windows test builds use a separate opt-in desktop-test update channel; macOS self-updates like the AppImage build, while Windows downloads the update first and runs its installer only after **Restart to update**.
 
-## Canvas bridge
-
-The running app gives the headless `openclaw node run` host a single Canvas WebView. The bundled `linux-canvas` plugin advertises `canvas.*` only while the app socket exists. The app listens at `$XDG_RUNTIME_DIR/openclaw-canvas.sock` (or `/tmp/openclaw-canvas-$UID.sock`) with mode `0600`; a headless Linux node without the app does not advertise Canvas.
-
-The Canvas plugin sources remain the source of truth for the A2UI renderer. Each native build
-generates `index.html` and `a2ui.bundle.js` into its isolated build output before compiling. Run
-`node --import tsx scripts/sync-native-a2ui.mts --check` from the repository root to verify fresh bundles are
-byte-identical and every native build owner is wired.
-
 ## Quick Chat widgets
 
-Quick Chat advertises the Gateway `inline-widgets` capability and renders hosted `show_widget` results in isolated child WebViews. The parent Quick Chat WebView is the only one granted Tauri commands; widget WebViews match no capability and therefore have no IPC access. Quick Chat accepts only assistant-message Canvas previews under the capability-scoped `/__openclaw__/canvas/documents/` route, blocks navigation away from the original document, uses nonpersistent WebViews, and keeps stable widget instances while switching among multiple previews. Connections that require a custom Gateway TLS leaf pin remain text-only because the platform WebView cannot bind that pin. Like the other native clients, Quick Chat does not expose the Control UI `sendPrompt` bridge.
+Quick Chat advertises the Gateway `inline-widgets` capability and renders hosted `show_widget` results in isolated child WebViews. The parent Quick Chat WebView is the only one granted Tauri commands; widget WebViews match no capability and therefore have no IPC access. Quick Chat accepts only assistant-message widget previews under the capability-scoped `/__openclaw__/canvas/documents/` route, blocks navigation away from the original document, uses nonpersistent WebViews, and keeps stable widget instances while switching among multiple previews. Connections that require a custom Gateway TLS leaf pin remain text-only because the platform WebView cannot bind that pin. Like the other native clients, Quick Chat does not expose the Control UI `sendPrompt` bridge.
 
 ## Installer resource
 

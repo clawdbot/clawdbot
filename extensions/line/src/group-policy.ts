@@ -3,7 +3,8 @@ import {
   buildChannelGroupsScopeTree,
   resolveScopeRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
-import { resolveExactLineGroupConfigKey, type OpenClawConfig } from "./channel-api.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveExactLineGroupConfigKey } from "./group-keys.js";
 
 type LineGroupContext = { cfg: OpenClawConfig; accountId?: string | null; groupId?: string | null };
 

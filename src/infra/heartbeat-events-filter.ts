@@ -1,8 +1,11 @@
 // Filters heartbeat event text before it is added to prompts.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS } from "../auto-reply/heartbeat.js";
-import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import {
+  HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
+  isHeartbeatAcknowledgementText,
+} from "../auto-reply/heartbeat.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
 const MAX_EXEC_EVENT_PROMPT_CHARS = 8_000;
 const STRUCTURED_EXEC_COMPLETION_EVENT_RE =
@@ -85,22 +88,12 @@ export function buildCronEventPrompt(
   const useHeartbeatResponseTool = opts?.useHeartbeatResponseTool ?? false;
   const eventText = pendingEvents.join("\n").trim();
   if (!eventText) {
-    if (useHeartbeatResponseTool) {
-      return (
-        "A scheduled cron event was triggered, but no event content was found. " +
-        HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
-      );
-    }
-    if (!deliverToUser) {
-      return (
-        "A scheduled cron event was triggered, but no event content was found. " +
-        "Handle this internally and reply HEARTBEAT_OK when nothing needs user-facing follow-up."
-      );
-    }
-    return (
-      "A scheduled cron event was triggered, but no event content was found. " +
-      "Reply HEARTBEAT_OK."
-    );
+    const completionInstruction = useHeartbeatResponseTool
+      ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
+      : deliverToUser
+        ? `Reply ${SILENT_REPLY_TOKEN}.`
+        : `Handle this internally and reply ${SILENT_REPLY_TOKEN} when nothing needs user-facing follow-up.`;
+    return `A scheduled cron event was triggered, but no event content was found. ${completionInstruction}`;
   }
   if (!deliverToUser) {
     return (
@@ -128,16 +121,10 @@ export function buildExecEventPrompt(
       ? `${truncateUtf16Safe(rawEventText, MAX_EXEC_EVENT_PROMPT_CHARS)}\n\n[truncated]`
       : rawEventText;
   if (!eventText) {
-    if (useHeartbeatResponseTool) {
-      return (
-        "An async command completion event was triggered, but no command output was found. " +
-        `${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS} Do not mention, summarize, or reuse output from any earlier run.`
-      );
-    }
-    return (
-      "An async command completion event was triggered, but no command output was found. " +
-      "Reply HEARTBEAT_OK only. Do not mention, summarize, or reuse output from any earlier run."
-    );
+    const completionInstruction = useHeartbeatResponseTool
+      ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
+      : `Reply ${SILENT_REPLY_TOKEN} only.`;
+    return `An async command completion event was triggered, but no command output was found. ${completionInstruction} Do not mention, summarize, or reuse output from any earlier run.`;
   }
   if (!deliverToUser) {
     if (useHeartbeatResponseTool) {
@@ -149,7 +136,7 @@ export function buildExecEventPrompt(
     }
     return (
       "An async command completion event was triggered, but user delivery is disabled for this run. " +
-      "Handle the result internally and reply HEARTBEAT_OK only. Do not mention, summarize, or reuse command output."
+      `Handle the result internally and reply ${SILENT_REPLY_TOKEN} only. Do not mention, summarize, or reuse command output.`
     );
   }
   if (hasMissingOutputFailure) {
@@ -172,30 +159,15 @@ export function buildExecEventPrompt(
 
 const HEARTBEAT_OK_PREFIX = normalizeLowercaseStringOrEmpty(HEARTBEAT_TOKEN);
 
-// Detect heartbeat-specific noise so cron reminders don't trigger on non-reminder events.
-function isHeartbeatAckEvent(evt: string): boolean {
-  const trimmed = evt.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  if (!lower.startsWith(HEARTBEAT_OK_PREFIX)) {
-    return false;
-  }
-  const suffix = lower.slice(HEARTBEAT_OK_PREFIX.length);
-  if (suffix.length === 0) {
-    return true;
-  }
-  return !/[a-z0-9_]/.test(suffix.charAt(0));
-}
-
 function isHeartbeatNoiseEvent(evt: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(evt);
   if (!lower) {
     return false;
   }
   return (
-    isHeartbeatAckEvent(lower) ||
+    isHeartbeatAcknowledgementText(evt, 0) ||
+    (lower.startsWith(HEARTBEAT_OK_PREFIX) &&
+      !/[a-z0-9_]/.test(lower.charAt(HEARTBEAT_OK_PREFIX.length))) ||
     lower.includes("heartbeat poll") ||
     lower.includes("heartbeat wake")
   );

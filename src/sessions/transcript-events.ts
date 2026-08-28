@@ -24,6 +24,7 @@ type SessionTranscriptUpdateFields = {
   message?: unknown;
   messageId?: string;
   messageSeq?: number;
+  runId?: string;
 };
 
 /** Normalized transcript update emitted after a session transcript changes. */
@@ -36,6 +37,49 @@ export type SessionTranscriptUpdate = Omit<
 
 /** Internal transcript update that may identify a transcript without a file path. */
 export type InternalSessionTranscriptUpdate = SessionTranscriptUpdateFields;
+
+/** Persists authoritative run ownership on assistant and tool-result rows. */
+export function attachSessionTranscriptRunId<T>(message: T, runId: string | null | undefined): T {
+  const normalizedRunId = normalizeOptionalString(runId);
+  if (
+    !normalizedRunId ||
+    !isRecord(message) ||
+    (message.role !== "assistant" && message.role !== "toolResult")
+  ) {
+    return message;
+  }
+  const metadata = isRecord(message["__openclaw"]) ? message["__openclaw"] : {};
+  if (metadata.runId === normalizedRunId) {
+    return message;
+  }
+  return {
+    ...message,
+    __openclaw: { ...metadata, runId: normalizedRunId },
+  };
+}
+
+/** Correlates only terminal assistant rows with the run that actually produced them. */
+export function resolveTerminalAssistantTranscriptRunId(
+  message: unknown,
+  runId: string | null | undefined,
+): string | undefined {
+  const normalizedRunId = normalizeOptionalString(runId);
+  if (!normalizedRunId || !isRecord(message) || message.role !== "assistant") {
+    return undefined;
+  }
+  if (
+    message.stopReason === "toolUse" ||
+    (Array.isArray(message.content) &&
+      message.content.some(
+        (block) =>
+          isRecord(block) &&
+          (block.type === "toolCall" || block.type === "toolUse" || block.type === "functionCall"),
+      ))
+  ) {
+    return undefined;
+  }
+  return normalizedRunId;
+}
 
 type SessionTranscriptListener = (update: SessionTranscriptUpdate) => void;
 type InternalSessionTranscriptListener = (update: InternalSessionTranscriptUpdate) => void;
@@ -107,6 +151,7 @@ function normalizeSessionTranscriptUpdate(
   const sessionId = normalizeOptionalString(update.sessionId) ?? target?.sessionId;
   const lifecycleRevision = normalizeOptionalString(update.lifecycleRevision);
   const messageId = normalizeOptionalString(update.messageId);
+  const runId = normalizeOptionalString(update.runId);
   return {
     ...(trimmed ? { sessionFile: trimmed } : {}),
     ...(target ? { target } : {}),
@@ -117,6 +162,7 @@ function normalizeSessionTranscriptUpdate(
     ...(update.message !== undefined ? { message: update.message } : {}),
     ...(messageId ? { messageId } : {}),
     ...(messageSeq !== undefined ? { messageSeq } : {}),
+    ...(runId ? { runId } : {}),
   };
 }
 
@@ -161,6 +207,7 @@ function projectPublicSessionTranscriptUpdate(
       : {}),
     ...(update.messageId ? { messageId: update.messageId } : {}),
     ...(update.messageSeq !== undefined ? { messageSeq: update.messageSeq } : {}),
+    ...(update.runId ? { runId: update.runId } : {}),
   };
 }
 

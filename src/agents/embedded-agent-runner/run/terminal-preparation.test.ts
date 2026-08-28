@@ -204,6 +204,55 @@ describe("prepareEmbeddedRunTerminal", () => {
     expect(prepared.agentMeta.lastCallUsage).toMatchObject({ input: 200, output: 20, total: 220 });
   });
 
+  it("projects a Code Mode cron tool failure into terminal metadata", async () => {
+    const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
+    const assistant = assistantMessage("stop");
+    const prepared = prepareEmbeddedRunTerminal({
+      runParams: {
+        admittedRunContext: createTestAdmittedRunContext("run-1"),
+        sessionId: "session-1",
+        runId: "run-1",
+        workspaceDir: "/tmp/openclaw-test",
+        prompt: "hi",
+        trigger: "cron",
+        timeoutMs: 60_000,
+      },
+      attempt: attemptResult({
+        codeModeEngaged: true,
+        lastToolError: {
+          toolName: "exec",
+          errorCode: "invalid_input",
+          error:
+            "Unknown tool id: MCP.notes.read. Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name.",
+        },
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptCompletedAssistant: assistant,
+      }),
+      currentAttemptCompletedAssistant: assistant,
+      provider: "openai",
+      model: "gpt-5.4",
+      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
+      authProfileStore: { version: 1, profiles: {} },
+      sessionIdUsed: "session-1",
+      outerContextTokenMeta: {},
+      usageAccumulator: createUsageAccumulator(),
+      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+      resolvedToolResultFormat: "markdown",
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(prepared.failureSignal).toBeUndefined();
+    expect(prepared.terminalToolFailure).toEqual({
+      source: "tool",
+      toolName: "exec",
+      code: "UNKNOWN_TOOL_ID",
+    });
+  });
+
   it("recovers current final text and tool media after a prompt-timeout race", async () => {
     const completedText = "Completed answer block before the timeout.";
     const partialText = "Partial final response before the timeout.";
@@ -318,6 +367,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     assistantTurns?: number;
     bridgeCalls?: { search: number; describe: number; call: number };
     config?: unknown;
+    assistantProvider?: string;
     provider?: string;
     model?: string;
     outerContextTokenMeta?: { contextTokens?: number };
@@ -336,7 +386,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     const model = statsInput.model ?? "cost-model";
     const assistant = {
       ...assistantMessage("stop"),
-      provider,
+      provider: statsInput.assistantProvider ?? provider,
       model,
       ...(statsInput.responseModel ? { responseModel: statsInput.responseModel } : {}),
     };
@@ -430,6 +480,28 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     });
   });
 
+  it("reports the terminal physical attempt's redacted credential source", async () => {
+    const prepared = await prepareStats({
+      attempt: {
+        modelAttempt: {
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          credentialSource: {
+            kind: "direct",
+            evidence: "environment",
+            authorization: "declared",
+          },
+        },
+      },
+    });
+
+    expect(prepared.agentMeta.credentialSource).toEqual({
+      kind: "direct",
+      evidence: "environment",
+      authorization: "declared",
+    });
+  });
+
   it("stamps assistantTurns from the run accumulator and omits zero", async () => {
     const counted = await prepareStats({ assistantTurns: 3 });
     expect(counted.agentMeta.assistantTurns).toBe(3);
@@ -494,9 +566,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       },
     });
 
-    expect(
-      (prepared.agentMeta as { terminalReceipt?: Record<string, unknown> }).terminalReceipt,
-    ).toMatchObject({
+    expect(prepared.agentMeta.terminalReceipt).toMatchObject({
       runId: "run-1",
       sessionId: "session-1",
       turnId: "turn-7",
@@ -509,10 +579,22 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       successfulToolNames: ["exec", "read", "Zeta", "alpha", "zeta"],
       rerouted: true,
     });
-    expect(
-      (prepared.agentMeta as { terminalReceipt?: Record<string, unknown> }).terminalReceipt,
-    ).not.toHaveProperty("terminalDisposition");
+    expect(prepared.agentMeta.terminalReceipt).not.toHaveProperty("terminalDisposition");
     expect(prepared.agentMeta.model).toBe("cost-model");
     expect(prepared.reportedModelRef.model).toBe("cost-model");
+  });
+
+  it("marks a provider-only response route as rerouted", async () => {
+    const prepared = await prepareStats({ assistantProvider: "routed-provider" });
+
+    expect(prepared.agentMeta.terminalReceipt).toMatchObject({
+      requested: { provider: "cost-test-provider", model: "cost-model" },
+      effective: {
+        provider: "routed-provider",
+        model: "cost-model",
+        responseModel: "cost-model",
+      },
+      rerouted: true,
+    });
   });
 });

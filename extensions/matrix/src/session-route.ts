@@ -10,7 +10,11 @@ import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-s
 import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
 import { resolveDefaultMatrixAccountId } from "./matrix/accounts.js";
 import { resolveMatrixStoredSessionMeta } from "./matrix/session-store-metadata.js";
-import { isMatrixQualifiedUserId, resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
+import {
+  isMatrixQualifiedUserId,
+  isMatrixRoomId,
+  resolveMatrixTargetIdentity,
+} from "./matrix/target-ids.js";
 
 function resolveEffectiveMatrixAccountId(
   params: Pick<ChannelOutboundSessionRouteParams, "cfg" | "accountId">,
@@ -107,7 +111,7 @@ export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSession
     accountId: effectiveAccountId,
     recipientSessionExact:
       target.kind === "room"
-        ? dmSessionScope === "per-room" && target.id.startsWith("!") && target.id.includes(":")
+        ? dmSessionScope === "per-room" && isMatrixRoomId(target.id)
         : dmSessionScope === "per-user"
           ? isMatrixQualifiedUserId(target.id)
           : roomScopedDmId !== undefined,

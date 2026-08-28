@@ -134,6 +134,15 @@ on:
       candidate_artifact_json:
         description: Immutable package and Docker image artifact tuple
         value: ${{ jobs.prepare_docker_e2e_image.outputs.candidate_artifact_json }}
+      candidate_request_json:
+        description: Canonical full release candidate request
+        value: ${{ jobs.prepare_docker_e2e_image.outputs.candidate_request_json }}
+      candidate_request_sha256:
+        description: Canonical full release candidate request SHA-256
+        value: ${{ jobs.prepare_docker_e2e_image.outputs.candidate_request_sha256 }}
+      candidate_evidence_json:
+        description: Immutable full release candidate producer evidence binding
+        value: ${{ jobs.bind_full_release_candidate_evidence.outputs.candidate_evidence_json }}
       package_artifact_name:
         description: Immutable package artifact name
         value: ${{ jobs.prepare_docker_e2e_image.outputs.package_artifact_name }}
@@ -215,6 +224,16 @@ on:
         type: boolean
       prepare_only:
         description: Prepare immutable package and Docker image artifacts without running validation lanes
+        required: false
+        default: false
+        type: boolean
+      emit_candidate_evidence:
+        description: Emit content-addressed full release candidate producer evidence
+        required: false
+        default: false
+        type: boolean
+      release_soak:
+        description: Effective release soak policy recorded in candidate evidence
         required: false
         default: false
         type: boolean
@@ -451,6 +470,8 @@ on:
         required: false
       DEEPINFRA_API_KEY:
         required: false
+      DEEPSEEK_API_KEY:
+        required: false
       DASHSCOPE_API_KEY:
         required: false
       GROQ_API_KEY:
@@ -534,7 +555,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "24.19.0"
   OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
   OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
   OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}
@@ -544,6 +565,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
+      package_artifact_present: ${{ steps.validate.outputs.package_artifact_present }}
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
       workflow_repository: ${{ steps.workflow.outputs.workflow_repository }}
@@ -582,7 +604,7 @@ jobs:
           NODE
 
       - name: Checkout workflow repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -620,6 +642,9 @@ jobs:
         run: |
           set -euo pipefail
           trusted_reason=""
+          has_non_whitespace() {
+            [[ "$1" =~ [^[:space:]] ]]
+          }
 
           # Resolve here instead of in actions/checkout so short SHAs work too.
           if ! selected_sha="$(git rev-parse --verify "${INPUT_REF}^{commit}")"; then
@@ -643,7 +668,7 @@ jobs:
             exit 1
           fi
 
-          package_tuple_present=0
+          package_tuple_present=false
           for value in \
             "$PACKAGE_ARTIFACT_DIGEST" \
             "$PACKAGE_ARTIFACT_ID" \
@@ -654,20 +679,20 @@ jobs:
             "$PACKAGE_SHA256" \
             "$PACKAGE_SOURCE_SHA" \
             "$PACKAGE_VERSION"; do
-            if [[ -n "${value// }" ]]; then
-              package_tuple_present=1
+            if has_non_whitespace "$value"; then
+              package_tuple_present=true
             fi
           done
-          if [[ "$package_tuple_present" == "1" ]]; then
+          if [[ "$package_tuple_present" == "true" ]]; then
             [[ "$PACKAGE_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ &&
               "$PACKAGE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
-              -n "${PACKAGE_ARTIFACT_NAME// }" &&
+              "$PACKAGE_ARTIFACT_NAME" =~ [^[:space:]] &&
               "$PACKAGE_ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ &&
               "$PACKAGE_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ &&
               "$PACKAGE_FILE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$ &&
               "$PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ &&
               "$PACKAGE_SOURCE_SHA" =~ ^[0-9a-f]{40}$ &&
-              -n "${PACKAGE_VERSION// }" ]] || {
+              "$PACKAGE_VERSION" =~ [^[:space:]] ]] || {
               echo "Package artifact selection requires the complete immutable artifact and package identity tuple." >&2
               exit 1
             }
@@ -676,6 +701,7 @@ jobs:
               exit 1
             }
           fi
+          echo "package_artifact_present=$package_tuple_present" >> "$GITHUB_OUTPUT"
 
           if [[ "$PREPUBLISH_PLUGIN_REGISTRY_ENABLED" == "true" ]]; then
             prepublish_plugin_registry_tuple_present=0
@@ -686,14 +712,14 @@ jobs:
               "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT" \
               "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID" \
               "$PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256"; do
-              if [[ -n "${value// }" ]]; then
+              if has_non_whitespace "$value"; then
                 prepublish_plugin_registry_tuple_present=1
               fi
             done
             if [[ "$prepublish_plugin_registry_tuple_present" == "1" ]]; then
               [[ "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ &&
                 "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
-                -n "${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME// }" &&
+                "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME" =~ [^[:space:]] &&
                 "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ &&
                 "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ &&
                 "$PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
@@ -715,14 +741,14 @@ jobs:
             "$SHARED_IMAGE_ARTIFACT_RUN_ATTEMPT" \
             "$SHARED_IMAGE_ARTIFACT_RUN_ID" \
             "$SHARED_IMAGE_ARCHIVE_SHA256"; do
-            if [[ -n "${value// }" ]]; then
+            if has_non_whitespace "$value"; then
               image_tuple_present=1
             fi
           done
           if [[ "$image_tuple_present" == "1" ]]; then
             [[ "$SHARED_IMAGE_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ &&
               "$SHARED_IMAGE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
-              -n "${SHARED_IMAGE_ARTIFACT_NAME// }" &&
+              "$SHARED_IMAGE_ARTIFACT_NAME" =~ [^[:space:]] &&
               "$SHARED_IMAGE_ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ &&
               "$SHARED_IMAGE_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ &&
               "$SHARED_IMAGE_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
@@ -755,7 +781,7 @@ jobs:
                 echo "shared_image_policy=no-push-artifact builds local image artifacts and rejects provided images." >&2
                 exit 1
               }
-              if [[ "$image_tuple_present" == "1" && "$package_tuple_present" != "1" ]]; then
+              if [[ "$image_tuple_present" == "1" && "$package_tuple_present" != "true" ]]; then
                 echo "Reusing a Docker image artifact requires its immutable package identity tuple." >&2
                 exit 1
               fi
@@ -836,7 +862,11 @@ jobs:
               add_profile_suite native-live-src-gateway-profiles-openai-gpt56-ultra "stable full"
               add_profile_suite native-live-src-gateway-profiles-fireworks "full"
               add_profile_suite native-live-src-gateway-profiles-deepseek "full"
-              add_profile_suite native-live-src-gateway-profiles-opencode-go "full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go "stable full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go-deepseek-glm "full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go-kimi "full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go-mimo "full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go-minimax-qwen "full"
               add_profile_suite native-live-src-gateway-profiles-opencode-go-smoke "stable"
               add_profile_suite native-live-src-gateway-profiles-openrouter "full"
               add_profile_suite native-live-src-gateway-profiles-xai "full"
@@ -874,6 +904,10 @@ jobs:
               add_profile_suite native-live-extensions-media-music-google "full"
               add_profile_suite native-live-extensions-media-music-minimax "full"
               add_profile_suite native-live-extensions-media-video "full"
+              add_profile_suite native-live-extensions-media-video-a "full"
+              add_profile_suite native-live-extensions-media-video-b "full"
+              add_profile_suite native-live-extensions-media-video-c "full"
+              add_profile_suite native-live-extensions-media-video-d "full"
             fi
           fi
 
@@ -905,7 +939,7 @@ jobs:
       live_models_omitted_json: ${{ steps.plan.outputs.live_models_omitted_json }}
     steps:
       - name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -936,7 +970,7 @@ jobs:
       OPENCLAW_LIVE_TEST: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -944,6 +978,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -985,7 +1020,7 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -993,6 +1028,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           build-all-cache-scope: full
@@ -1032,7 +1068,7 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -1040,6 +1076,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           build-all-cache-scope: full
@@ -1073,12 +1110,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export OPENSHELL_VERSION=v0.0.92
+          export OPENSHELL_VERSION=v0.0.109
           installer_path="$(mktemp "${RUNNER_TEMP}/openshell-install.XXXXXX")"
           trap 'rm -f "$installer_path"' EXIT
           curl -LsSf --connect-timeout 10 --max-time 120 \
             -o "$installer_path" \
-            https://raw.githubusercontent.com/NVIDIA/OpenShell/2d108818f84be568e63232d5d0aba53775cea4f7/install.sh
+            https://raw.githubusercontent.com/NVIDIA/OpenShell/8d67250a5d17348eb96c4fa46226b06d8041f2ba/install.sh
           sh "$installer_path"
           openshell --version
 
@@ -1189,6 +1226,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -1229,7 +1267,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
-      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_DOCKER_ALL_RELEASE_PROFILE: ${{ inputs.release_test_profile }}
@@ -1247,7 +1285,7 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
@@ -1255,7 +1293,7 @@ jobs:
 
       - name: Checkout trusted release harness
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -1280,6 +1318,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -1528,7 +1567,7 @@ jobs:
       groups_json: ${{ steps.groups.outputs.groups_json }}
     steps:
       - name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -1575,6 +1614,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -1615,7 +1655,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
-      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CODEX_NPM_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
@@ -1631,14 +1671,14 @@ jobs:
       DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -1661,6 +1701,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -1914,7 +1955,7 @@ jobs:
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
-      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
@@ -1923,14 +1964,14 @@ jobs:
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -1953,10 +1994,10 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
           install-deps: "false"
-          use-actions-cache: "false"
 
       - name: Validate Open WebUI credentials
         shell: bash
@@ -2099,6 +2140,7 @@ jobs:
           if-no-files-found: error
 
   prepare_docker_e2e_image:
+    name: Prepare shared Docker E2E image
     needs: validate_selected_ref
     if: inputs.prepare_only || inputs.include_release_path_suites || inputs.include_openwebui || inputs.docker_lanes != ''
     continue-on-error: ${{ inputs.advisory }}
@@ -2110,6 +2152,8 @@ jobs:
       packages: read
     outputs:
       candidate_artifact_json: ${{ steps.candidate_manifest.outputs.json }}
+      candidate_request_json: ${{ steps.candidate_request.outputs.json }}
+      candidate_request_sha256: ${{ steps.candidate_request.outputs.sha256 }}
       image: ${{ steps.image.outputs.image }}
       bare_image: ${{ steps.image.outputs.bare_image }}
       functional_image: ${{ steps.image.outputs.functional_image }}
@@ -2125,8 +2169,8 @@ jobs:
       needs_registry_build: ${{ steps.image_exists.outputs.needs_build }}
       package_sha256: ${{ steps.package.outputs.sha256 }}
       package_version: ${{ steps.package.outputs.version }}
-      package_artifact_name: ${{ steps.upload_package.outputs.artifact-id && format('docker-e2e-package-{0}-{1}', github.run_id, github.run_attempt) || inputs.package_artifact_name }}
-      package_artifact_id: ${{ steps.upload_package.outputs.artifact-id || inputs.package_artifact_id }}
+      package_artifact_name: ${{ steps.upload_package.outputs.artifact-id && format('docker-e2e-package-{0}-{1}', github.run_id, github.run_attempt) || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_name || '') }}
+      package_artifact_id: ${{ steps.upload_package.outputs.artifact-id || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_id || '') }}
       package_artifact_digest: ${{ steps.upload_package.outputs.artifact-digest || steps.input_package_artifact.outputs.artifact_digest }}
       package_artifact_run_id: ${{ steps.upload_package.outputs.artifact-id && github.run_id || steps.input_package_artifact.outputs.run_id }}
       package_artifact_run_attempt: ${{ steps.upload_package.outputs.artifact-id && github.run_attempt || steps.input_package_artifact.outputs.run_attempt }}
@@ -2144,26 +2188,116 @@ jobs:
       image_artifact_digest: ${{ steps.upload_image_artifact.outputs.artifact-digest || inputs.shared_image_artifact_digest }}
       image_artifact_run_id: ${{ steps.upload_image_artifact.outputs.artifact-id && github.run_id || inputs.shared_image_artifact_run_id }}
       image_artifact_run_attempt: ${{ steps.upload_image_artifact.outputs.artifact-id && github.run_attempt || inputs.shared_image_artifact_run_attempt }}
+      plan_sha256: ${{ steps.plan.outputs.plan_sha256 }}
+      producer_job_id: ${{ steps.producer_identity.outputs.job_id }}
+      producer_job_name: ${{ steps.producer_identity.outputs.job_name }}
+      producer_run_attempt: ${{ steps.producer_identity.outputs.run_attempt }}
+      producer_run_id: ${{ steps.producer_identity.outputs.run_id }}
+      producer_workflow_path: ${{ steps.producer_identity.outputs.workflow_path }}
+      producer_workflow_repository: ${{ steps.producer_identity.outputs.workflow_repository }}
+      producer_workflow_sha: ${{ steps.producer_identity.outputs.workflow_sha }}
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
     steps:
+      - name: Capture trusted producer identity
+        id: producer_identity
+        if: inputs.emit_candidate_evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+          TOOLING_REPOSITORY: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          TOOLING_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          producer_job_id="$(
+            jq -er '.check_run_id | tostring | select(test("^[1-9][0-9]*$"))' <<< "$JOB_CONTEXT"
+          )"
+          producer_workflow_path="$(
+            jq -er \
+              '.workflow_file_path | select(test("^\\.github/workflows/[A-Za-z0-9_.-]+\\.ya?ml$"))' \
+              <<< "$JOB_CONTEXT"
+          )"
+          producer_workflow_repository="$(
+            jq -er \
+              '.workflow_repository | select(test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))' \
+              <<< "$JOB_CONTEXT"
+          )"
+          producer_workflow_sha="$(
+            jq -er '.workflow_sha | select(test("^[a-f0-9]{40}$"))' <<< "$JOB_CONTEXT"
+          )"
+          [[ "$producer_workflow_repository" == "$TOOLING_REPOSITORY" &&
+            "$producer_workflow_sha" == "$TOOLING_SHA" ]] || {
+              echo "Current job workflow identity does not match the trusted release harness." >&2
+              exit 1
+            }
+          producer_job_name="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${producer_job_id}" |
+              jq -er \
+                --arg id "$producer_job_id" \
+                --arg run_id "$GITHUB_RUN_ID" \
+                --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+                'select(
+                  (.id | tostring) == $id and
+                  (.run_id | tostring) == $run_id and
+                  (.run_attempt | tostring) == $run_attempt and
+                  .status == "in_progress" and
+                  .conclusion == null
+                ) | .name | select(type == "string" and length > 0)'
+          )"
+          {
+            printf 'job_id=%s\n' "$producer_job_id"
+            printf 'job_name=%s\n' "$producer_job_name"
+            printf 'run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
+            printf 'run_id=%s\n' "$GITHUB_RUN_ID"
+            printf 'workflow_path=%s\n' "$producer_workflow_path"
+            printf 'workflow_repository=%s\n' "$producer_workflow_repository"
+            printf 'workflow_sha=%s\n' "$producer_workflow_sha"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
           path: .release-harness
           persist-credentials: false
+
+      - name: Resolve source package requirement
+        id: package_source
+        env:
+          PACKAGE_ARTIFACT_PRESENT: ${{ needs.validate_selected_ref.outputs.package_artifact_present }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_package_required=false
+          if [[ "$PACKAGE_ARTIFACT_PRESENT" != "true" ]]; then
+            source_package_required=true
+          fi
+          echo "required=$source_package_required" >> "$GITHUB_OUTPUT"
+
+      - name: Validate prepare-only Docker E2E package source metadata
+        if: inputs.prepare_only && steps.package_source.outputs.required == 'true'
+        env:
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--source-dir "$GITHUB_WORKSPACE")
+          if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
+            args+=(--allow-unreleased-changelog)
+          fi
+          node .release-harness/scripts/package-source-preflight.mjs "${args[@]}"
 
       - name: Setup trusted release harness
         uses: ./.release-harness/.github/actions/setup-release-harness
@@ -2186,7 +2320,24 @@ jobs:
           set -euo pipefail
           mkdir -p .artifacts/docker-tests
 
-          if [[ "$PREPARE_ONLY" == "true" || "$INCLUDE_RELEASE_PATH_SUITES" == "true" ]]; then
+          if [[ "$PREPARE_ONLY" == "true" ]]; then
+            # Shared artifacts serve both release-path and plugin prerelease consumers.
+            # Plan their union here without expanding either child's execution scope.
+            preparation_lanes="$(node --input-type=module <<'NODE'
+          import { allReleasePathLanes } from "./.release-harness/scripts/lib/docker-e2e-scenarios.mts";
+          import { createPluginPrereleaseTestPlan } from "./.release-harness/scripts/lib/plugin-prerelease-test-plan.mts";
+          const releaseLanes = allReleasePathLanes({
+            includeOpenWebUI: process.env.INCLUDE_OPENWEBUI === "true",
+            releaseProfile: process.env.RELEASE_TEST_PROFILE,
+          });
+          console.log([...new Set([
+            ...releaseLanes.map(({ name }) => name),
+            ...createPluginPrereleaseTestPlan().dockerLanes,
+          ])].join(" "));
+          NODE
+            )"
+            export OPENCLAW_DOCKER_ALL_LANES="$preparation_lanes"
+          elif [[ "$INCLUDE_RELEASE_PATH_SUITES" == "true" ]]; then
             export OPENCLAW_DOCKER_ALL_PROFILE=release-path
             export OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL=1
           elif [[ -n "$LANES" ]]; then
@@ -2207,18 +2358,76 @@ jobs:
                 exit 1
               }
           fi
-          echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
+          printf 'plan_sha256=%s\n' "$(sha256sum "$plan_path" | awk '{print $1}')" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Build full release candidate request
+        id: candidate_request
+        if: inputs.emit_candidate_evidence
+        env:
+          ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions }}
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
+          RELEASE_PROFILE: ${{ inputs.release_test_profile }}
+          RELEASE_SOAK: ${{ inputs.release_soak }}
+          SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+          TOOLING_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          UPGRADE_SURVIVOR_BASELINE: ${{ inputs.published_upgrade_survivor_baseline }}
+          UPGRADE_SURVIVOR_BASELINES: ${{ inputs.published_upgrade_survivor_baselines }}
+          UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          request_dir="${RUNNER_TEMP}/full-release-candidate"
+          mkdir -p "$request_dir"
+          jq -cn \
+            --arg repository "$TARGET_REPOSITORY" \
+            --arg targetSha "$TARGET_SHA" \
+            --arg toolingSha "$TOOLING_SHA" \
+            --arg releaseProfile "$RELEASE_PROFILE" \
+            --argjson releaseSoak "$RELEASE_SOAK" \
+            --arg upgradeSurvivorBaseline "$UPGRADE_SURVIVOR_BASELINE" \
+            --arg upgradeSurvivorBaselines "$UPGRADE_SURVIVOR_BASELINES" \
+            --arg upgradeSurvivorScenarios "$UPGRADE_SURVIVOR_SCENARIOS" \
+            --argjson allowFrozenTargetScenarioOmissions "$ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" \
+            --argjson allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
+            --arg sharedImagePolicy "$SHARED_IMAGE_POLICY" \
+            '$ARGS.named' > "$request_dir/request-input.json"
+          result="$(
+            node .release-harness/scripts/full-release-candidate-contract.mjs request \
+              --input "$request_dir/request-input.json" \
+              --output "$request_dir/request.json"
+          )"
+          {
+            printf 'json=%s\n' "$(jq -er '.requestJson' <<< "$result")"
+            printf 'sha256=%s\n' "$(jq -er '.requestSha256' <<< "$result")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate Docker E2E package source metadata
+        if: (!inputs.prepare_only) && steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true'
+        env:
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--source-dir "$GITHUB_WORKSPACE")
+          if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
+            args+=(--allow-unreleased-changelog)
+          fi
+          node .release-harness/scripts/package-source-preflight.mjs "${args[@]}"
 
       - name: Setup Node environment
-        if: (steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == '') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')
+        if: (steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
       - name: Validate OpenClaw package artifact identity
         id: input_package_artifact
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
+        if: steps.plan.outputs.needs_package == '1' && needs.validate_selected_ref.outputs.package_artifact_present == 'true'
         env:
           ARTIFACT_DIGEST: ${{ inputs.package_artifact_digest }}
           ARTIFACT_ID: ${{ inputs.package_artifact_id }}
@@ -2276,7 +2485,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Download current-run OpenClaw Docker E2E package
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != '' && inputs.package_artifact_run_id == github.run_id
+        if: steps.plan.outputs.needs_package == '1' && needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_run_id == github.run_id
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           artifact-ids: ${{ inputs.package_artifact_id }}
@@ -2285,7 +2494,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Download previous-run OpenClaw Docker E2E package
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != '' && inputs.package_artifact_run_id != github.run_id
+        if: steps.plan.outputs.needs_package == '1' && needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_run_id != github.run_id
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           artifact-ids: ${{ inputs.package_artifact_id }}
@@ -2294,7 +2503,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Pack OpenClaw package for Docker E2E
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == ''
+        if: steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true'
         env:
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
         shell: bash
@@ -2316,10 +2525,10 @@ jobs:
         id: package
         if: steps.plan.outputs.needs_package == '1'
         env:
-          EXPECTED_PACKAGE_FILE_NAME: ${{ inputs.package_file_name }}
-          EXPECTED_PACKAGE_SHA256: ${{ inputs.package_sha256 }}
-          EXPECTED_PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha }}
-          EXPECTED_PACKAGE_VERSION: ${{ inputs.package_version }}
+          EXPECTED_PACKAGE_FILE_NAME: ${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_file_name || '' }}
+          EXPECTED_PACKAGE_SHA256: ${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_sha256 || '' }}
+          EXPECTED_PACKAGE_SOURCE_SHA: ${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_source_sha || '' }}
+          EXPECTED_PACKAGE_VERSION: ${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_version || '' }}
           SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
         shell: bash
@@ -2419,7 +2628,7 @@ jobs:
 
       - name: Upload OpenClaw Docker E2E package
         id: upload_package
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id == ''
+        if: steps.plan.outputs.needs_package == '1' && needs.validate_selected_ref.outputs.package_artifact_present != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: docker-e2e-package-${{ github.run_id }}-${{ github.run_attempt }}
@@ -2695,11 +2904,11 @@ jobs:
           IMAGE_ARTIFACT_NAME: ${{ steps.image_artifact.outputs.artifact_name || inputs.shared_image_artifact_name }}
           IMAGE_ARTIFACT_RUN_ATTEMPT: ${{ steps.upload_image_artifact.outputs.artifact-id && github.run_attempt || inputs.shared_image_artifact_run_attempt }}
           IMAGE_ARTIFACT_RUN_ID: ${{ steps.upload_image_artifact.outputs.artifact-id && github.run_id || inputs.shared_image_artifact_run_id }}
-          PACKAGE_ARTIFACT_DIGEST: ${{ steps.upload_package.outputs.artifact-digest || inputs.package_artifact_digest }}
-          PACKAGE_ARTIFACT_ID: ${{ steps.upload_package.outputs.artifact-id || inputs.package_artifact_id }}
-          PACKAGE_ARTIFACT_NAME: ${{ steps.upload_package.outputs.artifact-id && format('docker-e2e-package-{0}-{1}', github.run_id, github.run_attempt) || inputs.package_artifact_name }}
-          PACKAGE_ARTIFACT_RUN_ATTEMPT: ${{ steps.upload_package.outputs.artifact-id && github.run_attempt || inputs.package_artifact_run_attempt }}
-          PACKAGE_ARTIFACT_RUN_ID: ${{ steps.upload_package.outputs.artifact-id && github.run_id || inputs.package_artifact_run_id }}
+          PACKAGE_ARTIFACT_DIGEST: ${{ steps.upload_package.outputs.artifact-digest || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_digest || '') }}
+          PACKAGE_ARTIFACT_ID: ${{ steps.upload_package.outputs.artifact-id || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_id || '') }}
+          PACKAGE_ARTIFACT_NAME: ${{ steps.upload_package.outputs.artifact-id && format('docker-e2e-package-{0}-{1}', github.run_id, github.run_attempt) || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_name || '') }}
+          PACKAGE_ARTIFACT_RUN_ATTEMPT: ${{ steps.upload_package.outputs.artifact-id && github.run_attempt || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_run_attempt || '') }}
+          PACKAGE_ARTIFACT_RUN_ID: ${{ steps.upload_package.outputs.artifact-id && github.run_id || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_run_id || '') }}
           PACKAGE_FILE_NAME: ${{ steps.package.outputs.file_name }}
           PACKAGE_SHA256: ${{ steps.package.outputs.sha256 }}
           PACKAGE_SOURCE_SHA: ${{ steps.package.outputs.source_sha }}
@@ -2746,6 +2955,330 @@ jobs:
           fi
           echo "json=$json" >> "$GITHUB_OUTPUT"
 
+  bind_full_release_candidate_evidence:
+    name: Bind full release candidate evidence
+    needs: [validate_selected_ref, prepare_docker_e2e_image]
+    if: inputs.emit_candidate_evidence && needs.prepare_docker_e2e_image.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      candidate_evidence_json: ${{ steps.candidate_binding.outputs.json }}
+    steps:
+      # Start from a statically trusted checkout. The following step validates job context
+      # locally before restoring the exact called-workflow revision.
+      - name: Checkout trusted release harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: main
+          fetch-depth: 1
+          path: .release-harness
+          persist-credentials: false
+
+      - name: Restore exact trusted workflow revision
+        id: workflow
+        env:
+          EXPECTED_WORKFLOW_REPOSITORY: ${{ github.repository }}
+          HARNESS_PATH: .release-harness
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
+
+          const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+          const repository = process.env.EXPECTED_WORKFLOW_REPOSITORY ?? "";
+          const harnessPath = process.env.HARNESS_PATH ?? "";
+          if (repository !== "openclaw/openclaw" || job.workflow_repository !== repository) {
+            throw new Error("job.workflow_repository must exactly match github.repository");
+          }
+          if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
+            throw new Error("job.workflow_sha must be a full lowercase commit SHA");
+          }
+          if (harnessPath !== ".release-harness") {
+            throw new Error("trusted harness path is invalid");
+          }
+          const git = (...args) =>
+            execFileSync("git", ["-C", harnessPath, ...args], {
+              encoding: "utf8",
+              stdio: ["ignore", "pipe", "inherit"],
+            }).trim();
+          const remote = git("remote", "get-url", "origin").replace(/\.git$/u, "");
+          if (remote !== `https://github.com/${repository}`) {
+            throw new Error("trusted harness remote does not match the workflow repository");
+          }
+          execFileSync(
+            "git",
+            [
+              "-C",
+              harnessPath,
+              "fetch",
+              "--no-tags",
+              "--no-recurse-submodules",
+              "--depth=1",
+              "origin",
+              job.workflow_sha,
+            ],
+            { stdio: "inherit" },
+          );
+          execFileSync("git", ["-C", harnessPath, "checkout", "--detach", job.workflow_sha], {
+            stdio: "inherit",
+          });
+          if (git("rev-parse", "HEAD") !== job.workflow_sha) {
+            throw new Error("trusted harness checkout did not resolve to job.workflow_sha");
+          }
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!outputPath) {
+            throw new Error("GITHUB_OUTPUT is required");
+          }
+          appendFileSync(
+            outputPath,
+            `repository=${repository}\nsha=${job.workflow_sha}\n`,
+          );
+          NODE
+
+      - name: Setup trusted release harness
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Create full release candidate evidence
+        id: candidate_evidence
+        env:
+          CANDIDATE_ARTIFACT_JSON: ${{ needs.prepare_docker_e2e_image.outputs.candidate_artifact_json }}
+          CANDIDATE_REQUEST_JSON: ${{ needs.prepare_docker_e2e_image.outputs.candidate_request_json }}
+          CANDIDATE_REQUEST_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.candidate_request_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          PLAN_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.plan_sha256 }}
+          PRODUCER_JOB_ID: ${{ needs.prepare_docker_e2e_image.outputs.producer_job_id }}
+          PRODUCER_JOB_NAME: ${{ needs.prepare_docker_e2e_image.outputs.producer_job_name }}
+          PRODUCER_RUN_ATTEMPT: ${{ needs.prepare_docker_e2e_image.outputs.producer_run_attempt }}
+          PRODUCER_RUN_ID: ${{ needs.prepare_docker_e2e_image.outputs.producer_run_id }}
+          PRODUCER_WORKFLOW_PATH: ${{ needs.prepare_docker_e2e_image.outputs.producer_workflow_path }}
+          PRODUCER_WORKFLOW_REPOSITORY: ${{ needs.prepare_docker_e2e_image.outputs.producer_workflow_repository }}
+          PRODUCER_WORKFLOW_SHA: ${{ needs.prepare_docker_e2e_image.outputs.producer_workflow_sha }}
+          REQUIRED_PACKAGES_JSON: ${{ needs.prepare_docker_e2e_image.outputs.required_prepublish_plugin_packages }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          TOOLING_REPOSITORY: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          TOOLING_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence_dir="${RUNNER_TEMP}/full-release-candidate"
+          mkdir -p "$evidence_dir"
+          jq -e 'type == "array" and length > 0' <<< "$REQUIRED_PACKAGES_JSON" >/dev/null
+          [[ "$PRODUCER_RUN_ID" == "$GITHUB_RUN_ID" &&
+            "$PRODUCER_RUN_ATTEMPT" == "$GITHUB_RUN_ATTEMPT" ]] || {
+              echo "Candidate evidence must be bound in the producer run attempt." >&2
+              exit 1
+            }
+          [[ "$PRODUCER_WORKFLOW_REPOSITORY" == "$TOOLING_REPOSITORY" &&
+            "$PRODUCER_WORKFLOW_SHA" == "$TOOLING_SHA" ]] || {
+              echo "Producer workflow identity does not match the trusted release harness." >&2
+              exit 1
+            }
+          node .release-harness/scripts/verify-full-release-producer-job.mjs \
+            --repository "$GITHUB_REPOSITORY" \
+            --job-id "$PRODUCER_JOB_ID" \
+            --job-name "$PRODUCER_JOB_NAME" \
+            --run-id "$PRODUCER_RUN_ID" \
+            --run-attempt "$PRODUCER_RUN_ATTEMPT"
+          artifact_expiry() {
+            local label="$1"
+            local id="$2"
+            local name="$3"
+            local digest="$4"
+            local run_id="$5"
+            local run_attempt="$6"
+            bash .release-harness/scripts/docker/shared-image-artifact.sh \
+              verify-upload "$label" "$id" "$name" "$digest" "$run_id" "$run_attempt"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" |
+              jq -er \
+                --arg id "$id" \
+                --arg name "$name" \
+                --arg digest "sha256:${digest}" \
+                --arg run_id "$run_id" \
+                'select(
+                  (.id | tostring) == $id and
+                  .name == $name and
+                  .digest == $digest and
+                  .expired == false and
+                  (.workflow_run.id | tostring) == $run_id
+                ) | .expires_at'
+          }
+          package_expiry="$(
+            artifact_expiry \
+              "OpenClaw package" \
+              "$(jq -er '.packageArtifactId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.packageArtifactName' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.packageArtifactDigest' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.packageArtifactRunId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.packageArtifactRunAttempt' <<< "$CANDIDATE_ARTIFACT_JSON")"
+          )"
+          registry_expiry="$(
+            artifact_expiry \
+              "Prerelease plugin registry" \
+              "$(jq -er '.prepublishPluginRegistryArtifactId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.prepublishPluginRegistryArtifactName' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.prepublishPluginRegistryArtifactDigest' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.prepublishPluginRegistryArtifactRunId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.prepublishPluginRegistryArtifactRunAttempt' <<< "$CANDIDATE_ARTIFACT_JSON")"
+          )"
+          image_expiry="$(
+            artifact_expiry \
+              "Shared Docker image" \
+              "$(jq -er '.imageArtifactId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.imageArtifactName' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.imageArtifactDigest' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.imageArtifactRunId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -er '.imageArtifactRunAttempt' <<< "$CANDIDATE_ARTIFACT_JSON")"
+          )"
+          jq -cn \
+            --argjson request "$CANDIDATE_REQUEST_JSON" \
+            --arg requestSha256 "$CANDIDATE_REQUEST_SHA256" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg workflowPath "$PRODUCER_WORKFLOW_PATH" \
+            --arg workflowSha "$PRODUCER_WORKFLOW_SHA" \
+            --arg runId "$PRODUCER_RUN_ID" \
+            --arg runAttempt "$PRODUCER_RUN_ATTEMPT" \
+            --arg jobId "$PRODUCER_JOB_ID" \
+            --arg jobName "$PRODUCER_JOB_NAME" \
+            --arg planSha256 "$PLAN_SHA256" \
+            --argjson requiredPackages "$REQUIRED_PACKAGES_JSON" \
+            --argjson candidate "$CANDIDATE_ARTIFACT_JSON" \
+            --arg targetSha "$TARGET_SHA" \
+            --arg packageExpiresAt "$package_expiry" \
+            --arg registryExpiresAt "$registry_expiry" \
+            --arg imageExpiresAt "$image_expiry" \
+            '{
+              request: $request,
+              requestSha256: $requestSha256,
+              producer: {
+                repository: $repository,
+                workflowPath: $workflowPath,
+                workflowSha: $workflowSha,
+                runId: $runId,
+                runAttempt: $runAttempt,
+                jobId: $jobId,
+                jobName: $jobName
+              },
+              preparation: {
+                planSha256: $planSha256,
+                requiredPrepublishPluginPackages: $requiredPackages
+              },
+              package: {
+                artifact: {
+                  name: $candidate.packageArtifactName,
+                  id: $candidate.packageArtifactId,
+                  digest: $candidate.packageArtifactDigest,
+                  expiresAt: $packageExpiresAt,
+                  runId: $candidate.packageArtifactRunId,
+                  runAttempt: $candidate.packageArtifactRunAttempt
+                },
+                fileName: $candidate.packageFileName,
+                sourceSha: $candidate.packageSourceSha,
+                packageSha256: $candidate.packageSha256,
+                version: $candidate.packageVersion
+              },
+              prepublishPluginRegistry: {
+                artifact: {
+                  name: $candidate.prepublishPluginRegistryArtifactName,
+                  id: $candidate.prepublishPluginRegistryArtifactId,
+                  digest: $candidate.prepublishPluginRegistryArtifactDigest,
+                  expiresAt: $registryExpiresAt,
+                  runId: $candidate.prepublishPluginRegistryArtifactRunId,
+                  runAttempt: $candidate.prepublishPluginRegistryArtifactRunAttempt
+                },
+                manifestSha256: $candidate.prepublishPluginRegistryManifestSha256,
+                sourceSha: $targetSha
+              },
+              sharedImage: {
+                artifact: {
+                  name: $candidate.imageArtifactName,
+                  id: $candidate.imageArtifactId,
+                  digest: $candidate.imageArtifactDigest,
+                  expiresAt: $imageExpiresAt,
+                  runId: $candidate.imageArtifactRunId,
+                  runAttempt: $candidate.imageArtifactRunAttempt
+                },
+                archiveSha256: $candidate.imageArchiveSha256,
+                packageSha256: $candidate.packageSha256
+              }
+            }' > "$evidence_dir/manifest-input.json"
+          result="$(
+            node .release-harness/scripts/full-release-candidate-contract.mjs manifest \
+              --input "$evidence_dir/manifest-input.json" \
+              --output "$evidence_dir/full-release-candidate.json"
+          )"
+          printf 'manifest_sha256=%s\n' "$(jq -er '.manifestSha256' <<< "$result")" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Upload full release candidate evidence
+        id: upload_candidate_evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: full-release-candidate-v1-${{ needs.prepare_docker_e2e_image.outputs.candidate_request_sha256 }}
+          path: ${{ runner.temp }}/full-release-candidate/full-release-candidate.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Bind full release candidate evidence
+        id: candidate_binding
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload_candidate_evidence.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.upload_candidate_evidence.outputs.artifact-id }}
+          ARTIFACT_NAME: full-release-candidate-v1-${{ needs.prepare_docker_e2e_image.outputs.candidate_request_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_json=""
+          artifact_error="${RUNNER_TEMP}/full-release-candidate/artifact-metadata-error"
+          for attempt in 1 2 3; do
+            if artifact_json="$(
+              gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" 2>"$artifact_error"
+            )"; then
+              break
+            fi
+            if [[ "$attempt" == "3" ]] ||
+              ! grep -Eiq 'HTTP 404|status code 404|Not Found' "$artifact_error"; then
+              cat "$artifact_error" >&2
+              echo "Full release candidate evidence metadata is unavailable." >&2
+              exit 1
+            fi
+            sleep "$((attempt * 2))"
+          done
+          artifact_expires_at="$(
+            jq -er \
+              --arg id "$ARTIFACT_ID" \
+              --arg name "$ARTIFACT_NAME" \
+              --arg digest "sha256:${ARTIFACT_DIGEST}" \
+              --arg run_id "$GITHUB_RUN_ID" \
+              'select(
+                (.id | tostring) == $id and
+                .name == $name and
+                .digest == $digest and
+                .expired == false and
+                (.workflow_run.id | tostring) == $run_id
+              ) | .expires_at' <<< "$artifact_json"
+          )"
+          binding="$(
+            node .release-harness/scripts/full-release-candidate-contract.mjs binding \
+              --manifest "${RUNNER_TEMP}/full-release-candidate/full-release-candidate.json" \
+              --artifact-name "$ARTIFACT_NAME" \
+              --artifact-id "$ARTIFACT_ID" \
+              --artifact-digest "$ARTIFACT_DIGEST" \
+              --artifact-expires-at "$artifact_expires_at" \
+              --artifact-run-id "$GITHUB_RUN_ID" \
+              --artifact-run-attempt "$GITHUB_RUN_ATTEMPT"
+          )"
+          printf 'json=%s\n' "$(jq -cer . <<< "$binding")" >> "$GITHUB_OUTPUT"
+
   docker_e2e_image_ready:
     needs: prepare_docker_e2e_image
     if: always() && needs.prepare_docker_e2e_image.result != 'skipped'
@@ -2788,7 +3321,7 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -2842,13 +3375,13 @@ jobs:
 
       - name: Setup Docker builder
         if: inputs.shared_image_policy == 'no-push-artifact'
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
         with:
-          max-cache-size-mb: 800000
+          cache-key: Dockerfile
 
       - name: Build shared live-test image
         if: inputs.shared_image_policy == 'no-push-artifact'
-        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2.3.0
         with:
           context: .
           file: ./Dockerfile
@@ -2867,7 +3400,7 @@ jobs:
       # target must not accidentally package the current checkout into its image.
       - name: Checkout trusted release harness
         if: inputs.shared_image_policy == 'no-push-artifact'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -2953,6 +3486,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -2989,7 +3523,7 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -2997,7 +3531,7 @@ jobs:
 
       - name: Checkout trusted live Docker harness
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -3051,6 +3585,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -3124,6 +3659,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -3158,14 +3694,14 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Checkout trusted live Docker harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -3218,6 +3754,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -3546,6 +4083,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -3589,14 +4127,14 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -3608,6 +4146,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -3813,6 +4352,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -3859,7 +4399,7 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -3867,7 +4407,7 @@ jobs:
 
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -3931,6 +4471,7 @@ jobs:
         if: steps.codex_compat.outputs.run_lane != 'false' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -4093,6 +4634,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -4136,14 +4678,14 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
@@ -4163,6 +4705,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 

@@ -299,19 +299,16 @@ export function buildStatusHealthRows(params: {
     const detail = line.slice(colon + 1).trim();
     const normalized = normalizeLowercaseStringOrEmpty(detail);
     // Channel health format is string-based; classify known prefixes into table status chips.
-    const status = normalized.startsWith("ok")
-      ? params.ok("OK")
-      : normalized.startsWith("failed")
-        ? params.warn("WARN")
+    const status =
+      normalized === "healthy" || normalized.startsWith("ok") || normalized.startsWith("configured")
+        ? params.ok("OK")
         : normalized.startsWith("not configured")
           ? params.muted("OFF")
-          : normalized.startsWith("configured")
-            ? params.ok("OK")
-            : normalized.startsWith("linked")
-              ? params.ok("LINKED")
-              : normalized.startsWith("not linked")
-                ? params.warn("UNLINKED")
-                : params.warn("WARN");
+          : normalized.startsWith("linked")
+            ? params.ok("LINKED")
+            : normalized.startsWith("not linked")
+              ? params.warn("UNLINKED")
+              : params.warn("WARN");
     rows.push({ Item: item, Status: status, Detail: detail });
   }
   return rows;

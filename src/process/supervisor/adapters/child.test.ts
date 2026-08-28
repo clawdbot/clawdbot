@@ -280,6 +280,134 @@ describe("createChildAdapter", () => {
     expect(disconnectMock).toHaveBeenCalledOnce();
   });
 
+  it("keeps ordinary children supervised through repeated operational errors", async () => {
+    const { child, emitClose, emitExit } = createStubChild(7865);
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setInterval(() => {}, 1000)"],
+      stdinMode: "pipe-open",
+    });
+    const resolved = vi.fn();
+    const rejected = vi.fn();
+    const wait = adapter.wait();
+    void wait.then(resolved, rejected);
+
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const error = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+        expect(() => child.emit("error", error)).not.toThrow();
+        expect(child.listenerCount("error")).toBe(1);
+        expect(child.listenerCount("exit")).toBe(1);
+        expect(child.listenerCount("close")).toBe(1);
+        await Promise.resolve();
+        expect(resolved).not.toHaveBeenCalled();
+        expect(rejected).not.toHaveBeenCalled();
+      }
+
+      emitExit(0);
+      emitClose(0);
+      await expect(wait).resolves.toEqual({ code: 0, signal: null });
+    } finally {
+      adapter.dispose();
+    }
+
+    expect(child.listenerCount("error")).toBe(0);
+    expect(child.listenerCount("exit")).toBe(0);
+    expect(child.listenerCount("close")).toBe(0);
+  });
+
+  it.each([
+    { first: "error", waitBefore: true },
+    { first: "error", waitBefore: false },
+    { first: "close", waitBefore: true },
+    { first: "close", waitBefore: false },
+  ] as const)(
+    "keeps the first owned worker $first outcome (waitBefore=$waitBefore)",
+    async ({ first, waitBefore }) => {
+      const { child, disconnectMock, emitClose } = createStubChild(7866);
+      spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+      const adapter = await createChildAdapter({
+        argv: ["node", "worker"],
+        ownedWorker: true,
+      });
+      const error = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+      const pending = Promise.allSettled(waitBefore ? [adapter.wait(), adapter.wait()] : []);
+
+      try {
+        if (first === "error") {
+          child.emit("error", error);
+          emitClose(0);
+        } else {
+          emitClose(0);
+          child.emit("error", error);
+        }
+        // Cross a turn before late waits so an unhandled eager rejection fails the test.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        const outcomes = [
+          ...(await pending),
+          ...(await Promise.allSettled([adapter.wait(), adapter.wait()])),
+        ];
+        let firstResult: Awaited<ReturnType<typeof adapter.wait>> | undefined;
+        for (const outcome of outcomes) {
+          if (first === "error") {
+            expect(outcome.status).toBe("rejected");
+            if (outcome.status === "rejected") {
+              expect(outcome.reason).toBe(error);
+            }
+          } else {
+            expect(outcome).toStrictEqual({
+              status: "fulfilled",
+              value: { code: 0, signal: null },
+            });
+            if (outcome.status === "fulfilled") {
+              firstResult ??= outcome.value;
+              expect(outcome.value).toBe(firstResult);
+            }
+          }
+        }
+      } finally {
+        adapter.dispose();
+      }
+
+      expect(disconnectMock).toHaveBeenCalledOnce();
+      expect(child.listenerCount("error")).toBe(0);
+    },
+  );
+
+  it("preserves startup failure when a worker error arrives during secret delivery", async () => {
+    const { child, killMock } = createStubChild();
+    const deliveryError = new Error("secret delivery failed");
+    const secretStream = new Writable({
+      write(_chunk, _encoding, callback) {
+        child.emit("error", new Error("worker IPC failed"));
+        setImmediate(() => callback(deliveryError));
+      },
+    });
+    Object.defineProperty(child, "stdio", {
+      value: [child.stdin, child.stdout, child.stderr, secretStream, null],
+      configurable: true,
+    });
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    const transient = Buffer.from("synthetic-secret");
+
+    await expect(
+      createChildAdapter({
+        argv: ["node", "worker"],
+        ownedWorker: true,
+        secretInput: { fd: 3, createData: () => transient },
+      }),
+    ).rejects.toBe(deliveryError);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
+    child.removeAllListeners();
+  });
+
   it("writes secret input to an extra descriptor and zeroes the transient buffer", async () => {
     const { child } = createStubChild();
     const secretStream = new PassThrough();
@@ -904,14 +1032,16 @@ describe("createChildAdapter", () => {
     });
     const first = vi.fn();
     const second = vi.fn();
+    const raw = vi.fn();
 
-    adapter.onStdout(first);
+    adapter.onStdout(first, raw);
     adapter.onStdout(second);
     child.stdout?.emit("data", Buffer.from([0xb2]));
 
     expect(createWindowsOutputDecoderMock).toHaveBeenCalledTimes(2);
     expect(first).toHaveBeenCalledWith("first");
     expect(second).toHaveBeenCalledWith("second");
+    expect(raw).toHaveBeenCalledWith(Buffer.from([0xb2]));
   });
 
   it("guards stream errors before output listeners are registered", async () => {

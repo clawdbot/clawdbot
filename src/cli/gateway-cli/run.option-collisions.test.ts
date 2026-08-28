@@ -16,6 +16,7 @@ import {
 import { getFreePort } from "../../test-utils/ports.js";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import { VERSION } from "../../version.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
@@ -44,6 +45,8 @@ type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unkn
 type GatewayLoopParams = {
   start: GatewayLoopStart;
   completeBoot?: (completion: unknown) => void;
+  ownsProcessLifecycle?: boolean;
+  runtime?: unknown;
 };
 const runGatewayLoop = vi.fn(async ({ start }: GatewayLoopParams) => {
   await start();
@@ -171,7 +174,8 @@ vi.mock("../../commands/doctor/shared/pristine-startup-state.js", () => ({
     pristineStartupMigrationPlan.state(env),
 }));
 
-vi.mock("../../config/paths.js", () => ({
+vi.mock("../../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/paths.js")>()),
   CONFIG_PATH: "/tmp/openclaw-test-missing-config.json",
   normalizeStateDirEnv: (env?: NodeJS.ProcessEnv) => normalizeStateDirEnv(env),
   pinRuntimePaths: (env?: NodeJS.ProcessEnv) => pinRuntimePaths(env),
@@ -345,7 +349,8 @@ vi.mock("../../logging/subsystem.js", () => ({
   }),
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime,
 }));
 
@@ -504,6 +509,9 @@ describe("gateway run option collisions", () => {
 
     expect(beforeRun).toHaveBeenCalledOnce();
     expect(callOrder).toEqual(["bootstrap", "normalize", "normalize", "start"]);
+    expect(runGatewayLoop).toHaveBeenCalledWith(
+      expect.objectContaining({ ownsProcessLifecycle: true, runtime: defaultRuntime }),
+    );
   });
 
   it("rejects invalid gateway ports before startup", async () => {
@@ -892,6 +900,91 @@ describe("gateway run option collisions", () => {
         expect(startGatewayServer).toHaveBeenCalledOnce();
       },
     );
+  });
+
+  it("admits only the stable-authored retired keys to gateway migration preflight", async () => {
+    const selectedStateDir = "/tmp/openclaw-stable-upgrade-state";
+    await withEnvAsync({ OPENCLAW_STATE_DIR: undefined }, async () => {
+      const stableConfig = {
+        meta: {
+          lastTouchedAt: "2026-08-01T00:00:00.000Z",
+          lastTouchedVersion: "2026.7.1-2",
+        },
+        agents: {
+          defaults: { heartbeat: { skipWhenBusy: true } },
+          entries: { main: {} },
+        },
+        env: { vars: { OPENCLAW_STATE_DIR: selectedStateDir } },
+        gateway: { mode: "local" },
+      };
+      configState.snapshot = {
+        config: stableConfig,
+        runtimeConfig: stableConfig,
+        exists: true,
+        issues: [
+          { path: "meta", message: "retired" },
+          { path: "agents.defaults.heartbeat", message: "retired" },
+        ],
+        legacyIssues: [{ path: "", message: "retired" }],
+        parsed: stableConfig,
+        path: "/tmp/openclaw.json",
+        raw: JSON.stringify(stableConfig),
+        resolved: stableConfig,
+        sourceConfig: stableConfig,
+        valid: false,
+        warnings: [],
+      };
+      const {
+        prepareGatewayRunBootstrap,
+        recheckGatewayRunBootstrap,
+        selectGatewayRunEnvironment,
+      } = await import("./pre-bootstrap.js");
+
+      expect(await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime })).toBe(true);
+      expect(await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime })).toBe(true);
+      expect(process.env.OPENCLAW_STATE_DIR).toBe(selectedStateDir);
+
+      const repairedConfig = {
+        agents: { entries: { main: {} } },
+        env: stableConfig.env,
+        gateway: { mode: "local" as const },
+        meta: {
+          lastTouchedVersion: VERSION,
+          migrations: { modelPolicyAllowlist: true },
+        },
+      } satisfies ConfigFileSnapshot["sourceConfig"];
+      const repairedSnapshot = {
+        config: repairedConfig,
+        exists: true,
+        issues: [],
+        legacyIssues: [],
+        parsed: repairedConfig,
+        path: "/tmp/openclaw.json",
+        raw: JSON.stringify(repairedConfig),
+        resolved: repairedConfig,
+        runtimeConfig: repairedConfig,
+        sourceConfig: repairedConfig,
+        valid: true,
+        warnings: [],
+      } satisfies ConfigFileSnapshot;
+      expect(
+        await recheckGatewayRunBootstrap({
+          opts: {},
+          runtime: defaultRuntime,
+          snapshot: repairedSnapshot,
+        }),
+      ).toBe(true);
+      await expect(
+        recheckGatewayRunBootstrap({
+          opts: {},
+          runtime: defaultRuntime,
+          snapshot: {
+            ...repairedSnapshot,
+            sourceConfig: { ...repairedConfig, gateway: { mode: "remote" } },
+          },
+        }),
+      ).rejects.toMatchObject({ code: 1 });
+    });
   });
 
   it("rejects an invalid final config after a prepared config selected runtime paths", async () => {
@@ -1665,6 +1758,7 @@ describe("gateway run option collisions", () => {
           OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "REMOVED_KEY,SECRET_REF_KEY",
           REMOVED_KEY: "stale-service-value",
           SECRET_REF_KEY: "file-backed-value",
+          OPENAI_API_KEY: "operator-owned-provider-key",
           OPERATOR_KEY: "operator-value",
         },
         async () => {
@@ -1673,6 +1767,7 @@ describe("gateway run option collisions", () => {
           await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime });
           expect(process.env.REMOVED_KEY).toBeUndefined();
           expect(process.env.SECRET_REF_KEY).toBe("file-backed-value");
+          expect(process.env.OPENAI_API_KEY).toBe("operator-owned-provider-key");
           expect(process.env.OPERATOR_KEY).toBe("operator-value");
           await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime });
         },

@@ -27,6 +27,26 @@ function expectSchemaFailurePath(result: SchemaParseResult, expectedPathPrefix: 
 }
 
 describe("agent defaults schema", () => {
+  it.each([undefined, "session", "agent", "global"] as const)(
+    "preserves the optional model selection scope %s",
+    (modelSelectionScope) => {
+      const input = modelSelectionScope === undefined ? {} : { modelSelectionScope };
+      const defaults = AgentDefaultsSchema.parse(input)!;
+
+      expect(defaults.modelSelectionScope).toBe(modelSelectionScope);
+      expect(Object.hasOwn(defaults, "modelSelectionScope")).toBe(
+        modelSelectionScope !== undefined,
+      );
+    },
+  );
+
+  it("rejects unsupported model selection scopes", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ modelSelectionScope: "default" }),
+      "modelSelectionScope",
+    );
+  });
+
   it("accepts utility models on defaults and agent entries", () => {
     const defaults = AgentDefaultsSchema.parse({ utilityModel: "openai/gpt-5.4-mini" })!;
     const agent = AgentEntrySchema.parse({
@@ -360,6 +380,7 @@ describe("agent defaults schema", () => {
     "adaptive",
     "max",
     "ultra",
+    "inherit",
   ] as const)("accepts compaction.thinkingLevel=%s", (thinkingLevel) => {
     const result = AgentDefaultsSchema.parse({ compaction: { thinkingLevel } })!;
     expect(result.compaction?.thinkingLevel).toBe(thinkingLevel);

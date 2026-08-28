@@ -15,6 +15,7 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
   NODE_TERMINAL_UPLOAD_COMMAND,
 } from "../infra/node-commands.js";
+import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
 import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { ensureTerminalUploadCleanup } from "../infra/terminal-file-upload.js";
@@ -30,6 +31,8 @@ import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
 import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
+import { resolveNodeWorkerContainerEngine } from "./node-worker-container-engine.js";
+import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import {
@@ -42,6 +45,7 @@ import {
 import { scanNodeHostedSkills } from "./skills.js";
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const WORKER_INITIALIZATION_RETRY_MS = 5_000;
 
 type NodeHostManifest = {
   caps: string[];
@@ -58,12 +62,14 @@ export type NodeHostInventory = {
 type PreparedNodeHostRuntime = {
   manifest: NodeHostManifest;
   workerHostingEnabled: boolean;
+  workerHostingDisabledReason?: string;
   initialInventory: NodeHostInventory;
   start(params: {
     client: NodeHostClient;
     onInventoryChanged?: (inventory: NodeHostInventory) => void;
     onManifestChanged?: (manifest: NodeHostManifest) => void;
     onRunnerCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
+    onWorkerHostingDisabled?: (reason: string) => void;
   }): ActiveNodeHostRuntime;
 };
 
@@ -90,6 +96,7 @@ type NodeInvokeInputTarget = {
 
 type ActiveNodeInvoke = {
   controller: AbortController;
+  framedFailure?: Error;
   input?: NodeInvokeInputTarget;
 };
 
@@ -286,9 +293,67 @@ export async function prepareNodeHostRuntime(params?: {
     params?.enableAgentRuns === true && config.nodeHost?.agentRuns?.claude?.enabled === true
       ? resolveExecutableTrustPathFromEnv("claude", pathEnv)
       : null;
-  const workerRunsEnabled =
+  let workerRunsEnabled =
     params?.enableWorkerRuns === true &&
     (params.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
+  let preparedContainerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
+  let preparedContainerSupervisor: ReturnType<typeof createNodeWorkerSupervisor> | undefined;
+  let preparedContainerCapacity: NodeWorkerCapacitySnapshot | undefined;
+  let preparedContainerInitialized = false;
+  let publishContainerCapacity: ((capacity: NodeWorkerCapacitySnapshot) => void) | undefined;
+  let workerHostingDisabledReason: string | undefined;
+  const disablePreparedContainerHosting = async (error: unknown) => {
+    let failure = error;
+    try {
+      await preparedContainerSupervisor?.close();
+    } catch (closeError) {
+      if (closeError !== error) {
+        failure = new Error(`${String(error)}; supervisor cleanup failed: ${String(closeError)}`);
+      }
+    }
+    workerRunsEnabled = false;
+    preparedContainerWorkspace = undefined;
+    preparedContainerSupervisor = undefined;
+    preparedContainerCapacity = undefined;
+    workerHostingDisabledReason = failure instanceof Error ? failure.message : String(failure);
+  };
+  if (workerRunsEnabled && config.nodeHost?.workerRuns?.isolation === "container") {
+    try {
+      if (platform === "win32") {
+        throw new Error(
+          'Container-isolated node workers are unsupported on Windows because native paths cannot be mounted at their container paths; run the node host on Linux or macOS, or set isolation to "none".',
+        );
+      }
+      const containerEngine = await resolveNodeWorkerContainerEngine({ env });
+      preparedContainerWorkspace = new NodeWorkerWorkspaceRuntime({ env });
+      preparedContainerSupervisor = createNodeWorkerSupervisor({
+        env,
+        capacity: config.nodeHost?.workerRuns?.capacity,
+        workspace: preparedContainerWorkspace,
+        containerEngine,
+        ...(config.nodeHost?.workerRuns?.containerImage
+          ? { containerImage: config.nodeHost.workerRuns.containerImage }
+          : {}),
+        onCapacityChanged: (capacity) => {
+          preparedContainerCapacity = capacity;
+          publishContainerCapacity?.(capacity);
+        },
+      });
+      try {
+        // Container ownership and orphan cleanup must precede positive capacity publication.
+        await preparedContainerSupervisor.initialize();
+        preparedContainerInitialized = true;
+      } catch (error) {
+        if (error instanceof NodeWorkerContainerContextMismatchError) {
+          await disablePreparedContainerHosting(error);
+        } else {
+          logDebug(`node-host: worker capacity reconciliation failed: ${String(error)}`);
+        }
+      }
+    } catch (error) {
+      await disablePreparedContainerHosting(error);
+    }
+  }
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
     caps: [
@@ -321,26 +386,69 @@ export async function prepareNodeHostRuntime(params?: {
   return {
     manifest,
     workerHostingEnabled: workerRunsEnabled,
+    ...(workerHostingDisabledReason ? { workerHostingDisabledReason } : {}),
     initialInventory,
-    start({ client, onInventoryChanged, onManifestChanged, onRunnerCapacityChanged }) {
+    start({
+      client,
+      onInventoryChanged,
+      onManifestChanged,
+      onRunnerCapacityChanged,
+      onWorkerHostingDisabled,
+    }) {
       const mcpAbort = new AbortController();
-      const workerWorkspace = workerRunsEnabled
-        ? new NodeWorkerWorkspaceRuntime({ env })
-        : undefined;
+      let closing = false;
+      let connectionGeneration = 0;
+      let closePromise: Promise<void> | undefined;
+      let initializationRetry: ReturnType<typeof setTimeout> | undefined;
+      const workerWorkspace =
+        preparedContainerWorkspace ??
+        (workerRunsEnabled ? new NodeWorkerWorkspaceRuntime({ env }) : undefined);
       const workerBundleInstaller = workerRunsEnabled
         ? new NodeWorkerBundleInstaller({ env })
         : undefined;
-      const workerSupervisor = workerRunsEnabled
-        ? createNodeWorkerSupervisor({
-            env,
-            onCapacityChanged: onRunnerCapacityChanged,
-            workspace: workerWorkspace,
-          })
-        : undefined;
-      if (workerSupervisor) {
-        void workerSupervisor.initialize().catch((error: unknown) => {
+      let workerSupervisor =
+        preparedContainerSupervisor ??
+        (workerRunsEnabled
+          ? createNodeWorkerSupervisor({
+              env,
+              capacity: config.nodeHost?.workerRuns?.capacity,
+              onCapacityChanged: onRunnerCapacityChanged,
+              workspace: workerWorkspace,
+            })
+          : undefined);
+      if (preparedContainerSupervisor) {
+        publishContainerCapacity = onRunnerCapacityChanged;
+        if (preparedContainerCapacity) {
+          onRunnerCapacityChanged?.(preparedContainerCapacity);
+        }
+      }
+      const initializeWorkerSupervisor = () => {
+        const supervisor = workerSupervisor;
+        if (!supervisor || closing) {
+          return;
+        }
+        void supervisor.initialize().catch(async (error: unknown) => {
           logDebug(`node-host: worker capacity reconciliation failed: ${String(error)}`);
+          if (closing || workerSupervisor !== supervisor) {
+            return;
+          }
+          if (error instanceof NodeWorkerContainerContextMismatchError) {
+            workerSupervisor = undefined;
+            onWorkerHostingDisabled?.(error.message);
+            await supervisor.close().catch((closeError: unknown) => {
+              logDebug(`node-host: worker supervisor cleanup failed: ${String(closeError)}`);
+            });
+            return;
+          }
+          initializationRetry = setTimeout(() => {
+            initializationRetry = undefined;
+            initializeWorkerSupervisor();
+          }, WORKER_INITIALIZATION_RETRY_MS);
+          initializationRetry.unref?.();
         });
+      };
+      if (workerSupervisor && !preparedContainerInitialized) {
+        initializeWorkerSupervisor();
       }
       const skillBins = new SkillBinsCache(client, pathEnv);
       const activeInvokes = new Map<string, ActiveNodeInvoke>();
@@ -348,6 +456,12 @@ export async function prepareNodeHostRuntime(params?: {
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {
         sendNodeEvent: async (event, payload) =>
           await client.request("node.event", buildNodeEventParams(event, payload)),
+        ...(workerWorkspace
+          ? {
+              acquireManagedWorkspace: (request) =>
+                workerWorkspace.acquireManagedWorkspace(request),
+            }
+          : {}),
       };
       let currentPluginNodeHost = pluginNodeHost;
       let currentManifest = manifest;
@@ -359,8 +473,6 @@ export async function prepareNodeHostRuntime(params?: {
           }
         | undefined;
       let manager: NodeHostMcpManager | undefined;
-      let closing = false;
-      let closePromise: Promise<void> | undefined;
       const publishInventory = () =>
         onInventoryChanged?.(
           createInventory(skills, currentPluginNodeHost.nodePluginTools, manager?.descriptors),
@@ -399,7 +511,11 @@ export async function prepareNodeHostRuntime(params?: {
       }
       return {
         async invoke(frame) {
+          const generation = connectionGeneration;
           await pluginDisconnectCleanup;
+          if (closing || generation !== connectionGeneration) {
+            return;
+          }
           const duplexCommand = duplexEnabled && isRegisteredNodeHostCommandDuplex(frame.command);
           const progressEnabled = duplexCommand || frame.command === NODE_DESKTOP_STREAM_COMMAND;
           const controller = new AbortController();
@@ -438,8 +554,22 @@ export async function prepareNodeHostRuntime(params?: {
           if (duplexCommand) {
             progress?.startHeartbeats();
           }
-          const pluginCommandIo: OpenClawPluginNodeHostCommandIo | undefined =
+          const framedIo =
             input && progress
+              ? createNodeDuplexEndpoint({
+                  sendFrame: async (payloadJSON) => await progress.write(payloadJSON),
+                  onError: (error) => {
+                    active.framedFailure = error;
+                    controller.abort(error);
+                  },
+                })
+              : undefined;
+          if (framedIo) {
+            controller.signal.addEventListener("abort", () => framedIo.close(), { once: true });
+          }
+          let framedInputRegistered = false;
+          const pluginCommandIo: OpenClawPluginNodeHostCommandIo | undefined =
+            input && progress && framedIo
               ? {
                   signal: controller.signal,
                   emitChunk: async (chunk) => await progress.write(chunk),
@@ -448,13 +578,37 @@ export async function prepareNodeHostRuntime(params?: {
                       registerNodeInvokeInputHandler(input, callback);
                     }
                   },
+                  frames: {
+                    send: async (message) => await framedIo.send(message),
+                    onMessage: (callback) => {
+                      const unsubscribe = framedIo.onMessage(callback);
+                      if (!framedInputRegistered) {
+                        framedInputRegistered = true;
+                        registerNodeInvokeInputHandler(input, (payloadJSON) => {
+                          try {
+                            framedIo.receive(payloadJSON);
+                          } catch (error) {
+                            controller.abort(error);
+                          }
+                        });
+                        void framedIo.sendReady().catch(controller.abort.bind(controller));
+                      }
+                      return unsubscribe;
+                    },
+                  },
                 }
               : undefined;
           try {
             await handleInvoke(frame, client, skillBins, manager, {
               ...(claudePath ? { claudePath } : {}),
               signal: controller.signal,
-              ...(pluginCommandIo ? { pluginCommandIo } : {}),
+              pluginCommandIo,
+              flushPluginCommandIo: framedIo?.drain,
+              canReportAbortedFailure: (error) =>
+                controller.signal.aborted &&
+                error === active.framedFailure &&
+                error === controller.signal.reason &&
+                activeInvokes.get(frame.id) === active,
               ...(gatewayConnection?.url ? { gatewayUrl: gatewayConnection.url } : {}),
               ...(gatewayConnection?.tlsFingerprint
                 ? { gatewayTlsFingerprint: gatewayConnection.tlsFingerprint }
@@ -472,6 +626,7 @@ export async function prepareNodeHostRuntime(params?: {
               ...(workerWorkspace ? { workerWorkspace } : {}),
             });
           } finally {
+            framedIo?.close();
             progress?.stop();
             await progress?.flush();
             if (activeInvokes.get(frame.id) === active) {
@@ -489,6 +644,7 @@ export async function prepareNodeHostRuntime(params?: {
           activeInvokes.get(invokeId)?.controller.abort();
         },
         cancelAll() {
+          connectionGeneration += 1;
           for (const active of activeInvokes.values()) {
             active.controller.abort();
           }
@@ -507,6 +663,10 @@ export async function prepareNodeHostRuntime(params?: {
             return closePromise;
           }
           closing = true;
+          if (initializationRetry) {
+            clearTimeout(initializationRetry);
+            initializationRetry = undefined;
+          }
           this.cancelAll();
           const preludeErrors: unknown[] = [];
           try {

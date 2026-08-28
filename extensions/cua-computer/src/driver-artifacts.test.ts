@@ -23,7 +23,7 @@ function createArtifactFixture(
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cua-artifacts-"));
   temporaryDirectories.push(root);
   const platformKey = options.platformKey ?? "linux-x64-gnu";
-  const acceptedVersion = "0.19.3";
+  const acceptedVersion = "0.20.0";
   const nativeFile = platformKey.startsWith("linux")
     ? "libcua_driver_sdk.so"
     : "cua_driver_sdk.dll";
@@ -80,7 +80,7 @@ describe("CUA Driver artifact verification", () => {
     ).toEqual({
       ok: true,
       applicable: true,
-      version: "0.19.3",
+      version: "0.20.0",
       platformPackage: "@trycua/cua-driver-linux-x64-gnu",
     });
   });
@@ -100,7 +100,7 @@ describe("CUA Driver artifact verification", () => {
   });
 
   it("refuses SDK and platform package version skew", () => {
-    const fixture = createArtifactFixture({ platformVersion: "0.19.2" });
+    const fixture = createArtifactFixture({ platformVersion: "0.19.3" });
 
     const result = inspectCuaDriverArtifacts({
       platform: "linux",
@@ -110,7 +110,7 @@ describe("CUA Driver artifact verification", () => {
     });
 
     expect(result).toMatchObject({ ok: false, code: "COMPUTER_DRIVER_VERSION_MISMATCH" });
-    expect(result.ok ? "" : result.diagnostic).toContain("resolved @trycua/cua-driver@0.19.3");
+    expect(result.ok ? "" : result.diagnostic).toContain("resolved @trycua/cua-driver@0.20.0");
   });
 
   it("refuses a native file that does not match the accepted digest", () => {
@@ -139,5 +139,22 @@ describe("CUA Driver artifact verification", () => {
 
     expect(result).toMatchObject({ ok: false, code: "COMPUTER_DRIVER_PLATFORM_UNSUPPORTED" });
     expect(result.ok ? "" : result.diagnostic).toContain("glibc-based Linux");
+  });
+});
+
+describe("verifyInstalledCuaDriverArtifacts (real resolution)", () => {
+  // Regression: the CUA Driver SDK is ESM-only, so require-condition resolution
+  // threw PATH_NOT_EXPORTED and every real install reported
+  // COMPUTER_DRIVER_PACKAGE_MISSING even with the packages present.
+  it("resolves the installed SDK package through import conditions", async () => {
+    const { verifyInstalledCuaDriverArtifacts } = await import("./driver-artifacts.js");
+    const result = verifyInstalledCuaDriverArtifacts();
+    if (process.platform === "linux" || process.platform === "win32") {
+      expect(result).toMatchObject({ ok: true, applicable: true });
+    } else if (!result.ok) {
+      // Other hosts are out of the fulfiller's scope but must never report a
+      // missing package for an installed SDK.
+      expect(result.code).not.toBe("COMPUTER_DRIVER_PACKAGE_MISSING");
+    }
   });
 });

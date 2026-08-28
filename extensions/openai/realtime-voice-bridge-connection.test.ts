@@ -132,7 +132,8 @@ describe("OpenAI realtime voice bridge connection", () => {
       token: "test-api-key-platform",
     });
     const gaSideband = requireRecord(brokerRequest.gaSideband, "GA sideband request");
-    expect(gaSideband.session).toMatchObject({
+    const gaSession = requireRecord(brokerRequest.gaSession, "GA session policy");
+    expect(gaSession).toMatchObject({
       type: "realtime",
       instructions: "Stay concise.",
       model: "gpt-realtime-2.1",
@@ -176,7 +177,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     await Promise.resolve();
     const sessionUpdates = parseSent(socket).filter((event) => event.type === "session.update");
     expect(sessionUpdates).toHaveLength(1);
-    expect(sessionUpdates[0]?.session).toEqual(gaSideband.session);
+    expect(sessionUpdates[0]?.session).toEqual(gaSession);
     emitServerEvent(socket, {
       type: "session.created",
       session: { type: "realtime", tools: [{ type: "function" }], tool_choice: "auto" },

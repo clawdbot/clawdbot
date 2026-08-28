@@ -19,6 +19,7 @@ export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 export type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 export type {
   BlockStreamingCoalesceConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
 } from "openclaw/plugin-sdk/config-contracts";
@@ -75,9 +76,7 @@ export {
   applySetupAccountConfigPatch,
   migrateBaseNameToDefaultAccount,
 } from "openclaw/plugin-sdk/setup";
-export {
-  getAgentScopedMediaLocalRoots,
-  resolveChannelMediaMaxBytes,
-} from "openclaw/plugin-sdk/media-runtime";
+export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
+export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 export { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 export { setMattermostRuntime } from "./src/runtime.js";

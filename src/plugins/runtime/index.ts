@@ -189,6 +189,7 @@ function createUnavailableNodesRuntime(): PluginRuntime["nodes"] {
   return {
     list: unavailable,
     invoke: unavailable,
+    openDuplex: unavailable,
   };
 }
 
@@ -266,9 +267,14 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
-    gateway: createRuntimeGateway(),
+    gateway: _options.gateway ?? createRuntimeGateway(),
     config: createRuntimeConfig(),
     agent,
+    hooks: _options.hooks ?? {
+      dispatchHookAgentTurn: async () => {
+        throw new Error("Plugin hook runtime is only available inside the Gateway.");
+      },
+    },
     subagent: _options.subagent ?? createUnavailableSubagentRuntime(),
     nodes: _options.nodes ?? createUnavailableNodesRuntime(),
     sandbox: createRuntimeSandbox(agent),
@@ -279,7 +285,11 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       listProviders: listWebSearchProviders,
       search: runWebSearch,
     },
-    channel: createRuntimeChannel(),
+    channel: createRuntimeChannel(
+      _options.dispatchReplyFromConfig
+        ? { dispatchReplyFromConfig: _options.dispatchReplyFromConfig }
+        : undefined,
+    ),
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
     state: {

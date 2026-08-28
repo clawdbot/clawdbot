@@ -8,8 +8,12 @@ import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
-import { resolvePluginSkillDirs } from "../loading/plugin-skills.js";
+import {
+  resolvePluginSkillRoots,
+  resolvePluginSkillRootsFromMetadata,
+} from "../loading/plugin-skills.js";
 import {
   resolveAllowedSkillSymlinkTargetRealPaths,
   tryRealpath,
@@ -99,6 +103,7 @@ function resolveWatchTargets(
   config: OpenClawConfig | undefined,
   executionSkillsDir: string | undefined,
   watcherKey: string,
+  pluginMetadataSnapshot: PluginMetadataSnapshot | undefined,
 ): WatchTarget[] {
   const baseRoots: Array<{ path: string; source: string }> = [];
   if (workspaceDir.trim()) {
@@ -123,7 +128,14 @@ function resolveWatchTargets(
     .map((d) => normalizeOptionalString(d) ?? "")
     .filter(Boolean)
     .map((dir) => resolveUserPath(dir));
-  const pluginSkillDirs = resolvePluginSkillDirs({ workspaceDir, config });
+  const pluginSkillRoots = pluginMetadataSnapshot
+    ? resolvePluginSkillRootsFromMetadata({
+        workspaceDir,
+        config,
+        metadataSnapshot: pluginMetadataSnapshot,
+      })
+    : resolvePluginSkillRoots({ workspaceDir, config });
+  const pluginSkillDirs = pluginSkillRoots.map((root) => root.dir);
   const allowedSymlinkTargetRealPaths = resolveAllowedSkillSymlinkTargetRealPaths(config);
   const signature = JSON.stringify({
     basePaths: baseRoots.map((root) => toWatchRoot(root.path)),
@@ -668,6 +680,7 @@ export function ensureSkillsWatcher(params: {
   workspaceDir: string;
   executionSkillsDir?: string;
   config?: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }) {
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) {
@@ -694,6 +707,7 @@ export function ensureSkillsWatcher(params: {
     params.config,
     params.executionSkillsDir,
     watcherKey,
+    params.pluginMetadataSnapshot,
   );
   const targetsUnchanged = sameWatchTargets(previousTargets, watchTargets);
   const watcherDepthsCoverTargets = watchTargets.every(
@@ -726,9 +740,10 @@ export function ensureSkillsWatcher(params: {
   evictIdleWorkspaceWatchStates(now);
 }
 
-async function resetSkillsRefreshForTest(): Promise<void> {
-  resetSkillsRefreshStateForTest();
-
+export async function closeSkillsWatchers(resetState = false): Promise<void> {
+  if (resetState) {
+    resetSkillsRefreshStateForTest();
+  }
   const active = Array.from(pathWatchers.values());
   pathWatchers.clear();
   workspaceWatchTargets.clear();
@@ -751,6 +766,6 @@ async function resetSkillsRefreshForTest(): Promise<void> {
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.skillsRefreshTestApi")] = {
-    resetSkillsRefreshForTest,
+    resetSkillsRefreshForTest: () => closeSkillsWatchers(true),
   };
 }

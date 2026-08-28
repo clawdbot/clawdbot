@@ -4,11 +4,25 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { createPluginRecord } from "../../plugins/loader-records.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import {
+  bindGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import {
   closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
@@ -29,6 +43,7 @@ import {
 import type { AnyAgentTool } from "../tools/common.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
+import { getInProcessGatewayToolContext } from "../tools/in-process-gateway.js";
 import {
   createAgentHarnessHostCapabilities,
   retainBeforeToolCallForNativeHookRelay,
@@ -126,6 +141,156 @@ describe("agent harness host capability", () => {
     mockCallGatewayTool.mockReset();
   });
 
+  it("binds Full node invocation to the exact live admission, session and placement", async () => {
+    const previousRegistry = getActivePluginRegistry();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-full-node-"));
+    const sessionTarget = {
+      agentId: "main",
+      sessionKey: "agent:main:session-1",
+      sessionId: "session-1",
+      storePath: path.join(root, "sessions.json"),
+    };
+    try {
+      for (const change of [
+        "none",
+        "ordinary",
+        "close",
+        "admission",
+        "restart",
+        "permission",
+        "session",
+        "placement",
+        "gateway",
+        "plugin",
+        "plugin-reload",
+      ] as const) {
+        await upsertSessionEntryCore(sessionTarget, {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          permissionMode: "full",
+        });
+        const { attempt, admission } = await admittedAttempt(`run-${change}`, {
+          permissionMode: change === "ordinary" ? "workspace" : "full",
+          sessionTarget,
+        });
+        let placementActive = true;
+        const registry = createEmptyPluginRegistry();
+        registry.plugins.push(
+          createPluginRecord({
+            id: "fixture",
+            source: "fixture",
+            origin: "bundled",
+            enabled: true,
+            configSchema: true,
+          }),
+        );
+        setActivePluginRegistry(registry);
+        const context = {} as GatewayRequestContext;
+        const assertPlacementCurrent = vi.fn(() => {
+          if (!placementActive) {
+            throw new Error("placement no longer current");
+          }
+        });
+        let currentContext = context;
+        bindGatewayContextResolver(attempt.admittedRunContext, () => currentContext);
+        const host = createAgentHarnessHostCapabilities({
+          attempt,
+          pluginId: "fixture",
+          requiredNodeCommands: ["fixture.exec"],
+        });
+        const dispatched = vi.fn(async () => "launched");
+        await withPluginRuntimeGatewayRequestScope(
+          { isWebchatConnect: () => false, assertNodeExecutionCurrent: assertPlacementCurrent },
+          () =>
+            host.runWithScope(async () => {
+              const invoke = getPluginRuntimeGatewayRequestScope()?.invokeWithSessionNodeAuthority;
+              expect(invoke).toBeTypeOf("function");
+              const ready = createDeferred();
+              const release = createDeferred();
+              const result = invoke!(
+                {
+                  source: "session-full",
+                  command: "fixture.exec",
+                  pluginId: change === "plugin" ? "other" : "fixture",
+                  nodeId: "node-1",
+                  workspace: {
+                    workspaceDir: "/node/workspace",
+                    sessionKey: sessionTarget.sessionKey,
+                    sessionId: "session-1",
+                    environmentId: "environment-1",
+                    ownerEpoch: 2,
+                  },
+                },
+                async (assertCurrent) => {
+                  ready.resolve();
+                  await release.promise;
+                  assertCurrent();
+                  return await dispatched();
+                },
+              );
+              void result.catch(() => {});
+              if (change === "ordinary") {
+                await expect(result).resolves.toBeUndefined();
+                expect(dispatched).not.toHaveBeenCalled();
+                return;
+              }
+              if (change === "plugin") {
+                await expect(result).rejects.toThrow("no longer current");
+                expect(dispatched).not.toHaveBeenCalled();
+                return;
+              }
+              await ready.promise;
+              switch (change) {
+                case "close":
+                  host.close();
+                  break;
+                case "admission":
+                  admission.close();
+                  break;
+                case "restart":
+                  rotateAgentRunRegistryLifecycleGeneration();
+                  break;
+                case "permission":
+                  await upsertSessionEntryCore(sessionTarget, { permissionMode: "workspace" });
+                  break;
+                case "session":
+                  await upsertSessionEntryCore(sessionTarget, { sessionId: "replacement" });
+                  break;
+                case "placement":
+                  placementActive = false;
+                  break;
+                case "gateway":
+                  currentContext = {} as GatewayRequestContext;
+                  break;
+                case "plugin-reload":
+                  setActivePluginRegistry(createEmptyPluginRegistry());
+                  break;
+                case "none":
+                  break;
+              }
+              release.resolve();
+              if (change === "none") {
+                await expect(result).resolves.toBe("launched");
+                expect(dispatched).toHaveBeenCalledOnce();
+              } else {
+                await expect(result).rejects.toThrow(/no longer (active|current)/);
+                expect(dispatched).not.toHaveBeenCalled();
+              }
+            }),
+        );
+        host.close();
+        admission.close();
+      }
+    } finally {
+      if (previousRegistry) {
+        setActivePluginRegistry(previousRegistry);
+      } else {
+        resetPluginRuntimeStateForTest();
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("overwrites plugin policy fields with the host snapshot and revokes lexically", async () => {
     const { attempt, admission } = await admittedAttempt();
     const authority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
@@ -171,6 +336,7 @@ describe("agent harness host capability", () => {
     host.close();
     expect(getAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(authority);
     expect(() => host.capabilities.bindToolSurface([tool])).toThrow("no longer active");
+    expect(() => host.capabilities.createToolSurface?.({} as never)).toThrow("no longer active");
     expect(() => host.capabilities.assertActive()).toThrow("no longer active");
     await expect(bound.execute("call-1", {})).rejects.toThrow("no longer active");
     expect(execute).not.toHaveBeenCalled();
@@ -239,6 +405,75 @@ describe("agent harness host capability", () => {
     });
     host.close();
     expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
+  });
+
+  it("rejects retained preparation after the admitted Gateway is replaced", async () => {
+    const { attempt } = await admittedAttempt("run-prepared-gateway");
+    const admitted = {} as GatewayRequestContext;
+    const replacement = {} as GatewayRequestContext;
+    let current = admitted;
+    bindGatewayContextResolver(attempt.admittedRunContext, () => current);
+    const preparedExecute = vi.fn(async () => ({ content: [], details: {} }));
+    const tool = attachInternalToolExecutionPreparer(testTool().tool, async () => {
+      expect(getInProcessGatewayToolContext()).toBe(admitted);
+      return {
+        kind: "ready",
+        args: {},
+        execute: preparedExecute,
+        dispose: vi.fn(),
+      };
+    });
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const [bound] = host.capabilities.bindToolSurface([tool]);
+    const preparer = bound ? getInternalToolExecutionPreparer(bound) : undefined;
+    if (!preparer) {
+      throw new Error("expected bound preparer");
+    }
+
+    await withPluginRuntimeGatewayRequestScope(
+      { context: replacement, isWebchatConnect: () => false },
+      async () => {
+        const prepared = await preparer({ toolCallId: "prepare", args: {} });
+        expect(prepared.kind).toBe("ready");
+        current = replacement;
+        if (prepared.kind === "ready") {
+          await expect(prepared.execute()).rejects.toThrow("no longer active");
+        }
+      },
+    );
+
+    expect(preparedExecute).not.toHaveBeenCalled();
+  });
+
+  it("delegates trajectory events and rejects a flush that outlives the capability", async () => {
+    const flushStarted = createDeferred();
+    const flushResult = createDeferred();
+    const recordEvent = vi.fn();
+    const flush = vi.fn(async () => {
+      flushStarted.resolve();
+      await flushResult.promise;
+    });
+    const { attempt } = await admittedAttempt("run-trajectory", {
+      trajectoryRecorder: {
+        recordEvent,
+        flush,
+      },
+    });
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const trajectory = host.capabilities.trajectory;
+    if (!trajectory) {
+      throw new Error("expected trajectory capability");
+    }
+
+    trajectory.recordEvent("plugin.event", { ok: true });
+    expect(recordEvent).toHaveBeenCalledWith("plugin.event", { ok: true });
+    const pending = trajectory.flush();
+    await flushStarted.promise;
+    host.close();
+    flushResult.resolve();
+
+    await expect(pending).rejects.toThrow("no longer active");
+    expect(() => trajectory.recordEvent("late.event")).toThrow("no longer active");
   });
 
   it("preserves ambient GitHub service tokens for a native local identity", async () => {
@@ -342,38 +577,51 @@ describe("agent harness host capability", () => {
     expect(mockRunBefore).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    {
-      name: "lexical host closure",
-      revoke: async ({ host }: { host: ReturnType<typeof createAgentHarnessHostCapabilities> }) => {
-        host.close();
+  it.each(
+    [
+      {
+        name: "lexical host closure",
+        revoke: async ({
+          host,
+        }: {
+          host: ReturnType<typeof createAgentHarnessHostCapabilities>;
+          attempt: HostAttempt;
+        }) => {
+          host.close();
+        },
       },
-    },
-    {
-      name: "exact authority release",
-      revoke: async ({ attempt }: { attempt: HostAttempt }) => {
-        expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+      {
+        name: "exact authority release",
+        revoke: async ({
+          attempt,
+        }: {
+          host: ReturnType<typeof createAgentHarnessHostCapabilities>;
+          attempt: HostAttempt;
+        }) => {
+          expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+        },
       },
-    },
-    {
-      name: "outer admission abort",
-      revoke: async ({ admission }: { admission: PreparedAgentRunAdmission }) => {
-        admission.close();
+      {
+        name: "replacement owner",
+        revoke: async ({
+          attempt,
+        }: {
+          host: ReturnType<typeof createAgentHarnessHostCapabilities>;
+          attempt: HostAttempt;
+        }) => {
+          await admittedAttempt(attempt.runId);
+        },
       },
-    },
-    {
-      name: "replacement owner",
-      revoke: async ({ attempt }: { attempt: HostAttempt }) => {
-        await admittedAttempt(attempt.runId);
-      },
-    },
-  ])("rejects an allowed policy result after $name during the hook", async ({ revoke }) => {
-    const { attempt, admission } = await admittedAttempt("run-policy-race");
+    ].flatMap((entry) =>
+      (["resolve", "reject"] as const).map((settlement) => Object.assign({ settlement }, entry)),
+    ),
+  )("rejects a deferred policy $settlement after $name", async ({ revoke, settlement }) => {
+    const { attempt } = await admittedAttempt("run-policy-race");
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    const hookStarted = createDeferred();
+    const hookStarted = createDeferred<(() => boolean | void) | undefined>();
     const hookResult = createDeferred<{ blocked: false; params: { command: string } }>();
     mockRunBefore.mockImplementationOnce(async () => {
-      hookStarted.resolve();
+      hookStarted.resolve(getGatewayToolCallerIdentity()?.receiptAuthority);
       return await hookResult.promise;
     });
 
@@ -381,11 +629,19 @@ describe("agent harness host capability", () => {
       toolName: "exec",
       params: { command: "true" },
     });
-    await hookStarted.promise;
-    await revoke({ admission, attempt, host });
-    hookResult.resolve({ blocked: false, params: { command: "true" } });
+    const receiptAuthority = await hookStarted.promise;
+    expect(receiptAuthority).toEqual(expect.any(Function));
+    await revoke({ attempt, host });
+    expect(receiptAuthority?.()).toBe(false);
+    if (settlement === "resolve") {
+      hookResult.resolve({ blocked: false, params: { command: "true" } });
+    } else {
+      hookResult.reject(new Error("deferred policy rejected"));
+    }
 
-    await expect(pending).rejects.toThrow("no longer active");
+    await expect(pending).rejects.toThrow(
+      settlement === "resolve" ? "no longer active" : "deferred policy rejected",
+    );
   });
 
   it("keeps a private native policy lease after foreground close but fences replacement", async () => {

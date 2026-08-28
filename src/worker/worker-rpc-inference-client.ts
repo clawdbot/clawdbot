@@ -6,12 +6,7 @@ import type {
   WorkerInferenceTerminalOutcome,
   WorkerInferenceTerminalParams,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import {
-  type WorkerConnection,
-  WorkerConnectionInterruptedError,
-  WorkerConnectionStoppedError,
-  WorkerFencedError,
-} from "./worker-connection.js";
+import { type WorkerConnection, WorkerConnectionInterruptedError } from "./worker-connection.js";
 import type { InferenceResponseError } from "./worker-rpc-client-shared.js";
 import { fenceForOwnershipError } from "./worker-rpc-client-shared.js";
 
@@ -66,15 +61,7 @@ export class WorkerInferenceProxyClient {
   constructor(private readonly connection: WorkerConnection) {
     this.unsubscribers = [
       connection.onReady(() => this.resume()),
-      connection.onStateChange((state) => {
-        if (state.kind === "fenced") {
-          this.rejectAllOperations(new WorkerFencedError(state.reason));
-        } else if (state.kind === "failed") {
-          this.rejectAllOperations(state.error);
-        } else if (state.kind === "stopped") {
-          this.rejectAllOperations(new WorkerConnectionStoppedError());
-        }
-      }),
+      connection.onTerminalError((error) => this.rejectAllOperations(error)),
       connection.onInferenceEvent((frame) => this.handleEvent(frame.payload)),
       connection.onInferenceTerminal((frame) => this.handleTerminal(frame.payload)),
     ];

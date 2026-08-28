@@ -103,7 +103,6 @@ export async function scanStatusJsonWithPolicy(
     includeChannelsData: false,
     // Fast JSON only needs to know whether channels may exist; it does not render channel tables.
     includeChannelSecretTargets: false,
-    skipConfigPluginValidation: true,
     fetchGitUpdate: policy.fetchGitUpdate,
     includeRegistryUpdate: policy.includeRegistryUpdate,
     includeLocalStatusRpcFallback: policy.includeLocalStatusRpcFallback,

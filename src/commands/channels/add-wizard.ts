@@ -2,7 +2,8 @@
 // prompter) and the gateway `wizard.start {flow:"channels"}` RPC (session
 // prompter driving the Control UI / native clients).
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentOperationAgentId } from "../../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
@@ -50,7 +51,7 @@ export async function resolveInitialWizardChannelTarget(
   const resolved = resolveChannelSetupEntries({
     cfg,
     installedPlugins: listActiveChannelSetupPlugins(),
-    workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
+    workspaceDir: resolveAgentWorkspaceDir(cfg, resolveAgentOperationAgentId(cfg)),
   });
   const matchedEntry =
     resolved.entries.find(
@@ -211,7 +212,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
               initialValue: true,
             });
     if (bindNow) {
-      const defaultAgentId = resolveDefaultAgentId(nextConfig);
+      const defaultAgentId = resolveAgentOperationAgentId(nextConfig);
       for (const target of bindTargets) {
         const targetAgentId = await prompter.select({
           message: `Send ${target.channel}/${target.accountId} messages to agent`,

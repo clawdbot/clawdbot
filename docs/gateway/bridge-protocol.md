@@ -43,7 +43,7 @@ Client to gateway:
 
 Gateway to client:
 
-- `invoke` / `invoke-res`: node commands (`canvas.*`, `camera.*`, `screen.record`, `location.get`, `sms.send`).
+- `invoke` / `invoke-res`: node commands (`canvas.present`, `canvas.hide`, `canvas.navigate`, `camera.*`, `screen.record`, `location.get`, `sms.send`).
 - `event`: chat updates for subscribed sessions.
 - `ping` / `pong`: keepalive.
 

@@ -143,7 +143,7 @@ export class WorkerFaultPlacementLifecycle {
   }
 
   private bindCredentialToClaim(credential: string, claim: WorkerSessionTurnClaim): void {
-    if (claim.owner.kind !== "worker") {
+    if (claim.owner.kind !== "worker" || !this.options.placementStore.validateTurnClaim(claim)) {
       throw new Error("fault worker credential requires a worker-owned claim");
     }
     const previous = this.options.environmentStore.getCredential(this.options.environmentId);
@@ -158,6 +158,8 @@ export class WorkerFaultPlacementLifecycle {
     });
     if (previous && previous.credentialHash !== credentialHash) {
       this.options.getLiveEvents().rotateCredential({
+        ackedSeq:
+          this.options.placementStore.get(this.options.sessionId)?.lastLiveEventAckCursor ?? 0,
         credentialHash,
         environmentId: this.options.environmentId,
         newProcessTurn: true,

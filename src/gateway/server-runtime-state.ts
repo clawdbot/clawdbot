@@ -10,6 +10,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import type { PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiRootState } from "./control-ui.js";
@@ -121,6 +122,7 @@ export async function createGatewayHttpTransport(params: {
   logPlugins: ReturnType<typeof createSubsystemLogger>;
   getReadiness?: ReadinessChecker;
   getStartup?: StartupChecker;
+  isStartupPending?: () => boolean;
   isTerminalEnabled: () => boolean;
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
@@ -142,12 +144,29 @@ export async function createGatewayHttpTransport(params: {
   getTailscaleIngressEndpoint: () => GatewayTailscaleIngressEndpoint | undefined;
   getMcpAppSandboxPort: () => number | undefined;
   ensureSandboxHostPort: () => Promise<number>;
+  dispatchHookAgentTurn: (
+    pluginId: string,
+    params: Parameters<PluginRuntimeCore["hooks"]["dispatchHookAgentTurn"]>[0],
+  ) => ReturnType<PluginRuntimeCore["hooks"]["dispatchHookAgentTurn"]>;
 }> {
   const loadRuntimeConfig = params.getRuntimeConfig ?? (() => params.cfg);
   const resolvePluginRouteRegistry = () =>
     params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
 
   let loadedHooksRequestHandler: HooksRequestHandler | null = null;
+  let loadedHookDispatcher:
+    | ReturnType<(typeof import("./server/hooks.js"))["createGatewayHookDispatcher"]>
+    | undefined;
+  const getHookDispatcher = async () => {
+    const { createGatewayHookDispatcher } = await import("./server/hooks.js");
+    return (loadedHookDispatcher ??= createGatewayHookDispatcher({
+      deps: params.deps,
+      logHooks: params.logHooks,
+      ...(params.getGatewayRequestContext
+        ? { resolveGatewayContext: params.getGatewayRequestContext }
+        : {}),
+    }));
+  };
   const handleHooksRequest: HooksRequestHandler = async (req, res) => {
     const hooksConfig = params.hooksConfig();
     if (!hooksConfig) {
@@ -165,11 +184,15 @@ export async function createGatewayHttpTransport(params: {
         const { createGatewayHooksRequestHandler } = await import("./server/hooks.js");
         loadedHooksRequestHandler = createGatewayHooksRequestHandler({
           deps: params.deps,
+          dispatcher: await getHookDispatcher(),
           getHooksConfig: params.hooksConfig,
           getClientIpConfig: params.getHookClientIpConfig,
           bindHost: params.bindHost,
           port: params.port,
           logHooks: params.logHooks,
+          ...(params.getGatewayRequestContext
+            ? { resolveGatewayContext: params.getGatewayRequestContext }
+            : {}),
         });
       }
       return await loadedHooksRequestHandler(req, res);
@@ -314,6 +337,7 @@ export async function createGatewayHttpTransport(params: {
       getReadiness: params.getReadiness,
       getStartup: params.getStartup,
       getRuntimeConfig: loadRuntimeConfig,
+      getGatewayRequestContext: params.getGatewayRequestContext,
       isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
       isTerminalEnabled: params.isTerminalEnabled,
       tlsOptions,
@@ -338,6 +362,7 @@ export async function createGatewayHttpTransport(params: {
       desktopSessionRegistry: params.desktopSessionRegistry,
       nodeDesktopStreamBroker: params.nodeDesktopStreamBroker,
       getGatewayRequestContext: params.getGatewayRequestContext,
+      isStartupPending: params.isStartupPending,
       ingressTransport,
       reportUnattributableProxy,
     });
@@ -529,5 +554,7 @@ export async function createGatewayHttpTransport(params: {
     getTailscaleIngressEndpoint: () => tailscaleIngressEndpoint,
     getMcpAppSandboxPort: () => mcpAppSandboxPort,
     ensureSandboxHostPort,
+    dispatchHookAgentTurn: async (pluginId, hookParams) =>
+      await (await getHookDispatcher()).dispatchHookAgentTurn(hookParams, pluginId),
   };
 }

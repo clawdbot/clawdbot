@@ -1,6 +1,8 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { resolveMessageReceiptPrimaryId } from "../channels/message/receipt.js";
+import type { MessageReceipt } from "../channels/message/types.js";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import type { MessagePollResult, MessageSendResult } from "../infra/outbound/message.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -13,6 +15,7 @@ type EmbeddedMessageDeliveryFact = {
 };
 
 const NON_DELIVERY_IDS = new Set(["skipped", "suppressed"]);
+const NON_DELIVERY_STATUSES = new Set(["failed", ...NON_DELIVERY_IDS]);
 const STATUSES = new Set(["settled", "suppressed", "dryRun", "failed"]);
 const PLUGIN_ENVELOPE_KEYS = ["details", "payload", "result", "results", "toolResult"];
 
@@ -33,13 +36,39 @@ function deliveryId(value: unknown): string | undefined {
   return id && !NON_DELIVERY_IDS.has(id.toLowerCase()) ? id : undefined;
 }
 
+function projectReceiptIdentity(delivery?: {
+  receipt?: MessageReceipt;
+  messageId?: string;
+  pollId?: string;
+}) {
+  const receipt = delivery?.receipt;
+  const primaryPlatformMessageId = [
+    receipt ? resolveMessageReceiptPrimaryId(receipt) : undefined,
+    delivery?.messageId,
+    delivery?.pollId,
+    ...(receipt?.parts.map((part) => part.platformMessageId) ?? []),
+  ]
+    .map(deliveryId)
+    .find(Boolean);
+  const createdThreadIds = [
+    receipt?.threadId,
+    ...(receipt?.parts.map((part) => part.threadId) ?? []),
+  ].flatMap((id) => (typeof id === "string" && id.trim() ? [id.trim()] : []));
+  return { primaryPlatformMessageId, createdThreadIds: [...new Set(createdThreadIds)] };
+}
+
 function normalizeStatus(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim().toLowerCase() : undefined;
 }
 
+type PluginEnvelopePredicate = (
+  record: Record<string, unknown>,
+  status: string | undefined,
+) => boolean;
+
 function visitPluginEnvelope(
   value: unknown,
-  predicate: (record: Record<string, unknown>) => boolean,
+  predicate: PluginEnvelopePredicate,
   depth = 0,
 ): boolean {
   if (!value || typeof value !== "object" || depth > 4) {
@@ -52,7 +81,8 @@ function visitPluginEnvelope(
   if (!record) {
     return false;
   }
-  if (predicate(record)) {
+  const status = normalizeStatus(record.deliveryStatus) ?? normalizeStatus(record.status);
+  if (predicate(record, status)) {
     return true;
   }
   if (typeof record.text === "string") {
@@ -71,12 +101,12 @@ function visitPluginEnvelope(
 }
 
 const PLUGIN_SIGNALS = {
-  dryRun: (record: Record<string, unknown>) =>
-    record.dryRun === true || normalizeStatus(record.status) === "dry_run",
-  partial: (record: Record<string, unknown>) =>
+  dryRun: (record: Record<string, unknown>, status: string | undefined) =>
+    record.dryRun === true || status === "dry_run",
+  partial: (record: Record<string, unknown>, status: string | undefined) =>
     record.sentBeforeError === true ||
     record.visibleReplySent === true ||
-    normalizeStatus(record.status) === "partial_failed",
+    status === "partial_failed",
   conversation: (record: Record<string, unknown>) =>
     [
       record.topicId,
@@ -84,16 +114,15 @@ const PLUGIN_SIGNALS = {
       record.messageThreadId,
       asOptionalRecord(record.thread)?.id,
     ].some((id) => hasNonEmptyString(id) || (typeof id === "number" && Number.isFinite(id))),
-  nonDelivery: (record: Record<string, unknown>) => {
+  nonDelivery: (record: Record<string, unknown>, status: string | undefined) => {
     const id = normalizeStatus(record.messageId);
     return (
       (id !== undefined && NON_DELIVERY_IDS.has(id)) ||
-      normalizeStatus(record.status) === "suppressed"
+      (status !== undefined && NON_DELIVERY_STATUSES.has(status))
     );
   },
-  noOp: (record: Record<string, unknown>) => {
+  noOp: (record: Record<string, unknown>, status: string | undefined) => {
     const removed = record.removed;
-    const status = normalizeStatus(record.status);
     return (
       removed === null ||
       removed === false ||
@@ -110,14 +139,14 @@ const PLUGIN_SIGNALS = {
       status === "not_found"
     );
   },
-  delivery: (record: Record<string, unknown>) => {
+  delivery: (record: Record<string, unknown>, status: string | undefined) => {
     const message = asOptionalRecord(record.message);
     const ids = [record.messageId, record.pollId, message?.id]
       .map(normalizeStatus)
       .filter((id): id is string => Boolean(id));
     return (
       ids.some((id) => !NON_DELIVERY_IDS.has(id)) ||
-      normalizeStatus(record.status) === "sent" ||
+      status === "sent" ||
       normalizeStatus(record.text) === "sent"
     );
   },
@@ -127,7 +156,7 @@ const PLUGIN_SIGNALS = {
       .some((id) => Boolean(id && !NON_DELIVERY_IDS.has(id))),
   ok: (record: Record<string, unknown>) =>
     record.ok === true || normalizeStatus(record.text) === "ok",
-} satisfies Record<string, (record: Record<string, unknown>) => boolean>;
+} satisfies Record<string, PluginEnvelopePredicate>;
 
 export function pluginEnvelopeHas(value: unknown, signal: keyof typeof PLUGIN_SIGNALS): boolean {
   return visitPluginEnvelope(value, PLUGIN_SIGNALS[signal]);
@@ -187,20 +216,7 @@ export function pluginBroadcastHasDelivery(value: unknown): boolean {
 
 function projectSend(result: MessageSendResult): EmbeddedMessageDeliveryFact {
   const delivery = result.result;
-  const receipt = delivery && "receipt" in delivery ? delivery.receipt : undefined;
-  const primaryPlatformMessageId = [
-    receipt?.primaryPlatformMessageId,
-    delivery?.messageId,
-    delivery && "pollId" in delivery ? delivery.pollId : undefined,
-    ...(receipt?.platformMessageIds ?? []),
-    ...(receipt?.parts.map((part) => part.platformMessageId) ?? []),
-  ]
-    .map(deliveryId)
-    .find(Boolean);
-  const createdThreadIds = [
-    receipt?.threadId,
-    ...(receipt?.parts.map((part) => part.threadId) ?? []),
-  ].flatMap((id) => (typeof id === "string" && id.trim() ? [id.trim()] : []));
+  const { primaryPlatformMessageId, createdThreadIds } = projectReceiptIdentity(delivery);
   const partialDelivery =
     result.deliveryStatus === "partial_failed" || result.sentBeforeError === true;
   const nonDeliveryId =
@@ -219,18 +235,17 @@ function projectSend(result: MessageSendResult): EmbeddedMessageDeliveryFact {
     status,
     ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
     partialDelivery,
-    createdThreadIds: [...new Set(createdThreadIds)],
+    createdThreadIds,
   };
 }
 
 function projectPoll(result: MessagePollResult): EmbeddedMessageDeliveryFact {
-  const primaryPlatformMessageId =
-    deliveryId(result.result?.messageId) ?? deliveryId(result.result?.pollId);
+  const { primaryPlatformMessageId, createdThreadIds } = projectReceiptIdentity(result.result);
   return {
     status: result.dryRun ? "dryRun" : primaryPlatformMessageId ? "settled" : "failed",
     ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
     partialDelivery: false,
-    createdThreadIds: [],
+    createdThreadIds,
   };
 }
 
@@ -296,6 +311,37 @@ export function attachEmbeddedMessageDeliveryFact(
     return { ...result, details: rest };
   }
   return { ...result, details: { ...details, messageDelivery: fact } };
+}
+
+export function isDeliveredCoreCurrentChannelWidgetResult(params: {
+  coreBuiltinToolNames?: ReadonlySet<string>;
+  sourceReplyDeliveryMode?: string;
+  toolName: string;
+  result: unknown;
+  isToolError: boolean;
+}): boolean {
+  if (
+    params.sourceReplyDeliveryMode !== "message_tool_only" ||
+    params.toolName !== "show_widget" ||
+    params.isToolError ||
+    params.coreBuiltinToolNames?.has("show_widget") !== true
+  ) {
+    return false;
+  }
+  const details = asOptionalRecord(params.result)?.details;
+  const presentation = asOptionalRecord(asOptionalRecord(details)?.presentation);
+  const receipt = asOptionalRecord(presentation?.receipt);
+  if (asOptionalRecord(details)?.kind !== "widget" || presentation?.target !== "current_channel") {
+    return false;
+  }
+  const receiptIds = [
+    receipt?.primaryPlatformMessageId,
+    ...(Array.isArray(receipt?.platformMessageIds) ? receipt.platformMessageIds : []),
+    ...(Array.isArray(receipt?.parts)
+      ? receipt.parts.map((part) => asOptionalRecord(part)?.platformMessageId)
+      : []),
+  ];
+  return receiptIds.some((id) => hasNonEmptyString(id));
 }
 
 export function readEmbeddedMessageDeliveryFact(

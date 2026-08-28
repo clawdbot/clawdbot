@@ -24,10 +24,7 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      const [cacheKeys, windowClients] = await Promise.all([
-        caches.keys(),
-        self.clients.matchAll({ type: "window", includeUncontrolled: true }),
-      ]);
+      const cacheKeys = await caches.keys();
       const controlKeys = cacheKeys.filter((key) => key.startsWith(CACHE_PREFIX));
       const priorCacheLimit = Math.max(0, CONTROL_CACHE_LIMIT - 1);
       // Keep a small prior-build window so open tabs can still load old hashed chunks after updates.
@@ -42,6 +39,12 @@ self.addEventListener("activate", (event) => {
           controlKeys.filter((key) => !retained.has(key)).map((key) => caches.delete(key)),
         ),
       ]);
+      // Enumerate after claim so a concurrent reload receives the activation event
+      // instead of leaving the new document unaware of the replacement worker.
+      const windowClients = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
 
       for (const client of windowClients) {
         // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Service Worker Client.postMessage does not take targetOrigin.

@@ -29,15 +29,11 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
 ] as const;
 const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/acpx/index.ts": ["reply_dispatch"],
-  "extensions/active-memory/index.ts": ["agent_end", "before_model_resolve", "before_prompt_build"],
+  "extensions/active-memory/index.ts": ["agent_end", "before_prompt_build"],
   "extensions/clickclack/src/discussions/register.ts": ["before_tool_call"],
   "extensions/codex/index.ts": ["after_compaction", "inbound_claim", "session_end"],
   "extensions/diffs/src/plugin.ts": ["before_prompt_build"],
-  "extensions/discord/subagent-hooks-api.ts": [
-    "gateway_start",
-    "subagent_delivery_target",
-    "subagent_ended",
-  ],
+  "extensions/discord/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/feishu/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/matrix/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start", "gateway_stop"],

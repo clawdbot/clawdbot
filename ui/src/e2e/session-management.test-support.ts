@@ -46,6 +46,7 @@ export function sessionRow(
     pinnedAt?: number;
     hasActiveRun?: boolean;
     unread?: boolean;
+    markedUnreadAt?: number;
     status?: string;
     spawnedBy?: string;
     startedAt?: number;
@@ -185,7 +186,11 @@ export async function openSessionMenuSubmenu(page: Page, name: string): Promise<
   expect(index).toBeGreaterThanOrEqual(0);
   await expect
     .poll(() =>
-      page.locator("openclaw-session-menu > wa-dropdown > wa-dropdown-item:focus").count(),
+      page
+        .locator(
+          ":is(openclaw-session-menu, openclaw-chat-header-session-menu) > wa-dropdown > wa-dropdown-item:focus",
+        )
+        .count(),
     )
     .toBe(1);
   await page.keyboard.press("Home");

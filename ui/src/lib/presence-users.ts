@@ -1,4 +1,5 @@
 import type { PresenceEntry } from "../api/types.ts";
+import { readPresenceEntries } from "../app/user-profile.ts";
 
 export type PresenceViewer = {
   id: string;
@@ -22,16 +23,6 @@ function firstSorted(values: Iterable<string | null | undefined>): string | unde
     .map(normalized)
     .filter((value): value is string => value !== undefined)
     .toSorted()[0];
-}
-
-function readPresenceEntries(value: unknown): PresenceEntry[] {
-  if (!value || typeof value !== "object") {
-    return [];
-  }
-  // SAFETY: Gateway snapshots are protocol-validated before reaching UI projections.
-  const presence = (value as { presence?: unknown }).presence;
-  // SAFETY: The validated presence array carries PresenceEntry protocol records.
-  return Array.isArray(presence) ? (presence as PresenceEntry[]) : [];
 }
 
 function presenceEntrySortKey(entry: PresenceEntry): string {
@@ -119,7 +110,7 @@ export function projectPresencePayload(
   cachedAuthenticatedSelfUserId = authenticatedSelfUserId;
   cachedSelfInstanceId = selfInstanceId;
   cachedPresenceProjection = projectPresenceViewers(
-    readPresenceEntries(value),
+    readPresenceEntries(value) ?? [],
     authenticatedSelfUserId,
     selfInstanceId,
   );

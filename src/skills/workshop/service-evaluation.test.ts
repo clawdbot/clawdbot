@@ -22,6 +22,7 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 }));
 
 import { buildSkillProposalEvaluationBundles } from "./proposal-bundle.js";
+import { SkillProposalRevisionChangedError } from "./service-evaluation.js";
 import {
   applySkillProposal,
   evaluateSkillProposal,
@@ -454,7 +455,7 @@ describe("Skill Workshop proposal evaluation", () => {
         "skill-workshop",
         "proposals",
         proposal.record.id,
-        "PROPOSAL.md",
+        proposal.record.draftFile,
       ),
       "# Evaluation Drift\n\nUncommitted replacement.\n",
     );
@@ -510,7 +511,7 @@ describe("Skill Workshop proposal evaluation", () => {
         "skill-workshop",
         "proposals",
         proposal.record.id,
-        "PROPOSAL.md",
+        proposal.record.draftFile,
       ),
       "# Concurrent Drift\n\nReplaced while evaluating.\n",
     );
@@ -629,7 +630,11 @@ describe("Skill Workshop proposal evaluation", () => {
         proposalId: proposal.record.id,
         expectedRevisionHash: proposal.revisionHash,
       }),
-    ).rejects.toThrow("proposal revision changed");
+    ).rejects.toMatchObject({
+      constructor: SkillProposalRevisionChangedError,
+      expectedRevisionHash: proposal.revisionHash,
+      currentRevisionHash: revised.revisionHash,
+    });
     expect(hookMocks.evaluate).not.toHaveBeenCalled();
   });
 

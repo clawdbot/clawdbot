@@ -194,6 +194,22 @@ describe("google web search provider", () => {
     expect(postCalls).toHaveLength(2);
   });
 
+  it("reuses cached Gemini answers across ignored result counts while rejecting invalid counts", async () => {
+    const mockFetch = installGeminiFetch();
+    const tool = createGeminiToolWithHeaders({});
+    const query = "unique Gemini ignored result count cache regression";
+
+    await tool?.execute({ query, count: 1 });
+    await tool?.execute({ query, count: 10 });
+    await tool?.execute({ query });
+
+    await expect(tool?.execute({ query, count: 0 })).rejects.toThrow(
+      "count must be an integer from 1 to 10.",
+    );
+    const postCalls = mockFetch.mock.calls.filter(([, init]) => typeof init?.body === "string");
+    expect(postCalls).toHaveLength(1);
+  });
+
   it("does not partition cached results by overwritten provider-owned headers", async () => {
     const mockFetch = installGeminiFetch();
 
@@ -719,6 +735,51 @@ describe("google web search provider", () => {
     expect(thirdBody.tools?.[0]?.google_search?.timeRangeFilter).toBeUndefined();
     expect(thirdBody.contents?.[0]?.parts?.[0]?.text).toBe("same query cache partition");
   });
+
+  it.each([
+    {
+      label: "relative freshness",
+      filter: { freshness: "week" },
+      equivalentFilter: { freshness: "pw" },
+      distinctFilter: { freshness: "month" },
+      initialTimeRange: {
+        startTime: "2026-04-08T12:00:00Z",
+        endTime: "2026-04-15T12:00:00Z",
+      },
+    },
+    {
+      label: "open-ended date ranges",
+      filter: { date_after: "2026-04-01" },
+      equivalentFilter: { date_after: "2026-04-01" },
+      distinctFilter: { date_after: "2026-04-02" },
+      initialTimeRange: {
+        startTime: "2026-04-01T00:00:00Z",
+        endTime: "2026-04-15T12:00:00Z",
+      },
+    },
+  ])(
+    "reuses Gemini $label cache entries as the clock advances without merging distinct filters",
+    async ({ label, filter, equivalentFilter, distinctFilter, initialTimeRange }) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
+      const mockFetch = installGeminiFetch();
+      const tool = createGeminiToolWithHeaders({});
+      const query = `unique Gemini ${label} moving-clock cache regression`;
+
+      await tool?.execute({ query, ...filter });
+      vi.setSystemTime(new Date("2026-04-15T12:00:02.123Z"));
+      const cached = await tool?.execute({ query, ...equivalentFilter });
+
+      expect(cached).toMatchObject({ cached: true });
+      expect(parseGeminiFetchBody(mockFetch).tools?.[0]?.google_search?.timeRangeFilter).toEqual(
+        initialTimeRange,
+      );
+
+      await tool?.execute({ query, ...distinctFilter });
+      const postCalls = mockFetch.mock.calls.filter(([, init]) => typeof init?.body === "string");
+      expect(postCalls).toHaveLength(2);
+    },
+  );
 
   it("strips sub-second precision from date-range timestamps so Gemini accepts them", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });

@@ -30,10 +30,9 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
   const scheduleEvent = (
     evt: AgentSessionEvent,
     handler: () => void | Promise<void>,
-    options?: { detach?: boolean },
   ): void | Promise<void> => {
-    // Most stream events must preserve order across async formatting and flush
-    // work. A detached event may run after the chain without blocking delivery.
+    // Tool-result delivery must settle before later assistant or terminal events;
+    // suppression flags would discard those events instead of preserving order.
     const run = () => {
       try {
         return handler();
@@ -56,11 +55,8 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
             ctx.state.pendingEventChain = null;
           }
         });
-      if (!options?.detach) {
-        ctx.state.pendingEventChain = task;
-        return task;
-      }
-      return;
+      ctx.state.pendingEventChain = task;
+      return task;
     }
 
     const task = ctx.state.pendingEventChain
@@ -73,10 +69,8 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
           ctx.state.pendingEventChain = null;
         }
       });
-    if (!options?.detach) {
-      ctx.state.pendingEventChain = task;
-      return task;
-    }
+    ctx.state.pendingEventChain = task;
+    return task;
   };
 
   return (evt: AgentSessionEvent) => {
@@ -121,13 +115,9 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         });
         return;
       case "tool_execution_end":
-        void scheduleEvent(
-          evt,
-          () => {
-            return handleToolExecutionEnd(ctx, evt as never);
-          },
-          { detach: true },
-        );
+        void scheduleEvent(evt, async () => {
+          await handleToolExecutionEnd(ctx, evt as never);
+        });
         return;
       case "agent_start":
         void scheduleEvent(evt, () => {

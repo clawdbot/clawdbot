@@ -1,6 +1,11 @@
 // Verifies runtime config snapshots preserve normalized public settings.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getConfigResolutionFacts, setConfigResolutionFacts } from "./resolution-facts.js";
+import {
+  createConfigResolutionFacts,
+  getAuthoredConfigSecretRef,
+  getConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "./resolution-facts.js";
 import {
   finalizeRuntimeSnapshotWrite,
   getRuntimeConfigAppliedHash,
@@ -22,6 +27,7 @@ import {
   setRuntimeConfigSourceSnapshotIfCurrent,
   setRuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
+import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
 import type { OpenClawConfig } from "./types.js";
 
 function resetRuntimeConfigState(): void {
@@ -55,28 +61,8 @@ describe("runtime snapshot state", () => {
   });
 
   it("returns the source snapshot when runtime snapshot is active", () => {
-    const sourceConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            models: [],
-          },
-        },
-      },
-    };
-    const runtimeConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "sk-runtime-resolved",
-            models: [],
-          },
-        },
-      },
-    };
+    const sourceConfig = createProviderConfigFixture();
+    const runtimeConfig = createProviderConfigFixture("sk-runtime-resolved");
 
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
@@ -87,14 +73,23 @@ describe("runtime snapshot state", () => {
       gateway: { auth: { mode: "token", token: "${GATEWAY_TOKEN}" } },
     };
     const unresolvedSource = structuredClone(runtimeConfig);
-    setConfigResolutionFacts(unresolvedSource, new Set(["gateway.auth.token"]));
+    setConfigResolutionFacts(
+      unresolvedSource,
+      createConfigResolutionFacts(
+        [{ configPath: "gateway.auth.token", varName: "GATEWAY_TOKEN" }],
+        new Map([["gateway.auth.token", "GATEWAY_TOKEN"]]),
+      ),
+    );
     setRuntimeConfigSnapshot(runtimeConfig, unresolvedSource);
     expect([...(getConfigResolutionFacts(getRuntimeConfigSnapshot()) ?? [])]).toEqual([
       "gateway.auth.token",
     ]);
+    expect(getAuthoredConfigSecretRef(getRuntimeConfigSnapshot(), "gateway.auth.token")?.id).toBe(
+      "GATEWAY_TOKEN",
+    );
 
     const literalSource = structuredClone(runtimeConfig);
-    setConfigResolutionFacts(literalSource, new Set());
+    setConfigResolutionFacts(literalSource, createConfigResolutionFacts([]));
     expect(
       setRuntimeConfigSourceSnapshotIfCurrent({
         expectedRevision: getRuntimeConfigSnapshotMetadata()?.revision ?? -1,
@@ -102,6 +97,7 @@ describe("runtime snapshot state", () => {
       }),
     ).toBe(true);
     expect(getConfigResolutionFacts(getRuntimeConfigSnapshot())?.size).toBe(0);
+    expect(getAuthoredConfigSecretRef(getRuntimeConfigSnapshot(), "gateway.auth.token")).toBeNull();
   });
 
   it("tracks snapshot metadata and cache keys across runtime refreshes", () => {
@@ -144,28 +140,8 @@ describe("runtime snapshot state", () => {
   });
 
   it("selects runtime config only when input still matches the runtime source", () => {
-    const sourceConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            models: [],
-          },
-        },
-      },
-    };
-    const runtimeConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "sk-runtime-resolved",
-            models: [],
-          },
-        },
-      },
-    };
+    const sourceConfig = createProviderConfigFixture();
+    const runtimeConfig = createProviderConfigFixture("sk-runtime-resolved");
     const scopedResolvedConfig: OpenClawConfig = {
       ...runtimeConfig,
       tools: {
@@ -204,31 +180,10 @@ describe("runtime snapshot state", () => {
     }));
     const nextSourceConfig: OpenClawConfig = {
       gateway: { auth: { mode: "token" } },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            models: [],
-          },
-        },
-      },
+      ...createProviderConfigFixture(),
     };
 
-    setRuntimeConfigSnapshot(
-      {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: "sk-runtime-resolved",
-              models: [],
-            },
-          },
-        },
-      },
-      nextSourceConfig,
-    );
+    setRuntimeConfigSnapshot(createProviderConfigFixture("sk-runtime-resolved"), nextSourceConfig);
 
     await finalizeRuntimeSnapshotWrite({
       nextSourceConfig,
@@ -279,28 +234,8 @@ describe("runtime snapshot state", () => {
     });
 
     setRuntimeConfigSnapshot(
-      {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: "sk-runtime-resolved",
-              models: [],
-            },
-          },
-        },
-      },
-      {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              models: [],
-            },
-          },
-        },
-      },
+      createProviderConfigFixture("sk-runtime-resolved"),
+      createProviderConfigFixture(),
     );
     setRuntimeConfigSnapshotRefreshHandler({
       refresh: async ({ sourceConfig }) => {
@@ -313,15 +248,7 @@ describe("runtime snapshot state", () => {
     const writePromise = finalizeRuntimeSnapshotWrite({
       nextSourceConfig: {
         gateway: { auth: { mode: "token" } },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              models: [],
-            },
-          },
-        },
+        ...createProviderConfigFixture(),
       },
       hadRuntimeSnapshot: true,
       hadBothSnapshots: true,

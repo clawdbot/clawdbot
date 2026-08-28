@@ -179,6 +179,7 @@ describe("runAuthProbes", () => {
         authProfileId?: string;
         authProfileIdSource?: string;
         config?: OpenClawConfig;
+        preparedModelRuntimeMode?: string;
       }): Promise<AgentRunResultView> => {
         if (params.agentHarnessRuntimeOverride !== "openclaw") {
           throw new Error(
@@ -262,6 +263,9 @@ describe("runAuthProbes", () => {
           authProfileIdSource: "user",
         }),
       );
+      // Profile targets reuse the committed configured generation: no isolated
+      // runtime mode is requested.
+      expect(runEmbeddedAgent.mock.calls[0]?.[0].preparedModelRuntimeMode).toBeUndefined();
 
       runEmbeddedAgent.mockResolvedValueOnce({
         payloads: [{ text: "LLM request timed out.", isError: true }],
@@ -308,6 +312,7 @@ describe("runAuthProbes", () => {
         authProfileId?: string;
         authProfileIdSource?: string;
         config?: OpenClawConfig;
+        preparedModelRuntimeMode?: string;
       }) => ({ payloads: [{ text: "OK" }] }),
     );
     vi.doMock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
@@ -386,6 +391,7 @@ describe("runAuthProbes", () => {
       );
       expect(configKeyCall?.[0].agentDir).not.toBe("/tmp/openclaw-probe-agent");
       expect(configKeyCall?.[0].authProfileIdSource).toBe("user");
+      expect(configKeyCall?.[0].preparedModelRuntimeMode).toBe("isolated-read-only");
       expect(configKeyCall?.[0].config).toMatchObject({
         models: {
           providers: {
@@ -421,7 +427,12 @@ describe("runAuthProbes", () => {
 
   it("isolates marker credentials from stored profiles without pinning a synthetic one", async () => {
     const runEmbeddedAgent = vi.fn(
-      async (_params: { agentDir?: string; authProfileId?: string; config?: OpenClawConfig }) => ({
+      async (_params: {
+        agentDir?: string;
+        authProfileId?: string;
+        config?: OpenClawConfig;
+        preparedModelRuntimeMode?: string;
+      }) => ({
         payloads: [{ text: "OK" }],
       }),
     );
@@ -490,6 +501,7 @@ describe("runAuthProbes", () => {
       const call = runEmbeddedAgent.mock.calls[0]?.[0];
       expect(call?.agentDir).not.toBe("/tmp/openclaw-probe-agent");
       expect(call?.agentDir).toContain("openclaw-auth-probe-");
+      expect(call?.preparedModelRuntimeMode).toBe("isolated-read-only");
       expect(call?.config?.auth?.order?.openai).toEqual([]);
       expect(call?.config?.models?.providers?.openai?.apiKey).toBe(
         cfg.models.providers.openai.apiKey,

@@ -151,12 +151,6 @@ export function prependCurrentInboundContext(
     : prompt;
 }
 
-export function waitForCodexNotificationDispatchTurn(): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
 export function buildCodexAppServerTimeoutDiagnostics(params: {
   idleMs?: number;
   timeoutMs?: number;

@@ -25,7 +25,6 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiWebSearchPayload,
-  extractXaiWebSearchContent,
   requestXaiWebSearch,
   resolveXaiInlineCitations,
   resolveXaiWebSearchEndpoint,
@@ -423,7 +422,6 @@ export async function executeXaiWebSearchProviderTool(
 
 export const testing = {
   buildXaiWebSearchPayload,
-  extractXaiWebSearchContent,
   resolveXaiToolSearchConfig,
   resolveXaiInlineCitations,
   resolveXaiWebSearchCredential,

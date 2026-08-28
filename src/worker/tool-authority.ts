@@ -15,7 +15,12 @@ export const WORKER_LOCAL_TOOL_NAMES = [
 ] as const;
 
 /** Gateway-proxied tools exposed through the closed worker protocol. */
-export const WORKER_SESSION_TOOL_NAMES = ["sessions_spawn", "sessions_send"] as const;
+export const WORKER_SESSION_TOOL_NAMES = [
+  "sessions_spawn",
+  "sessions_send",
+  "github_publish",
+  "portal",
+] as const;
 
 export const WORKER_TOOL_NAMES = [
   ...WORKER_LOCAL_TOOL_NAMES,

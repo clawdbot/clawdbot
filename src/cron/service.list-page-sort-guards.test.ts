@@ -283,7 +283,7 @@ describe("cron listPage sort guards", () => {
     expect(page.jobs.map((job) => job.id)).toEqual(["tax-digest"]);
   });
 
-  it("applies schedule and last-run status filters before paging", async () => {
+  it("applies schedule, status, and trigger filters before paging", async () => {
     const nextRunAtMs = Date.parse("2030-02-27T15:30:00.000Z");
     const jobs = [
       createBaseJob({
@@ -299,6 +299,12 @@ describe("cron listPage sort guards", () => {
       createBaseJob({
         id: "cron-unknown",
         schedule: { kind: "cron", expr: "0 10 * * *" },
+        trigger: { script: "json({ fire: true })" },
+        state: { nextRunAtMs },
+      }),
+      createBaseJob({
+        id: "cron-unknown-plain",
+        schedule: { kind: "cron", expr: "0 11 * * *" },
         state: { nextRunAtMs },
       }),
     ];
@@ -310,6 +316,7 @@ describe("cron listPage sort guards", () => {
       const page = await listPage(state, {
         scheduleKind: "cron",
         lastRunStatus: "unknown",
+        trigger: "conditional",
         limit: 1,
       });
 

@@ -6,13 +6,16 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
+  accumulatedStreamText,
   advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
 } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 import {
+  resolveAssistantTextTail,
   streamCausalInsertIndex,
   streamCausalInterval,
   streamCausalTimestamp,
@@ -27,7 +30,7 @@ import {
   resolveLiveToolStreamRefs,
   resolveMatchingLiveToolIdentity,
 } from "./tool-stream-identity.ts";
-import { resetToolStream } from "./tool-stream.ts";
+import { resetToolStream, resetToolStreamRun } from "./tool-stream.ts";
 
 type StreamReconciliationState = StreamCausalBoundaryState & {
   chatStream: string | null;
@@ -64,6 +67,18 @@ type MaterializeVisibleStreamOptions = {
   isHiddenStreamText: StreamVisibility;
 };
 
+function resettableToolStreamHost(
+  state: StreamReconciliationState,
+): Parameters<typeof resetToolStream>[0] | null {
+  const toolHost = state as ToolStreamHost & Partial<Parameters<typeof resetToolStream>[0]>;
+  return toolHost.toolStreamById instanceof Map &&
+    Array.isArray(toolHost.toolStreamOrder) &&
+    Array.isArray(toolHost.chatToolMessages) &&
+    Array.isArray(toolHost.chatStreamSegments)
+    ? (toolHost as Parameters<typeof resetToolStream>[0])
+    : null;
+}
+
 export function currentLiveToolCallIds(state: StreamReconciliationState): string[] {
   const toolHost = state as ToolStreamHost;
   return Array.isArray(toolHost.toolStreamOrder)
@@ -89,20 +104,23 @@ export function maybeResetToolStream(
   state: StreamReconciliationState,
   opts?: { preserveStreamSegments?: boolean },
 ) {
-  const toolHost = state as ToolStreamHost & Partial<Parameters<typeof resetToolStream>[0]>;
-  if (
-    toolHost.toolStreamById instanceof Map &&
-    Array.isArray(toolHost.toolStreamOrder) &&
-    Array.isArray(toolHost.chatToolMessages) &&
-    Array.isArray(toolHost.chatStreamSegments)
-  ) {
-    const preservedStreamSegments = opts?.preserveStreamSegments
-      ? [...toolHost.chatStreamSegments]
-      : null;
-    resetToolStream(toolHost as Parameters<typeof resetToolStream>[0]);
-    if (preservedStreamSegments) {
-      toolHost.chatStreamSegments = preservedStreamSegments;
-    }
+  const toolHost = resettableToolStreamHost(state);
+  if (!toolHost) {
+    return;
+  }
+  const preservedStreamSegments = opts?.preserveStreamSegments
+    ? [...toolHost.chatStreamSegments]
+    : null;
+  resetToolStream(toolHost);
+  if (preservedStreamSegments) {
+    toolHost.chatStreamSegments = preservedStreamSegments;
+  }
+}
+
+export function maybeResetToolStreamRun(state: StreamReconciliationState, runId: string) {
+  const toolHost = resettableToolStreamHost(state);
+  if (toolHost) {
+    resetToolStreamRun(toolHost, runId);
   }
 }
 
@@ -136,8 +154,13 @@ function buildAssistantStreamMessage(
   };
 }
 
-function unkeyedStreamFallbackMetadata(message: unknown): Record<string, unknown> | null {
+function streamFallbackMetadata(message: unknown): Record<string, unknown> | null {
   const metadata = asNullableRecord(asNullableRecord(message)?.openclawStreamFallback);
+  return metadata;
+}
+
+function unkeyedStreamFallbackMetadata(message: unknown): Record<string, unknown> | null {
+  const metadata = streamFallbackMetadata(message);
   return metadata && !normalizeOptionalString(metadata.itemId) ? metadata : null;
 }
 
@@ -168,14 +191,24 @@ export function appendTerminalAssistantMessage(messages: unknown[], message: unk
   let terminalCursor = 0;
   for (let index = interval.start; index < interval.end; index += 1) {
     const existing = messages[index];
-    const fallback = unkeyedStreamFallbackMetadata(existing);
+    const fallback = streamFallbackMetadata(existing);
     if (!fallback) {
+      continue;
+    }
+    const visibleText = extractText(existing)?.trim();
+    if (normalizeOptionalString(fallback.itemId)) {
+      // Keyed stream segments normally represent commentary and must remain
+      // beside the final answer. When a keyed segment is the exact final
+      // answer, though, retaining both renders the streamed and persisted
+      // copies as duplicate assistant messages.
+      if (visibleText && visibleText === terminalText) {
+        removedIndexes.add(index);
+      }
       continue;
     }
     if (fallback.source === "current") {
       currentFallbackIndexes.push(index);
     }
-    const visibleText = extractText(existing)?.trim();
     if (!visibleText) {
       continue;
     }
@@ -222,33 +255,6 @@ function visibleAssistantStreamText(
     return null;
   }
   return stream;
-}
-
-function hasAssistantStreamReplacement(
-  messages: unknown[],
-  stream: string,
-  isHiddenAssistantMessage: AssistantMessageVisibility,
-  startIndex: number,
-  endIndex = messages.length,
-): boolean {
-  const expected = stream.trim();
-  if (!expected) {
-    return false;
-  }
-  return messages.slice(startIndex, endIndex).some((message) => {
-    if (!message || typeof message !== "object") {
-      return false;
-    }
-    const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
-    if (role && role !== "assistant") {
-      return false;
-    }
-    if (role === "assistant" && isHiddenAssistantMessage(message)) {
-      return false;
-    }
-    const text = extractText(message)?.trim();
-    return Boolean(text && (text === expected || text.startsWith(expected)));
-  });
 }
 
 function streamFallbackItemId(message: unknown): string | null {
@@ -303,7 +309,7 @@ export function visibleAssistantStreamParts(
     const afterBoundaryRunId =
       normalizeOptionalString(segment.afterBoundaryRunId) ?? latestBoundaryRunId;
     const boundaryRunId = normalizeOptionalString(segment.boundaryRunId);
-    if (!usesItemId && segment.boundaryMarker !== true) {
+    if (!usesItemId && segment.boundaryMarker !== true && segment.persisted !== true) {
       toolIndexedSegmentIndex += 1;
     }
     const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
@@ -311,7 +317,7 @@ export function visibleAssistantStreamParts(
       usesAccumulatedText ? trimAccumulatedStreamPrefix(segment.text, previousText) : segment.text,
       opts.isHiddenStreamText,
     );
-    if (visible) {
+    if (visible && segment.persisted !== true) {
       parts.push({
         text: visible,
         replacementText: segment.text,
@@ -363,12 +369,7 @@ export function visibleCurrentAssistantStreamTail(
   const segments = Array.isArray(streamHost.chatStreamSegments)
     ? streamHost.chatStreamSegments
     : [];
-  let previousText: string | null = null;
-  for (const segment of segments) {
-    if (streamSegmentUsesAccumulatedText(segment) && typeof segment.text === "string") {
-      previousText = advanceAccumulatedStreamText(previousText, segment.text);
-    }
-  }
+  const previousText = accumulatedStreamText(segments);
   return visibleAssistantStreamText(
     trimAccumulatedStreamPrefix(state.chatStream, previousText),
     isHiddenStreamText,
@@ -385,21 +386,20 @@ export function hasAssistantStreamPartReplacement(
   if (part.itemId) {
     return hasKeyedAssistantStreamReplacement(messages, part.itemId, startIndex, endIndex);
   }
-  return (
-    hasAssistantStreamReplacement(
-      messages,
-      part.replacementText,
-      isHiddenAssistantMessage,
-      startIndex,
-      endIndex,
-    ) ||
-    hasAssistantStreamReplacement(
-      messages,
-      part.text,
-      isHiddenAssistantMessage,
-      startIndex,
-      endIndex,
-    )
+  const persistedTexts = messages.slice(startIndex, endIndex).map((message) => {
+    const identity = readSessionMessageIdentity(message);
+    if (
+      (identity?.role && identity.role !== "assistant") ||
+      (identity?.runId && part.runId && identity.runId !== part.runId) ||
+      isHiddenAssistantMessage(message) ||
+      isKeyedAssistantStreamFallbackMessage(message)
+    ) {
+      return null;
+    }
+    return extractText(message)?.trim() ?? null;
+  });
+  return [part.replacementText, part.text].some(
+    (text) => Boolean(text.trim()) && !resolveAssistantTextTail(persistedTexts, text.trim()),
   );
 }
 

@@ -79,6 +79,7 @@ import {
   type SignalSender,
 } from "../identity.js";
 import { formatSignalMediaText } from "../media-text.js";
+import { createSignalNativeReplyIdPlan } from "../native-reply.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
@@ -447,6 +448,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     };
     const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
       ...replyPipeline,
+      propagateRetryableNoSendFailure: true,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
     };
@@ -466,6 +468,34 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           replyContext: nativeReplyContext,
           chatType: entry.isGroup ? "group" : "direct",
         });
+      },
+      durable: (payload, info) => {
+        if (info.kind !== "final") {
+          return false;
+        }
+        const replyPlan = createSignalNativeReplyIdPlan({
+          payload,
+          replyContext: nativeReplyContext,
+          replyToMode,
+        });
+        const send: typeof sendMessageSignal = async (to, text, options) => {
+          entry.turnAdoptionLifecycle?.abortSignal.throwIfAborted();
+          deps.abortSignal?.throwIfAborted();
+          const result = await sendMessageSignal(to, text, {
+            ...options,
+            baseUrl: deps.baseUrl,
+            account: deps.account,
+            maxBytes: deps.mediaMaxBytes,
+            accountId: deps.accountId,
+          });
+          replyPlan.markSent();
+          return result;
+        };
+        return {
+          deps: { signal: send },
+          replyToId: replyPlan.peek() ?? null,
+          replyToMode,
+        };
       },
       onError: (err, info) => {
         deps.runtime.error?.(danger(`signal ${info.kind} reply failed: ${String(err)}`));
@@ -493,6 +523,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           accountId: route.accountId,
           route: { agentId: route.agentId, sessionKey: route.sessionKey },
           ctxPayload,
+          // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
+          dispatchReplyFromConfig: deps.channelRuntime?.reply?.dispatchReplyFromConfig,
           record: {
             updateLastRoute: !entry.isGroup
               ? {
@@ -916,17 +948,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   return async (
     event: { event?: string; data?: string },
     turnAdoptionLifecycle?: SignalIngressLifecycle,
+    preparedPayload?: SignalReceivePayload,
   ): Promise<{ kind: "deferred" } | { kind: "failed-retryable"; error: unknown } | void> => {
     if (event.event !== "receive" || !event.data) {
       return;
     }
 
-    let payload: SignalReceivePayload | null;
-    try {
-      payload = JSON.parse(event.data) as SignalReceivePayload;
-    } catch (err) {
-      deps.runtime.error?.(`failed to parse event: ${String(err)}`);
-      return;
+    let payload: SignalReceivePayload | null = preparedPayload ?? null;
+    if (!preparedPayload) {
+      try {
+        payload = JSON.parse(event.data) as SignalReceivePayload;
+      } catch (err) {
+        deps.runtime.error?.(`failed to parse event: ${String(err)}`);
+        return;
+      }
     }
     if (payload?.exception?.message) {
       deps.runtime.error?.(`receive exception: ${payload.exception.message}`);

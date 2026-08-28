@@ -483,6 +483,29 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
+  fun reconnectHistoryOmissionClearsStaleExactRunIds() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway, history(emptyList()))
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"patch","session":{"key":"main","agentId":"main","hasActiveRun":true,"activeRunIds":["run-stale"]}}""",
+      )
+      assertEquals("run-stale", controller.selectedActiveRunPresentation.value.runId)
+
+      gateway.respondWith(
+        "chat.history",
+        history(emptyList(), hasActiveRun = true, activeRunIds = null),
+      )
+      val pendingSessionList = CompletableDeferred<String>()
+      gateway.respond("sessions.list") { pendingSessionList.await() }
+      reconnect(controller)
+
+      assertEquals(1, controller.selectedActiveRunPresentation.value.count)
+      assertNull(controller.selectedActiveRunPresentation.value.runId)
+    }
+
+  @Test
   fun reconnectStaysUnhealthyUntilRecoveryHistoryApplies() =
     runTest {
       val gateway = ScriptedGateway(json)

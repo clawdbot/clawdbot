@@ -6,7 +6,12 @@ import {
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import {
+  createCodexElicitationResponse,
+  type CodexElicitationResponse,
+} from "./elicitation-response.js";
+import {
   approvalRequestExplicitlyUnavailable,
+  codexApprovalTimeoutText,
   mapExecDecisionToOutcome,
   requestPluginApproval,
   sanitizeCodexApprovalVisibleText,
@@ -36,6 +41,11 @@ type BridgeableApprovalElicitation = {
   persistHintsMode?: "legacy" | "explicit";
   allowedDecisions?: ExecApprovalDecision[];
 };
+
+type ElicitationApprovalOutcome = AppServerApprovalOutcome | "timed-out";
+type CodexApprovalElicitationResult =
+  | { kind: "not-mine" }
+  | { kind: "handled"; response: CodexElicitationResponse };
 
 type PluginElicitationResolution =
   | { kind: "not_plugin" }
@@ -70,7 +80,7 @@ const MAX_DISPLAY_VALUE_OBJECT_KEYS = 8;
 const MAX_DISPLAY_VALUE_DEPTH = 3;
 const DISPLAY_TEXT_SCAN_MAX_LENGTH = 4096;
 
-export async function handleCodexAppServerElicitationRequest(params: {
+export async function routeCodexAppServerElicitationRequest(params: {
   requestParams: JsonValue | undefined;
   paramsForRun: EmbeddedRunAttemptParams;
   threadId: string;
@@ -78,14 +88,24 @@ export async function handleCodexAppServerElicitationRequest(params: {
   pluginAppPolicyContext?: PluginAppPolicyContext;
   computerUseMcpServerName?: string;
   signal?: AbortSignal;
-}): Promise<JsonValue | undefined> {
+}): Promise<CodexApprovalElicitationResult> {
   const requestParams = isJsonObject(params.requestParams) ? params.requestParams : undefined;
   if (!requestParams || readNonBlankStringField(requestParams, "threadId") !== params.threadId) {
-    return undefined;
+    return { kind: "not-mine" };
   }
   const requestTurnId = requestParams.turnId;
   if (requestTurnId !== null && requestTurnId !== undefined && requestTurnId !== params.turnId) {
-    return undefined;
+    return { kind: "not-mine" };
+  }
+  const meta = isJsonObject(requestParams["_meta"]) ? requestParams["_meta"] : undefined;
+  const approvalShaped =
+    meta?.[MCP_TOOL_APPROVAL_KIND_KEY] === MCP_TOOL_APPROVAL_KIND ||
+    (params.computerUseMcpServerName !== undefined &&
+      readNonBlankStringField(requestParams, "serverName") === params.computerUseMcpServerName);
+  // Plugin ownership identifies which approval policy applies; it does not turn
+  // ordinary MCP forms or OAuth URLs into destructive-action approvals.
+  if (!approvalShaped) {
+    return { kind: "not-mine" };
   }
   const pluginResolution = resolvePluginElicitation({
     requestParams,
@@ -94,29 +114,31 @@ export async function handleCodexAppServerElicitationRequest(params: {
   if (pluginResolution.kind !== "not_plugin") {
     if (params.paramsForRun.trigger === "cron" && params.paramsForRun.scheduledRuntimeAuthority) {
       logPluginElicitationDecline("scheduled_authority_non_interactive", requestParams);
-      return declineElicitationResponse();
+      return handled(createCodexElicitationResponse("decline"));
     }
     if (pluginResolution.kind === "decline") {
       logPluginElicitationDecline(pluginResolution.reason, requestParams);
-      return declineElicitationResponse();
+      return handled(createCodexElicitationResponse("decline"));
     }
     if (requestTurnId !== params.turnId) {
       logPluginElicitationDecline("missing_active_turn", requestParams);
-      return declineElicitationResponse();
+      return handled(createCodexElicitationResponse("decline"));
     }
-    return await buildPluginPolicyElicitationResponse({
-      entry: pluginResolution.entry,
-      requestParams,
-      paramsForRun: params.paramsForRun,
-      signal: params.signal,
-    });
+    return handled(
+      await buildPluginPolicyElicitationResponse({
+        entry: pluginResolution.entry,
+        requestParams,
+        paramsForRun: params.paramsForRun,
+        signal: params.signal,
+      }),
+    );
   }
 
   const approvalPrompt =
     readComputerUseApprovalElicitation(requestParams, params.computerUseMcpServerName) ??
     readBridgeableApprovalElicitation(requestParams);
   if (!approvalPrompt) {
-    return undefined;
+    return handled(createCodexElicitationResponse("decline"));
   }
 
   const outcome = await requestPluginApprovalOutcome({
@@ -126,7 +148,11 @@ export async function handleCodexAppServerElicitationRequest(params: {
     allowedDecisions: approvalPrompt.allowedDecisions,
     signal: params.signal,
   });
-  return buildElicitationResponse(approvalPrompt, outcome);
+  return handled(buildElicitationResponse(approvalPrompt, outcome));
+}
+
+function handled(response: CodexElicitationResponse): CodexApprovalElicitationResult {
+  return { kind: "handled", response };
 }
 
 function resolvePluginElicitation(params: {
@@ -284,19 +310,19 @@ async function buildPluginPolicyElicitationResponse(params: {
   requestParams: JsonObject;
   paramsForRun: EmbeddedRunAttemptParams;
   signal?: AbortSignal;
-}): Promise<JsonValue> {
+}): Promise<CodexElicitationResponse> {
   const mode = resolvePluginDestructiveApprovalMode(params.entry);
   if (mode === "deny") {
     logPluginElicitationDecline("destructive_actions_disabled", params.requestParams);
-    return declineElicitationResponse();
+    return createCodexElicitationResponse("decline");
   }
   const approvalPrompt = readPluginApprovalElicitation(params.entry, params.requestParams);
   if (!approvalPrompt) {
     logPluginElicitationDecline("unsupported_schema", params.requestParams);
-    return declineElicitationResponse();
+    return createCodexElicitationResponse("decline");
   }
   const response = buildElicitationResponse(approvalPrompt, "approved-once");
-  if (isJsonObject(response) && response.action === "accept") {
+  if (response.action === "accept") {
     if (mode === "allow") {
       return response;
     }
@@ -309,11 +335,11 @@ async function buildPluginPolicyElicitationResponse(params: {
     });
     return buildElicitationResponse(
       approvalPrompt,
-      oneShotPluginPolicyApprovalOutcome(mode, outcome),
+      mode === "ask" && outcome === "approved-session" ? "approved-once" : outcome,
     );
   }
   logPluginElicitationDecline("unmappable_schema", params.requestParams);
-  return declineElicitationResponse();
+  return createCodexElicitationResponse("decline");
 }
 
 function resolvePluginDestructiveApprovalMode(
@@ -331,13 +357,6 @@ function allowedPluginPolicyApprovalDecisions(
     return allowedDecisions;
   }
   return allowedDecisions.filter((decision) => decision !== "allow-always");
-}
-
-function oneShotPluginPolicyApprovalOutcome(
-  mode: "allow" | "deny" | "auto" | "ask",
-  outcome: AppServerApprovalOutcome,
-): AppServerApprovalOutcome {
-  return mode === "ask" && outcome === "approved-session" ? "approved-once" : outcome;
 }
 
 function readPluginApprovalElicitation(
@@ -406,10 +425,6 @@ function canMapPersistentApproval(requestedSchema: JsonObject, meta: JsonObject)
       chooseAlwaysPersistOptionValue(readEnumOptions(schema)) !== undefined
     );
   });
-}
-
-function declineElicitationResponse(): JsonValue {
-  return { action: "decline", content: null, _meta: null };
 }
 
 function logPluginElicitationDecline(reason: string, requestParams: JsonObject | undefined): void {
@@ -655,7 +670,7 @@ async function requestPluginApprovalOutcome(params: {
   description: string;
   allowedDecisions?: ExecApprovalDecision[];
   signal?: AbortSignal;
-}): Promise<AppServerApprovalOutcome> {
+}): Promise<ElicitationApprovalOutcome> {
   try {
     const requestResult = await requestPluginApproval({
       hostCapabilities: params.paramsForRun.hostCapabilities,
@@ -678,6 +693,12 @@ async function requestPluginApprovalOutcome(params: {
           approvalId,
           signal: params.signal,
         });
+    if (params.signal?.aborted) {
+      return "cancelled";
+    }
+    if (approvalResult?.terminalReason === "timeout") {
+      return "timed-out";
+    }
     return mapExecDecisionToOutcome(approvalResult?.decision);
   } catch {
     return params.signal?.aborted ? "cancelled" : "denied";
@@ -689,14 +710,19 @@ function buildElicitationResponse(
     BridgeableApprovalElicitation,
     "requestedSchema" | "meta" | "persistHintsMode"
   >,
-  outcome: AppServerApprovalOutcome,
-): JsonValue {
+  outcome: ElicitationApprovalOutcome,
+): CodexElicitationResponse {
   const { requestedSchema, meta } = approvalPrompt;
   if (outcome === "cancelled") {
-    return { action: "cancel", content: null, _meta: null };
+    return createCodexElicitationResponse("cancel");
+  }
+  if (outcome === "timed-out") {
+    return createCodexElicitationResponse("decline", null, {
+      message: codexApprovalTimeoutText("other"),
+    });
   }
   if (outcome === "denied" || outcome === "unavailable") {
-    return { action: "decline", content: null, _meta: null };
+    return createCodexElicitationResponse("decline");
   }
 
   const content = buildAcceptedContent(approvalPrompt, outcome);
@@ -706,13 +732,13 @@ function buildElicitationResponse(
       fields: Object.keys(requestedSchema.properties ?? {}),
       outcome,
     });
-    return declineElicitationResponse();
+    return createCodexElicitationResponse("decline");
   }
-  return {
-    action: "accept",
-    content: content ?? null,
-    _meta: buildAcceptedMeta(meta, outcome, approvalPrompt.persistHintsMode ?? "legacy"),
-  };
+  return createCodexElicitationResponse(
+    "accept",
+    content ?? null,
+    buildAcceptedMeta(meta, outcome, approvalPrompt.persistHintsMode ?? "legacy"),
+  );
 }
 
 function buildAcceptedContent(

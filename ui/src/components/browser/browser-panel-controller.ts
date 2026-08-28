@@ -70,6 +70,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   hostDisconnected(): void {
+    this.input.cancelOverlayPointerGesture();
     this.invalidateViewOperations();
     this.setState("loading", false);
   }
@@ -120,6 +121,8 @@ export class BrowserPanelController implements ReactiveController {
     this.input.resetCaptureState();
     this.setState("inspected", null);
     this.setState("inspectPointer", null);
+    this.urlDraftEditing = false;
+    this.setState("urlDraft", "");
     this.setState("pendingNewTab", false);
     // Re-probe per connection: another gateway may have evaluate enabled.
     this.setState("evaluateUnavailable", false);
@@ -202,7 +205,7 @@ export class BrowserPanelController implements ReactiveController {
         return;
       }
       const dataUrl = await fetchBrowserScreenshotDataUrl({
-        basePath: this.host.basePath,
+        resourceBasePath: this.host.resourceBasePath,
         authToken: this.host.authToken,
         path: shot.path,
       });
@@ -645,8 +648,12 @@ export class BrowserPanelController implements ReactiveController {
     this.input.handleOverlayPointerMove(event);
   }
 
-  handleOverlayPointerUp(): void {
-    this.input.handleOverlayPointerUp();
+  handleOverlayPointerUp(event: PointerEvent): void {
+    this.input.handleOverlayPointerUp(event);
+  }
+
+  cancelOverlayPointerGesture(): void {
+    this.input.cancelOverlayPointerGesture();
   }
 
   undoStroke(): void {

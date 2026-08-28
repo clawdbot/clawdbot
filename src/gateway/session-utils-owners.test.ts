@@ -1,5 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import {
+  buildSessionCreationStamp,
+  inheritSessionCreationPolicy,
+} from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
@@ -48,6 +52,7 @@ it("lets configured agents win id-only owner facet collisions", () => {
         `agent:main:${index}`,
         {
           createdActor: { type, id: "shared-id" },
+          createdVia: "operator",
           sessionId: `session-${index}`,
           updatedAt: 2 - index,
         } satisfies SessionEntry,
@@ -62,7 +67,14 @@ it("lets configured agents win id-only owner facet collisions", () => {
       opts: { archived: "all" },
     });
 
-    expect(result.owners).toEqual([{ type: "agent", id: "shared-id", label: "Shared agent" }]);
+    expect(result.owners).toEqual([
+      {
+        type: "agent",
+        id: "shared-id",
+        identity: { type: "agent", id: "shared-id" },
+        label: "Shared agent",
+      },
+    ]);
   }
 });
 
@@ -72,11 +84,13 @@ it("returns the complete deterministic owner facet independently of pagination",
       archivedAt: 3,
       archivedBy: { type: "human", id: "profile-bob" },
       createdActor: { type: "human", id: "profile-ada" },
+      createdVia: "operator",
       sessionId: "session-ada",
       updatedAt: 2,
     },
     "agent:main:bob": {
       createdActor: { type: "human", id: "profile-bob" },
+      createdVia: "operator",
       sessionId: "session-bob",
       updatedAt: 1,
     },
@@ -95,20 +109,28 @@ it("returns the complete deterministic owner facet independently of pagination",
     {
       type: "human",
       id: "profile-ada",
+      identity: { type: "profile", id: "profile-ada" },
       label: "Ada",
       avatarUrl: "/api/users/profile-ada/avatar?v=ada-hash-png",
     },
-    { type: "human", id: "profile-bob", label: "Bob" },
+    {
+      type: "human",
+      id: "profile-bob",
+      identity: { type: "profile", id: "profile-bob" },
+      label: "Bob",
+    },
   ]);
   expect(result.sessions[0]?.createdActor).toEqual({
     type: "human",
     id: "profile-ada",
+    identity: { type: "profile", id: "profile-ada" },
     label: "Ada",
     avatarUrl: "/api/users/profile-ada/avatar?v=ada-hash-png",
   });
   expect(result.sessions[0]?.archivedBy).toEqual({
     type: "human",
     id: "profile-bob",
+    identity: { type: "profile", id: "profile-bob" },
     label: "Bob",
   });
   expect(getUserProfileDisplay).toHaveBeenCalledTimes(2);
@@ -123,11 +145,43 @@ it("returns the complete deterministic owner facet independently of pagination",
   expect(filtered.owners).toEqual(result.owners);
 });
 
+it("prepends an owner window without advancing shared-page pagination", () => {
+  const store: Record<string, SessionEntry> = {
+    "agent:main:foreign-newest": {
+      createdActor: { type: "human", id: "profile-ada" },
+      createdVia: "operator",
+      sessionId: "session-foreign-newest",
+      updatedAt: 2,
+    },
+    "agent:main:owner-older": {
+      createdActor: { type: "human", id: "profile-bob" },
+      createdVia: "operator",
+      sessionId: "session-owner-older",
+      updatedAt: 1,
+    },
+  };
+
+  const result = listSessionsFromStore({
+    cfg: {} as OpenClawConfig,
+    storePath: "/tmp/openclaw-session-owner-first",
+    store,
+    opts: { archived: "all", limit: 1 },
+    ownerFirstActorId: "profile-bob",
+  });
+
+  expect(result.sessions.map((row) => row.key)).toEqual([
+    "agent:main:owner-older",
+    "agent:main:foreign-newest",
+  ]);
+  expect(result).toMatchObject({ count: 2, totalCount: 2, nextOffset: 1, hasMore: true });
+});
+
 it("projects only durable profiles and configured agents as effective owners", () => {
   const cases = [
     { createdActor: { type: "human" as const, id: "profile-ada" }, ownerId: "profile-ada" },
     {
       createdActor: { type: "human" as const, id: "profile:channel:opaque" },
+      createdVia: "operator",
       ownerId: "profile:channel:opaque",
     },
     { createdActor: { type: "agent" as const, id: "research" }, ownerId: "research" },
@@ -136,6 +190,7 @@ it("projects only durable profiles and configured agents as effective owners", (
     { createdActor: { type: "system" as const, id: "system-import" } },
     {
       createdActor: { type: "human" as const, id: "profile-ada" },
+      createdVia: "operator",
       owner: { actor: { type: "human" as const, id: "slack:channel:789" } },
     },
   ];
@@ -144,6 +199,7 @@ it("projects only durable profiles and configured agents as effective owners", (
       `agent:main:owner-${index}`,
       {
         createdActor,
+        createdVia: "operator",
         owner,
         sessionId: `session-owner-${index}`,
         updatedAt: cases.length - index,
@@ -168,11 +224,22 @@ it("projects only durable profiles and configured agents as effective owners", (
     {
       type: "human",
       id: "profile-ada",
+      identity: { type: "profile", id: "profile-ada" },
       label: "Ada",
       avatarUrl: "/api/users/profile-ada/avatar?v=ada-hash-png",
     },
-    { type: "human", id: "profile:channel:opaque", label: "Channel Keeper" },
-    { type: "agent", id: "research", label: "Research" },
+    {
+      type: "human",
+      id: "profile:channel:opaque",
+      identity: { type: "profile", id: "profile:channel:opaque" },
+      label: "Channel Keeper",
+    },
+    {
+      type: "agent",
+      id: "research",
+      identity: { type: "agent", id: "research" },
+      label: "Research",
+    },
   ]);
   expect(
     result.sessions.map((row) => ({
@@ -199,11 +266,13 @@ it("filters immutable creator and effective owner separately while preserving pr
   const store: Record<string, SessionEntry> = {
     "agent:main:default-owner": {
       createdActor: { type: "human", id: "profile-ada" },
+      createdVia: "operator",
       sessionId: "session-default-owner",
       updatedAt: 2,
     },
     "agent:main:assigned-owner": {
       createdActor: { type: "human", id: "profile-ada" },
+      createdVia: "operator",
       owner: {
         actor: { type: "human", id: "profile-bob" },
         assignedBy: { type: "human", id: "profile-ada" },
@@ -214,6 +283,7 @@ it("filters immutable creator and effective owner separately while preserving pr
     },
     "agent:main:other-creator": {
       createdActor: { type: "human", id: "profile-bob" },
+      createdVia: "operator",
       owner: { actor: { type: "human", id: "profile-ada" } },
       sessionId: "session-other-creator",
       updatedAt: 0,
@@ -242,10 +312,16 @@ it("filters immutable creator and effective owner separately while preserving pr
     {
       type: "human",
       id: "profile-ada",
+      identity: { type: "profile", id: "profile-ada" },
       label: "Ada",
       avatarUrl: "/api/users/profile-ada/avatar?v=ada-hash-png",
     },
-    { type: "human", id: "profile-bob", label: "Bob" },
+    {
+      type: "human",
+      id: "profile-bob",
+      identity: { type: "profile", id: "profile-bob" },
+      label: "Bob",
+    },
   ]);
   const creatorFiltered = listSessionsFromStore({
     cfg: {} as OpenClawConfig,
@@ -280,19 +356,21 @@ it("projects participant identities and filters sessions involving the viewer", 
   const store: Record<string, SessionEntry> = {
     "agent:main:owned": {
       createdActor: { type: "human", id: "profile-ada" },
-      participants: [{ type: "human", id: "profile-bob" }],
+      createdVia: "operator",
+      participants: [{ identity: { type: "profile", id: "profile-bob" } }],
       participantCount: 1,
       sessionId: "session-owned",
       updatedAt: 3,
     },
     "agent:main:participating": {
       createdActor: { type: "human", id: "profile-bob" },
+      createdVia: "operator",
       participants: [
-        { type: "agent", id: "research", source: "agent" },
-        { type: "human", id: "profile-carol", source: "profile" },
-        { type: "human", id: "profile-dana", source: "profile" },
-        { type: "human", id: "profile-erin", source: "profile" },
-        { type: "human", id: "profile-ada", source: "profile" },
+        { identity: { type: "agent", id: "research" } },
+        { identity: { type: "profile", id: "profile-carol" } },
+        { identity: { type: "profile", id: "profile-dana" } },
+        { identity: { type: "profile", id: "profile-erin" } },
+        { identity: { type: "profile", id: "profile-ada" } },
       ],
       participantCount: 5,
       sessionId: "session-participating",
@@ -300,20 +378,35 @@ it("projects participant identities and filters sessions involving the viewer", 
     },
     "agent:main:channel-collision": {
       createdActor: { type: "human", id: "profile-bob" },
-      participants: [{ type: "human", id: "profile-ada", source: "channel" }],
+      createdVia: "operator",
+      participants: [
+        {
+          identity: {
+            type: "observation",
+            id: "profile-ada",
+            pluginId: "discord",
+            accountId: null,
+            senderKind: "unknown",
+          },
+        },
+      ],
       participantCount: 1,
       sessionId: "session-channel-collision",
       updatedAt: 1,
     },
     "agent:main:legacy-collision": {
       createdActor: { type: "human", id: "profile-bob" },
-      participants: [{ type: "human", id: "profile-ada" }],
+      createdVia: "operator",
+      participants: [
+        { identity: { type: "legacy", id: "profile-ada", actorType: "human", source: null } },
+      ],
       participantCount: 1,
       sessionId: "session-legacy-collision",
       updatedAt: 1,
     },
     "agent:main:unrelated": {
       createdActor: { type: "human", id: "profile-bob" },
+      createdVia: "operator",
       sessionId: "session-unrelated",
       updatedAt: 1,
     },
@@ -335,10 +428,10 @@ it("projects participant identities and filters sessions involving the viewer", 
   ]);
   expect(result.sessions[1]).toMatchObject({
     participants: [
-      { type: "agent", id: "research", label: "Research" },
-      { type: "human", id: "profile-carol", label: "Bob" },
-      { type: "human", id: "profile-dana", label: "Bob" },
-      { type: "human", id: "profile-erin", label: "Bob" },
+      { identity: { type: "agent", id: "research" }, label: "Research" },
+      { identity: { type: "profile", id: "profile-carol" }, label: "Bob" },
+      { identity: { type: "profile", id: "profile-dana" }, label: "Bob" },
+      { identity: { type: "profile", id: "profile-erin" }, label: "Bob" },
     ],
     participantCount: 5,
   });
@@ -350,11 +443,216 @@ it("projects participant identities and filters sessions involving the viewer", 
     opts: { archived: "all" },
   });
   expect(unfiltered.sessions.find((row) => row.key.endsWith(":channel-collision"))).toMatchObject({
-    participants: [{ type: "human", id: "profile-ada", label: "Ada" }],
+    participants: [{ identity: { type: "observation", id: "profile-ada" } }],
   });
   expect(unfiltered.sessions.find((row) => row.key.endsWith(":legacy-collision"))).toMatchObject({
-    participants: [{ type: "human", id: "profile-ada", label: "Ada" }],
+    participants: [{ identity: { type: "legacy", id: "profile-ada" } }],
   });
+  for (const suffix of [":legacy-collision", ":channel-collision"]) {
+    const participant = unfiltered.sessions.find((row) => row.key.endsWith(suffix))
+      ?.participants?.[0];
+    expect(participant).not.toHaveProperty("label");
+    expect(participant).not.toHaveProperty("avatarUrl");
+  }
+  const selected = listSessionsFromStore({
+    cfg,
+    storePath: "/tmp/openclaw-session-participants",
+    store,
+    opts: { archived: "all", includePeople: true, involvingProfileId: "profile-ada", limit: 1 },
+  });
+  expect(selected.totalCount).toBe(2);
+  expect(
+    selected.people?.find((person) => person.identity.id === "profile-ada")?.sessionCount,
+  ).toBe(2);
+  expect(selected.people?.some((person) => person.identity.id === "research")).toBe(false);
+});
+
+it.each(["spawn", "talk", "cron"] as const)(
+  "associates a required %s creator without inventing profile contributions or promoting unqualified creators",
+  (via) => {
+    getUserProfileDisplay.mockImplementation((id) => ({
+      id: id === "former" ? "current" : id,
+      displayName: "Current",
+      hasAvatar: false,
+      avatarRevision: "1",
+    }));
+    const childKey = "agent:main:delegated";
+    const child: SessionEntry = {
+      ...buildSessionCreationStamp({
+        via,
+        ...inheritSessionCreationPolicy(
+          { createdActor: { type: "human", id: "former" }, sandbox: "required" },
+          { type: "agent", id: "research" },
+        ),
+        now: 1,
+      }),
+      sessionId: "delegated",
+      updatedAt: 0,
+      participants: [{ identity: { type: "agent", id: "research" } }],
+      participantCount: 1,
+    };
+    const store: Record<string, SessionEntry> = {
+      "agent:main:historical": {
+        sessionId: "historical",
+        updatedAt: 1,
+        participants: [
+          { identity: { type: "profile", id: "former" } },
+          { identity: { type: "profile", id: "current" } },
+        ],
+      },
+      [childKey]: child,
+    };
+    const unqualified = [
+      ["channel", undefined],
+      ["channel", "required"],
+      ["spawn", undefined],
+      ["talk", undefined],
+      ["cron", undefined],
+      ["plugin", "required"],
+      ["internal", "required"],
+      [undefined, "required"],
+    ] as const;
+    for (const [index, [createdVia, sandbox]] of unqualified.entries()) {
+      store[`agent:main:unqualified-${index}`] = {
+        sessionId: `unqualified-${index}`,
+        updatedAt: 2,
+        createdVia,
+        sandbox,
+        createdActor: { type: "human", id: "current" },
+      };
+    }
+    const query = {
+      cfg: { agents: { list: [{ id: "main" }, { id: "research" }] } },
+      storePath: "/tmp/openclaw-session-profile-alias",
+      store,
+      opts: { archived: "all" as const, includePeople: true },
+    };
+    const all = listSessionsFromStore(query);
+    const creator = {
+      type: "human",
+      id: "former",
+      identity: { type: "profile", id: "current" },
+      label: "Current",
+    };
+    expect(all.sessions.find((row) => row.key === childKey)).toMatchObject({
+      createdActor: creator,
+      owner: { actor: creator },
+      participants: [{ identity: { type: "agent", id: "research" } }],
+      participantCount: 1,
+    });
+    expect(all.owners).toEqual([creator]);
+    for (const row of all.sessions.filter((candidate) => candidate.key.includes(":unqualified-"))) {
+      expect(row.createdActor).toEqual({
+        type: "human",
+        id: "current",
+        identity: { type: "legacy", actorType: "human", source: null, id: "current" },
+      });
+      expect(row.owner).toBeUndefined();
+    }
+    const involving = listSessionsFromStore({ ...query, involvingActorId: "current" });
+    expect(involving.sessions.map((row) => row.key)).toEqual(["agent:main:historical", childKey]);
+    expect(involving.sessions[0]?.participants).toEqual([
+      { identity: { type: "profile", id: "current" }, label: "Current" },
+    ]);
+    expect(involving.people).toEqual([
+      { identity: { type: "profile", id: "current" }, label: "Current", sessionCount: 2 },
+    ]);
+    const ownerFirst = listSessionsFromStore({
+      ...query,
+      opts: { archived: "all", limit: 1 },
+      ownerFirstActorId: "current",
+    });
+    expect(ownerFirst.sessions[0]?.key).toBe(childKey);
+
+    // Reassignment must not erase the creator's Activity association or fabricate their input.
+    child.owner = { actor: { type: "agent", id: "main" } };
+    const associated = listSessionsFromStore({
+      ...query,
+      opts: { ...query.opts, involvingProfileId: "former" },
+    });
+    expect(associated.sessions.map((row) => row.key)).toEqual(["agent:main:historical", childKey]);
+    expect(associated.involvingProfileId).toBe("current");
+    expect(associated.sessions[1]?.participants).toEqual([
+      { identity: { type: "agent", id: "research" } },
+    ]);
+    expect(child.createdActor).toEqual({ type: "human", id: "former" });
+    expect(child.participants).toEqual([{ identity: { type: "agent", id: "research" } }]);
+  },
+);
+
+it("returns a canonical selected person and orders merged owners without borrowing remote identities", () => {
+  getUserProfileDisplay.mockImplementation((id) => ({
+    id: id === "former" ? "current" : id,
+    displayName: id,
+    hasAvatar: false,
+    avatarRevision: "1",
+  }));
+  const store: Record<string, SessionEntry> = Object.fromEntries(
+    Array.from({ length: 65 }, (_, i) => [
+      `agent:main:other-${i}`,
+      {
+        sessionId: `other-${i}`,
+        updatedAt: 100 + i,
+        participants: [{ identity: { type: "profile", id: `person-${i}` } }],
+      },
+    ]),
+  );
+  store["agent:main:owned"] = {
+    sessionId: "owned",
+    updatedAt: 1,
+    owner: { actor: { type: "human", id: "former" } },
+  };
+  const query = {
+    cfg: {},
+    storePath: "/tmp/openclaw-session-selected-person",
+    store,
+    opts: { archived: "all" as const, includePeople: true, involvingProfileId: "former", limit: 1 },
+  };
+  const result = listSessionsFromStore(query);
+  expect(result).toMatchObject({
+    involvingProfileId: "current",
+    totalCount: 1,
+    peopleIncomplete: true,
+  });
+  expect(result.people?.some((person) => person.identity.id === "current")).toBe(true);
+  const ordered = listSessionsFromStore({
+    ...query,
+    opts: { archived: "all", limit: 1 },
+    ownerFirstActorId: "current",
+  });
+  expect(ordered.sessions[0]?.key).toBe("agent:main:owned");
+  const involved = listSessionsFromStore({
+    ...query,
+    opts: { archived: "all" },
+    involvingActorId: "current",
+  });
+  expect(involved.sessions.map((row) => row.key)).toEqual(["agent:main:owned"]);
+});
+
+it("reports the authoritative admission bound even when the visible participant list is smaller", () => {
+  const result = listSessionsFromStore({
+    cfg: {},
+    storePath: "/tmp/openclaw-session-bound",
+    store: {
+      "agent:main:capped": {
+        sessionId: "capped",
+        updatedAt: 1,
+        participantCount: 32,
+        participants: Array.from({ length: 31 }, (_, i) => ({
+          identity: {
+            type: "remote",
+            pluginId: "test",
+            domain: "workspace",
+            idKind: "user",
+            id: String(i),
+          },
+        })),
+      },
+    },
+    opts: { includePeople: true },
+  });
+  expect(result.people).toEqual([]);
+  expect(result.peopleIncomplete).toBe(true);
 });
 
 it("preserves list output across visibility, scope, owner, and search filters", async () => {
@@ -375,6 +673,7 @@ it("preserves list output across visibility, scope, owner, and search filters", 
   const store: Record<string, SessionEntry> = {
     global: {
       createdActor: { type: "human", id: "profile-bob" },
+      createdVia: "operator",
       sessionId: "session-global",
       subject: "needle global",
       updatedAt: now - 1,
@@ -388,6 +687,7 @@ it("preserves list output across visibility, scope, owner, and search filters", 
     "agent:main:shared": {
       boardFace: "chat",
       createdActor: { type: "human", id: "profile-ada" },
+      createdVia: "operator",
       label: "focus",
       lastInteractionAt: now - 5,
       sessionId: "session-main-shared",
@@ -397,6 +697,7 @@ it("preserves list output across visibility, scope, owner, and search filters", 
     },
     "agent:main:draft": {
       createdActor: { type: "human", id: "profile-ada" },
+      createdVia: "operator",
       sessionId: "session-main-draft",
       subject: "needle hidden draft",
       updatedAt: now - 4,
@@ -404,6 +705,7 @@ it("preserves list output across visibility, scope, owner, and search filters", 
     },
     "agent:work:shared": {
       createdActor: { type: "human", id: "profile-bob" },
+      createdVia: "operator",
       sessionId: "session-work-shared",
       subject: "needle work",
       updatedAt: now - 5,
@@ -412,6 +714,7 @@ it("preserves list output across visibility, scope, owner, and search filters", 
     "agent:main:archived": {
       archivedAt: now - 10,
       createdActor: { type: "human", id: "profile-bob" },
+      createdVia: "operator",
       sessionId: "session-main-archived",
       subject: "needle archived",
       updatedAt: now - 7,
@@ -474,8 +777,18 @@ it("preserves list output across visibility, scope, owner, and search filters", 
     JSON.stringify({
       count: 5,
       owners: [
-        { type: "human", id: "profile-ada", label: "Ada" },
-        { type: "human", id: "profile-bob", label: "Bob" },
+        {
+          type: "human",
+          id: "profile-ada",
+          identity: { type: "profile", id: "profile-ada" },
+          label: "Ada",
+        },
+        {
+          type: "human",
+          id: "profile-bob",
+          identity: { type: "profile", id: "profile-bob" },
+          label: "Bob",
+        },
       ],
       hasMore: false,
       keys: ["global", "unknown", "agent:main:shared", "agent:work:shared", "agent:main:archived"],
@@ -498,8 +811,18 @@ it("preserves list output across visibility, scope, owner, and search filters", 
     JSON.stringify({
       count: 2,
       owners: [
-        { type: "human", id: "profile-ada", label: "Ada" },
-        { type: "human", id: "profile-bob", label: "Bob" },
+        {
+          type: "human",
+          id: "profile-ada",
+          identity: { type: "profile", id: "profile-ada" },
+          label: "Ada",
+        },
+        {
+          type: "human",
+          id: "profile-bob",
+          identity: { type: "profile", id: "profile-bob" },
+          label: "Bob",
+        },
       ],
       hasMore: false,
       keys: ["global", "agent:main:archived"],
@@ -540,8 +863,8 @@ it("keeps the serialized list response deterministic for the current filter path
   });
   const expectedSerializedResponse = [
     '{"ts":1000000,"path":"/tmp/openclaw-session-byte-parity","count":1,"totalCount":1,"limitApplied":100,"nextOffset":null,"hasMore":false,"owners":[]',
-    ',"defaults":{"modelProvider":"openai","model":"gpt-5.4","contextTokens":200000,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"source":"implicit"},"thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off"}',
-    ',"sessions":[{"key":"global","visibility":"shared","createdActor":{"type":"system","id":"creator-b"},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","agentRuntime":{"id":"codex","source":"implicit"},"contextTokens":100}]}',
+    ',"defaults":{"modelProvider":"openai","model":"gpt-5.4","contextTokens":200000,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off"}',
+    ',"sessions":[{"key":"global","visibility":"shared","createdActor":{"type":"system","id":"creator-b","identity":{"type":"legacy","actorType":"system","source":null,"id":"creator-b"}},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","modelOverrideSource":null,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"contextTokens":100}]}',
   ].join("");
 
   expect(JSON.stringify(result)).toBe(expectedSerializedResponse);

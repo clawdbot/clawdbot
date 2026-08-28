@@ -28,14 +28,13 @@ export class CronService implements CronServiceContract {
   private readonly state;
   private startInProgress = 0;
   private startState: { generation: number; promise: Promise<void> } | null = null;
-  private lifecycleGeneration = 0;
 
   constructor(deps: CronServiceDeps) {
     this.state = createCronServiceState(deps);
   }
 
   async start() {
-    const generation = this.lifecycleGeneration;
+    const generation = this.state.lifecycleGeneration;
     const pending = this.startState;
     if (pending) {
       try {
@@ -67,7 +66,7 @@ export class CronService implements CronServiceContract {
     this.state.schedulerStarted = false;
     try {
       await lifecycleOps.start(this.state);
-      if (generation !== this.lifecycleGeneration) {
+      if (generation !== this.state.lifecycleGeneration) {
         lifecycleOps.stop(this.state);
         return;
       }
@@ -78,7 +77,6 @@ export class CronService implements CronServiceContract {
   }
 
   stop() {
-    this.lifecycleGeneration += 1;
     lifecycleOps.stop(this.state);
   }
 

@@ -26,6 +26,7 @@ import type {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { readNonBlankString as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -176,6 +177,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   sessionKey: string;
   sessionAgentId: string;
   memoryToolNames: readonly string[];
+  ringZeroActive: boolean;
   sandboxed?: boolean;
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
@@ -244,8 +246,15 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       memoryWorkspaceDir: params.effectiveWorkspace,
     });
     const injectOpenClawContext = shouldInjectCodexOpenClawPromptContext(params.params);
+    const restrictedProjectDocNeedsOpenClawCarrier =
+      params.params.pluginHarnessToolPolicyRestricted === true &&
+      !params.params.disableTools &&
+      !isMessageOnlyCodexSourceReply(params.params) &&
+      params.params.bootstrapContextMode !== "lightweight";
     const threadDeveloperInstructionFiles =
-      injectOpenClawContext && inheritsAgentWorkspace
+      injectOpenClawContext &&
+      !params.ringZeroActive &&
+      (inheritsAgentWorkspace || restrictedProjectDocNeedsOpenClawCarrier)
         ? selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.resolvedWorkspace)
         : [];
     const turnScopedDeveloperInstructionFiles = injectOpenClawContext
@@ -459,12 +468,23 @@ function buildCodexBootstrapInjectionStats(params: {
       ? undefined
       : (readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) ??
         readCodexIndexedContextFileContent(developerInstructionIndex, pathValue, fileName));
-    let injectedChars = memoryToolRoutedFile ? 0 : (injected?.length ?? 0);
-    let truncated = memoryToolRoutedFile ? false : !file.missing && injectedChars < rawChars;
-    if (injected === undefined && CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName)) {
-      injectedChars = rawChars;
-      truncated = false;
+    if (
+      !file.missing &&
+      injected === undefined &&
+      CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName)
+    ) {
+      return {
+        name: displayName,
+        path: pathValue,
+        missing: false,
+        rawChars,
+        injectionStatus: "native_unverified",
+        injectedChars: null,
+        truncated: null,
+      };
     }
+    const injectedChars = memoryToolRoutedFile ? 0 : (injected?.length ?? 0);
+    const truncated = memoryToolRoutedFile ? false : !file.missing && injectedChars < rawChars;
     return {
       name: displayName,
       path: pathValue,

@@ -2,11 +2,10 @@ import { html, nothing } from "lit";
 import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import type { BrowserTarget } from "./discovery.ts";
 
 export function renderPlaceBrowser(params: {
   listing: FsListDirResult | null;
-  target: BrowserTarget;
+  label: string;
   loading: boolean;
   error: string | null;
   pathDraft: string;
@@ -18,7 +17,7 @@ export function renderPlaceBrowser(params: {
   onBack: () => void;
   onRegisterProject: (path: string) => void;
   onClose: () => void;
-  onApplyFolder: (path: string, nodeId: string) => void;
+  onApplyFolder: (path: string) => void;
 }) {
   const entries = params.listing?.entries ?? [];
   const registerProjectPath = params.registerProjectPath;
@@ -54,7 +53,7 @@ export function renderPlaceBrowser(params: {
           class="new-session-page__browser-path"
           type="text"
           aria-label=${t("newSession.folder")}
-          placeholder=${params.target.label}
+          placeholder=${params.label}
           .value=${params.pathDraft}
           @input=${(event: Event) => {
             params.onPathDraftChange((event.target as HTMLInputElement).value);
@@ -119,7 +118,7 @@ export function renderPlaceBrowser(params: {
           ?disabled=${params.usablePath === null || params.registeringProject}
           @click=${() => {
             if (params.usablePath !== null) {
-              params.onApplyFolder(params.usablePath, params.target.nodeId);
+              params.onApplyFolder(params.usablePath);
               params.onClose();
             }
           }}

@@ -7,6 +7,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   ManagedWorktreeGcResult,
   ManagedWorktreeRecord,
@@ -27,10 +28,6 @@ type SessionListResult = {
     spawnedCwd?: string;
     worktree?: SessionWorktree;
   }>;
-};
-type SessionDeleteResult = {
-  deleted: boolean;
-  worktreePreserved?: { id: string; branch: string; path: string };
 };
 type WorktreeListResult = { worktrees: ManagedWorktreeRecord[] };
 type GatewayRunResult = { runId?: unknown; status?: unknown };
@@ -119,7 +116,7 @@ describe("managed worktrees session-owner product proof", () => {
         branch: "openclaw/qa-session-clean",
         path: expect.any(String),
       });
-      expect(clean.entry.worktree).toEqual({
+      expect(clean.entry.worktree).toMatchObject({
         id: clean.worktree.id,
         branch: clean.worktree.branch,
         repoRoot: repo,
@@ -147,11 +144,11 @@ describe("managed worktrees session-owner product proof", () => {
         expect.objectContaining({
           key: clean.key,
           spawnedCwd: clean.worktree.path,
-          worktree: {
+          worktree: expect.objectContaining({
             id: clean.worktree.id,
             branch: clean.worktree.branch,
             repoRoot: repo,
-          },
+          }),
         }),
       );
 
@@ -185,7 +182,7 @@ describe("managed worktrees session-owner product proof", () => {
 
       const cleanDeleted = (await harness.gateway.call("sessions.delete", {
         key: clean.key,
-      })) as SessionDeleteResult;
+      })) as SessionsDeleteResult;
       expect(cleanDeleted.deleted).toBe(true);
       expect(cleanDeleted).not.toHaveProperty("worktreePreserved");
       await expect(fs.access(clean.worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
@@ -206,7 +203,7 @@ describe("managed worktrees session-owner product proof", () => {
       await fs.writeFile(dirtyFile, "restore this note\n");
       const dirtyDeleted = (await harness.gateway.call("sessions.delete", {
         key: dirty.key,
-      })) as SessionDeleteResult;
+      })) as SessionsDeleteResult;
       expect(dirtyDeleted.deleted).toBe(true);
       expect(dirtyDeleted).not.toHaveProperty("worktreePreserved");
       await expect(fs.access(dirty.worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
@@ -233,7 +230,7 @@ describe("managed worktrees session-owner product proof", () => {
       await git(repo, "worktree", "lock", locked.worktree.path);
       const lockedDeleted = (await harness.gateway.call("sessions.delete", {
         key: locked.key,
-      })) as SessionDeleteResult;
+      })) as SessionsDeleteResult;
       expect(lockedDeleted).toEqual(
         expect.objectContaining({
           deleted: true,
@@ -241,6 +238,7 @@ describe("managed worktrees session-owner product proof", () => {
             id: locked.worktree.id,
             branch: locked.worktree.branch,
             path: locked.worktree.path,
+            reason: "foreign-lock",
           },
         }),
       );

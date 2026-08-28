@@ -2,6 +2,7 @@
  * Builds the skills, tools, capability profile, and system prompt used by one
  * prepared direct compaction attempt.
  */
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
@@ -16,7 +17,7 @@ import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-r
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { transformProviderSystemPrompt } from "../../plugins/provider-runtime.js";
-import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import { getPluginToolMeta } from "../../plugins/tools.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import {
@@ -29,6 +30,7 @@ import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { createOpenClawCodingTools } from "../agent-tools.js";
+import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
 import {
@@ -44,7 +46,6 @@ import {
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { formatDateStamp, resolveUserTimezone } from "../date-time.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
-import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
 import {
   applyAuthHeaderOverride,
@@ -56,7 +57,10 @@ import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
+import { resolveSessionPermissionExecMode } from "../session-permission-exec-mode.js";
 import { detectRuntimeShell } from "../shell-utils.js";
+import { resolveRuntimeAgentName } from "../system-prompt-params.js";
+import { toolPolicyRestrictsTools } from "../tool-policy.js";
 import {
   filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
@@ -68,7 +72,9 @@ import type { DirectCompactionPreparation } from "./direct-compaction-preparatio
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 import { log } from "./logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
+import { resolvePromptModeForSession } from "./run/attempt-prompt-helpers.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt-thread-helpers.js";
+import { applyEmbeddedAttemptToolsAllow } from "./run/attempt-tool-construction-plan.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
 import {
   createSandboxPromptEntryLoader,
@@ -101,6 +107,23 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     effectiveCwd,
     effectiveSkillAgentId,
   } = prepared;
+  const permissionModes = {
+    deny: "read-only",
+    allowlist: "read-only",
+    ask: "guarded",
+    auto: "workspace",
+    full: "full",
+  } as const;
+  const mode = params.execOverrides?.mode
+    ? permissionModes[params.execOverrides.mode]
+    : (params.permissionMode ?? params.sessionEntry?.permissionMode);
+  const root = params.sessionRoot ?? params.sessionEntry?.sessionRoot;
+  const sessionPermissionPolicy = mode
+    ? { mode, root: root ?? (await fs.realpath(resolvedWorkspace)) }
+    : undefined;
+  const execOverrides = sessionPermissionPolicy
+    ? { ...params.execOverrides, mode: resolveSessionPermissionExecMode(sessionPermissionPolicy) }
+    : params.execOverrides;
   let restoreSkillEnv: (() => void) | undefined;
   let bundleMcpRuntime: Awaited<ReturnType<typeof createBundleMcpToolRuntime>> | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
@@ -307,14 +330,16 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       pluginMetadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
     });
     const toolsEnabled = supportsModelTools(effectiveModel);
+    const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
     const toolsRaw = toolsEnabled
       ? createOpenClawCodingTools({
           exec: {
-            ...params.execOverrides,
+            ...execOverrides,
             config: params.config,
             elevated: params.bashElevated,
           },
           sandbox,
+          sessionPermissionPolicy,
           messageProvider: resolvedMessageProvider,
           clientCaps: params.clientCaps,
           chatType: params.chatType,
@@ -352,6 +377,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           modelContextWindowTokens: contextTokenBudget,
           skillsSnapshot: skillsSnapshotForRun,
           skillUsagePaths,
+          skillInstructionDeliveryCache,
           conversationCapabilityProfile: runtimeCapabilityProfile,
           preparedModelRuntime: params.preparedModelRuntime,
           modelAuthMode: resolveModelAuthMode(effectiveModel.provider, params.config, undefined, {
@@ -435,6 +461,13 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     });
     const effectiveTools = [...toolSchemaProjection.tools];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
+    const promptPolicyRestricted = toolPolicyRestrictsTools({ allow: params.toolsAllow });
+    // Compaction execution retains its existing tool objects. Only the model-visible endpoint
+    // prompt is narrowed to the caller's policy so private capability guidance cannot leak.
+    const promptTools = applyEmbeddedAttemptToolsAllow(effectiveTools, params.toolsAllow, {
+      toolMeta: (tool) => getPluginToolMeta(tool),
+    });
+    const promptAllowedToolNames = collectAllowedToolNames({ tools: promptTools });
     runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
@@ -451,7 +484,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
             accountId: params.agentAccountId,
           })
         : undefined;
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    const { sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
       agentId: params.agentId,
@@ -483,6 +516,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
 
     const runtimeInfo = {
       agentId: sessionAgentId,
+      agentName: params.config ? resolveRuntimeAgentName(params.config, sessionAgentId) : undefined,
       sessionKey: params.sessionKey,
       host: machineName,
       os: resolveRuntimeOsLabel(),
@@ -506,8 +540,9 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       config: params.config,
       agentId: sessionAgentId,
       sessionKey: params.sessionKey,
+      permissionMode: sessionPermissionPolicy?.mode,
       sandboxAvailable: sandbox?.enabled === true,
-      execOverrides: params.execOverrides,
+      execOverrides,
     });
     const sandboxInfo = buildEmbeddedSandboxInfo(
       sandbox,
@@ -525,10 +560,9 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
     const userDate = formatDateStamp(Date.now(), userTimezone);
     const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
-    const promptMode =
-      isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
-        ? "minimal"
-        : "full";
+    const promptMode = promptPolicyRestricted
+      ? "minimal"
+      : resolvePromptModeForSession(params.sessionKey);
     const nativeCommandGuidanceLines = listRegisteredPluginAgentPromptGuidance({
       surface: promptSurface,
     });
@@ -555,23 +589,21 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       runtimePlan.prompt.resolveSystemPromptContribution(promptContributionContext);
     const preparedMemoryPrompt = await prepareAgentMemoryPrompt({
       enabled: promptMode === "full",
-      toolNames: effectiveTools.map((tool) => tool.name),
+      toolNames: promptTools.map((tool) => tool.name),
       citationsMode: params.config?.memory?.citations,
       agentId: runtimeInfo.agentId,
       agentSessionKey: runtimeInfo.sessionKey,
       sandboxed: sandboxInfo?.enabled === true,
     });
-    // Compaction must build byte-identical prompt sections to live turns, or
-    // the compaction run misses the transcript's cached prompt prefix. The
-    // allowlist doubles as the capability set so a session-read tool reachable
-    // only through capability names gates the section the same way live turns do.
+    // Match live-turn policy gates so restricted endpoint compaction cannot disclose
+    // private ambient sections through its model-visible developer prompt.
     const preparedWatchedSessions = prepareWatchedSessionsPrompt({
       enabled: promptMode === "full",
       config: params.config,
       sessionKey: params.sessionKey,
       sandboxed: sandboxInfo?.enabled === true,
-      toolNames: effectiveTools.map((tool) => tool.name),
-      capabilityToolNames: allowedToolNames,
+      toolNames: promptTools.map((tool) => tool.name),
+      capabilityToolNames: promptAllowedToolNames,
     });
     const activeProjectKeys = params.preparedModelRuntime?.activeProjectKeys ?? [];
     const buildSystemPromptText = (defaultThinkLevel: ThinkLevel) => {
@@ -584,12 +616,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         extraSystemPrompt: params.extraSystemPrompt,
         ownerNumbers: params.ownerNumbers,
         reasoningTagHint,
-        heartbeatPrompt: resolveHeartbeatPromptForSystemPrompt({
-          config: params.config,
-          agentId: sessionAgentId,
-          defaultAgentId,
-        }),
-        skillsPrompt,
+        skillsPrompt: promptPolicyRestricted ? undefined : skillsPrompt,
         docsPath: openClawReferences.docsPath ?? undefined,
         sourcePath: openClawReferences.sourcePath ?? undefined,
         promptMode,
@@ -603,7 +630,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         reactionGuidance,
         messageToolHints,
         sandboxInfo,
-        tools: effectiveTools,
+        tools: promptTools,
         userTimezone,
         userDate,
         contextFiles,

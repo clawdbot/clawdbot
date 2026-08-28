@@ -11,7 +11,7 @@ import {
 } from "./pre-commit/pnpm-audit-prod.mjs";
 
 const DEPENDENCY_FILE_PATTERNS = [
-  /^\.github\/release\/clawhub-cli\/package-lock\.json$/u,
+  /^\.github\/release\/[^/]+\/package-lock\.json$/u,
   /^package\.json$/u,
   /^pnpm-lock\.yaml$/u,
   /^pnpm-workspace\.yaml$/u,
@@ -21,6 +21,7 @@ const DEPENDENCY_FILE_PATTERNS = [
 
 const DEPENDENCY_DIFF_PATHS = [
   ".github/release/clawhub-cli/package-lock.json",
+  ".github/release/vercel-cli/package-lock.json",
   "package.json",
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
@@ -138,7 +139,7 @@ function renderMarkdownReport(report: ReturnType<typeof createDependencyChangesR
     "",
     "It reports two related but different things:",
     "",
-    "- Dependency file changes: package manifests, pnpm workspace config, pnpm lockfile, the trusted ClawHub CLI package lock, and patches.",
+    "- Dependency file changes: package manifests, pnpm workspace config, pnpm lockfile, trusted release CLI package locks, and patches.",
     "- Resolved package changes: package versions added, removed, or changed in pnpm-lock.yaml.",
     "",
     "## Summary",

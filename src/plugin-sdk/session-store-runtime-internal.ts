@@ -76,6 +76,9 @@ export function generationValidPrivateFieldsForSameSession(
     ...(existingEntry.lifecycleRunId !== undefined
       ? { lifecycleRunId: existingEntry.lifecycleRunId }
       : {}),
+    ...(existingEntry.pendingProjectGitUrl !== undefined
+      ? { pendingProjectGitUrl: existingEntry.pendingProjectGitUrl }
+      : {}),
     ...(existingEntry.sessionDiffBaselineCapture
       ? { sessionDiffBaselineCapture: existingEntry.sessionDiffBaselineCapture }
       : {}),

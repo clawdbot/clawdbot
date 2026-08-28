@@ -14,7 +14,6 @@ import {
   type TelegramMentionCaseForTest,
   type TelegramMentionPolicyForTest,
 } from "./bot.create-telegram-bot.test-support.js";
-import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
@@ -217,16 +216,22 @@ function replyPayload(): Record<string, unknown> {
   return call[0] as Record<string, unknown>;
 }
 
-function expectTypeOnlyMediaPayload(kind: string, rawBody = "") {
+function expectUnavailableMediaPayload(
+  kind: string,
+  rawBody = "",
+  notice = "[media unavailable: download failed]",
+) {
   const payload = replyPayload();
   expect(payload).toMatchObject({
-    BodyForAgent: rawBody,
+    Body: expect.stringContaining(notice),
+    BodyForAgent: [rawBody, notice].filter(Boolean).join("\n\n"),
     media: [expect.objectContaining({ kind })],
     RawBody: rawBody,
   });
-  const media = payload.media as Array<{ path?: string }>;
+  const media = payload.media as Array<{ path?: string; fileName?: string }>;
   expect(media).toHaveLength(1);
   expect(media[0]?.path).toBeUndefined();
+  expect(media[0]?.fileName).toBeUndefined();
 }
 
 function setTelegramIngestGroupConfig(
@@ -271,7 +276,7 @@ async function dispatchTelegramGroupPhoto(params: {
         id: -100456,
         type: "supergroup",
         title: "Ops Chat",
-        ...(params.topicId ? { is_forum: true } : {}),
+        is_forum: params.topicId !== undefined,
       },
       message_id: params.messageId,
       date: 1736380800,
@@ -397,7 +402,6 @@ describe("createTelegramBot channel_post media", () => {
   });
 
   beforeEach(() => {
-    resetTelegramForumFlagCacheForTest();
     setTelegramRuntime({
       state: {
         openKeyedStore: ((options) =>
@@ -525,7 +529,7 @@ describe("createTelegramBot channel_post media", () => {
 
     expect(replySpy).toHaveBeenCalledOnce();
     expect(sendMessageSpy).not.toHaveBeenCalled();
-    expectTypeOnlyMediaPayload("image");
+    expectUnavailableMediaPayload("image", "", "[media unavailable: file exceeds 0MB limit]");
     fetchSpy.mockRestore();
   });
 
@@ -542,7 +546,7 @@ describe("createTelegramBot channel_post media", () => {
       await waitForTelegramMockCalls(sendMessageSpy, 1);
       expectTelegramDownloadWarning(411);
       expect(replySpy).toHaveBeenCalledOnce();
-      expectTypeOnlyMediaPayload("image");
+      expectUnavailableMediaPayload("image");
     } finally {
       fetchSpy.mockRestore();
     }
@@ -565,7 +569,7 @@ describe("createTelegramBot channel_post media", () => {
     await waitForTelegramMockCalls(sendMessageSpy, 1);
     expectTelegramDownloadWarning(100000);
     expect(replySpy).toHaveBeenCalledOnce();
-    expectTypeOnlyMediaPayload("document");
+    expectUnavailableMediaPayload("document");
     expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
 
@@ -595,7 +599,11 @@ describe("createTelegramBot channel_post media", () => {
         `⚠️ File too large. Maximum size is ${expectedLimitMb}MB.`,
       );
       expect(replySpy).toHaveBeenCalledOnce();
-      expectTypeOnlyMediaPayload("document");
+      expectUnavailableMediaPayload(
+        "document",
+        "",
+        `[media unavailable: file exceeds ${expectedLimitMb}MB limit]`,
+      );
       expect(saveRemoteMedia).not.toHaveBeenCalled();
     },
   );
@@ -616,6 +624,7 @@ describe("createTelegramBot channel_post media", () => {
       error: new MediaFetchError("max_bytes", "Failed to fetch media: payload exceeds maxBytes 10"),
       result: { kind: "completed" },
       warning: "⚠️ File too large. Maximum size is 100MB.",
+      notice: "[media unavailable: file exceeds 100MB limit]",
     },
     {
       name: "permanent SSRF rejection",
@@ -646,7 +655,7 @@ describe("createTelegramBot channel_post media", () => {
     expect(sendMessageSpy.mock.calls[0]?.[1]).toBe(testCase.warning);
     if (testCase.warning) {
       expectTelegramDownloadWarning(testCase.messageId, testCase.warning);
-      expectTypeOnlyMediaPayload("document");
+      expectUnavailableMediaPayload("document", "", testCase.notice);
     }
   });
 
@@ -900,7 +909,7 @@ describe("createTelegramBot channel_post media", () => {
         }),
       );
       expect(replySpy).toHaveBeenCalledOnce();
-      expectTypeOnlyMediaPayload("image", "caption" in testCase ? testCase.caption : "");
+      expectUnavailableMediaPayload("image", "caption" in testCase ? testCase.caption : "");
     } finally {
       fetchSpy.mockRestore();
     }
@@ -1006,6 +1015,10 @@ describe("createTelegramBot channel_post media", () => {
   it("drops the media group when a non-recoverable media error occurs", async () => {
     replySpy.mockReset();
     setOpenChannelPostConfig();
+    saveRemoteMedia.mockResolvedValueOnce({
+      path: "/tmp/fatal-album-first.jpg",
+      contentType: "image/jpeg",
+    });
 
     const runtimeError = vi.fn();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
@@ -1033,6 +1046,10 @@ describe("createTelegramBot channel_post media", () => {
           expect.stringContaining("media group handler failed"),
         ),
       );
+      expect(runtimeError).toHaveBeenCalledWith(
+        expect.stringContaining("Telegram getFile returned no file_path"),
+      );
+      expect(saveRemoteMedia).toHaveBeenCalledTimes(1);
       expect(replySpy).not.toHaveBeenCalled();
     } finally {
       setTimeoutSpy.mockRestore();

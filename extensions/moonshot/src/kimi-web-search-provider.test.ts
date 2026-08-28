@@ -223,6 +223,57 @@ describe("kimi web search provider", () => {
     });
   });
 
+  it("rejects exhausted web search rounds without caching a fabricated answer", async () => {
+    const query = "unique Kimi exhausted search rounds cache regression";
+    const toolCallResponse = (id: string) =>
+      jsonResponse({
+        choices: [
+          {
+            finish_reason: "tool_calls",
+            message: {
+              content: "",
+              tool_calls: [
+                {
+                  id,
+                  function: {
+                    name: "$web_search",
+                    arguments: JSON.stringify({ query }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(toolCallResponse("call-1"))
+      .mockResolvedValueOnce(toolCallResponse("call-2"))
+      .mockResolvedValueOnce(toolCallResponse("call-3"))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          search_results: [{ title: "OpenClaw", url: "https://github.com/openclaw/openclaw" }],
+          choices: [
+            {
+              finish_reason: "stop",
+              message: { content: "OpenClaw is available on GitHub." },
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await withEnvAsync({ KIMI_API_KEY: "kimi-test-key" }, async () => {
+      await expect(executeKimiSearch(query)).rejects.toThrow(
+        "exhausted its tool-call rounds without producing a final answer",
+      );
+
+      const result = await executeKimiSearch(query);
+      expectStringFieldContains(result, "content", "OpenClaw is available on GitHub.");
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+    });
+  });
+
   it("accepts final responses with search result citations", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
@@ -244,6 +295,40 @@ describe("kimi web search provider", () => {
       expectStringFieldContains(result, "content", "OpenClaw is on GitHub.");
       expect(result.citations).toEqual(["https://github.com/openclaw/openclaw"]);
       expect(result).not.toHaveProperty("error");
+    });
+  });
+
+  it("reuses cached Kimi answers across ignored result counts while rejecting invalid counts", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          search_results: [{ title: "OpenClaw", url: "https://github.com/openclaw/openclaw" }],
+          choices: [
+            {
+              finish_reason: "stop",
+              message: { content: "OpenClaw is on GitHub." },
+            },
+          ],
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await withEnvAsync({ KIMI_API_KEY: "kimi-test-key" }, async () => {
+      const tool = createKimiWebSearchProvider().createTool({ config: {}, searchConfig: {} });
+      if (!tool) {
+        throw new Error("Expected tool definition");
+      }
+      const query = "unique Kimi ignored result count cache regression";
+
+      await tool.execute({ query, count: 1 });
+      await tool.execute({ query, count: 10 });
+      await tool.execute({ query });
+
+      await expect(tool.execute({ query, count: 0 })).rejects.toThrow(
+        "count must be an integer from 1 to 10.",
+      );
+      expect(fetchMock).toHaveBeenCalledOnce();
     });
   });
 

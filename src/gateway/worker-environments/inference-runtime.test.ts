@@ -4,6 +4,7 @@ import {
   validateWorkerInferenceTerminalOutcome,
   type WorkerInferenceStartParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import type { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
 import type { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import type { resolveEmbeddedAgentStreamFn } from "../../agents/embedded-agent-runner/stream-resolution.js";
@@ -43,7 +44,7 @@ type Deps = {
   applyStreamPolicy: typeof applyExtraParamsToAgent;
   acquireRuntimeLease: typeof acquireAgentRunPreparedModelRuntime;
   prepareModel: typeof prepareSimpleCompletionModel;
-  resolveAuthProfileMode: () => string | undefined;
+  resolveSessionAuthSelection: typeof resolveSessionAuthSelection;
   resolveModel: typeof resolveModelAsync;
   resolveProviderStream: typeof registerProviderStreamForModel;
   resolveStream: typeof resolveEmbeddedAgentStreamFn;
@@ -189,6 +190,7 @@ function providerStream(message = finalMessage(), options: { omitToolEnd?: boole
 function setup(
   entry: SessionEntry = sessionEntry,
   options: {
+    catalogOnlyModel?: boolean;
     pluginRegistry?: PluginRegistry;
     afterModelPreparation?: () => void;
     observeStage?: (
@@ -230,6 +232,9 @@ function setup(
     return {} as Awaited<ReturnType<Deps["resolveModel"]>>;
   });
   const prepareModel = vi.fn<Deps["prepareModel"]>(async (modelParams) => {
+    if (options.catalogOnlyModel && !modelParams.allowBundledStaticCatalogFallback) {
+      return { error: `Unknown model: ${modelParams.provider}/${modelParams.modelId}` };
+    }
     scope.agentRuntime = modelParams.agentRuntimeId;
     scope.preparedModelRuntime = modelParams.preparedModelRuntime === leasedPreparedModelRuntime;
     scope.prepareWorkspace = modelParams.workspaceDir;
@@ -247,7 +252,15 @@ function setup(
       },
     };
   });
-  const resolveAuthProfileMode = vi.fn<Deps["resolveAuthProfileMode"]>(() => undefined);
+  const resolveAuthSelection = vi.fn<Deps["resolveSessionAuthSelection"]>(async () =>
+    entry.authProfileOverride
+      ? {
+          profileId: entry.authProfileOverride,
+          source: entry.authProfileOverrideSource ?? "user",
+          routeRequirement: undefined,
+        }
+      : undefined,
+  );
   const observedRegistry = () => getPluginRuntimeGenerationRegistry() ?? getActivePluginRegistry();
   const stream = vi.fn<StreamFn>(() => {
     options.observeStage?.("execution", observedRegistry());
@@ -288,10 +301,9 @@ function setup(
     })),
     acquireRuntimeLease,
     resolveDefaultModel: vi.fn(() => ({ provider: PROVIDER, model: MODEL })),
-    resolveSessionAuthProfile: vi.fn(async () => entry.authProfileOverride),
+    resolveSessionAuthSelection: resolveAuthSelection,
     resolveModel,
     prepareModel,
-    resolveAuthProfileMode,
     resolveProviderStream,
     resolveStream,
     applyStreamPolicy,
@@ -307,7 +319,7 @@ function setup(
     acquireRuntimeLease,
     prepareModel,
     releaseRuntime,
-    resolveAuthProfileMode,
+    resolveAuthSelection,
     scope,
     stream,
   };
@@ -335,6 +347,38 @@ const MODEL_ERROR = {
 };
 
 describe("worker inference provider runtime", () => {
+  it("prepares an approved model available only from the bundled static catalog", async () => {
+    const runtime = setup(sessionEntry, { catalogOnlyModel: true });
+
+    await expect(runtime.executor(params(request(MODEL), vi.fn()))).resolves.toMatchObject({
+      type: "done",
+      message: { provider: PROVIDER, model: MODEL },
+    });
+    expect(runtime.stream).toHaveBeenCalledOnce();
+    expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("returns bounded, redacted model preparation guidance", async () => {
+    const runtime = setup();
+    const secret = `worker-preparation-secret-${"a".repeat(48)}`;
+    runtime.prepareModel.mockResolvedValueOnce({
+      error: `Auth lookup failed for provider "anthropic": configure the selected auth profile. Authorization: Bearer ${secret}. ${"diagnostic ".repeat(40)}`,
+    });
+
+    const outcome = await runtime.executor(params(request(), vi.fn()));
+
+    expect(outcome).toMatchObject({ type: "error", reason: "provider-error" });
+    if (outcome.type !== "error") {
+      throw new Error("expected model preparation to fail");
+    }
+    expect(outcome.message).toContain("configure the selected auth profile");
+    expect(outcome.message).not.toContain(secret);
+    expect(outcome.message.length).toBeLessThanOrEqual(256);
+    expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
+    expect(runtime.stream).not.toHaveBeenCalled();
+    expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
+  });
+
   it("keeps provider construction and execution on the leased generation", async () => {
     const generationA = createEmptyPluginRegistry();
     const generationB = createEmptyPluginRegistry();
@@ -363,12 +407,20 @@ describe("worker inference provider runtime", () => {
 
   it("projects the gateway-owned auth profile onto the provider route", async () => {
     const oauthRuntime = setup();
-    oauthRuntime.resolveAuthProfileMode.mockReturnValue("oauth");
+    oauthRuntime.resolveAuthSelection.mockResolvedValue({
+      profileId: PROFILE,
+      source: "user",
+      routeRequirement: "subscription",
+    });
     await oauthRuntime.executor(params(request(), vi.fn()));
     const oauth = oauthRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
 
     const apiKeyRuntime = setup();
-    apiKeyRuntime.resolveAuthProfileMode.mockReturnValue("api_key");
+    apiKeyRuntime.resolveAuthSelection.mockResolvedValue({
+      profileId: PROFILE,
+      source: "user",
+      routeRequirement: "api-key",
+    });
     await apiKeyRuntime.executor(params(request(), vi.fn()));
     const apiKey = apiKeyRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
 
@@ -386,7 +438,11 @@ describe("worker inference provider runtime", () => {
 
   it("prepares the selected model against its gateway-owned OAuth route", async () => {
     const runtime = setup();
-    runtime.resolveAuthProfileMode.mockReturnValue("oauth");
+    runtime.resolveAuthSelection.mockResolvedValue({
+      profileId: PROFILE,
+      source: "user",
+      routeRequirement: "subscription",
+    });
 
     await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
       type: "done",
@@ -405,7 +461,11 @@ describe("worker inference provider runtime", () => {
       authProfileOverrideSource: "auto",
       authProfileOverrideCompactionCount: 1,
     });
-    runtime.resolveAuthProfileMode.mockReturnValue("oauth");
+    runtime.resolveAuthSelection.mockResolvedValue({
+      profileId: PROFILE,
+      source: "auto",
+      routeRequirement: "subscription",
+    });
 
     await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
       type: "done",

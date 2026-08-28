@@ -68,9 +68,8 @@ actor CameraCaptureService {
             preferFrontCamera: facing == .front,
             deviceId: deviceId,
             pickCamera: { preferFrontCamera, deviceId in
-                Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
             },
-            cameraUnavailableError: CameraError.cameraUnavailable,
             mapSetupError: { setupError in
                 CameraError.captureFailed(setupError.localizedDescription)
             })
@@ -80,6 +79,23 @@ actor CameraCaptureService {
 
         session.startRunning()
         defer { session.stopRunning() }
+        // The photo preset can choose a portrait format at startup on external webcams.
+        // Select its landscape counterpart only after negotiation and before capturing.
+        let formats = device.formats
+        if let index = CameraDeviceResolver.landscapePhotoFormatIndex(
+            deviceType: device.deviceType,
+            activeFormat: device.activeFormat.formatDescription,
+            formats: formats.map(\.formatDescription))
+        {
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                device.activeFormat = formats[index]
+            } catch {
+                self.logger.warning(
+                    "camera landscape format selection failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
         try await CameraCapturePipelineSupport.warmUpCaptureSession()
         await self.waitForExposureAndWhiteBalance(device: device)
         await self.sleepDelayMs(delayMs)
@@ -130,9 +146,8 @@ actor CameraCaptureService {
                 includeAudio: includeAudio,
                 durationMs: durationMs),
             pickCamera: { preferFrontCamera, deviceId in
-                Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
             },
-            cameraUnavailableError: CameraError.cameraUnavailable,
             mapSetupError: Self.mapMovieSetupError)
         let session = prepared.session
         let output = prepared.output
@@ -172,21 +187,19 @@ actor CameraCaptureService {
 
     private nonisolated static func pickCamera(
         facing: CameraFacing,
-        deviceId: String?) -> AVCaptureDevice?
+        deviceId: String?) throws -> AVCaptureDevice
     {
-        if let deviceId, !deviceId.isEmpty {
-            if let match = CameraDeviceResolver.camera(deviceId: deviceId) {
-                return match
-            }
-        }
-        let position: AVCaptureDevice.Position = (facing == .front) ? .front : .back
-
-        if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) {
-            return device
-        }
-
-        // Many macOS cameras report `unspecified` position; fall back to any default.
-        return AVCaptureDevice.default(for: .video)
+        try CameraCapturePipelineSupport.selectCamera(
+            deviceId: deviceId,
+            matching: CameraDeviceResolver.camera,
+            fallback: {
+                let position: AVCaptureDevice.Position = facing == .front ? .front : .back
+                // Many macOS cameras report `unspecified` position; fall back only without an explicit device.
+                return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) ??
+                    AVCaptureDevice.default(for: .video)
+            },
+            unavailableError: CameraError.cameraUnavailable,
+            deviceNotFoundError: { CameraPTZError.deviceNotFound($0) })
     }
 
     private nonisolated static func clampQuality(_ quality: Double?) -> Double {

@@ -384,8 +384,8 @@ public enum ChatSessionSidebarModel {
         if let hasActiveRun = change.hasActiveRun {
             session.hasActiveRun = hasActiveRun
         }
-        if let activeRunIds = change.activeRunIds {
-            session.activeRunIds = activeRunIds
+        if change.activeRunIdsPresent {
+            session.activeRunIds = change.activeRunIds
         }
         if let startedAt = change.startedAt {
             session.startedAt = startedAt
@@ -502,9 +502,17 @@ public enum ChatSessionSidebarModel {
             status != "running"
     }
 
-    static func isSessionInActiveAgentScope(key: String, activeAgentID: String?) -> Bool {
+    public static func isSessionInActiveAgentScope(
+        key: String,
+        agentID: String? = nil,
+        activeAgentID: String?) -> Bool
+    {
         let normalizedAgent = activeAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         guard !normalizedAgent.isEmpty else { return true }
+        // Gateway row ownership outranks ambiguous bare/global keys. Missing
+        // metadata is a shipped legacy-cache state and keeps key-only behavior.
+        let rowAgent = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let rowAgent, !rowAgent.isEmpty, rowAgent != normalizedAgent { return false }
         let parts = key.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
         guard parts.count == 3, parts[0].lowercased() == "agent" else { return true }
         return parts[1].lowercased() == normalizedAgent

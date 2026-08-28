@@ -1,5 +1,7 @@
 /** Shared helpers for model commands that read or mutate model config. */
-import { resolveAgentDir, resolveDefaultAgentId, listAgentIds } from "../../agents/agent-scope.js";
+
+import { resolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import { listAgentIds, resolveAgentDir, resolveSoleAgentId } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
@@ -55,7 +57,10 @@ type UpdateConfigContext = {
 
 /** Reads source config, applies a mutator, and writes only the source-form config. */
 export async function updateConfig(
-  mutator: (cfg: OpenClawConfig, context: UpdateConfigContext) => OpenClawConfig,
+  mutator: (
+    cfg: OpenClawConfig,
+    context: UpdateConfigContext,
+  ) => OpenClawConfig | Promise<OpenClawConfig>,
 ): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
@@ -66,7 +71,7 @@ export async function updateConfig(
   const runtimeConfig = structuredClone(snapshot.runtimeConfig ?? snapshot.config);
   // Mutate source config so SecretRefs and unresolved placeholders do not get
   // overwritten by runtime-resolved secret values.
-  const next = mutator(sourceConfig, { runtimeConfig });
+  const next = await mutator(sourceConfig, { runtimeConfig });
   await replaceConfigFile({
     nextConfig: next,
     baseHash: snapshot.hash,
@@ -131,37 +136,43 @@ export function resolveModelKeysFromEntries(params: {
     .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
 }
 
-/** Validates an optional agent id against configured agents. */
-export function resolveKnownAgentId(params: {
-  cfg: OpenClawConfig;
-  rawAgentId?: string | null;
-}): string | undefined {
-  const raw = params.rawAgentId?.trim();
-  if (!raw) {
-    return undefined;
-  }
-  const agentId = normalizeAgentId(raw);
-  const knownAgents = listAgentIds(params.cfg);
-  if (!knownAgents.includes(agentId)) {
+function resolveKnownAgentId(cfg: OpenClawConfig, rawAgentId: string): string {
+  const agentId = normalizeAgentId(rawAgentId);
+  if (!listAgentIds(cfg).includes(agentId)) {
     throw new Error(
-      `Unknown agent id "${raw}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
+      `Unknown agent id "${rawAgentId}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
     );
   }
   return agentId;
 }
 
+type ModelsTargetMode = { kind: "read"; agentDirOverride?: string } | { kind: "mutation" };
+
 /** Resolves the selected model-command agent and its profile directory. */
 export function resolveModelsTargetAgent(
   cfg: OpenClawConfig,
-  rawAgentId?: string,
+  rawAgentId: string | undefined,
+  mode: ModelsTargetMode,
 ): {
   agentId: string;
   agentDir: string;
 } {
-  const agentId =
-    resolveKnownAgentId({ cfg, rawAgentId }) ??
-    resolveDefaultAgentId(cfg, { surface: "the model command", hint: "Pass --agent <id>." });
-  const agentDir = resolveAgentDir(cfg, agentId);
+  const requested = rawAgentId?.trim();
+  if (rawAgentId !== undefined && !requested) {
+    throw new Error("--agent must not be blank");
+  }
+  const requestedAgentId = requested ? resolveKnownAgentId(cfg, requested) : undefined;
+  const resolvedAgentId =
+    mode.kind === "read"
+      ? resolveAmbientOwnerAgentId(cfg, requestedAgentId, {
+          surface: "model inspection",
+          hint: "Pass --agent <id> or set agents.defaults.systemAgent.agentId.",
+        })
+      : (requestedAgentId ??
+        resolveSoleAgentId(cfg, { surface: "the model command", hint: "Pass --agent <id>." }));
+  const agentId = resolveKnownAgentId(cfg, resolvedAgentId);
+  const agentDirOverride = mode.kind === "read" ? mode.agentDirOverride : undefined;
+  const agentDir = agentDirOverride ?? resolveAgentDir(cfg, agentId);
   return { agentId, agentDir };
 }
 

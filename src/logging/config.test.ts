@@ -2,9 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { readLoggingConfig } from "./config.js";
+import { applyLoggingConfig, resetLogger } from "./logger.js";
 
 const originalArgv = process.argv;
 let tempDirs: string[] = [];
@@ -19,11 +20,20 @@ function writeConfig(source: string): string {
 
 describe("readLoggingConfig", () => {
   afterEach(() => {
+    resetLogger();
     process.argv = originalArgv;
     for (const dir of tempDirs) {
       fs.rmSync(dir, { force: true, recursive: true });
     }
     tempDirs = [];
+  });
+
+  it("returns the applied runtime snapshot without bootstrap filesystem work", () => {
+    const existsSync = vi.spyOn(fs, "existsSync");
+    applyLoggingConfig({ level: "debug", consoleStyle: "json" });
+
+    expect(readLoggingConfig()).toEqual({ level: "debug", consoleStyle: "json" });
+    expect(existsSync).not.toHaveBeenCalled();
   });
 
   it("reads logging style without a mutating config load for config schema", () => {
@@ -196,5 +206,30 @@ describe("readLoggingConfig", () => {
     withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
       expect(readLoggingConfig()).toBeUndefined();
     });
+  });
+
+  it("caches a missing config until the path selector changes", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-logging-config-missing-"));
+    tempDirs.push(dir);
+    const firstPath = path.join(dir, "missing-first.json");
+    const secondPath = path.join(dir, "missing-second.json");
+    const existsSync = vi.spyOn(fs, "existsSync");
+
+    try {
+      withEnv({ OPENCLAW_CONFIG_PATH: firstPath }, () => {
+        expect(readLoggingConfig()).toBeUndefined();
+        expect(readLoggingConfig()).toBeUndefined();
+      });
+      withEnv({ OPENCLAW_CONFIG_PATH: secondPath }, () => {
+        expect(readLoggingConfig()).toBeUndefined();
+      });
+
+      const checksFor = (configPath: string) =>
+        existsSync.mock.calls.filter(([candidate]) => candidate === configPath).length;
+      expect(checksFor(firstPath)).toBe(1);
+      expect(checksFor(secondPath)).toBe(1);
+    } finally {
+      existsSync.mockRestore();
+    }
   });
 });

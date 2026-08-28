@@ -72,13 +72,23 @@ require_no_ignored_transition_paths() {
         return 1
         ;;
     esac
-    if IFS= read -r -d '' ignored < <(
-      git ls-files --others --ignored --exclude-standard -z -- ":(literal)$file"
-    ); then
-      refuse_review_transition "$pr" "ignored file '$ignored' would be overwritten by the journaled transition."
-      return 1
-    fi
   done < <(git diff --name-only --no-renames -z "$source" "$target")
+
+  # Ask Git about every transition path at once. Per-path ignored-file scans
+  # become prohibitively slow when a PR is far behind main.
+  if IFS= read -r -d '' ignored < <(
+    git check-ignore -z --stdin < <(git diff --name-only --no-renames -z "$source" "$target") |
+      while IFS= read -r -d '' candidate; do
+        # check-ignore also reports matching paths that do not exist. Only an
+        # existing ignored entry can be overwritten by the transition.
+        if [ -e "$candidate" ] || [ -L "$candidate" ]; then
+          printf '%s\0' "$candidate"
+        fi
+      done
+  ); then
+    refuse_review_transition "$pr" "ignored file '$ignored' would be overwritten by the journaled transition."
+    return 1
+  fi
 }
 
 validate_review_transition_state() {
@@ -153,13 +163,12 @@ recover_review_transition() {
   fi
 
   validate_review_transition_state "$pr" "$source" "$target" || return 1
-  local paths=()
-  local file
-  while IFS= read -r -d '' file; do
-    paths+=(":(literal)$file")
-  done < <(git diff --name-only --no-renames -z "$source" "$target")
-  if [ "${#paths[@]}" -gt 0 ]; then
-    git restore --source="$target" --staged --worktree -- "${paths[@]}" || return 1
+  # Completed deletions are absent from both index and target, so replay only
+  # remaining entries rather than passing already-removed paths to restore.
+  if ! git diff --cached --quiet "$target"; then
+    git diff --cached --name-only --no-renames -z "$target" |
+      git --literal-pathspecs restore --source="$target" --staged --worktree \
+        --pathspec-from-file=- --pathspec-file-nul || return 1
   fi
   if [ "$(git write-tree)" != "$(git rev-parse "$target^{tree}")" ] || ! git diff --quiet; then
     refuse_review_transition "$pr" "the tracked tree did not reach the journaled target."

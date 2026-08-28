@@ -20,6 +20,8 @@ function baseProps(overrides: Partial<DevicesProps> = {}): DevicesProps {
       paired: [],
     },
     canPairDevice: true,
+    canManagePairing: true,
+    canAdmin: true,
     configForm: null,
     configLoading: false,
     configSaving: false,
@@ -530,6 +532,39 @@ describe("devices inventory rendering", () => {
     );
   });
 
+  it("shows node-only offline affordances while preserving mixed-role device liveness", () => {
+    const container = renderDevicesContainer({
+      devicesList: {
+        pending: [],
+        paired: [
+          {
+            deviceId: "windows-mixed",
+            displayName: "Mixed-role Windows",
+            platform: "Windows 11",
+            roles: ["operator", "node"],
+            connected: true,
+          },
+        ],
+      },
+      nodes: [
+        {
+          nodeId: "windows-mixed",
+          displayName: "Mixed-role Windows",
+          platform: "Windows 11",
+          connected: false,
+          paired: true,
+        },
+      ],
+    });
+    const section = getInventorySection(container);
+    const row = getSettingsRow(section, "Mixed-role Windows");
+
+    expect(section.textContent).toContain("1 of 1 connected");
+    expect(
+      Array.from(row.querySelectorAll(".settings-status"), (status) => status.textContent?.trim()),
+    ).toEqual(["offline", "manual wake required"]);
+  });
+
   it("shows token rows with rotate and revoke inside entry details", () => {
     const rotations: Array<{ deviceId: string; name: string; role: string }> = [];
     const revocations: Array<{ deviceId: string; role: string }> = [];
@@ -637,6 +672,50 @@ describe("devices inventory rendering", () => {
     expect(subs.some((text) => text.includes("iOS 26.4"))).toBe(true);
     expect(subs.some((text) => text.includes("IOS"))).toBe(false);
     expect(subs.some((text) => text.includes("macOS"))).toBe(true);
+  });
+});
+
+describe("devices access gating", () => {
+  it("disables pairing and admin mutations with one browsing-only notice", () => {
+    const container = renderDevicesContainer({
+      canPairDevice: false,
+      canManagePairing: false,
+      canAdmin: false,
+      devicesList: {
+        pending: [
+          {
+            requestId: "request-1",
+            deviceId: "pending-device",
+            displayName: "Pending device",
+            roles: ["operator"],
+            scopes: ["operator.read"],
+          },
+        ],
+        paired: [
+          {
+            deviceId: "device-1",
+            displayName: "Device One",
+            roles: ["operator"],
+            tokens: [{ role: "operator", scopes: ["operator.read"], createdAtMs: Date.now() }],
+          },
+        ],
+      },
+      configForm: { agents: { entries: [{ id: "main", default: true }] } },
+      configDirty: true,
+    });
+
+    expect(container.querySelectorAll(".callout.info")).toHaveLength(1);
+    expect(container.textContent).toContain("Device changes require operator.pairing");
+    for (const label of ["Approve", "Reject", "Rotate", "Revoke", "Save"]) {
+      expect(findButton(container, label).disabled).toBe(true);
+    }
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Remove Device One"]')
+        ?.disabled,
+    ).toBe(true);
+    expect(container.textContent).toContain(
+      "Browsing only. Exec approvals and node bindings require operator.admin access.",
+    );
   });
 });
 

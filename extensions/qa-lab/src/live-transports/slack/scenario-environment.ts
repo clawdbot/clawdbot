@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
@@ -14,6 +13,7 @@ import type {
   SlackQaScenarioContext,
   SlackQaScenarioMetadata,
   SlackQaScenarioRun,
+  SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 import { assertSlackCodexApprovalModelSupported } from "./slack-live.contracts.js";
 import { waitForSlackChannelStable } from "./slack-live.message-observations.js";

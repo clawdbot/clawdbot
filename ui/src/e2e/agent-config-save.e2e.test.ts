@@ -18,6 +18,79 @@ const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "agent
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
 suite.define(() => {
+  it("shows rejected initial configuration loads and recovers when reloaded", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+      async ({ page }) => {
+        const config = { agents: { entries: { main: { default: true } } } };
+        const gateway = await installMockGateway(page, {
+          assistantName: "Main agent",
+          defaultAgentId: "main",
+          methodResponses: {
+            "agents.list": {
+              agents: [{ id: "main", name: "Main agent" }],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
+            "config.get": {
+              __mockError: {
+                code: "INTERNAL_ERROR",
+                message: "Agent configuration unavailable; retry Reload Config",
+                retryable: true,
+              },
+            },
+          },
+        });
+
+        expect(
+          (await page.goto(`${suite.server.baseUrl}settings/agents/main/overview`))?.status(),
+        ).toBe(200);
+        await gateway.waitForRequest("agents.list");
+        await gateway.waitForRequest("config.get");
+        const agentsPage = page.locator("openclaw-agents-page");
+        const reload = agentsPage.getByRole("button", { name: "Reload Config" });
+        await reload.waitFor();
+        if (captureUiProof) {
+          await mkdir(proofDir, { recursive: true });
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(
+              proofDir,
+              `agent-config-load-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "failed"}.png`,
+            ),
+          });
+        }
+
+        const error = agentsPage
+          .getByRole("alert")
+          .filter({ hasText: "Agent configuration unavailable" });
+        await expect.poll(() => error.isVisible()).toBe(true);
+        await expect
+          .poll(() => agentsPage.locator(".model-picker__select").getAttribute("disabled"))
+          .not.toBeNull();
+
+        await gateway.setMethodResponse("config.get", {
+          config,
+          sourceConfig: config,
+          runtimeConfig: config,
+          hash: "recovered-agent-config",
+          issues: [],
+          raw: JSON.stringify(config),
+          valid: true,
+        });
+        const readsBefore = (await gateway.getRequests("config.get")).length;
+        await reload.click();
+        await gateway.waitForRequest("config.get", { after: readsBefore });
+        await expect.poll(() => error.count()).toBe(0);
+        await expect
+          .poll(() => agentsPage.locator(".model-picker__select").getAttribute("disabled"))
+          .toBeNull();
+      },
+    );
+  });
+
   it("submits keyed entries and surfaces Gateway validation failures", async () => {
     await suite.withPage(
       {
@@ -128,6 +201,92 @@ suite.define(() => {
             path: path.join(proofDir, "01-save-error.png"),
           });
         }
+      },
+    );
+  });
+
+  it("stages skill changes from the inherited allowlist", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const config = {
+          agents: {
+            defaults: { skills: ["github"] },
+            entries: { main: { default: true } },
+          },
+        };
+        const skill = (name: string, blockedByAgentFilter: boolean) => ({
+          name,
+          description: `${name} skill`,
+          source: "openclaw-managed",
+          bundled: false,
+          filePath: `/tmp/skills/${name}/SKILL.md`,
+          baseDir: `/tmp/skills/${name}`,
+          skillKey: name,
+          always: false,
+          disabled: false,
+          blockedByAllowlist: false,
+          blockedByAgentFilter,
+          eligible: true,
+          requirements: { bins: [], anyBins: [], env: [], config: [], os: [] },
+          missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+          configChecks: [],
+          install: [],
+        });
+        const gateway = await installMockGateway(page, {
+          assistantName: "Main agent",
+          defaultAgentId: "main",
+          methodResponses: {
+            "agents.list": {
+              agents: [{ id: "main", name: "Main agent" }],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
+            "config.get": {
+              config,
+              sourceConfig: config,
+              runtimeConfig: config,
+              hash: "agent-config-hash-1",
+              issues: [],
+              raw: JSON.stringify(config),
+              valid: true,
+            },
+            "skills.status": {
+              agentId: "main",
+              agentSkillFilter: ["github"],
+              workspaceDir: "/tmp/workspace",
+              managedSkillsDir: "/tmp/skills",
+              skills: [skill("github", false), skill("weather", true)],
+            },
+          },
+        });
+
+        const response = await page.goto(`${suite.server.baseUrl}settings/agents/main/skills`);
+        expect(response?.status()).toBe(200);
+        await gateway.waitForRequest("config.get");
+        await gateway.waitForRequest("skills.status");
+
+        await gateway.deferNext("config.set");
+        await page
+          .locator(".agent-skill-row", { hasText: "github skill" })
+          .locator("wa-switch")
+          .click();
+
+        const request = await gateway.waitForRequest("config.set");
+        const params = requireRecord(request.params);
+        expect(JSON.parse(String(params.raw))).toEqual({
+          agents: {
+            defaults: { skills: ["github"] },
+            entries: { main: { default: true, skills: [] } },
+          },
+        });
+        expect(params.baseHash).toBe("agent-config-hash-1");
+        await gateway.resolveDeferred("config.set", { hash: "agent-config-hash-2" });
       },
     );
   });

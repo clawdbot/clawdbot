@@ -236,7 +236,7 @@ export type ChatRunState = {
   resolveBuffer: (runId: string) => { text: string; suppress: boolean };
   hasAbortMarker: (runId: string) => boolean;
   deleteAbortMarker: (runId: string) => void;
-  recordProgressEvent: (runId: string, event: AgentEventPayload) => void;
+  recordProgressEvent: (runId: string, event: AgentEventPayload, mode?: "full" | "summary") => void;
   clearRun: (runId: string) => void;
   clear: () => void;
 };
@@ -247,10 +247,15 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistryForStore(store);
   const toolEventRecipients = createToolEventRecipientRegistryForStore(store);
 
-  const recordProgressEvent = (runId: string, event: AgentEventPayload) => {
+  const recordProgressEvent = (
+    runId: string,
+    event: AgentEventPayload,
+    mode?: "full" | "summary",
+  ) => {
     const progressSnapshot = updateChatRunProgressSnapshot(
       store.runs.get(runId)?.progressSnapshot,
       event,
+      mode,
     );
     if (progressSnapshot) {
       store.getOrCreate(runId).progressSnapshot = progressSnapshot;

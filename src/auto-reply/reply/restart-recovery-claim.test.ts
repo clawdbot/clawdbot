@@ -93,6 +93,98 @@ describe("createReplyRestartRecoveryClaimController", () => {
     },
   );
 
+  it("preserves lifecycle ownership when cleanup observes a restart abort", async () => {
+    const root = tempDirs.make("openclaw-reply-claim-restart-abort-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const sessionId = "session";
+    let restartAborted = false;
+    let entry: InternalSessionEntry = {
+      abortedLastRun: false,
+      lifecycleRunId: "recovery-run",
+      restartRecoveryDeliveryRunId: "recovery-run",
+      sessionId,
+      startedAt: 1,
+      status: "running",
+      updatedAt: 1,
+    };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    const controller = createReplyRestartRecoveryClaimController({
+      admissionRunId: "recovery-run",
+      getEntry: () => entry,
+      getSessionId: () => sessionId,
+      isRestartAbort: () => restartAborted,
+      resolveDeliveryContext: () => undefined,
+      sessionKey,
+      setEntry: (next) => {
+        entry = next;
+      },
+      storePath,
+    });
+
+    await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+    restartAborted = true;
+    await controller.clear();
+
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      lifecycleRunId: "recovery-run",
+      restartRecoveryDeliveryRunId: "recovery-run",
+      status: "running",
+    });
+  });
+
+  it("adopts an exact channel recovery claim before execution starts", async () => {
+    const root = tempDirs.make("openclaw-reply-channel-claim-adoption-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:chat:topic:thread";
+    const sessionId = "channel-session";
+    const deliveryContext = {
+      channel: "telegram",
+      to: "chat",
+      accountId: "default",
+      threadId: "thread",
+    };
+    let entry: InternalSessionEntry = {
+      abortedLastRun: false,
+      lifecycleRunId: "recovery-run",
+      restartRecoveryDeliveryContext: deliveryContext,
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "recovery-run",
+      restartRecoveryDeliverySourceRunId: "source-turn",
+      restartRecoveryDeliveryToolCallId: "message-call",
+      sessionId,
+      startedAt: 1,
+      status: "running",
+      updatedAt: 1,
+    };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    const controller = createReplyRestartRecoveryClaimController({
+      admissionRunId: "recovery-run",
+      getEntry: () => entry,
+      getSessionId: () => sessionId,
+      isRestartAbort: () => false,
+      resolveDeliveryContext: () => deliveryContext,
+      sessionKey,
+      setEntry: (next) => {
+        entry = next;
+      },
+      sourceTurnId: "source-turn",
+      storePath,
+    });
+
+    await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      restartRecoveryDeliveryContext: deliveryContext,
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "recovery-run",
+      restartRecoveryDeliverySourceRunId: "source-turn",
+      restartRecoveryDeliveryToolCallId: "message-call",
+      status: "running",
+    });
+  });
+
   it("retargets durable user-turn admission to the prepared reply session", async () => {
     const root = tempDirs.make("openclaw-reply-admission-");
     const storePath = path.join(root, "sessions.json");

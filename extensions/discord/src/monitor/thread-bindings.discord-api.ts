@@ -1,9 +1,9 @@
 // Discord API module exposes the plugin public contract.
-import { ChannelType } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isDiscordThreadChannelType } from "../channel-type.js";
 import { createDiscordRestClient } from "../client.js";
 import { createChannelWebhook, getChannel } from "../internal/discord.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
@@ -45,14 +45,6 @@ export function isThreadArchived(raw: unknown): boolean {
     return true;
   }
   return false;
-}
-
-function isThreadChannelType(type: unknown): boolean {
-  return (
-    type === ChannelType.PublicThread ||
-    type === ChannelType.PrivateThread ||
-    type === ChannelType.AnnouncementThread
-  );
 }
 
 function normalizeDiscordBindingChannelId(raw?: string | null): string | null {
@@ -263,7 +255,7 @@ export async function resolveChannelIdForBinding(params: {
     const parentId = normalizeOptionalString(channelInfo.parentId) ?? "";
     // Only thread channels should resolve to their parent channel.
     // Non-thread channels (text/forum/media) must keep their own ID.
-    if (parentId && isThreadChannelType(type)) {
+    if (parentId && isDiscordThreadChannelType(type)) {
       return parentId;
     }
     return channelId || null;

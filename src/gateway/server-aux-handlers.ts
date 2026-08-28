@@ -1,13 +1,11 @@
 // Gateway auxiliary method handlers.
 // Wires reload, secrets, exec approval, and plugin approval RPC handlers.
 import { randomUUID } from "node:crypto";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   type AgentRunDelegatedAuthority,
   registerAgentRunDelegatedAuthorityClosedHandler,
 } from "../infra/agent-run-registry.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import {
   type ExecApprovalDecision,
@@ -24,21 +22,10 @@ import {
   resolveCommandSecretsFromActiveRuntimeSnapshot,
   type CommandSecretAssignment,
 } from "../secrets/runtime-command-secrets.js";
-import {
-  getActiveSecretsRuntimeSnapshotState,
-  getActiveSecretsRuntimeSnapshotRevisionState,
-  type PreparedSecretsRuntimeSnapshot,
-} from "../secrets/runtime-state.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
 import { resolveApprovalSessionAudienceWithFallback } from "./approval-session-audience.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
-import { diffConfigPaths } from "./config-diff.js";
-import {
-  buildGatewayReloadPlan,
-  type ChannelKind,
-  type GatewayReloadPlan,
-} from "./config-reload-plan.js";
 import {
   createExecApprovalIosPushDelivery,
   createPluginApprovalIosPushDelivery,
@@ -48,12 +35,12 @@ import {
   type OperatorApprovalLifecycleEvent,
 } from "./exec-approval-manager.js";
 import { createLazyHandler } from "./lazy-handler.js";
+import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.js";
 import {
   closeOrphanedOperatorApprovals,
   pruneTerminalOperatorApprovals,
 } from "./operator-approval-store.js";
 import { QuestionManager } from "./question-manager.js";
-import type { ChannelAutostartSuppression } from "./server-channels.js";
 import { publishAppliedApprovalResolution } from "./server-methods/approval-publication.js";
 import {
   cancelAgentRuntimeBoundApprovals,
@@ -62,17 +49,9 @@ import {
 } from "./server-methods/approval-run-cancellation.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
-  captureSharedGatewaySessionGenerationOwnership,
-  claimSharedGatewaySessionGenerationIfOwned,
-  disconnectStaleSharedGatewayAuthClients,
-  finalizeOwnedSharedGatewaySessionGeneration,
-  isSharedGatewaySessionGenerationOwnershipCurrent,
-  replaceOwnedSharedGatewaySessionGenerationState,
-  type SharedGatewayAuthClient,
-  type SharedGatewaySessionGenerationOwnership,
-  type SharedGatewaySessionGenerationState,
-} from "./server-shared-auth-generation.js";
-import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
+  createGatewaySecretsReloader,
+  type GatewaySecretsReloaderParams,
+} from "./server-secrets-reload.js";
 import type { WorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 
 type GatewayAuxHandlerLogger = {
@@ -81,63 +60,23 @@ type GatewayAuxHandlerLogger = {
   debug?: (message: string) => void;
 };
 
-type ReloadSecretsResult = {
-  warningCount: number;
-};
-
-async function activateSecretsRuntimeSnapshotIfCurrent(
-  snapshot: PreparedSecretsRuntimeSnapshot,
-  expectedRevision: number,
-  options?: {
-    canActivate?: () => boolean;
-    onActivated?: () => void;
-  },
-): Promise<number | null> {
-  const runtime = await import("../secrets/runtime.js");
-  if (options?.canActivate && !options.canActivate()) {
-    return null;
-  }
-  if (!runtime.activateSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision)) {
-    return null;
-  }
-  options?.onActivated?.();
-  return runtime.getActiveSecretsRuntimeSnapshotRevision();
-}
-
-async function restoreSecretsRuntimeSnapshotIfCurrent(
-  snapshot: PreparedSecretsRuntimeSnapshot,
-  expectedRevision: number,
-  ownedSnapshot: PreparedSecretsRuntimeSnapshot,
-  options?: { onActivated?: () => void },
-): Promise<number | null> {
-  const runtime = await import("../secrets/runtime.js");
-  if (!runtime.restoreSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision, ownedSnapshot)) {
-    return null;
-  }
-  options?.onActivated?.();
-  return runtime.getActiveSecretsRuntimeSnapshotRevision();
-}
-
 /** Create auxiliary gateway handlers that are not part of the core descriptor set. */
-export function createGatewayAuxHandlers(params: {
-  log: GatewayAuxHandlerLogger;
-  activateRuntimeSecrets: ActivateRuntimeSecrets;
-  buildReloadPlan?: (changedPaths: string[]) => GatewayReloadPlan;
-  sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
-  resolveSharedGatewaySessionGenerationForConfig: (config: OpenClawConfig) => string | undefined;
-  clients: Iterable<SharedGatewayAuthClient>;
-  startChannel: (name: ChannelKind) => Promise<void>;
-  stopChannel: (name: ChannelKind) => Promise<void>;
-  getChannelAutostartSuppression?: () => ChannelAutostartSuppression | null;
-  logChannels: { info: (msg: string) => void };
-  onApprovalLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
-  onAgentRunAuthorityClosed?: (authority: AgentRunDelegatedAuthority) => void;
-  validateAgentRuntimeDelegatedAuthority?: (authority: AgentRuntimeDelegatedAuthority) => boolean;
-  chatAbortControllers?: Map<string, ChatAbortControllerEntry>;
-  registerWorkerTurnClaimClosedHandler?: (
-    handler: (claim: WorkerSessionTurnClaim) => void,
-  ) => () => void;
-}) {
+export function createGatewayAuxHandlers(
+  params: GatewaySecretsReloaderParams & {
+    log: GatewayAuxHandlerLogger;
+    onApprovalLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
+    onAgentRunAuthorityClosed?: (authority: AgentRunDelegatedAuthority) => void;
+    validateAgentRuntimeDelegatedAuthority?: (authority: AgentRuntimeDelegatedAuthority) => boolean;
+    /** Abort-wins guard: a tombstoned run must not mint standing authority. */
+    hasRunAbortMarker?: (runId: string) => boolean;
+    /** Config-driven default expiry stamp for freshly minted standing grants. */
+    resolveGrantDefaultExpiresAtMs?: (nowMs: number) => number | null;
+    chatAbortControllers?: Map<string, ChatAbortControllerEntry>;
+    registerWorkerTurnClaimClosedHandler?: (
+      handler: (claim: WorkerSessionTurnClaim) => void,
+    ) => () => void;
+  },
+) {
   // Both approval kinds share one durable first-answer-wins registry and
   // Gateway-lifetime epoch while retaining separate in-process waiter maps.
   // A newly constructed Gateway cannot resume the prior lifetime's waiters.
@@ -151,12 +90,17 @@ export function createGatewayAuxHandlers(params: {
   const createApprovalManager = <TPayload>(
     approvalKind: "exec" | "plugin" | "system-agent",
     resolveAllowedDecisions: (request: TPayload) => readonly ExecApprovalDecision[],
+    resolveStandingGrantMint?: (request: TPayload) => CronStandingGrantMintSpec | null,
   ) =>
     new ExecApprovalManager<TPayload>({
       approvalKind,
       persistence: approvalPersistence,
       resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
       resolveAllowedDecisions,
+      ...(resolveStandingGrantMint ? { resolveStandingGrantMint } : {}),
+      ...(params.resolveGrantDefaultExpiresAtMs
+        ? { resolveStandingGrantExpiresAtMs: params.resolveGrantDefaultExpiresAtMs }
+        : {}),
       onLifecycle: params.onApprovalLifecycle,
       // Timeout expiry is gateway-clock truth: publish the terminal like a
       // resolve so reviewer surfaces need not infer it from their own clocks.
@@ -177,6 +121,25 @@ export function createGatewayAuxHandlers(params: {
   const execApprovalManager = createApprovalManager<ExecApprovalRequestPayload>(
     "exec",
     resolveExecApprovalRequestAllowedDecisions,
+    (request) => {
+      const source = request.cronExecutionSource;
+      const operationBinding = request.cronOperationBinding?.trim();
+      const agentId = request.agentId?.trim();
+      if (!source || !operationBinding || !agentId) {
+        return null;
+      }
+      // Abort-wins: the abort owner tombstones the run before sweeping its
+      // approvals, so a raced allow-always must not mint standing authority.
+      if (request.runId && params.hasRunAbortMarker?.(request.runId) === true) {
+        return null;
+      }
+      return {
+        agentId,
+        cronJobId: source.jobId,
+        jobConfigRevision: source.jobConfigRevision,
+        operationBinding,
+      };
+    },
   );
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalIosPushDelivery = createExecApprovalIosPushDelivery({ log: params.log });
@@ -190,15 +153,28 @@ export function createGatewayAuxHandlers(params: {
       ),
     { cacheRejections: true },
   );
-  const questionManager = new QuestionManager();
-  const loadQuestionHandlers = createLazyPromise(
-    () =>
-      import("./server-methods/question.js").then(({ createQuestionHandlers }) =>
-        createQuestionHandlers(questionManager),
-      ),
+  const reloadSecrets = createGatewaySecretsReloader(params);
+  const loadSecretsModule = createLazyPromise(() => import("./server-methods/secrets.js"), {
+    cacheRejections: true,
+  });
+  const loadSecretStoreWriteService = createLazyPromise(
+    async () => {
+      const { createSecretStoreWriteService } = await loadSecretsModule();
+      return createSecretStoreWriteService({ reloadSecrets, log: params.log });
+    },
     { cacheRejections: true },
   );
-  const buildReloadPlan = params.buildReloadPlan ?? buildGatewayReloadPlan;
+  const questionManager = new QuestionManager();
+  const loadQuestionHandlers = createLazyPromise(
+    async () => {
+      const [{ createQuestionHandlers }, storeWriteService] = await Promise.all([
+        import("./server-methods/question.js"),
+        loadSecretStoreWriteService(),
+      ]);
+      return createQuestionHandlers(questionManager, storeWriteService);
+    },
+    { cacheRejections: true },
+  );
   const pluginApprovalManager = createApprovalManager<PluginApprovalRequestPayload>(
     "plugin",
     resolveCanonicalPluginApprovalRequestAllowedDecisions,
@@ -344,336 +320,44 @@ export function createGatewayAuxHandlers(params: {
       ),
     { cacheRejections: true },
   );
-  // Serialize the entire `secrets.reload` path (activation + channel restart)
-  // so concurrent callers cannot overlap the stop/start loop and so the
-  // "before" snapshot used for the reload-plan diff is always the snapshot
-  // replaced by this call's activation, not one captured by a prior caller.
-  let reloadInFlight: Promise<ReloadSecretsResult> | null = null;
-  const runExclusiveReload = (
-    fn: () => Promise<ReloadSecretsResult>,
-    options: { joinInFlight?: boolean } = {},
-  ): Promise<ReloadSecretsResult> => {
-    if (reloadInFlight) {
-      if (options.joinInFlight !== false) {
-        return reloadInFlight;
-      }
-      const precedingReload = reloadInFlight;
-      return precedingReload.catch(() => undefined).then(() => runExclusiveReload(fn, options));
-    }
-    const run = (async () => {
-      try {
-        return await fn();
-      } finally {
-        reloadInFlight = null;
-      }
-    })();
-    reloadInFlight = run;
-    return run;
-  };
   const loadSecretsHandlers = createLazyPromise(
-    () =>
-      import("./server-methods/secrets.js").then(({ createSecretsHandlers }) =>
-        createSecretsHandlers({
-          reloadSecrets: (reloadOptions) =>
-            runExclusiveReload(async () => {
-              let transaction:
-                | {
-                    previousSnapshot: PreparedSecretsRuntimeSnapshot;
-                    previousSharedGatewaySessionGeneration: string | undefined;
-                    previousSharedGatewaySessionGenerationRequired: string | undefined | null;
-                    prepared: PreparedSecretsRuntimeSnapshot;
-                    plan: GatewayReloadPlan;
-                    nextSharedGatewaySessionGeneration: string | undefined;
-                    sharedGatewaySessionGenerationChanged: boolean;
-                    generationOwnership: SharedGatewaySessionGenerationOwnership;
-                    publishedSnapshotRevision: number;
-                  }
-                | undefined;
-              const stoppedChannels: ChannelKind[] = [];
-              const restartedChannels = new Set<ChannelKind>();
-              try {
-                for (;;) {
-                  const previousSnapshot = getActiveSecretsRuntimeSnapshotState();
-                  if (!previousSnapshot) {
-                    throw new Error("Secrets runtime snapshot is not active.");
-                  }
-                  const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
-                  const previousGenerationOwnership =
-                    captureSharedGatewaySessionGenerationOwnership(
-                      params.sharedGatewaySessionGenerationState,
-                    );
-                  // Snapshot both generation fields with the candidate revision.
-                  // A stale preparation retries all three owners together.
-                  const previousSharedGatewaySessionGeneration =
-                    previousGenerationOwnership.generation;
-                  const previousSharedGatewaySessionGenerationRequired =
-                    params.sharedGatewaySessionGenerationState.required;
-                  const prepared = await params.activateRuntimeSecrets(
-                    previousSnapshot.sourceConfig,
-                    {
-                      reason: "reload",
-                      activate: false,
-                      publishFailureAsDegraded: true,
-                      forceColdRefKeys: reloadOptions?.forceColdRefKeys,
-                      canPublishFailureAsDegraded: () =>
-                        getActiveSecretsRuntimeSnapshotRevisionState() === previousSnapshotRevision,
-                    },
-                  );
-                  const plan = buildReloadPlan(
-                    diffConfigPaths(previousSnapshot.config, prepared.config),
-                  );
-                  const nextSharedGatewaySessionGeneration =
-                    params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
-                  let publishedSnapshotRevision: number | null = null;
-                  let generationOwnership: SharedGatewaySessionGenerationOwnership | null = null;
-                  const activateIfCurrent =
-                    params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent;
-                  if (activateIfCurrent) {
-                    const activated = await activateIfCurrent(
-                      prepared,
-                      previousSnapshotRevision,
-                      {
-                        reason: "reload",
-                        activate: true,
-                      },
-                      async () => {
-                        publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
-                        generationOwnership = claimSharedGatewaySessionGenerationIfOwned(
-                          params.sharedGatewaySessionGenerationState,
-                          previousGenerationOwnership,
-                          nextSharedGatewaySessionGeneration,
-                        );
-                      },
-                      () =>
-                        isSharedGatewaySessionGenerationOwnershipCurrent(
-                          params.sharedGatewaySessionGenerationState,
-                          previousGenerationOwnership,
-                        ),
-                    );
-                    if (!activated) {
-                      continue;
-                    }
-                  } else {
-                    publishedSnapshotRevision = await activateSecretsRuntimeSnapshotIfCurrent(
-                      prepared,
-                      previousSnapshotRevision,
-                      {
-                        canActivate: () =>
-                          isSharedGatewaySessionGenerationOwnershipCurrent(
-                            params.sharedGatewaySessionGenerationState,
-                            previousGenerationOwnership,
-                          ),
-                        onActivated: () => {
-                          generationOwnership = claimSharedGatewaySessionGenerationIfOwned(
-                            params.sharedGatewaySessionGenerationState,
-                            previousGenerationOwnership,
-                            nextSharedGatewaySessionGeneration,
-                          );
-                        },
-                      },
-                    );
-                    if (publishedSnapshotRevision === null) {
-                      continue;
-                    }
-                  }
-                  if (publishedSnapshotRevision === null || generationOwnership === null) {
-                    throw new Error("Secrets runtime activation did not publish ownership.");
-                  }
-                  transaction = {
-                    previousSnapshot,
-                    previousSharedGatewaySessionGeneration,
-                    previousSharedGatewaySessionGenerationRequired,
-                    prepared,
-                    plan,
-                    nextSharedGatewaySessionGeneration,
-                    sharedGatewaySessionGenerationChanged:
-                      previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration,
-                    generationOwnership,
-                    publishedSnapshotRevision,
-                  };
-                  if (
-                    !isSharedGatewaySessionGenerationOwnershipCurrent(
-                      params.sharedGatewaySessionGenerationState,
-                      generationOwnership,
-                    )
-                  ) {
-                    throw new Error("secrets.reload was superseded by a newer config write");
-                  }
-                  break;
-                }
-                const {
-                  prepared,
-                  plan,
-                  generationOwnership,
-                  nextSharedGatewaySessionGeneration,
-                  sharedGatewaySessionGenerationChanged,
-                } = transaction;
-                if (sharedGatewaySessionGenerationChanged) {
-                  disconnectStaleSharedGatewayAuthClients({
-                    clients: params.clients,
-                    expectedGeneration: nextSharedGatewaySessionGeneration,
-                  });
-                }
-                // Account-scoped changes restart their whole channel here:
-                // secrets.reload has no per-account restart path, and a missed
-                // restart would leave rotated credentials unapplied.
-                const channelsToRestart = new Set<ChannelKind>([
-                  ...plan.restartChannels,
-                  ...(plan.restartChannelAccounts?.keys() ?? []),
-                ]);
-                if (channelsToRestart.size > 0) {
-                  const restartChannels = [...channelsToRestart];
-                  if (
-                    isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
-                    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
-                  ) {
-                    throw new Error(
-                      `secrets.reload requires restarting channels: ${restartChannels.join(", ")}`,
-                    );
-                  }
-                  if (params.getChannelAutostartSuppression?.()) {
-                    throw new Error(
-                      `secrets.reload requires restarting channels but channel autostart is suppressed by crash-loop breaker: ${restartChannels.join(", ")}`,
-                    );
-                  }
-                  const restartFailures: ChannelKind[] = [];
-                  for (const channel of restartChannels) {
-                    if (
-                      !isSharedGatewaySessionGenerationOwnershipCurrent(
-                        params.sharedGatewaySessionGenerationState,
-                        generationOwnership,
-                      )
-                    ) {
-                      throw new Error("secrets.reload was superseded by a newer config write");
-                    }
-                    params.logChannels.info(`restarting ${channel} channel after secrets reload`);
-                    // Track for rollback before awaiting stopChannel: if stopChannel
-                    // throws after partially stopping the channel, still attempt recovery.
-                    stoppedChannels.push(channel);
-                    try {
-                      await params.stopChannel(channel);
-                      if (
-                        !isSharedGatewaySessionGenerationOwnershipCurrent(
-                          params.sharedGatewaySessionGenerationState,
-                          generationOwnership,
-                        )
-                      ) {
-                        throw new Error("secrets.reload was superseded by a newer config write");
-                      }
-                      await params.startChannel(channel);
-                      restartedChannels.add(channel);
-                      if (
-                        !isSharedGatewaySessionGenerationOwnershipCurrent(
-                          params.sharedGatewaySessionGenerationState,
-                          generationOwnership,
-                        )
-                      ) {
-                        throw new Error("secrets.reload was superseded by a newer config write");
-                      }
-                    } catch {
-                      params.logChannels.info(
-                        `failed to restart ${channel} channel after secrets reload`,
-                      );
-                      restartFailures.push(channel);
-                    }
-                  }
-                  if (restartFailures.length > 0) {
-                    throw new Error(
-                      `failed to restart channels after secrets reload: ${restartFailures.join(", ")}`,
-                    );
-                  }
-                }
-                if (
-                  !finalizeOwnedSharedGatewaySessionGeneration(
-                    params.sharedGatewaySessionGenerationState,
-                    generationOwnership,
-                  )
-                ) {
-                  throw new Error("secrets.reload was superseded by a newer config write");
-                }
-                return { warningCount: prepared.warnings.length };
-              } catch (err) {
-                let generationRestored = false;
-                if (transaction) {
-                  const failedTransaction = transaction;
-                  await restoreSecretsRuntimeSnapshotIfCurrent(
-                    failedTransaction.previousSnapshot,
-                    failedTransaction.publishedSnapshotRevision,
-                    failedTransaction.prepared,
-                    {
-                      onActivated: () => {
-                        generationRestored = replaceOwnedSharedGatewaySessionGenerationState(
-                          params.sharedGatewaySessionGenerationState,
-                          failedTransaction.generationOwnership,
-                          {
-                            current: failedTransaction.previousSharedGatewaySessionGeneration,
-                            required:
-                              failedTransaction.previousSharedGatewaySessionGenerationRequired,
-                          },
-                        );
-                      },
-                    },
-                  );
-                }
-                if (generationRestored && transaction) {
-                  if (transaction.sharedGatewaySessionGenerationChanged) {
-                    disconnectStaleSharedGatewayAuthClients({
-                      clients: params.clients,
-                      expectedGeneration: transaction.previousSharedGatewaySessionGeneration,
-                    });
-                  }
-                }
-                // Generation ownership fences state rollback, not liveness.
-                // Restart stopped channels against whichever runtime is current now.
-                for (const channel of stoppedChannels) {
-                  params.logChannels.info(
-                    `rolling back ${channel} channel after secrets reload failure`,
-                  );
-                  try {
-                    if (restartedChannels.has(channel)) {
-                      await params.stopChannel(channel);
-                    }
-                    await params.startChannel(channel);
-                  } catch {
-                    params.logChannels.info(
-                      `failed to roll back ${channel} channel after secrets reload`,
-                    );
-                  }
-                }
-                throw err;
-              }
-            }, reloadOptions),
-          log: params.log,
-          resolveSecrets: async ({
-            allowedPaths,
-            commandName,
-            forcedActivePaths,
-            optionalActivePaths,
-            providerOverrides,
-            targetIds,
-          }) => {
-            const { assignments, diagnostics, inactiveRefPaths } =
-              await resolveCommandSecretsFromActiveRuntimeSnapshot({
-                commandName,
-                targetIds: new Set(targetIds),
-                ...(allowedPaths ? { allowedPaths: new Set(allowedPaths) } : {}),
-                ...(forcedActivePaths ? { forcedActivePaths: new Set(forcedActivePaths) } : {}),
-                ...(optionalActivePaths
-                  ? { optionalActivePaths: new Set(optionalActivePaths) }
-                  : {}),
-                ...(providerOverrides ? { providerOverrides } : {}),
-              });
-            if (assignments.length === 0) {
-              return {
-                assignments: [] as CommandSecretAssignment[],
-                diagnostics,
-                inactiveRefPaths,
-              };
-            }
-            return { assignments, diagnostics, inactiveRefPaths };
-          },
-        }),
-      ),
+    async () => {
+      const [{ createSecretsHandlers }, storeWriteService] = await Promise.all([
+        loadSecretsModule(),
+        loadSecretStoreWriteService(),
+      ]);
+      return createSecretsHandlers({
+        reloadSecrets,
+        storeWriteService,
+        log: params.log,
+        resolveSecrets: async ({
+          allowedPaths,
+          commandName,
+          forcedActivePaths,
+          optionalActivePaths,
+          providerOverrides,
+          targetIds,
+        }) => {
+          const { assignments, diagnostics, inactiveRefPaths } =
+            await resolveCommandSecretsFromActiveRuntimeSnapshot({
+              commandName,
+              targetIds: new Set(targetIds),
+              ...(allowedPaths ? { allowedPaths: new Set(allowedPaths) } : {}),
+              ...(forcedActivePaths ? { forcedActivePaths: new Set(forcedActivePaths) } : {}),
+              ...(optionalActivePaths ? { optionalActivePaths: new Set(optionalActivePaths) } : {}),
+              ...(providerOverrides ? { providerOverrides } : {}),
+            });
+          if (assignments.length === 0) {
+            return {
+              assignments: [] as CommandSecretAssignment[],
+              diagnostics,
+              inactiveRefPaths,
+            };
+          }
+          return { assignments, diagnostics, inactiveRefPaths };
+        },
+      });
+    },
     { cacheRejections: true },
   );
 
@@ -696,6 +380,14 @@ export function createGatewayAuxHandlers(params: {
         loadExecApprovalHandlers,
       ),
       "exec.approval.resolve": createLazyHandler("exec.approval.resolve", loadExecApprovalHandlers),
+      "exec.approval.grants.list": createLazyHandler(
+        "exec.approval.grants.list",
+        loadExecApprovalHandlers,
+      ),
+      "exec.approval.grants.revoke": createLazyHandler(
+        "exec.approval.grants.revoke",
+        loadExecApprovalHandlers,
+      ),
       "plugin.approval.list": createLazyHandler("plugin.approval.list", loadPluginApprovalHandlers),
       "plugin.approval.request": createLazyHandler(
         "plugin.approval.request",

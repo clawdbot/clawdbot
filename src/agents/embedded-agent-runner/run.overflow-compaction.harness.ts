@@ -186,9 +186,8 @@ function makeMockRuntimePlan(): MockRuntimePlan {
 export const mockedCompactDirect = mockedContextEngine.compact;
 const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
 const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
-const mockedBuildAgentRuntimePlan = vi.fn<() => AgentRuntimePlan>(
-  () => makeMockRuntimePlan() as AgentRuntimePlan,
-);
+const buildMockAgentRuntimePlan = () => makeMockRuntimePlan() as AgentRuntimePlan;
+export const mockedBuildAgentRuntimePlan = vi.fn<() => AgentRuntimePlan>(buildMockAgentRuntimePlan);
 export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
   async (input: Record<string, unknown>) => {
     const pluginRegistry = getActivePluginRegistry();
@@ -442,6 +441,10 @@ const mockedHasUsableCustomProviderApiKey = vi.fn(() => false);
 const mockedMarkAuthProfileSuccess = vi.fn(async () => {});
 const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 
+// No provider here means model resolution defaults to anthropic/test-model, which
+// the mocked codex harness does not claim: such runs select the built-in openclaw
+// host harness and pay its one-time source-compile cost. Suites proving plugin
+// harness behavior must pin provider "openai" (see run.session-permissions.test.ts).
 export const overflowBaseRunParams = {
   agentId: "main",
   sessionId: "test-session",
@@ -501,7 +504,7 @@ function resetRunOverflowCompactionHarnessMocks(): void {
   mockedResolveContextEngine.mockResolvedValue(mockedContextEngine);
   mockedBuildAgentRuntimePlan.mockReset();
   mockedAcquireAgentRunPreparedModelRuntime.mockClear();
-  mockedBuildAgentRuntimePlan.mockImplementation(() => makeMockRuntimePlan() as AgentRuntimePlan);
+  mockedBuildAgentRuntimePlan.mockImplementation(buildMockAgentRuntimePlan);
   mockedCompactDirect.mockReset();
   mockedCompactDirect.mockResolvedValue({
     ok: false,
@@ -666,6 +669,9 @@ export function resetSharedRunIntegrationHarnessMocks(): void {
   vi.unstubAllEnvs();
   resetCommandQueueStateForTest();
   resetMockAgentHarness();
+
+  mockedBuildAgentRuntimePlan.mockReset();
+  mockedBuildAgentRuntimePlan.mockImplementation(buildMockAgentRuntimePlan);
 
   mockedBuildEmbeddedRunPayloads.mockReset();
   mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
@@ -1034,6 +1040,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../prepared-model-runtime.js", () => ({
     activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
     acquireAgentRunPreparedModelRuntime: mockedAcquireAgentRunPreparedModelRuntime,
+    acquireReadOnlyPreparedModelRuntime: mockedAcquireAgentRunPreparedModelRuntime,
     prepareModelRuntimeSnapshot: vi.fn(async () => ({
       createStores: () => ({ authStorage: {}, modelRegistry: {} }),
     })),

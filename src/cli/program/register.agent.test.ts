@@ -80,7 +80,7 @@ vi.mock("../one-shot-exit.js", () => ({
 
 describe("agent command registration", () => {
   async function runCli(args: string[]) {
-    const program = new Command();
+    const program = new Command().enablePositionalOptions();
     registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
     registerAgentsCommands(program);
     await program.parseAsync(args, { from: "user" });
@@ -108,7 +108,7 @@ describe("agent command registration", () => {
     return call;
   }
 
-  it("keeps both agent thinking help surfaces aligned with the canonical levels", () => {
+  it("keeps agent help aligned with supported thinking levels and auth sources", () => {
     const program = new Command();
     registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
     const agent = program.commands.find((command) => command.name() === "agent");
@@ -119,6 +119,9 @@ describe("agent command registration", () => {
     );
     expect(exec?.options.find((option) => option.long === "--thinking")?.description).toContain(
       "ultra",
+    );
+    expect(agent?.options.find((option) => option.long === "--local")?.description).toContain(
+      "configured provider credentials or local CLI logins",
     );
   });
 
@@ -177,12 +180,22 @@ describe("agent command registration", () => {
     expect(deps).toBeUndefined();
   });
 
-  it("keeps bare agent on the existing parent action", async () => {
-    await runCli(["agent", "--message", "hi", "--agent", "ops"]);
+  it.each([0, 1])("keeps bare agent on the parent action with exit code %i", async (exitCode) => {
+    const previousExitCode = process.exitCode;
+    agentCliCommandMock.mockImplementationOnce(async () => {
+      process.exitCode = exitCode;
+    });
 
-    expect(agentCliCommandMock).toHaveBeenCalledTimes(1);
-    expect(agentExecCommandMock).not.toHaveBeenCalled();
-    expect(requestExitAfterOneShotOutputMock).toHaveBeenCalledWith(runtime, 0);
+    try {
+      await runCli(["agent", "--message", "hi", "--agent", "ops"]);
+
+      expect(agentCliCommandMock).toHaveBeenCalledTimes(1);
+      expect(agentExecCommandMock).not.toHaveBeenCalled();
+      expect(requestExitAfterOneShotOutputMock).toHaveBeenCalledWith(runtime);
+      expect(process.exitCode).toBe(exitCode);
+    } finally {
+      process.exitCode = previousExitCode;
+    }
   });
 
   it("keeps an exec-valued parent message on the existing parent action", async () => {
@@ -262,14 +275,37 @@ describe("agent command registration", () => {
     );
   });
 
-  it("runs agents add and computes hasFlags based on explicit options", async () => {
+  it("resolves nested exec --timeout from the explicit leaf, then the parent, then the default", async () => {
+    await runCli(["agent", "exec", "fix it", "--timeout", "120"]);
+    expect(agentExecCommandMock).toHaveBeenLastCalledWith(
+      "fix it",
+      expect.objectContaining({ timeout: "120" }),
+      runtime,
+    );
+
+    await runCli(["agent", "--timeout", "30", "exec", "fix it"]);
+    expect(agentExecCommandMock).toHaveBeenLastCalledWith(
+      "fix it",
+      expect.objectContaining({ timeout: "30" }),
+      runtime,
+    );
+
+    await runCli(["agent", "--timeout", "30", "exec", "fix it", "--timeout", "120"]);
+    expect(agentExecCommandMock).toHaveBeenLastCalledWith(
+      "fix it",
+      expect.objectContaining({ timeout: "120" }),
+      runtime,
+    );
+  });
+
+  it("runs agents add and detects explicit automation options", async () => {
     await runCli(["agents", "add", "alpha"]);
     const [alphaOptions, alphaRuntime, alphaFlags] = commandCall(agentsAddCommandMock, 0);
     expect((alphaOptions as { name?: string }).name).toBe("alpha");
     expect((alphaOptions as { workspace?: string }).workspace).toBeUndefined();
     expect((alphaOptions as { bind?: string[] }).bind).toEqual([]);
     expect(alphaRuntime).toBe(runtime);
-    expect(alphaFlags).toEqual({ hasFlags: false, hasAutomationFlags: false });
+    expect(alphaFlags).toEqual({ hasAutomationFlags: false });
 
     await runCli([
       "agents",
@@ -291,10 +327,10 @@ describe("agent command registration", () => {
     expect((betaOptions as { nonInteractive?: boolean }).nonInteractive).toBe(true);
     expect((betaOptions as { json?: boolean }).json).toBe(true);
     expect(betaRuntime).toBe(runtime);
-    expect(betaFlags).toEqual({ hasFlags: true, hasAutomationFlags: true });
+    expect(betaFlags).toEqual({ hasAutomationFlags: true });
   });
 
-  it("keeps JSON-only agent creation non-interactive", async () => {
+  it("keeps JSON-only agent creation in wizard mode", async () => {
     await runCli(["agents", "add", "alpha", "--json"]);
 
     const [options, callRuntime, flags] = commandCall(agentsAddCommandMock);
@@ -302,7 +338,7 @@ describe("agent command registration", () => {
       expect.objectContaining({ name: "alpha", json: true, nonInteractive: false }),
     );
     expect(callRuntime).toBe(runtime);
-    expect(flags).toEqual({ hasFlags: true, hasAutomationFlags: false });
+    expect(flags).toEqual({ hasAutomationFlags: false });
   });
 
   it("runs agents list when root agents command is invoked", async () => {

@@ -14,9 +14,10 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
 
-export const DEVICE_WORKER_PROVIDER_ID = "device";
+export { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 const DEVICE_WORKER_DORMANCY_MS = 14 * 24 * 60 * 60 * 1_000;
 
 type DeviceWorkerRuntimeOptions = {
@@ -26,8 +27,9 @@ type DeviceWorkerRuntimeOptions = {
 
 export type DeviceWorkerAvailability = {
   available: boolean;
+  node?: NodeWorkerSupervisorNodeProof;
   issue?: NodeRunnerInventoryIssue;
-  unavailableReason?: "unpaired" | "disconnected" | "at-capacity";
+  unavailableReason?: "unpaired" | "disconnected" | "hosting-unavailable" | "at-capacity";
 };
 type DeviceWorkerAvailabilityResolver = (deviceId: string) => Promise<DeviceWorkerAvailability>;
 type DeviceWorkerReconciliation = (deviceId: string) => Promise<readonly string[]>;
@@ -58,8 +60,10 @@ export function deviceUnavailableText(deviceId: string, availability: DeviceWork
       return `device worker is not a paired node host: ${deviceId}`;
     case "disconnected":
       return `device worker node is not connected: ${deviceId}; reconnect it before retrying`;
+    case "hosting-unavailable":
+      return `device node ${deviceId} is connected but cannot host sessions; enable session hosting (nodeHost.workerRuns.enabled), update the node if needed, then reconnect it`;
     case "at-capacity":
-      return `device worker is at capacity (all worker slots in use): ${deviceId}; retry after a running turn completes`;
+      return `device worker is at capacity (all worker slots in use): ${deviceId}; stop an existing worker environment or retry when a slot is free`;
     default:
       return `device worker availability is unknown: ${deviceId}; verify the node host is paired and connected, then retry`;
   }
@@ -86,10 +90,6 @@ function requireDeviceId(profile: WorkerProfile): string {
     throw new WorkerProviderError("device worker profile requires a device setting");
   }
   return deviceId.trim();
-}
-
-function isSessionCapableNode(node: NodeWorkerSupervisorNodeProof): boolean {
-  return node.workerHost.capacity.available > 0;
 }
 
 function hasPairedNodeRole(device: PairedDevice | null): device is PairedDevice {
@@ -121,24 +121,26 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
       options.getPairedDevice(deviceId),
       findConnectedNode(deviceId),
     ]);
-    // Connected hosts remain discoverable while full; capacity gates only new leases.
+    const current = connected && nodeTransport?.isCurrent(connected) ? connected : undefined;
+    // Transport availability is runtime-neutral; only worker-turn placement consumes a slot.
     const unavailableReason = !hasPairedNodeRole(paired)
       ? "unpaired"
-      : !connected
-        ? "disconnected"
-        : !isSessionCapableNode(connected)
-          ? "at-capacity"
-          : undefined;
+      : !current
+        ? nodeTransport?.isConnected?.(deviceId)
+          ? "hosting-unavailable"
+          : "disconnected"
+        : undefined;
     const issue = nodeTransport?.getIssue?.(deviceId);
     return {
       available: unavailableReason === undefined,
+      ...(unavailableReason === undefined && current ? { node: current } : {}),
       ...(issue ? { issue } : {}),
       ...(unavailableReason ? { unavailableReason } : {}),
     };
   };
   const provider: WorkerProvider = {
     id: DEVICE_WORKER_PROVIDER_ID,
-    supportedExecutionModes: ["worker-turn"],
+    supportedExecutionModes: ["worker-turn", "remote-exec"],
     provisionBeforeInstallation: true,
     provision: async (profile, operationId) => {
       const deviceId = requireDeviceId(profile);

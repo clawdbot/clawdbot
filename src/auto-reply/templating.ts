@@ -312,11 +312,14 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   SessionCreation?: {
     via: import("../config/sessions/session-entry-provenance.js").SessionCreatedVia;
     actor?: import("../config/sessions/session-entry-provenance.js").SessionCreatedActor;
+    sandbox?: "required";
   };
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
   SenderIsBot?: boolean;
+  /** Channel-ingress fact: sender is the operator's own account (from-me). */
+  SenderIsSelf?: boolean;
   Timestamp?: number;
   LocationLat?: number;
   LocationLon?: number;
@@ -378,6 +381,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
+  /** Channel-owned local conversation image reference; never rendered into prompt text. */
+  ConversationAvatar?: string;
   /** Channel-owned metadata exposed to plugin hook context, not prompt text. */
   ChannelContext?: PluginHookChannelContext;
   /** Provider-native chat/conversation id used by channel plugins that expose `chat_id`. */
@@ -411,6 +416,10 @@ export type MsgContext = Partial<CanonicalInboundText> & {
    * Correlation interceptors must fail closed when this proof is absent.
    */
   InboundAccessAuthorized?: boolean;
+  /** Internal marker that channel ingress authoritatively observed route-context facts. */
+  ConversationRouteContextObserved?: boolean;
+  /** Canonical peer used by route selection; delivery targets may use a different namespace. */
+  ConversationRoutePeerId?: string;
   /**
    * Internal flag for channels that emit message_received through a channel-specific
    * privacy gate before entering the shared reply dispatcher.
@@ -465,7 +474,9 @@ export type FinalizedRuntimeMsgContext = Omit<
     CommandTurn?: CommandTurnContext;
   };
 
-export type TemplateContext = RuntimeMsgContext & {
+type NonTemplateContextKey = "ConversationAvatar";
+
+export type TemplateContext = Omit<RuntimeMsgContext, NonTemplateContextKey> & {
   BodyStripped?: string;
   SessionId?: string;
   IsNewSession?: string;
@@ -533,6 +544,9 @@ export function applyTemplate(str: string | undefined, ctx: TemplateContext) {
     return "";
   }
   return str.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
+    if (key === "ConversationAvatar") {
+      return "";
+    }
     const value = ctx[key as keyof TemplateContext];
     return formatTemplateValue(value);
   });

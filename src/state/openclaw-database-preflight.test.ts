@@ -11,15 +11,16 @@ import {
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
 import {
-  assertOpenClawDatabasesReadyForRestart,
+  assertOpenClawDatabasesReady,
   preflightOpenClawStateDatabasePath,
   preflightOpenClawDatabaseSchemas,
 } from "./openclaw-database-preflight.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -345,7 +346,7 @@ describe("OpenClaw database schema preflight", () => {
         },
       }),
     ).toEqual({ incompatible: [], indeterminate: [] });
-    expect(() => assertOpenClawDatabasesReadyForRestart({ env })).not.toThrow();
+    expect(() => assertOpenClawDatabasesReady({ env, operation: "gateway-restart" })).not.toThrow();
   });
 
   it("accepts an older v6 state database without the lazy setup id during restart preflight", () => {
@@ -361,7 +362,7 @@ describe("OpenClaw database schema preflight", () => {
     } finally {
       state.close();
     }
-    expect(() => assertOpenClawDatabasesReadyForRestart({ env })).not.toThrow();
+    expect(() => assertOpenClawDatabasesReady({ env, operation: "gateway-restart" })).not.toThrow();
   });
 
   it("reports a current but noncanonical state schema as indeterminate", () => {
@@ -400,9 +401,79 @@ describe("OpenClaw database schema preflight", () => {
         },
       ],
     });
-    expect(() => assertOpenClawDatabasesReadyForRestart({ env })).toThrow(
+    expect(() => assertOpenClawDatabasesReady({ env, operation: "gateway-restart" })).toThrow(
       /Gateway refused restart.*column definitions differ for worktrees/u,
     );
+  });
+
+  it.each(["default", "configured"])(
+    "checks an unregistered %s store without creating shared state",
+    (layout) => {
+      const stateDir = tempDirs.make("openclaw-unregistered-readiness-");
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const customPath = path.join(tempDirs.make("openclaw-configured-readiness-"), "agent.sqlite");
+      const agent = openOpenClawAgentDatabase({
+        agentId: "main",
+        env,
+        ...(layout === "configured" ? { path: customPath } : {}),
+      });
+      const statePath = resolveOpenClawStateSqlitePath(env);
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      fs.unlinkSync(statePath);
+      const { DatabaseSync } = requireNodeSqlite();
+      const database = new DatabaseSync(agent.path);
+      // Consolidate the fixture so ordinary SQLite WAL coordination is not
+      // mistaken for readiness creating or migrating a persistent database.
+      database.exec("PRAGMA journal_mode = DELETE;");
+      database.close();
+      const options = {
+        env,
+        operation: "doctor" as const,
+        configuredAgentDatabaseTargets:
+          layout === "configured" ? [{ agentId: "main", path: agent.path }] : [],
+      };
+      const before = snapshotSourceFamily(agent.path);
+      expect(() => assertOpenClawDatabasesReady(options)).not.toThrow();
+      expect(snapshotSourceFamily(agent.path)).toEqual(before);
+      expect(fs.existsSync(statePath)).toBe(false);
+      const legacyWriter = new DatabaseSync(agent.path);
+      legacyWriter.exec(
+        "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
+      );
+      legacyWriter.close();
+      const legacy = snapshotSourceFamily(agent.path);
+      expect(() => assertOpenClawDatabasesReady(options)).toThrow(
+        /Doctor.*database readiness.*schema version 17/,
+      );
+      expect(snapshotSourceFamily(agent.path)).toEqual(legacy);
+      expect(fs.existsSync(statePath)).toBe(false);
+    },
+  );
+
+  it("leaves archive-only state alone when no runtime database exists", () => {
+    const stateDir = tempDirs.make("openclaw-readiness-archive-only-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const archivePath = path.join(
+      stateDir,
+      "agents",
+      "main",
+      "sessions",
+      "old.jsonl.deleted.2026-07-24T01-02-04.000Z",
+    );
+    fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+    fs.writeFileSync(archivePath, "unreadable archive\n");
+    const before = snapshotSourceFamily(archivePath);
+    expect(() =>
+      assertOpenClawDatabasesReady({
+        env,
+        operation: "doctor",
+        configuredAgentDatabaseTargets: [],
+      }),
+    ).not.toThrow();
+    expect(snapshotSourceFamily(archivePath)).toEqual(before);
+    expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
+    expect(fs.existsSync(path.join(stateDir, "agents", "main", "agent"))).toBe(false);
   });
 
   it("collects newer state and registered agent schemas with writer builds", () => {

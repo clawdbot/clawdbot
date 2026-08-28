@@ -10,8 +10,12 @@ struct ConfigStoreTests {
         var remoteHit = false
         await ConfigStore._testSetOverrides(.init(
             isRemoteMode: { true },
-            loadLocal: { localHit = true; return ["local": true] },
-            loadRemote: { remoteHit = true; return ["remote": true] }))
+            loadLocal: { localHit = true
+                return ["local": true]
+            },
+            loadRemote: { remoteHit = true
+                return ["remote": true]
+            }))
 
         let result = await ConfigStore.load()
 
@@ -26,8 +30,12 @@ struct ConfigStoreTests {
         var remoteHit = false
         await ConfigStore._testSetOverrides(.init(
             isRemoteMode: { false },
-            loadLocal: { localHit = true; return ["local": true] },
-            loadRemote: { remoteHit = true; return ["remote": true] }))
+            loadLocal: { localHit = true
+                return ["local": true]
+            },
+            loadRemote: { remoteHit = true
+                return ["remote": true]
+            }))
 
         let result = await ConfigStore.load()
 
@@ -113,6 +121,24 @@ struct ConfigStoreTests {
         }
 
         #expect(changeCount.value == 0)
+    }
+
+    @Test func `remote stale-base rejection clears the cached revision`() async {
+        ConfigStore._testSetLastHash("legacy-raw-hash")
+        await self.withOverrides(.init(
+            isRemoteMode: { true },
+            saveRemote: { _ in
+                throw NSError(domain: "Gateway", code: 0, userInfo: [
+                    NSLocalizedDescriptionKey: "config changed since last load; re-run config.get and retry",
+                ])
+            })) {
+                do {
+                    try await ConfigStore.save(["browser": ["enabled": false]])
+                    Issue.record("Expected save to fail")
+                } catch {}
+            }
+
+        #expect(ConfigStore._testLastHash() == nil)
     }
 
     @Test func `local save does not fall back to direct write after stale gateway rejection`() async throws {

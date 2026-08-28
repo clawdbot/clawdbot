@@ -31,6 +31,7 @@ import {
 } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
 import {
@@ -75,6 +76,7 @@ export type PluginToolMcpMeta = {
 /** Runtime metadata used to trace an agent tool back to its owning plugin registration. */
 type PluginToolMeta = {
   pluginId: string;
+  kind?: PluginManifestRecord["kind"];
   optional: boolean;
   replaySafe?: boolean;
   sideEffecting?: boolean;
@@ -290,26 +292,6 @@ function blocksHostRestrictedConversationReadRegistration(params: {
       ctx: params.ctx,
     })
   );
-}
-
-function resolveCurrentManifestPlugin(params: {
-  pluginId: string;
-  ctx: OpenClawPluginToolContext;
-  loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
-}): PluginManifestRecord | undefined {
-  let config = params.ctx.runtimeConfig ?? params.ctx.config ?? params.loadContext.config;
-  if (params.ctx.getRuntimeConfig) {
-    try {
-      config = params.ctx.getRuntimeConfig() ?? config;
-    } catch {
-      return undefined;
-    }
-  }
-  return loadManifestContractSnapshot({
-    config,
-    workspaceDir: params.loadContext.workspaceDir,
-    env: params.loadContext.env,
-  }).plugins.find((plugin) => plugin.id === params.pluginId);
 }
 
 /**
@@ -876,11 +858,11 @@ function createCachedDescriptorPluginTool(params: {
       const resolveCandidateTool = (
         candidate: PluginToolRegistration,
       ): AnyAgentTool | undefined => {
-        const manifestPlugin = resolveCurrentManifestPlugin({
-          pluginId,
-          ctx: params.ctx,
-          loadContext: params.loadContext,
-        });
+        const manifestPlugin = resolvePluginMetadataSnapshot({
+          config: params.loadContext.config,
+          workspaceDir: params.loadContext.workspaceDir,
+          env: params.loadContext.env,
+        }).byPluginId.get(pluginId);
         if (
           blocksHostRestrictedConversationReadRegistration({
             entry: candidate,
@@ -923,6 +905,7 @@ function createCachedDescriptorPluginTool(params: {
   }
   setPluginToolMeta(tool, {
     pluginId,
+    ...(params.plugin.kind ? { kind: params.plugin.kind } : {}),
     optional: params.descriptor.optional,
     replaySafe: isManifestToolReplaySafe({
       manifestPlugin: params.plugin,
@@ -1177,11 +1160,9 @@ function resolvePluginToolLoadState(params: {
   const env = params.env ?? process.env;
   const baseConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
   const preparedLoadContext = params.preparedRuntime?.loadContext;
-  const usePreparedRuntime =
-    preparedLoadContext !== undefined &&
-    (baseConfig === preparedLoadContext.rawConfig || baseConfig === preparedLoadContext.config) &&
-    env === preparedLoadContext.env &&
-    params.context.workspaceDir === preparedLoadContext.workspaceDir;
+  // The prepared runtime already owns one immutable Gateway plugin generation. Per-turn config
+  // and workspace projections cannot invalidate that executable graph or reopen discovery.
+  const usePreparedRuntime = preparedLoadContext !== undefined && env === preparedLoadContext.env;
   const context = usePreparedRuntime
     ? preparedLoadContext
     : resolvePluginRuntimeLoadContext({
@@ -1576,6 +1557,7 @@ export function resolvePluginTools(params: {
       });
       pluginToolMeta.set(tool, {
         pluginId: entry.pluginId,
+        ...(manifestPlugin?.kind ? { kind: manifestPlugin.kind } : {}),
         optional,
         replaySafe: isManifestToolReplaySafe({
           manifestPlugin,

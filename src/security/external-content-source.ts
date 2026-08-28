@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** Hook session sources that carry untrusted external content into agent prompts. */
-export type HookExternalContentSource = "gmail" | "webhook";
+export type HookExternalContentSource = "email" | "gmail" | "webhook";
 
 /**
  * Resolve a hook session key into its external content source.
@@ -25,7 +25,7 @@ export function resolveHookExternalContentSource(
 export function mapHookExternalContentSource(
   source: HookExternalContentSource,
 ): "email" | "webhook" {
-  return source === "gmail" ? "email" : "webhook";
+  return source === "webhook" ? "webhook" : "email";
 }
 
 /** Return true when a session key should receive external-content prompt wrapping. */

@@ -1,64 +1,7 @@
 // Mattermost tests cover client.retry plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createMattermostClient,
-  createMattermostDirectChannelWithRetry,
-  resolveMattermostReplyDeliveryBarrierTimeoutMs,
-} from "./client.js";
-
-describe("resolveMattermostReplyDeliveryBarrierTimeoutMs", () => {
-  it("uses the default barrier for non-DM deliveries", () => {
-    expect(
-      resolveMattermostReplyDeliveryBarrierTimeoutMs({
-        isDirect: false,
-        queuedCounts: { tool: 1, block: 1, final: 1 },
-      }),
-    ).toBeUndefined();
-  });
-
-  it("uses the default barrier when no deliveries were queued", () => {
-    expect(
-      resolveMattermostReplyDeliveryBarrierTimeoutMs({
-        isDirect: true,
-        queuedCounts: { tool: 0, block: 0, final: 0 },
-      }),
-    ).toBeUndefined();
-  });
-
-  it("covers the default retry envelope plus scheduling slack", () => {
-    expect(
-      resolveMattermostReplyDeliveryBarrierTimeoutMs({
-        isDirect: true,
-        queuedCounts: { tool: 0, block: 0, final: 1 },
-      }),
-    ).toBe(210_000);
-  });
-
-  it("covers one maximum retry envelope per queued delivery", () => {
-    expect(
-      resolveMattermostReplyDeliveryBarrierTimeoutMs({
-        isDirect: true,
-        dmRetryOptions: {
-          maxRetries: 10,
-          maxDelayMs: 60_000,
-          timeoutMs: 120_000,
-        },
-        queuedCounts: { tool: 1, block: 0, final: 1 },
-      }),
-    ).toBe(3_960_000);
-  });
-
-  it("includes the configured inter-block delay budget", () => {
-    expect(
-      resolveMattermostReplyDeliveryBarrierTimeoutMs({
-        isDirect: true,
-        queuedCounts: { tool: 0, block: 2, final: 0 },
-        humanDelayBudgetMs: 180_000,
-      }),
-    ).toBe(600_000);
-  });
-});
+import { createMattermostClient, createMattermostDirectChannelWithRetry } from "./client.js";
 
 describe("createMattermostDirectChannelWithRetry", () => {
   const mockFetch = vi.fn<typeof fetch>();

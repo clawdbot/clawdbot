@@ -1,8 +1,9 @@
-/* @vitest-environment jsdom */
-
 import { render } from "lit";
+/* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
-import { resolveAvatarInitials, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { resolveAvatarInitials } from "../lib/identity-avatar.ts";
 import {
   hasMultiplePresenceIdentities,
   hasSessionPresenceViewers,
@@ -154,7 +155,7 @@ type ViewerFacepileElement = HTMLElement & {
   selfInstanceId?: string;
   sessionKey?: string;
   excludeUserId?: string;
-  staticUsers?: readonly PresenceViewer[];
+  staticParticipants?: readonly SessionParticipant[];
   maxVisible: number;
   updateComplete: Promise<boolean>;
 };
@@ -184,20 +185,20 @@ it("renders ordered static participant actors without presence filtering", async
   // SAFETY: the registered custom element exposes the tested reactive properties.
   const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
   facepile.maxVisible = 2;
-  facepile.staticUsers = [
-    { id: "profile-ada", name: "Ada", watchedSessions: [] },
-    { id: "research", name: "Research", watchedSessions: [] },
-    { id: "profile-bob", name: "Bob", watchedSessions: [] },
+  facepile.staticParticipants = [
+    { identity: { type: "profile", id: "profile-ada" }, label: "Ada" },
+    { identity: { type: "agent", id: "research" }, label: "Research" },
+    { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
   ];
   document.body.append(facepile);
 
   await vi.waitFor(async () => {
     await facepile.updateComplete;
     expect(
-      [...facepile.querySelectorAll("[data-viewer-id]")].map((node) =>
-        node.getAttribute("data-viewer-id"),
+      [...facepile.querySelectorAll("openclaw-viewer-avatar .viewer-avatar")].map((node) =>
+        node.getAttribute("aria-label"),
       ),
-    ).toEqual(["profile-ada", "research"]);
+    ).toEqual(["Ada", "Research"]);
   });
   expect(facepile.querySelector(".viewer-avatar--overflow")?.textContent?.trim()).toBe("+1");
 });
@@ -325,4 +326,39 @@ it("keeps collaboration UI dormant for a solo identity", () => {
       presence: [...solo.presence, { user: { id: "alice" }, watchedSessions: [] }],
     }),
   ).toBe(true);
+});
+
+it("links faces only when the host opts in, so nested facepiles stay plain", async () => {
+  const users: SessionParticipant[] = [
+    { identity: { type: "profile", id: "profile-ada" }, label: "Ada King" },
+    { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
+  ];
+  const mount = async (personActivity?: { basePath: string; navigate: (id: string) => void }) => {
+    const facepile = document.createElement("openclaw-viewer-facepile") as HTMLElement & {
+      staticParticipants: readonly SessionParticipant[];
+      personActivity?: { basePath: string; navigate: (id: string) => void };
+      updateComplete: Promise<boolean>;
+    };
+    facepile.staticParticipants = users;
+    if (personActivity) {
+      facepile.personActivity = personActivity;
+    }
+    document.body.append(facepile);
+    await facepile.updateComplete;
+    return facepile;
+  };
+
+  const navigate = vi.fn();
+  const linked = await mount({ basePath: "", navigate });
+  expect(
+    [...linked.querySelectorAll<HTMLAnchorElement>("a.person-activity-avatar-link")].map((link) =>
+      link.getAttribute("href"),
+    ),
+  ).toEqual(["/activity?person=profile-ada", "/activity?person=profile-mira"]);
+
+  // Sidebar rows and collapsed group headers render facepiles inside an anchor or button;
+  // a nested link there would break the parent's click target.
+  const plain = await mount();
+  expect(plain.querySelector("a")).toBeNull();
+  expect(plain.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(2);
 });

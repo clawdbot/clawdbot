@@ -305,8 +305,8 @@ describe("buildEmbeddedSystemPrompt", () => {
     expect(prompt).not.toContain("## Memory Recall");
   });
 
-  it("includes active background process references in the embedded prompt", () => {
-    const prompt = buildEmbeddedSystemPrompt({
+  it("includes active background process references only when process is callable", () => {
+    const params = {
       workspaceDir: "/tmp/openclaw",
       reasoningTagHint: false,
       runtimeInfo: {
@@ -330,16 +330,22 @@ describe("buildEmbeddedSystemPrompt", () => {
           },
         ],
       },
-      tools: [],
+      tools: [{ name: "process" } as never],
       modelAliasLines: [],
       userTimezone: "UTC",
       userDate: "2026-01-05",
-    });
+    } satisfies Parameters<typeof buildEmbeddedSystemPrompt>[0];
+    const prompt = buildEmbeddedSystemPrompt(params);
 
     expect(prompt).toContain("Active exec sessions:");
     expect(prompt).toContain("sess-active running pid=1234 cwd=/tmp/work :: sleep 600");
     expect(prompt).toContain("Before input: process log");
     expect(prompt).toContain("waitingForInput/stdinWritable");
     expect(prompt).toContain("process list");
+
+    const restrictedPrompt = buildEmbeddedSystemPrompt({ ...params, tools: [] });
+    expect(restrictedPrompt).not.toContain("Active exec sessions:");
+    expect(restrictedPrompt).not.toContain("process log");
+    expect(restrictedPrompt).not.toContain("process list");
   });
 });

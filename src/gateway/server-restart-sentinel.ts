@@ -1,5 +1,4 @@
-// Gateway restart sentinel recovery.
-// Resumes pending restart continuations and outbound delivery after process restart.
+// Gateway restart sentinel recovery resumes pending continuations and outbound delivery.
 import {
   resolveCorrelatedSubagentDelivery,
   settleCorrelatedSubagentDelivery,
@@ -28,14 +27,13 @@ import {
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import {
-  drainPendingSessionDeliveries,
+  drainPendingSessionDelivery,
   recoverPendingSessionDeliveries,
   type SessionDeliveryRecoveryLogger,
   type SettleSessionDeliveryFn,
 } from "../infra/session-delivery-queue-recovery.js";
 import {
   enqueueSessionDelivery,
-  loadPendingSessionDelivery,
   markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
   SessionDeliveryDeadLetteredError,
@@ -90,10 +88,7 @@ function sessionDeliveryStateDirArgs(stateDir?: string): [] | [string] {
 function cloneRestartSentinelPayload(
   payload: RestartSentinelPayload | null,
 ): RestartSentinelPayload | null {
-  if (!payload) {
-    return null;
-  }
-  return structuredClone(payload);
+  return payload ? structuredClone(payload) : null;
 }
 
 function hasRoutableDeliveryContext(context?: {
@@ -135,13 +130,11 @@ async function waitForRetry(delayMs: number) {
   });
 }
 
-function buildRestartContinuationMessageId(params: {
+const buildRestartContinuationMessageId = (params: {
   sessionKey: string;
   kind: RestartSentinelContinuation["kind"];
   revision: number;
-}) {
-  return `restart-sentinel:${params.sessionKey}:${params.kind}:${params.revision}`;
-}
+}) => `restart-sentinel:${params.sessionKey}:${params.kind}:${params.revision}`;
 
 function resolveRestartContinuationRoute(params: {
   channel?: string;
@@ -204,6 +197,7 @@ export async function deliverQueuedSessionDelivery(params: {
   deps: CliDeps;
   entry: QueuedSessionDelivery;
   stateDir?: string;
+  resolveGatewayContext?: import("./server-methods/types.js").GatewayContextResolver;
 }) {
   const queuedEntry = resolveCorrelatedSubagentDelivery(params.entry);
   const { cfg, agentId, entry, storePath, canonicalKey } = loadSessionEntry(queuedEntry.sessionKey);
@@ -242,6 +236,9 @@ export async function deliverQueuedSessionDelivery(params: {
       storePath,
       sessionEntry: entry,
       ...(params.stateDir !== undefined ? { stateDir: params.stateDir } : {}),
+      ...(params.resolveGatewayContext
+        ? { resolveGatewayContext: params.resolveGatewayContext }
+        : {}),
     })
   ) {
     return;
@@ -406,10 +403,11 @@ async function drainRestartContinuationQueue(params: {
   log: SessionDeliveryRecoveryLogger;
 }) {
   for (let attempt = 1; attempt <= RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS; attempt += 1) {
-    await drainPendingSessionDeliveries({
-      drainKey: `restart-continuation:${params.entryId}`,
+    const queued = await drainPendingSessionDelivery({
+      id: params.entryId,
       logLabel: "restart continuation",
       log: params.log,
+      bypassBackoff: true,
       deliver: (entry, context = {}) =>
         deliverQueuedSessionDelivery({
           deps: params.deps,
@@ -417,13 +415,8 @@ async function drainRestartContinuationQueue(params: {
           ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
         }),
       onSettled: settleQueuedSessionDelivery,
-      selectEntry: (entry) => ({
-        match: entry.id === params.entryId,
-        bypassBackoff: true,
-      }),
     });
 
-    const queued = await loadPendingSessionDelivery(params.entryId);
     if (!isRestartContinuationBusyRetry(queued)) {
       return;
     }
@@ -441,6 +434,7 @@ export async function recoverPendingRestartContinuationDeliveries(params: {
   deps: CliDeps;
   log?: SessionDeliveryRecoveryLogger;
   maxEnqueuedAt?: number;
+  resolveGatewayContext?: import("./server-methods/types.js").GatewayContextResolver;
 }) {
   await recoverPendingSessionDeliveries({
     deliver: (entry, context = {}) =>
@@ -448,6 +442,9 @@ export async function recoverPendingRestartContinuationDeliveries(params: {
         deps: params.deps,
         entry,
         ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
+        ...(params.resolveGatewayContext
+          ? { resolveGatewayContext: params.resolveGatewayContext }
+          : {}),
       }),
     log: params.log ?? log,
     maxEnqueuedAt: params.maxEnqueuedAt,

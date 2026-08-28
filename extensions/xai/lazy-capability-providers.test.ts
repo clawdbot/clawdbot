@@ -228,8 +228,8 @@ describe("xAI lazy capability providers", () => {
       third,
     ]);
     expect(runtimeMocks.transcriptionConnect).toHaveBeenCalledOnce();
-    expect(runtimeMocks.transcriptionSendAudio.mock.invocationCallOrder.at(-1)).toBeLessThan(
-      runtimeMocks.transcriptionConnect.mock.invocationCallOrder[0]!,
+    expect(runtimeMocks.transcriptionConnect.mock.invocationCallOrder[0]).toBeLessThan(
+      runtimeMocks.transcriptionSendAudio.mock.invocationCallOrder[0]!,
     );
   });
 
@@ -250,30 +250,68 @@ describe("xAI lazy capability providers", () => {
   });
 
   it("reopens transcription after close without replaying discarded audio", async () => {
+    const reconnecting = createDeferred<void>();
+    const forwarded: Buffer[] = [];
+    const events: string[] = [];
+    let connectCount = 0;
+    let providerClosed = false;
+    runtimeMocks.transcriptionConnect.mockImplementation(() => {
+      providerClosed = false;
+      connectCount += 1;
+      if (connectCount === 1) {
+        return Promise.resolve();
+      }
+      events.push("connect-start");
+      return reconnecting.promise.then(() => {
+        events.push("connect-settle");
+      });
+    });
+    runtimeMocks.transcriptionClose.mockImplementation(() => {
+      providerClosed = true;
+    });
+    runtimeMocks.transcriptionSendAudio.mockImplementation((audio: Buffer) => {
+      events.push(`${providerClosed ? "drop" : "audio"}:${audio[0]}`);
+      if (!providerClosed) {
+        forwarded.push(audio);
+      }
+    });
     const lazy = await loadLazyProviders();
     const session = lazy.createLazyXaiRealtimeTranscriptionProvider().createSession({
       providerConfig: {},
     });
     const first = Buffer.from([0x01]);
     const discarded = Buffer.from([0x02]);
-    const second = Buffer.from([0x03]);
+    const droppedByLimit = Buffer.alloc(1024 * 1024, 0x03);
+    const retainedFirst = Buffer.alloc(1024 * 1024, 0x04);
+    const retainedSecond = Buffer.alloc(1024 * 1024, 0x05);
+    const live = Buffer.from([0x06]);
 
     session.sendAudio(first);
     await session.connect();
     session.close();
     session.close();
     session.sendAudio(discarded);
+    events.length = 0;
 
     const reconnectPromise = session.connect();
-    session.sendAudio(second);
-    await reconnectPromise;
+    session.sendAudio(droppedByLimit);
+    session.sendAudio(retainedFirst);
+    session.sendAudio(retainedSecond);
+    await vi.waitFor(() => expect(runtimeMocks.transcriptionConnect).toHaveBeenCalledTimes(2));
+    session.sendAudio(live);
 
-    expect(runtimeMocks.transcriptionConnect).toHaveBeenCalledTimes(2);
     expect(runtimeMocks.transcriptionClose).toHaveBeenCalledOnce();
-    expect(runtimeMocks.transcriptionSendAudio.mock.calls.map(([audio]) => audio)).toEqual([
-      first,
-      second,
+    expect(forwarded.map((audio) => [audio[0], audio.byteLength])).toEqual([
+      [1, 1],
+      [4, 1024 * 1024],
+      [5, 1024 * 1024],
+      [6, 1],
     ]);
+    expect(events).toEqual(["connect-start", "audio:4", "audio:5", "audio:6"]);
+
+    reconnecting.resolve();
+    await reconnectPromise;
+    expect(events.at(-1)).toBe("connect-settle");
   });
 
   it("preserves voice startup ordering and waits to trigger the greeting", async () => {

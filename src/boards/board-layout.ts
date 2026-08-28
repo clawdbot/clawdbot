@@ -42,6 +42,10 @@ function cloneWidget(widget: BoardWidget): BoardWidget {
     tabId: widget.tabId,
     ...(widget.title !== undefined ? { title: widget.title } : {}),
     contentKind: widget.contentKind,
+    ...(widget.contentOwner !== undefined ? { contentOwner: widget.contentOwner } : {}),
+    ...(widget.registeredContentKind !== undefined
+      ? { registeredContentKind: widget.registeredContentKind }
+      : {}),
     ...(widget.presentation !== undefined ? { presentation: widget.presentation } : {}),
     ...(widget.heightMode !== undefined ? { heightMode: widget.heightMode } : {}),
     ...(widget.pluginKind !== undefined ? { pluginKind: widget.pluginKind } : {}),

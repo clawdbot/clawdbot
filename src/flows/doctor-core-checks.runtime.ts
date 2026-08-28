@@ -1,5 +1,6 @@
 // Doctor runtime checks inspect tool names, browser residue, and runtime state.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
 import {
   type McpToolCatalogDiagnostic,
@@ -29,12 +30,12 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "../agents/tool-schema-projection.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
+import { projectDoctorSecretRuntimeDegradations } from "../commands/doctor-secret-runtime-degradation.js";
+import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { collectUnavailableAgentSkills } from "../commands/doctor-skills-core.js";
 import {
   GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
-  gatewayProbeResultSawGateway,
-  gatewayProbeResultWasRateLimited,
+  gatewayConnectErrorWasRateLimited,
 } from "../commands/gateway-health-auth-diagnostic.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -42,7 +43,12 @@ import {
   type GatewayServiceRuntime,
 } from "../daemon/service-runtime.js";
 import { resolveGatewayService, readGatewayServiceState } from "../daemon/service.js";
-import { buildGatewayProbeConnectionDetails } from "../gateway/call.js";
+import {
+  buildGatewayProbeConnectionDetails,
+  callGateway,
+  isGatewayCredentialsRequiredError,
+} from "../gateway/call.js";
+import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   formatLocalAudioSelection,
@@ -54,14 +60,18 @@ import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
+import type { StatusSummary } from "../status/types.js";
+import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
+import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 type BundleMcpToolRuntime = Awaited<ReturnType<typeof createBundleMcpToolRuntime>>;
 const PROVIDER_CATALOG_ORDERS = ["simple", "profile", "paired", "late"] as const;
 const PROVIDER_CATALOG_ORDER_SET = new Set<ProviderCatalogOrder>(PROVIDER_CATALOG_ORDERS);
 
-function formatGatewayHealthTarget(url: string): string {
-  return redactSensitiveUrlLikeString(url);
+function formatGatewayHealthDiagnostic(value: unknown): string {
+  const raw = value instanceof Error ? value.message : String(value);
+  return scrubDoctorErrorMessage(sanitizeTerminalText(redactSensitiveUrlLikeString(raw)));
 }
 
 export function detectUnavailableSkills(cfg: OpenClawConfig, workspaceDir: string) {
@@ -105,64 +115,87 @@ export async function collectLocalAudioAccelerationFindings(): Promise<readonly 
 }
 
 export async function collectGatewayHealthFindings(
-  ctx: Pick<HealthCheckContext, "cfg" | "configPath">,
+  ctx: Pick<HealthCheckContext, "cfg" | "configPath" | "env" | "allowExecSecretRefs">,
 ): Promise<readonly HealthFinding[]> {
-  let probeDetails: Awaited<ReturnType<typeof buildGatewayProbeConnectionDetails>>;
+  const mode = ctx.cfg.gateway?.mode === "remote" ? "remote" : "local";
+  const gatewayPath = mode === "remote" ? "gateway.remote.url" : "gateway.mode";
+  let probeDetails: Awaited<ReturnType<typeof buildGatewayProbeConnectionDetails>> | undefined;
+  const warning = (message: string, fixHint: string): HealthFinding => ({
+    checkId: "core/doctor/gateway-health",
+    severity: "warning",
+    message,
+    path: probeDetails || mode === "remote" ? gatewayPath : "gateway",
+    ...(probeDetails ? { target: formatGatewayHealthDiagnostic(probeDetails.url) } : {}),
+    fixHint,
+  });
   try {
     probeDetails = await buildGatewayProbeConnectionDetails({
       config: ctx.cfg,
-      ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+      configPath: ctx.configPath,
     });
-  } catch (error) {
-    return [
-      {
-        checkId: "core/doctor/gateway-health",
-        severity: "warning",
-        message: `Gateway health probe could not be prepared: ${formatErrorMessage(error)}`,
-        path: ctx.cfg.gateway?.mode === "remote" ? "gateway.remote.url" : "gateway",
-        fixHint:
-          "Fix Gateway connection configuration, then rerun `openclaw doctor --lint --only core/doctor/gateway-health`.",
-      },
-    ];
-  }
-
-  const probe = await probeGatewayStatus({
-    url: probeDetails.url,
-    timeoutMs: 3000,
-    tlsFingerprint: probeDetails.tlsFingerprint,
-    preauthHandshakeTimeoutMs: probeDetails.preauthHandshakeTimeoutMs,
-    config: ctx.cfg,
-    json: true,
-  });
-  const mode = ctx.cfg.gateway?.mode === "remote" ? "remote" : "local";
-  if (gatewayProbeResultWasRateLimited(probe)) {
-    return [
-      {
-        checkId: "core/doctor/gateway-health",
-        severity: "warning",
-        message: GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
-        path: mode === "remote" ? "gateway.remote.url" : "gateway.mode",
-        target: formatGatewayHealthTarget(probeDetails.url),
-        fixHint: "Wait for the temporary authentication lockout to expire, then rerun doctor.",
-      },
-    ];
-  }
-  if (gatewayProbeResultSawGateway(probe)) {
-    return [];
-  }
-  return [
-    {
+    if (
+      ctx.allowExecSecretRefs !== true &&
+      (await hasActiveGatewayExecCredential({
+        cfg: ctx.cfg,
+        env: ctx.env,
+        targetUrl: probeDetails.url,
+      }))
+    ) {
+      return [
+        warning(
+          "Authenticated Gateway health inspection was intentionally skipped because an active credential uses an exec SecretRef.",
+          "Rerun `openclaw doctor --lint --only core/doctor/gateway-health --allow-exec` to permit configured secret execution.",
+        ),
+      ];
+    }
+    const status = await callGateway<StatusSummary>({
+      method: "status",
+      params: { includeChannelSummary: false },
+      timeoutMs: 3000,
+      sharedStateMode: "read-only",
+      config: ctx.cfg,
+      configPath: ctx.configPath,
+      tlsFingerprint: probeDetails.tlsFingerprint,
+      preauthHandshakeTimeoutMs: probeDetails.preauthHandshakeTimeoutMs,
+    });
+    return projectDoctorSecretRuntimeDegradations(status).map((owner) => ({
       checkId: "core/doctor/gateway-health",
       severity: "warning",
-      message: `Gateway is not reachable: ${probe.error ?? "status probe failed"}`,
-      path: mode === "remote" ? "gateway.remote.url" : "gateway.mode",
-      target: formatGatewayHealthTarget(probeDetails.url),
-      fixHint:
-        mode === "remote"
-          ? "Verify the remote Gateway URL, network path, TLS settings, and credentials."
-          : "Start the Gateway service or run `openclaw doctor --fix` for service repair prompts.",
-    },
-  ];
+      message: `Secret runtime degradation: ${owner.message}`,
+      path: owner.path,
+      target: owner.target,
+      fixHint: `Retry: ${owner.retryHint}`,
+    }));
+  } catch (error) {
+    if (!probeDetails) {
+      return [
+        warning(
+          `Gateway health inspection could not be prepared: ${formatGatewayHealthDiagnostic(error)}`,
+          "Fix Gateway connection configuration, then rerun `openclaw doctor --lint --only core/doctor/gateway-health`.",
+        ),
+      ];
+    }
+    const diagnostic = gatewayConnectErrorWasRateLimited(error)
+      ? {
+          message: GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+          fixHint: "Wait for the temporary authentication lockout to expire, then rerun doctor.",
+        }
+      : isGatewayCredentialsRequiredError(error) || isGatewaySecretRefUnavailableError(error)
+        ? {
+            message:
+              "Gateway status could not be inspected because this CLI has no usable token/password or paired device token for read-scope RPCs.",
+            fixHint:
+              "Configure the Gateway token/password or pair this device, then rerun the selected health check.",
+          }
+        : {
+            message: `Gateway status could not be inspected: ${formatGatewayHealthDiagnostic(error)}`,
+            fixHint:
+              mode === "remote"
+                ? "Verify the remote Gateway URL, network path, TLS settings, and credentials."
+                : "Start the Gateway service or run `openclaw doctor --fix` for service repair prompts.",
+          };
+    return [warning(diagnostic.message, diagnostic.fixHint)];
+  }
 }
 
 function gatewayRuntimeStatus(runtime: GatewayServiceRuntime | undefined): string | undefined {
@@ -172,12 +205,23 @@ function gatewayRuntimeStatus(runtime: GatewayServiceRuntime | undefined): strin
 export async function collectGatewayDaemonFindings(
   ctx: Pick<HealthCheckContext, "cfg">,
 ): Promise<readonly HealthFinding[]> {
-  if (ctx.cfg.gateway?.mode === "remote") {
+  if (ctx.cfg.gateway?.mode === "remote" || !(await shouldManageGatewayService())) {
     return [];
   }
   const service = resolveGatewayService();
   const state = await readGatewayServiceState(service, { env: process.env });
   const findings: HealthFinding[] = [];
+  if (state.loadState.status === "unknown") {
+    findings.push({
+      checkId: "core/doctor/gateway-daemon",
+      severity: "warning",
+      message: `Gateway service status could not be determined: ${state.loadState.detail}`,
+      path: state.command?.sourcePath,
+      target: service.label,
+      fixHint: "Run `openclaw gateway status --deep`, restore service-manager access, and retry.",
+    });
+    return findings;
+  }
   if (!state.installed) {
     findings.push({
       checkId: "core/doctor/gateway-daemon",
@@ -189,7 +233,7 @@ export async function collectGatewayDaemonFindings(
     });
     return findings;
   }
-  if (!state.loaded) {
+  if (state.loadState.status === "not-loaded") {
     findings.push({
       checkId: "core/doctor/gateway-daemon",
       severity: "warning",
@@ -200,7 +244,7 @@ export async function collectGatewayDaemonFindings(
     });
   }
   const status = gatewayRuntimeStatus(state.runtime);
-  if (state.loaded && !state.running) {
+  if (state.loadState.status === "loaded" && !state.running) {
     findings.push({
       checkId: "core/doctor/gateway-daemon",
       severity: "warning",

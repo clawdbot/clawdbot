@@ -48,20 +48,25 @@ function setWorkshopOwnershipClaimRelease(
   );
 }
 
-function writeWorkshopOwnershipClaimRelease(
+function writeWorkshopOwnershipClaims(
   workspaceDir: string,
-  skillDirs: readonly string[],
-  releaseTime: number | null,
+  claimedSkillDirs: readonly string[],
+  releasedSkillDirs: readonly string[],
+  releaseTime: number,
   options: SkillWorkshopStoreOptions,
 ): void {
-  if (skillDirs.length === 0) {
+  const claimedDirs = new Set(claimedSkillDirs.map((skillDir) => path.resolve(skillDir)));
+  const releasedDirs = releasedSkillDirs.filter(
+    (skillDir) => !claimedDirs.has(path.resolve(skillDir)),
+  );
+  if (claimedDirs.size === 0 && releasedDirs.length === 0) {
     return;
   }
   ensureSkillWorkshopSchema(options);
-  runOpenClawStateWriteTransaction(
-    ({ db }) => setWorkshopOwnershipClaimRelease(db, workspaceDir, skillDirs, releaseTime),
-    databaseOptions(options),
-  );
+  runOpenClawStateWriteTransaction(({ db }) => {
+    setWorkshopOwnershipClaimRelease(db, workspaceDir, releasedDirs, releaseTime);
+    setWorkshopOwnershipClaimRelease(db, workspaceDir, [...claimedDirs], null);
+  }, databaseOptions(options));
 }
 
 export function releaseWorkshopOwnershipClaims(
@@ -70,15 +75,17 @@ export function releaseWorkshopOwnershipClaims(
   releaseTime: number,
   options: SkillWorkshopStoreOptions = {},
 ): void {
-  writeWorkshopOwnershipClaimRelease(workspaceDir, skillDirs, releaseTime, options);
+  writeWorkshopOwnershipClaims(workspaceDir, [], skillDirs, releaseTime, options);
 }
 
 export function restoreWorkshopOwnershipClaims(
   workspaceDir: string,
   skillDirs: readonly string[],
+  resultSkillDirs: readonly string[],
+  releaseTime: number,
   options: SkillWorkshopStoreOptions = {},
 ): void {
-  writeWorkshopOwnershipClaimRelease(workspaceDir, skillDirs, null, options);
+  writeWorkshopOwnershipClaims(workspaceDir, skillDirs, resultSkillDirs, releaseTime, options);
 }
 
 export function restoreWorkshopOwnershipClaimsBestEffort(
@@ -87,7 +94,7 @@ export function restoreWorkshopOwnershipClaimsBestEffort(
   options: SkillWorkshopStoreOptions = {},
 ): void {
   try {
-    restoreWorkshopOwnershipClaims(workspaceDir, skillDirs, options);
+    writeWorkshopOwnershipClaims(workspaceDir, skillDirs, [], 0, options);
   } catch (error) {
     logWarn(`skill-workshop: failed to reclaim ownership after rollback: ${String(error)}`);
   }

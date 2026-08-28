@@ -1,5 +1,5 @@
 import type { SystemPresence } from "../infra/system-presence.js";
-import { formatUserProfileAvatarPath } from "./user-profiles-http-path.js";
+import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 
 type AuthenticatedPresenceProfile = {
   profileId: string;
@@ -29,7 +29,7 @@ export function buildAuthenticatedPresenceUser(params: {
       : {}),
     // This authenticated route resolves uploaded avatars first and then the
     // gateway-side Gravatar proxy, so it remains present without an upload.
-    avatarUrl: formatUserProfileAvatarPath(
+    avatarUrl: buildControlUiUserAvatarPath(
       params.authenticatedUserProfile.profileId,
       params.authenticatedUserProfile.avatarRevision,
     ),

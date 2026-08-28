@@ -1,6 +1,7 @@
 // Verifies prompt literals and data blocks strip control/spoofing characters.
 import { describe, expect, it } from "vitest";
 import {
+  hasPromptUnsafeControlCharacter,
   sanitizeForPromptLiteral,
   wrapPromptDataBlock,
   wrapUntrustedPromptDataBlock,
@@ -48,6 +49,19 @@ describe("sanitizeForPromptLiteral (OC-19 hardening)", () => {
   it("preserves ordinary Unicode + spaces", () => {
     const value = "/tmp/my project/日本語-folder.v2";
     expect(sanitizeForPromptLiteral(value)).toBe(value);
+  });
+});
+
+describe("hasPromptUnsafeControlCharacter", () => {
+  it("rejects every character the shared prompt sanitizer strips", () => {
+    expect(hasPromptUnsafeControlCharacter("ok-name.jpg")).toBe(false);
+    expect(hasPromptUnsafeControlCharacter("foo\nbar")).toBe(true);
+    expect(hasPromptUnsafeControlCharacter("foo\u007fbar")).toBe(true);
+    expect(hasPromptUnsafeControlCharacter("foo\u0085bar")).toBe(true);
+    expect(hasPromptUnsafeControlCharacter("foo\u009Bbar")).toBe(true);
+    expect(hasPromptUnsafeControlCharacter("foo\u2028bar")).toBe(true);
+    expect(hasPromptUnsafeControlCharacter("foo\u2029bar")).toBe(true);
+    expect(hasPromptUnsafeControlCharacter("foo\u202Ebar")).toBe(true);
   });
 });
 

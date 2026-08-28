@@ -5,7 +5,10 @@
 // is undefined, so calling it throws synchronously rather than rejecting. Guard
 // the secure-context path and fall back to the legacy execCommand copy so the
 // copy buttons keep working over HTTP. Returns whether the copy succeeded.
-export async function copyToClipboard(text: string): Promise<boolean> {
+export async function copyToClipboard(
+  text: string,
+  shouldFallback?: () => boolean,
+): Promise<boolean> {
   if (!text) {
     return false;
   }
@@ -17,6 +20,11 @@ export async function copyToClipboard(text: string): Promise<boolean> {
       // Secure-context API present but rejected (e.g. denied permission);
       // fall through to the execCommand path before giving up.
     }
+  }
+  // A rejected async write can settle after newer caller-owned work. Let that
+  // owner retire this second transport attempt before it mutates the clipboard.
+  if (shouldFallback && !shouldFallback()) {
+    return false;
   }
   return copyWithExecCommand(text);
 }

@@ -11,7 +11,10 @@ import {
   mergeUsageIntoAccumulator,
 } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
-import { runEmbeddedSettledTurnFinalizationWithBackend } from "./backend.js";
+import {
+  resolveRuntimeModelAttempt,
+  runEmbeddedSettledTurnFinalizationWithBackend,
+} from "./backend.js";
 import { withEmbeddedRunLaneProgressHeartbeat } from "./lane-runtime.js";
 import {
   resolveEmbeddedRunAttemptTerminalOutcome,
@@ -93,6 +96,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     };
   }
   const settledFailureSignal = prepared.failureSignal;
+  const settledTerminalToolFailure = prepared.terminalToolFailure;
 
   const runParams = input.terminalBase.runParams;
   const errorContext = input.terminalBase.activeErrorContext;
@@ -139,7 +143,11 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     // host-owned recovery output and must cross that source-reply suppression.
     finalizedPrepared.payloadsWithToolMedia?.forEach(markReplyPayloadForSourceSuppressionDelivery);
     // A failure-honest final answer cannot turn a settled cron denial into success.
-    prepared = { ...finalizedPrepared, failureSignal: settledFailureSignal };
+    prepared = {
+      ...finalizedPrepared,
+      failureSignal: settledFailureSignal,
+      terminalToolFailure: settledTerminalToolFailure,
+    };
     return {
       attempt,
       attemptAssistant: attempt.currentAttemptAssistant,
@@ -196,6 +204,7 @@ async function runPreparedSettledTurnFinalization(input: {
         settledAttempt: input.settledAttempt,
         prompt: input.prompt,
         agentHarnessId: input.attempt.agentHarnessId,
+        runtimePlan: input.attempt.runtimePlan,
       }),
     };
   });
@@ -207,6 +216,7 @@ function buildSettledTurnFinalizationAttemptResult(input: {
   settledAttempt: EmbeddedRunAttemptWithReceiptEvidence;
   prompt: string;
   agentHarnessId?: string;
+  runtimePlan?: EmbeddedRunAttemptParams["runtimePlan"];
 }): EmbeddedRunAttemptWithReceiptEvidence {
   const { result, settledAttempt } = input;
   const text = input.outcome === "empty" ? "" : resolveSettledTurnFinalizationText(result);
@@ -217,6 +227,7 @@ function buildSettledTurnFinalizationAttemptResult(input: {
     sessionIdUsed: settledAttempt.sessionIdUsed,
     sessionFileUsed: settledAttempt.sessionFileUsed,
     ...(input.agentHarnessId ? { agentHarnessId: input.agentHarnessId } : {}),
+    modelAttempt: resolveRuntimeModelAttempt(input.runtimePlan),
     contextTokens: settledAttempt.contextTokens,
     contextTokensSource: settledAttempt.contextTokensSource,
     authBindingFingerprint: settledAttempt.authBindingFingerprint,

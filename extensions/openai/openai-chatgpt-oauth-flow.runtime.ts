@@ -6,6 +6,7 @@
  */
 
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-auth";
 import {
   createOAuthLoginCancelledError,
   oauthErrorHtml,
@@ -16,7 +17,6 @@ import {
   type OAuthCredentials,
   type OAuthPrompt,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
-import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import {
   createOpenAIAuthorizationFlow,
   resolveOpenAICallbackHost,
@@ -172,7 +172,7 @@ function resolveOpenAICredentials(
   if (result.type !== "success") {
     throw new Error(result.message);
   }
-  const accountId = resolveCodexAuthIdentity({ accessToken: result.access }).accountId;
+  const accountId = resolveOpenAICodexAuthIdentity({ access: result.access }).accountId;
   if (!accountId) {
     throw new Error("Failed to extract accountId from token");
   }

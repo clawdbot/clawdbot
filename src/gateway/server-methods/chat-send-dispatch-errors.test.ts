@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
@@ -51,7 +52,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     });
 
     await lifecycle.handleError(new Error("late failure"));
-    lifecycle.finalize();
+    await lifecycle.finalize();
 
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("dispatch failed after followup queue admission"),
@@ -146,7 +147,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       });
 
       await lifecycle.handleError(new Error("dispatch rejected after explicit abort"));
-      lifecycle.finalize();
+      await lifecycle.finalize();
 
       expect(dedupe.get(`chat:${runId}`)).toMatchObject({
         ok: true,
@@ -289,7 +290,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     );
   });
 
-  it("cleans up a failed non-default global send beside the compatibility owner's run", async () => {
+  it("keeps a failed non-default global send admitted through lifecycle persistence", async () => {
     const cfg = retainLegacyDefaultAgentId(
       {
         agents: {
@@ -298,9 +299,14 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       },
       "main",
     );
+    const persistenceEntered = createDeferred();
+    const releasePersistence = createDeferred();
     const persistLifecycleEvent = vi
       .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
-      .mockResolvedValue(undefined);
+      .mockImplementation(async () => {
+        persistenceEntered.resolve();
+        await releasePersistence.promise;
+      });
     const cleanupAdmittedRun = vi.fn();
     const activeRunCleanup = vi.fn();
     const clientRunId = "failed-ops-global-send";
@@ -357,22 +363,24 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       });
 
       await lifecycle.handleError(new Error("dispatch rejected"));
-      lifecycle.finalize();
-
-      await vi.waitFor(() => {
-        expect(persistLifecycleEvent).toHaveBeenCalledWith({
-          sessionKey: "global",
-          agentId: "ops",
-          event: expect.objectContaining({
-            runId: clientRunId,
-            sessionId: "sess-ops",
-            data: expect.objectContaining({ phase: "error" }),
-          }),
-        });
+      const finalization = lifecycle.finalize();
+      await persistenceEntered.promise;
+      expect(persistLifecycleEvent).toHaveBeenCalledWith({
+        sessionKey: "global",
+        agentId: "ops",
+        event: expect.objectContaining({
+          runId: clientRunId,
+          sessionId: "sess-ops",
+          data: expect.objectContaining({ phase: "error" }),
+        }),
       });
+      expect(cleanupAdmittedRun).not.toHaveBeenCalled();
+      releasePersistence.resolve();
+      await finalization;
       expect(activeRunCleanup).toHaveBeenCalledWith({ force: true });
       expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
     } finally {
+      releasePersistence.resolve();
       persistLifecycleEvent.mockRestore();
     }
   });

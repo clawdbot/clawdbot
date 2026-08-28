@@ -103,7 +103,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     vi.clearAllMocks();
     mocks.subscribe.mockReturnValue({
       toolMetas: [],
-      runToolLifecycle: vi.fn(async ({ execute }) => await execute()),
+      runToolLifecycle: vi.fn(async ({ execute }) => await execute(() => undefined)),
       isCompacting: vi.fn(() => false),
     });
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });

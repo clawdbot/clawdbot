@@ -14,13 +14,7 @@ import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from ".
 export function createCodexTestToolTerminalObserver(): NonNullable<
   EmbeddedRunAttemptParams["observeToolTerminal"]
 > {
-  const unresolved = new Map<
-    string,
-    NonNullable<
-      ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>["lastToolError"]
-    >
-  >();
-  let nonMutatingFailure: ReturnType<
+  let lastToolError: ReturnType<
     NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>
   >["lastToolError"];
 
@@ -30,42 +24,22 @@ export function createCodexTestToolTerminalObserver(): NonNullable<
         ? (observation.arguments as Record<string, unknown>)
         : {};
     const action = typeof record.action === "string" ? record.action : undefined;
-    const to = typeof record.to === "string" ? record.to : undefined;
     const mutation = observation.nativeMutation ?? {
       mutatingAction: observation.toolName === "message" && action === "send",
       replaySafe: !(observation.toolName === "message" && action === "send"),
-      actionFingerprint:
-        observation.toolName === "message" && action === "send"
-          ? [`tool=${observation.toolName}`, `action=${action}`, ...(to ? [`to=${to}`] : [])].join(
-              "|",
-            )
-          : undefined,
     };
-    const key = mutation.actionFingerprint ?? `${observation.toolName}:${observation.meta ?? ""}`;
     const executionStarted = observation.executionStarted !== false;
     if (observation.outcome === "failure") {
       const mutatingAction = executionStarted && mutation.mutatingAction;
-      const failure = {
+      lastToolError = {
         toolName: observation.toolName,
         ...(observation.meta ? { meta: observation.meta } : {}),
         ...observation.failure,
         mutatingAction,
-        ...(mutatingAction && mutation.actionFingerprint
-          ? { actionFingerprint: mutation.actionFingerprint }
-          : {}),
       };
-      if (mutatingAction) {
-        unresolved.set(key, failure);
-        nonMutatingFailure = undefined;
-      } else if (unresolved.size === 0) {
-        nonMutatingFailure = failure;
-      }
-    } else if (unresolved.size === 0) {
-      nonMutatingFailure = undefined;
-    } else if (mutation.mutatingAction) {
-      unresolved.delete(key);
+    } else if (lastToolError?.toolName === observation.toolName) {
+      lastToolError = undefined;
     }
-    const lastToolError = [...unresolved.values()].at(-1) ?? nonMutatingFailure;
     return {
       ...(lastToolError ? { lastToolError } : {}),
       executionStarted,
@@ -116,12 +90,19 @@ export function createCodexTestModel(provider = "openai", input = ["text"]): Mod
 }
 
 /** Creates an in-memory Codex app-server client harness with writable stdout frames. */
-export function createClientHarness() {
+export function createClientHarness(options: { autoEmitExit?: boolean } = {}) {
   const stdout = new PassThrough();
   const writes: string[] = [];
+  const writeEvents = new EventEmitter();
   let stdinDestroyed = false;
   let exitEmitted = false;
   let emitProcessExit: () => void = () => undefined;
+  const emitExit = () => {
+    if (!exitEmitted) {
+      exitEmitted = true;
+      emitProcessExit();
+    }
+  };
   type HarnessProcess = EventEmitter & {
     stdin: Writable;
     stdout: PassThrough;
@@ -133,17 +114,17 @@ export function createClientHarness() {
     write(chunk, _encoding, callback) {
       writes.push(chunk.toString());
       callback();
+      writeEvents.emit("write");
     },
   });
   const destroyStdin = stdin.destroy.bind(stdin);
   stdin.destroy = ((error?: Error) => {
     stdinDestroyed = true;
     const result = destroyStdin(error);
-    if (!exitEmitted) {
-      exitEmitted = true;
+    if (!exitEmitted && options.autoEmitExit !== false) {
       // Let stdin surface pipe errors before the harness emits the fake child exit.
       // Otherwise close-reason tests can race EPIPE against a synthetic clean exit.
-      setImmediate(emitProcessExit);
+      setImmediate(emitExit);
     }
     return result;
   }) as typeof stdin.destroy;
@@ -164,9 +145,32 @@ export function createClientHarness() {
     client,
     process,
     writes,
+    async waitForWrite(index: number): Promise<string> {
+      if (writes[index] !== undefined) {
+        return writes[index];
+      }
+      return await new Promise<string>((resolve, reject) => {
+        const cleanup = () => {
+          clearTimeout(timer);
+          writeEvents.off("write", onWrite);
+        };
+        const onWrite = () => {
+          if (writes[index] !== undefined) {
+            cleanup();
+            resolve(writes[index]);
+          }
+        };
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error(`Timed out waiting for app-server harness write ${index}`));
+        }, 1_000);
+        writeEvents.on("write", onWrite);
+      });
+    },
     get stdinDestroyed() {
       return stdinDestroyed;
     },
+    emitExit,
     send(message: unknown) {
       stdout.write(`${JSON.stringify(message)}\n`);
     },

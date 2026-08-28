@@ -19,11 +19,13 @@ import {
   recordSessionCreated,
   recordSubagentSpawned,
 } from "../../../sessions/session-state-events.js";
+import { hasPromptUnsafeControlCharacter } from "../../sanitize-for-prompt.js";
 import {
   runSpawnPipeline,
   type SpawnBackendAdapter,
   summarizeSpawnError,
 } from "../../spawn-pipeline.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
   completeCollectorLaunchCleanup,
   settleFailedQueuedSubagentLaunch,
@@ -92,25 +94,17 @@ function sanitizeMountPathHint(value?: string): string | undefined {
   return trimmed;
 }
 
-function hasPromptUnsafeControlCharacter(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || code === 0x7f || code === 0x85 || code === 0x2028 || code === 0x2029) {
-      return true;
-    }
-  }
-  return false;
-}
-
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
+  const promptedAt = Date.now();
   const task = params.task;
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
   const requesterSessionKey = ctx.agentSessionKey;
+  const gatewayContextResolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   let requestedAgentId = params.agentId?.trim();
   const requestResolution = resolveSubagentSpawnRequest(params, ctx, {
     initial: requestedAgentId,
@@ -177,6 +171,7 @@ export async function spawnSubagentDirect(
       incognito,
       childSessionKey,
       childRuntimeSandboxed,
+      creationPolicy,
       targetAgentDir,
       modelPlan: plan,
       launchAuthorization,
@@ -191,10 +186,11 @@ export async function spawnSubagentDirect(
       childSessionKey,
       incognito,
       requesterInternalKey,
-      requesterAgentId,
+      creationPolicy,
       completionOwnerSessionKey: ownership.completionRequesterSessionKey,
       spawnedWorkspaceDir,
       spawnedCwd,
+      sessionPermissionPolicy: ctx.sessionPermissionPolicy,
       admissionPatch: admission.childSessionPatch,
       inheritedToolAllowlist: ctx.inheritedToolAllowlist,
       inheritedToolDenylist: ctx.inheritedToolDenylist,
@@ -459,10 +455,10 @@ export async function spawnSubagentDirect(
         taskRowOwnership = launch.taskRowOwnership;
         acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
         recordSessionParticipantBestEffort({
-          actor: { type: "agent", id: requesterAgentId },
+          promptedAt,
+          identity: { type: "agent", id: requesterAgentId },
           agentId: targetAgentId,
           sessionKey: childSessionKey,
-          source: "agent",
           storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
         });
         return { runId: acceptedChildRunId };
@@ -570,6 +566,7 @@ export async function spawnSubagentDirect(
           queuedLaunch,
           queued: params.collect === true,
           taskRowOwnership,
+          ...(gatewayContextResolver ? { gatewayContextResolver } : {}),
           attachmentsDir: attachmentAbsDir,
           attachmentsRootDir: attachmentRootDir,
           retainAttachmentsOnKeep: retainOnSessionKeep,
@@ -606,16 +603,24 @@ export async function spawnSubagentDirect(
             // Out-of-process Gateway tracking finds that exact runId and suppresses its CLI row.
             const gatewayRunId = readGatewayRunId(launch.response) ?? childRunId;
             recordSessionParticipantBestEffort({
-              actor: { type: "agent", id: requesterAgentId },
+              promptedAt,
+              identity: { type: "agent", id: requesterAgentId },
               agentId: targetAgentId,
               sessionKey: childSessionKey,
-              source: "agent",
               storePath: resolveSessionStorePathCore(cfg.session?.store, {
                 agentId: targetAgentId,
               }),
             });
             try {
-              if (!startQueuedSubagentRun(childRunId, gatewayRunId)) {
+              const started = gatewayContextResolver
+                ? startQueuedSubagentRun(
+                    childRunId,
+                    gatewayRunId,
+                    undefined,
+                    gatewayContextResolver,
+                  )
+                : startQueuedSubagentRun(childRunId, gatewayRunId);
+              if (!started) {
                 throw new Error(
                   "collector registry row could not transition from queued to running",
                 );

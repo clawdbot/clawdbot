@@ -14,9 +14,16 @@ describe("inspectQaExecutionIdentityStorage", () => {
       const database = new DatabaseSync(databasePath);
       database.exec(`
         CREATE TABLE execution_identity_contexts (context_id TEXT PRIMARY KEY);
-        CREATE TABLE execution_decision_facts (receipt_id TEXT PRIMARY KEY);
+        CREATE TABLE execution_decision_facts (
+          receipt_id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          action_family TEXT NOT NULL,
+          reason_code TEXT NOT NULL
+        );
         INSERT INTO execution_identity_contexts VALUES ('context-1'), ('context-2');
-        INSERT INTO execution_decision_facts VALUES ('receipt-1');
+        INSERT INTO execution_decision_facts VALUES
+          ('receipt-1', 'run-1', 'message', 'message_suppressed_inbound_metadata_echo'),
+          ('receipt-2', 'run-1', 'model-routing', 'model_route_selected');
       `);
       database.close();
 
@@ -26,6 +33,20 @@ describe("inspectQaExecutionIdentityStorage", () => {
             runtimeEnv: { OPENCLAW_STATE_DIR: stateDir },
           } as never,
         }),
+      ).toEqual({ contextCount: 2, decisionCount: 2 });
+      expect(
+        inspectQaExecutionIdentityStorage(
+          {
+            gateway: {
+              runtimeEnv: { OPENCLAW_STATE_DIR: stateDir },
+            } as never,
+          },
+          {
+            runId: "run-1",
+            actionFamily: "message",
+            reasonCode: "message_suppressed_inbound_metadata_echo",
+          },
+        ),
       ).toEqual({ contextCount: 2, decisionCount: 1 });
     } finally {
       await fs.rm(stateDir, { force: true, recursive: true });

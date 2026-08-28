@@ -91,7 +91,7 @@ export const resolveDeliveryTargetMock = createMock();
 export const dispatchCronDeliveryMock = createMock();
 export const queueCronMessageToolDeliveryAwarenessMock = createMock();
 export const preflightCronModelProviderMock = createMock();
-export const resolveSessionAuthProfileOverrideMock = createMock();
+export const resolveSessionAuthSelectionMock = createMock();
 export const resolveFastModeStateMock = createMock();
 export const getChannelPluginMock = createMock();
 export const retireSessionMcpRuntimeMock = createMock();
@@ -335,7 +335,7 @@ vi.mock("../../agents/model-runtime-aliases.js", () => ({
 }));
 
 vi.mock("./run-auth-profile.runtime.js", () => ({
-  resolveSessionAuthProfileOverride: resolveSessionAuthProfileOverrideMock,
+  resolveSessionAuthSelection: resolveSessionAuthSelectionMock,
 }));
 
 vi.mock("./run-embedded.runtime.js", () => ({
@@ -729,7 +729,7 @@ function resetRunOutcomeMocks(): void {
       outputText,
       synthesizedText,
       deliveryRequested,
-      skipHeartbeatDelivery,
+      skipDelivery,
       sourceDeliveryOutcome,
       resolvedDelivery,
     }) => ({
@@ -737,18 +737,17 @@ function resetRunOutcomeMocks(): void {
       delivered: Boolean(
         sourceDeliveryOutcome?.verifiedMessageToolDelivery ||
         (deliveryRequested &&
-          !skipHeartbeatDelivery &&
+          !skipDelivery &&
           !sourceDeliveryOutcome?.satisfiesSourceDelivery &&
           resolvedDelivery.ok),
       ),
       deliveryAttempted: Boolean(
         sourceDeliveryOutcome?.verifiedMessageToolDelivery ||
         (deliveryRequested &&
-          !skipHeartbeatDelivery &&
+          !skipDelivery &&
           !sourceDeliveryOutcome?.satisfiesSourceDelivery &&
           resolvedDelivery.ok),
       ),
-      cronRunSessionCleanupAttempted: false,
       summary,
       outputText,
       synthesizedText,
@@ -759,8 +758,8 @@ function resetRunOutcomeMocks(): void {
   queueCronMessageToolDeliveryAwarenessMock.mockResolvedValue(undefined);
   preflightCronModelProviderMock.mockReset();
   preflightCronModelProviderMock.mockResolvedValue({ status: "available" });
-  resolveSessionAuthProfileOverrideMock.mockReset();
-  resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+  resolveSessionAuthSelectionMock.mockReset();
+  resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
 }
 
 function resetRunSessionMocks(): void {

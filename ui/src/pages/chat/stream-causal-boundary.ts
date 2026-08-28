@@ -8,6 +8,7 @@ import {
 } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { userTurnSendIdentity } from "./chat-thread-items.ts";
+import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 
 export type StreamCausalBoundaryState = {
   chatMessages?: unknown[];
@@ -37,8 +38,70 @@ export function persistedSteerTargetRunId(message: unknown): string | null {
   return normalizeOptionalString(metadata?.steerTargetRunId) ?? null;
 }
 
+function turnRunId(messages: unknown[]): string | null {
+  for (const message of messages) {
+    const identity = userTurnSendIdentity(message);
+    if (identity?.startsWith("send:")) {
+      return identity.slice("send:".length);
+    }
+  }
+  return null;
+}
+
+function turnSteerTargetRunId(messages: unknown[]): string | null {
+  for (const message of messages) {
+    const targetRunId = persistedSteerTargetRunId(message);
+    if (targetRunId) {
+      return targetRunId;
+    }
+  }
+  return null;
+}
+
+export function indexTurnContinuations<T>(
+  turns: T[][],
+  userMessagesForTurn: (turn: T[]) => unknown[],
+): {
+  continuationTurnIndexes: Map<number, number>;
+  precedingContinuationTurnIndexes: Map<number, number>;
+} {
+  const runTurnIndexes = new Map<string, number>();
+  const steerTurnIndexesByTarget = new Map<string, number[]>();
+  for (const [turnIndex, turn] of turns.entries()) {
+    const userMessages = userMessagesForTurn(turn);
+    const runId = turnRunId(userMessages);
+    if (runId && !runTurnIndexes.has(runId)) {
+      runTurnIndexes.set(runId, turnIndex);
+    }
+    const targetRunId = turnSteerTargetRunId(userMessages);
+    if (targetRunId) {
+      const steerTurns = steerTurnIndexesByTarget.get(targetRunId) ?? [];
+      steerTurns.push(turnIndex);
+      steerTurnIndexesByTarget.set(targetRunId, steerTurns);
+    }
+  }
+
+  const continuationTurnIndexes = new Map<number, number>();
+  const precedingContinuationTurnIndexes = new Map<number, number>();
+  for (const [targetRunId, steerTurnIndexes] of steerTurnIndexesByTarget) {
+    let previousTurnIndex = runTurnIndexes.get(targetRunId);
+    if (previousTurnIndex === undefined) {
+      continue;
+    }
+    for (const steerTurnIndex of steerTurnIndexes) {
+      if (steerTurnIndex <= previousTurnIndex) {
+        continue;
+      }
+      continuationTurnIndexes.set(previousTurnIndex, steerTurnIndex);
+      precedingContinuationTurnIndexes.set(steerTurnIndex, previousTurnIndex);
+      previousTurnIndex = steerTurnIndex;
+    }
+  }
+  return { continuationTurnIndexes, precedingContinuationTurnIndexes };
+}
+
 export function latestPersistedSteerBoundary(
-  messages: unknown[],
+  messages: readonly unknown[],
   activeRunId: string,
 ): { index: number; runId: string } | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -171,7 +234,10 @@ export function resolveCumulativeAssistantTail(
   for (let index = 0; index < endIndex; index += 1) {
     const message = messages[index];
     const identity = readSessionMessageIdentity(message);
-    const persistedText = identity?.runId === runId ? extractText(message) : null;
+    const persistedText =
+      identity?.runId === runId && !isKeyedAssistantStreamFallbackMessage(message)
+        ? extractText(message)
+        : null;
     if (
       identity?.role === "assistant" &&
       persistedText &&
@@ -183,13 +249,24 @@ export function resolveCumulativeAssistantTail(
   }
   const turnStart =
     ownedPrefixIndex >= 0 ? ownedPrefixIndex : lastUserMessageIndex(messages, endIndex) + 1;
+  const persistedTexts = messages.slice(turnStart, endIndex).map((message) => {
+    const identity = readSessionMessageIdentity(message);
+    // Keyed commentary mirrors travel through item events, outside the cumulative buffer.
+    return identity?.role === "assistant" &&
+      (!identity.runId || identity.runId === runId) &&
+      !isKeyedAssistantStreamFallbackMessage(message)
+      ? extractText(message)
+      : null;
+  });
+  return resolveAssistantTextTail(persistedTexts, cumulativeText);
+}
+
+export function resolveAssistantTextTail(
+  persistedTexts: readonly (string | null)[],
+  cumulativeText: string,
+): string | null {
   let persistedPrefixLength = 0;
-  for (let index = turnStart; index < endIndex; index += 1) {
-    const identity = readSessionMessageIdentity(messages[index]);
-    if (identity?.role !== "assistant" || (identity.runId && identity.runId !== runId)) {
-      continue;
-    }
-    const persistedText = extractText(messages[index]);
+  for (const persistedText of persistedTexts) {
     if (!persistedText) {
       continue;
     }
@@ -234,30 +311,6 @@ function persistedBoundaryPrefix(state: StreamCausalBoundaryState, terminalText:
     boundaryRunId: boundary.runId,
     prefix: tail === null ? terminalText : terminalText.slice(0, terminalText.length - tail.length),
   };
-}
-
-export function markChatStreamAfterBoundary(
-  host: StreamRolloverState,
-  options: { runId: string; boundaryRunId: string; timestamp?: number },
-): void {
-  if (
-    host.chatRunId !== options.runId ||
-    latestStreamBoundaryRunId(host) === options.boundaryRunId
-  ) {
-    return;
-  }
-  const previousBoundaryRunId = latestStreamBoundaryRunId(host);
-  host.chatStreamSegments = [
-    ...(host.chatStreamSegments ?? []),
-    {
-      text: "",
-      ts: options.timestamp ?? Date.now(),
-      runId: options.runId,
-      boundaryRunId: options.boundaryRunId,
-      boundaryMarker: true,
-      ...(previousBoundaryRunId ? { afterBoundaryRunId: previousBoundaryRunId } : {}),
-    },
-  ];
 }
 
 function replaceTerminalText(
@@ -403,6 +456,7 @@ export function rolloverChatStream(
     runId: string;
     boundaryRunId?: string;
     toolCallId?: string;
+    persisted?: true;
     timestamp?: number;
   },
 ): void {
@@ -445,6 +499,7 @@ export function rolloverChatStream(
         ...(previousBoundaryRunId ? { afterBoundaryRunId: previousBoundaryRunId } : {}),
         ...(streamBoundaryRunId ? { boundaryRunId: streamBoundaryRunId } : {}),
         ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
+        ...(options.persisted ? { persisted: true } : {}),
       },
     ];
   }

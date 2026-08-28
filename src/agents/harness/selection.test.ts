@@ -1,15 +1,34 @@
 // Covers agent harness selection, fallback behavior, and compaction routing.
+import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
+import { createPluginRecord } from "../../plugins/loader-records.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  bindGatewayContextResolver,
+  clearGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -157,6 +176,7 @@ vi.mock("../tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
+const trajectoryTempDirs = createTempDirTracker();
 let selectionAdmission: PreparedAgentRunAdmission;
 let selectionAdmittedRunContext: AdmittedRunContext;
 
@@ -218,6 +238,11 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
+  clearRuntimeConfigSnapshot();
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  trajectoryTempDirs.cleanup();
   selectionAdmission.close();
   resetAgentRunRegistryForTest();
   clearAgentHarnesses();
@@ -557,6 +582,109 @@ describe("runAgentHarnessAttempt", () => {
     expect(observedApprovalOwner).toBe("actual-owner");
   });
 
+  it.each(["declared", "unlisted", "missing", "expanded"] as const)(
+    "limits selected harness Full authority to its captured node commands (%s)",
+    async (descriptor) => {
+      const root = trajectoryTempDirs.make("openclaw-harness-node-authority-");
+      const sessionTarget = {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        storePath: path.join(root, "agents", "main", "sessions", "sessions.json"),
+      };
+      await replaceSessionEntry(sessionTarget, {
+        sessionId: sessionTarget.sessionId,
+        updatedAt: 10,
+        permissionMode: "full",
+      });
+      const workspace = {
+        workspaceDir: path.join(root, "workspace"),
+        sessionId: sessionTarget.sessionId,
+        sessionKey: sessionTarget.sessionKey,
+        environmentId: "environment-1",
+        ownerEpoch: 1,
+      };
+      const launchCommand = "fixture.exec.launch";
+      const unrelatedCommand = "fixture.maintenance.apply";
+      const requiredNodeCommands = [launchCommand];
+      const command =
+        descriptor === "unlisted" || descriptor === "expanded" ? unrelatedCommand : launchCommand;
+      const effect = vi.fn(async (assertCurrent: () => void) => {
+        assertCurrent();
+        return "launched";
+      });
+      registerAgentHarness(
+        {
+          id: "node-harness",
+          label: "Node harness",
+          cloudPlacement: {
+            mode: "remote-exec",
+            ...(descriptor !== "missing"
+              ? { devicePlacement: { requiredNodeCommands, consumesWorkerSlot: false } }
+              : {}),
+          },
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt: async () => {
+            const invoke = getPluginRuntimeGatewayRequestScope()?.invokeWithSessionNodeAuthority;
+            if (!invoke) {
+              throw new Error("Expected the selected harness's admitted node invocation scope");
+            }
+            // Plugin initialization cannot widen the descriptor captured before its handoff.
+            if (descriptor === "expanded") {
+              requiredNodeCommands.push(unrelatedCommand);
+            }
+            const result = await invoke(
+              { source: "session-full", pluginId: "fixture", nodeId: "node-1", command, workspace },
+              effect,
+            );
+            expect(result).toBe(descriptor === "declared" ? "launched" : undefined);
+            return createAttemptResult("node-harness");
+          },
+        },
+        { ownerPluginId: "fixture" },
+      );
+      const registry = getActivePluginRegistry();
+      if (!registry) {
+        throw new Error("Expected the registered harness's plugin registry");
+      }
+      const record = createPluginRecord({
+        id: "fixture",
+        source: "fixture",
+        origin: "bundled",
+        enabled: true,
+        configSchema: true,
+      });
+      registry.plugins.push(record);
+      const context = {} as GatewayRequestContext;
+      bindGatewayContextResolver(selectionAdmittedRunContext, () => context);
+      try {
+        const params = createAttemptParams(providerRuntimeConfig("codex", "node-harness"));
+        params.agentId = sessionTarget.agentId;
+        params.sessionKey = sessionTarget.sessionKey;
+        params.sessionTarget = sessionTarget;
+        params.permissionMode = "full";
+        await withPluginRuntimeGatewayRequestScope(
+          {
+            isWebchatConnect: () => false,
+            assertNodeExecutionCurrent: (request) => {
+              expect(request).toMatchObject({
+                runId: params.runId,
+                agentId: sessionTarget.agentId,
+                nodeId: "node-1",
+                workspace,
+              });
+            },
+          },
+          () => runAgentHarnessAttempt(params),
+        );
+        expect(effect).toHaveBeenCalledTimes(descriptor === "declared" ? 1 : 0);
+      } finally {
+        clearGatewayContextResolver(selectionAdmittedRunContext);
+        registry.plugins.splice(registry.plugins.indexOf(record), 1);
+      }
+    },
+  );
+
   it("routes settled turns only through an explicit harness finalizer", async () => {
     const internalKey = "__openclawSourceReplyDeliveryRuntime";
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("run"));
@@ -691,6 +819,47 @@ describe("runAgentHarnessAttempt", () => {
 
     expect((params as unknown as Record<string, unknown>)[internalKey]).toBeDefined();
     expect(handedOffRuntime).toBeUndefined();
+  });
+
+  it("persists plugin trajectory events through the selected harness host capability", async () => {
+    const tempDir = trajectoryTempDirs.make("openclaw-harness-trajectory-");
+    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    const sessionKey = "agent:main:main";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
+    const trajectoryRecorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionKey,
+      sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
+    });
+    if (!trajectoryRecorder) {
+      throw new Error("Expected SQLite trajectory recorder");
+    }
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: async (attempt) => {
+          const trajectory = attempt.hostCapabilities?.trajectory;
+          if (!trajectory) {
+            throw new Error("Expected host trajectory capability");
+          }
+          trajectory.recordEvent("plugin.selected");
+          await trajectory.flush();
+          return createAttemptResult("codex");
+        },
+      },
+      { ownerPluginId: "codex" },
+    );
+    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+    params.sessionKey = sessionKey;
+    params.trajectoryRecorder = trajectoryRecorder;
+
+    await runAgentHarnessAttempt(params);
+
+    expect(await loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath })).toEqual([
+      expect.objectContaining({ source: "runtime", type: "plugin.selected" }),
+    ]);
   });
 
   it.each(["heartbeat"] as const)(
@@ -1242,6 +1411,7 @@ describe("runAgentHarnessAttempt", () => {
       }),
     );
     expect(classifyCall?.[1]).not.toHaveProperty("admittedRunContext");
+    expect(classifyCall?.[1]).not.toHaveProperty("operationalRunInstance");
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
   });
@@ -1385,7 +1555,7 @@ describe("runAgentHarnessAttempt", () => {
     expect(received[0]?.safeDeniedTools).toEqual(["image_generate"]);
   });
 
-  it("marks only explicit restrictive policy layers for plugin harness isolation", async () => {
+  it("isolates collector runs and explicit restrictive policy layers for plugin harnesses", async () => {
     const received: boolean[] = [];
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
       received.push(attempt.pluginHarnessToolPolicyRestricted === true);
@@ -1408,11 +1578,14 @@ describe("runAgentHarnessAttempt", () => {
       conversationToolPolicy?: EmbeddedRunAttemptParams["conversationToolPolicy"];
       agentId?: string;
       sessionKey?: string;
+      swarmCollector?: boolean;
     }> = [
       {},
       { config: { tools: { profile: "coding" } } as OpenClawConfig },
       { conversationToolPolicy: {} },
       { conversationToolPolicy: { allow: ["*"] } },
+      { swarmCollector: false },
+      { swarmCollector: true },
       { conversationToolPolicy: { deny: ["exec"] } },
       { config: { tools: { deny: ["exec"] } } as OpenClawConfig },
       {
@@ -1434,10 +1607,11 @@ describe("runAgentHarnessAttempt", () => {
         conversationToolPolicy: testCase.conversationToolPolicy,
         agentId: testCase.agentId,
         sessionKey: testCase.sessionKey,
+        swarmCollector: testCase.swarmCollector,
       });
     }
 
-    expect(received).toEqual([false, false, false, false, true, true, true, true]);
+    expect(received).toEqual([false, false, false, false, false, true, true, true, true, true]);
   });
 
   it("rejects restrictive policy before an unsupported plugin harness runs", async () => {
@@ -1584,6 +1758,30 @@ describe("runAgentHarnessAttempt", () => {
 });
 
 describe("selectAgentHarness", () => {
+  it("rejects a harness replaced during its support probe", () => {
+    const replacement: AgentHarness = {
+      id: "codex",
+      label: "Replacement",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => createAttemptResult("replacement"),
+    };
+    registerAgentHarness({
+      ...replacement,
+      supports: () => {
+        registerAgentHarness(replacement);
+        return { supported: true };
+      },
+    });
+
+    expect(() =>
+      selectAgentHarness({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        agentHarnessRuntimeOverride: "codex",
+      }),
+    ).toThrow("changed during owner resolution");
+  });
+
   it("does not select Codex from a non-OpenAI model name", () => {
     registerSuccessfulCodexHarness();
 
@@ -1983,6 +2181,45 @@ describe("selectAgentHarness", () => {
     });
   });
 
+  it("ignores catalog-seeded compatibility when selecting an official OpenAI route", () => {
+    const createConfig = (compat?: { supportsStore: boolean }) =>
+      ({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT-5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 8192,
+                  ...(compat ? { compat } : {}),
+                },
+              ],
+            },
+          },
+        },
+      }) satisfies OpenClawConfig;
+    const sourceConfig = createConfig();
+    const runtimeConfig = createConfig({ supportsStore: false });
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    expect(
+      buildAgentHarnessSupportContext({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        requestedRuntime: "codex",
+        config: runtimeConfig,
+      }).modelProvider,
+    ).toMatchObject({
+      requestTransportOverrides: "none",
+      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+    });
+  });
+
   it.each([
     {
       label: "default",
@@ -2042,49 +2279,180 @@ describe("selectAgentHarness", () => {
     },
   );
 
-  it("keeps native model run controls compatible with Codex", () => {
-    expect(
-      buildAgentHarnessSupportContext({
-        provider: "openai",
-        modelId: "gpt-5.6-sol",
-        modelProvider: {
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          requestTransportOverrides: "none",
+  it.each([
+    ["Platform", "openai-responses", "https://api.openai.com/v1"],
+    ["ChatGPT", "openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex"],
+  ] as const)(
+    "keeps authored reasoning metadata and native controls on %s Codex",
+    (_label, api, baseUrl) => {
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-5.6-sol",
+                  name: "Sol",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 8192,
+                  api,
+                  baseUrl,
+                  compat: {
+                    supportsReasoningEffort: true,
+                    supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+                  },
+                },
+              ],
+            },
+          },
         },
-        requestedRuntime: "codex",
-        config: {
-          agents: {
-            defaults: {
-              models: {
-                "openai/gpt-5.6-sol": {
-                  params: { thinking: "xhigh", fastMode: true, fastAutoOnSeconds: 30 },
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.6-sol": {
+                params: { thinking: "xhigh", fastMode: true, fastAutoOnSeconds: 30 },
+              },
+            },
+          },
+        },
+      };
+      registerAgentHarness({
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.modelProvider?.requestTransportOverrides === "present"
+            ? { supported: false, fallbackRuntime: "openclaw" }
+            : { supported: true },
+        runAttempt: async () => createAttemptResult("codex"),
+      });
+      for (const runtime of [undefined, "codex", "openclaw"]) {
+        expect(
+          selectAgentHarness({
+            provider: "openai",
+            modelId: "gpt-5.6-sol",
+            config,
+            agentHarnessRuntimeOverride: runtime,
+          }).id,
+        ).toBe(runtime ?? "codex");
+      }
+      expect(
+        buildAgentHarnessSupportContext({
+          provider: "openai",
+          modelId: "gpt-5.6-sol",
+          requestedRuntime: "codex",
+          config,
+        }).modelProvider,
+      ).toMatchObject({
+        requestTransportOverrides: "none",
+        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+      });
+    },
+  );
+
+  it.each([
+    ["model request params", {}, {}, { responsesServerCompaction: true }],
+    ["provider headers", { headers: { "x-route": "required" } }, {}, {}],
+    ["provider params", { params: { store: false } }, {}, {}],
+    ["provider timeout", { timeoutSeconds: 90 }, {}, {}],
+    ["model headers", {}, { headers: { "x-route": "required" } }, {}],
+    ["model params", {}, { params: { store: false } }, {}],
+    ["store compatibility", {}, { compat: { supportsStore: false } }, {}],
+    [
+      "mixed compatibility",
+      {},
+      {
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["high"],
+          supportsStore: false,
+        },
+      },
+      {},
+    ],
+  ])(
+    "uses a harness-declared fallback preserving %s",
+    (_label, providerPatch, modelPatch, params) => {
+      const supports = vi.fn((ctx: Parameters<AgentHarness["supports"]>[0]) =>
+        ctx.modelProvider?.requestTransportOverrides === "present"
+          ? {
+              supported: false as const,
+              reason: "authored request params are unsupported",
+              fallbackRuntime: "openclaw" as const,
+            }
+          : { supported: true as const },
+      );
+      registerAgentHarness({
+        id: "codex",
+        label: "Codex",
+        supports,
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+      });
+
+      expect(
+        selectAgentHarness({
+          provider: "openai",
+          modelId: "gpt-5.6-sol",
+          modelProvider: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            requestTransportOverrides: "none",
+            runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+          },
+          config: {
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  ...providerPatch,
+                  models: [
+                    {
+                      id: "gpt-5.6-sol",
+                      name: "Sol",
+                      reasoning: true,
+                      input: ["text"],
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      maxTokens: 8192,
+                      ...modelPatch,
+                    },
+                  ],
+                },
+              },
+            },
+            agents: {
+              defaults: {
+                models: {
+                  "openai/gpt-5.6-sol": {
+                    params,
+                    agentRuntime: { id: "codex" },
+                  },
                 },
               },
             },
           },
-        } as OpenClawConfig,
-      }).modelProvider,
-    ).toMatchObject({
-      requestTransportOverrides: "none",
-      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-    });
-  });
+        }).id,
+      ).toBe("openclaw");
+      expect(supports).toHaveBeenCalledWith(
+        expect.objectContaining({
+          modelProvider: expect.objectContaining({ requestTransportOverrides: "present" }),
+        }),
+      );
+    },
+  );
 
-  it("uses a harness-declared OpenClaw fallback for explicit request params", () => {
-    const supports = vi.fn((ctx: Parameters<AgentHarness["supports"]>[0]) =>
-      ctx.modelProvider?.requestTransportOverrides === "present"
-        ? {
-            supported: false as const,
-            reason: "authored request params are unsupported",
-            fallbackRuntime: "openclaw" as const,
-          }
-        : { supported: true as const },
-    );
+  it("keeps a private-QA forced runtime despite a plugin-declared fallback", () => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
     registerAgentHarness({
       id: "codex",
       label: "Codex",
-      supports,
+      supports: () => ({
+        supported: false,
+        reason: "authored request params are unsupported",
+        fallbackRuntime: "openclaw",
+      }),
       runAttempt: vi.fn(async () => createAttemptResult("codex")),
     });
 
@@ -2094,29 +2462,12 @@ describe("selectAgentHarness", () => {
         modelId: "gpt-5.6-sol",
         modelProvider: {
           api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-        },
-        config: {
-          agents: {
-            defaults: {
-              models: {
-                "openai/gpt-5.6-sol": {
-                  params: { responsesServerCompaction: true },
-                  agentRuntime: { id: "codex" },
-                },
-              },
-            },
-          },
+          baseUrl: "http://127.0.0.1:43123/v1",
+          requestTransportOverrides: "present",
+          runtimePolicy: { compatibleIds: ["openclaw"] },
         },
       }).id,
-    ).toBe("openclaw");
-    expect(supports).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelProvider: expect.objectContaining({ requestTransportOverrides: "present" }),
-      }),
-    );
+    ).toBe("codex");
   });
 
   it("keeps request-scoped transport overrides on the implicit OpenClaw runtime", () => {
@@ -2449,6 +2800,31 @@ describe("selectAgentHarness", () => {
         ...pin,
       }).id,
     ).toBe("openclaw");
+  });
+
+  it("keeps private-QA forced Codex across prepared routes that declare fallback", () => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: (ctx) =>
+        ctx.modelProvider?.requestTransportOverrides === "present"
+          ? { supported: false, fallbackRuntime: "openclaw" }
+          : { supported: true },
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+    });
+
+    expect(
+      selectAgentHarnessForPreparedModelProviders({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        modelProviders: [
+          { requestTransportOverrides: "none" },
+          { requestTransportOverrides: "present" },
+        ],
+      }).id,
+    ).toBe("codex");
   });
 
   it.each([

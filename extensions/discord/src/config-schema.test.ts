@@ -129,6 +129,19 @@ describe("discord config schema", () => {
     expect(cfg.groupPolicy).toBe("allowlist");
   });
 
+  it("accepts join introductions at channel and account scope without masking inheritance", () => {
+    const defaults = expectValidDiscordConfig({ accounts: { work: {} } });
+    const configured = expectValidDiscordConfig({
+      joinIntro: false,
+      accounts: { work: { joinIntro: true } },
+    });
+
+    expect(defaults.joinIntro).toBeUndefined();
+    expect(defaults.accounts?.work?.joinIntro).toBeUndefined();
+    expect(configured.joinIntro).toBe(false);
+    expect(configured.accounts?.work?.joinIntro).toBe(true);
+  });
+
   it("accepts historyLimit", () => {
     const cfg = expectValidDiscordConfig({ historyLimit: 3 });
 
@@ -340,6 +353,16 @@ describe("discord config schema", () => {
     });
 
     expect(cfg.voice?.allowedChannels).toEqual([{ guildId: "123", channelId: "456" }]);
+  });
+
+  it("accepts occupancy-managed Discord voice auto-join channels", () => {
+    const cfg = expectValidDiscordConfig({
+      voice: {
+        autoJoin: [{ guildId: "123", channelId: "456", whenOccupied: true }],
+      },
+    });
+
+    expect(cfg.voice?.autoJoin).toEqual([{ guildId: "123", channelId: "456", whenOccupied: true }]);
   });
 
   it("rejects invalid Discord voice allowed channels", () => {

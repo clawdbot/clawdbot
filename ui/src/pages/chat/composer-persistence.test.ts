@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatGoalDraftMode, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { subscribeStoredChatOutboxChanges } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -66,23 +66,146 @@ afterEach(() => {
 });
 
 describe("chat composer persistence", () => {
-  it("round-trips only the immutable steer run identity", () => {
+  it.each<ChatGoalDraftMode>([
+    { action: "start", sessionId: "session-a" },
+    {
+      action: "edit",
+      sessionId: "session-a",
+      goalId: "goal-a",
+      previousDraft: "Prior conversation draft",
+    },
+  ])("restores $action mode with its literal draft and exact target", (goalMode) => {
+    const state = createState({
+      chatMessage: "  /goal clear\n  literal objective ",
+      chatGoalDraftMode: goalMode,
+    });
+    expect(persistChatComposerState(state)).toBe(true);
+    const restored = createState();
+    expect(restoreChatComposerState(restored)).toBe(true);
+    expect(restored.chatMessage).toBe(state.chatMessage);
+    expect(restored.chatGoalDraftMode).toEqual(goalMode);
+    expect(loadChatComposerSnapshot(state, "agent:lily:other")).toBeNull();
+
+    const queued = reconnectItem("other-message", 1);
+    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, queued)).toBe(true);
+    expect(removeStoredChatComposerQueueItem(state, state.sessionKey, queued.id)).toBe(true);
+    expect(loadChatComposerSnapshot(state, state.sessionKey)?.goalMode).toEqual(goalMode);
+  });
+
+  it("persists empty Goal mode and gives cancellation a new draft revision", () => {
     const state = createState();
-    const steer: ChatQueueItem = {
+    const persistence = new ChatComposerPersistence(() => state);
+    persistence.start();
+    state.chatGoalDraftMode = { action: "start", sessionId: "session-a" };
+    persistence.schedule();
+    persistence.persistNow();
+    const revision = loadChatComposerDraftRevision(state, state.sessionKey);
+    expect(loadChatComposerSnapshot(state, state.sessionKey)?.goalMode).toEqual(
+      state.chatGoalDraftMode,
+    );
+    state.chatGoalDraftMode = null;
+    persistence.schedule();
+    persistence.persistNow();
+    expect(loadChatComposerDraftRevision(state, state.sessionKey)).toBeGreaterThan(revision);
+    expect(loadChatComposerSnapshot(state, state.sessionKey)).toBeNull();
+    persistence.stop();
+  });
+
+  it("fences a same-revision retry that changes objective interpretation", () => {
+    const state = createState({
+      chatMessage: "/goal clear",
+      chatGoalDraftMode: { action: "start" },
+    });
+    expect(persistChatComposerState(state, state.sessionKey, { draftRevision: 10 })).toBe(true);
+    expect(
+      persistChatComposerState(state, state.sessionKey, { draftRevision: 10, goalMode: null }),
+    ).toBe(false);
+    expect(loadChatComposerSnapshot(state, state.sessionKey)?.goalMode).toEqual({
+      action: "start",
+    });
+  });
+
+  it("does not persist whitespace-only drafts", () => {
+    const state = createState({ chatMessage: "  \n  " });
+
+    expect(persistChatComposerState(state)).toBe(true);
+    expect(loadChatComposerSnapshot(state, state.sessionKey)).toBeNull();
+  });
+
+  it("normalizes an existing whitespace-only stored draft during restore", () => {
+    const state = createState();
+    const gatewayUrl = state.settings?.gatewayUrl;
+    sessionStorage.setItem(
+      storageKeyForGateway(gatewayUrl),
+      JSON.stringify({
+        version: 2,
+        gatewayOwner: gatewayUrl,
+        sessions: {
+          [`${state.sessionKey}\u0000agent:lily`]: {
+            draft: "  \n  ",
+            draftRevision: 1,
+            updatedAt: 1,
+          },
+        },
+      }),
+    );
+
+    expect(restoreChatComposerState(state)).toBe(false);
+    expect(state.chatMessage).toBe("");
+  });
+
+  it("loads legacy steer rows as generic mode-bearing sends and never rewrites old fields", () => {
+    const state = createState();
+    const gatewayUrl = state.settings?.gatewayUrl;
+    const storageKey = storageKeyForGateway(gatewayUrl);
+    sessionStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 2,
+        gatewayOwner: gatewayUrl,
+        sessions: {
+          [`${state.sessionKey}\u0000agent:lily`]: {
+            queue: [
+              {
+                id: "steer-reload",
+                text: "keep the target",
+                createdAt: 1,
+                kind: "steered",
+                sendRunId: "steer-request",
+                sendState: "steering",
+                steerTargetRunId: "active-run",
+              },
+            ],
+            updatedAt: 1,
+          },
+        },
+      }),
+    );
+
+    const restored = loadChatComposerSnapshot(state, state.sessionKey)?.queue[0];
+    expect(restored).toMatchObject({
       id: "steer-reload",
-      text: "keep the target",
-      createdAt: 1,
-      kind: "steered",
+      queueMode: "steer",
       sendRunId: "steer-request",
       sendState: "unconfirmed",
-      steerTargetRunId: "active-run",
-    };
-
-    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, steer)).toBe(true);
-
-    expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue[0]).toMatchObject({
-      steerTargetRunId: "active-run",
     });
+    expect(restored).not.toHaveProperty("kind");
+    expect(restored).not.toHaveProperty("steerTargetRunId");
+
+    expect(
+      updateStoredChatComposerQueueItem(
+        state,
+        state.sessionKey,
+        restored!,
+        { ...restored!, text: "updated" },
+        restored?.agentId,
+      ),
+    ).toBe(true);
+    const written = sessionStorage.getItem(storageKey) ?? "";
+    expect(written).toContain('"queueMode":"steer"');
+    expect(written).not.toContain('"kind":"steered"');
+    expect(written).not.toContain("steerTargetRunId");
+    expect(written).not.toContain('"sendState":"steering"');
   });
 
   it("notifies stored outbox subscribers on draft presence transitions and queue writes", () => {
@@ -1153,27 +1276,6 @@ describe("chat composer persistence", () => {
         ],
       },
     ]);
-  });
-
-  it("does not persist Skill Workshop revision requests for reconnect replay", () => {
-    const item: ChatQueueItem = {
-      ...reconnectItem("rich", 1),
-      attachments: [
-        {
-          id: "att-1",
-          mimeType: "image/png",
-          fileName: "screen.png",
-          dataUrl: "data:image/png;base64,AAA",
-        },
-      ],
-      skillWorkshopRevision: { proposalId: "proposal-1", agentId: "owner" },
-    };
-    const state = createState();
-    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, item)).toBe(false);
-
-    const restored = createState();
-    expect(restoreChatComposerState(restored)).toBe(false);
-    expect(restored.chatQueue).toEqual([]);
   });
 
   it("normalizes interrupted and in-flight states before durable replay", () => {

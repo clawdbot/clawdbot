@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   assertBrowserProxyFileBytesWithinLimits,
   assertBrowserProxyFileCountWithinLimit,
@@ -150,20 +151,6 @@ export async function prepareBrowserProxyUploadRequest(params: {
   return { body: bodyWithoutPaths, upload };
 }
 
-function truncateUtf8(value: string, maxBytes: number): string {
-  let result = "";
-  let bytes = 0;
-  for (const character of value) {
-    const nextBytes = Buffer.byteLength(character, "utf8");
-    if (bytes + nextBytes > maxBytes) {
-      break;
-    }
-    result += character;
-    bytes += nextBytes;
-  }
-  return result;
-}
-
 function sanitizeUploadName(name: string): string {
   const basename = path.posix.basename(name.replaceAll("\\", "/"));
   const cleaned = Array.from(basename, (character) => {
@@ -177,7 +164,7 @@ function sanitizeUploadName(name: string): string {
     .replace(/[. ]+$/u, "");
   const portable = WINDOWS_RESERVED_NAME.test(cleaned) ? `_${cleaned}` : cleaned;
   const safe = portable && portable !== "." && portable !== ".." ? portable : "upload";
-  return truncateUtf8(safe, MAX_STAGED_NAME_BYTES) || "upload";
+  return truncateUtf8Prefix(safe, MAX_STAGED_NAME_BYTES) || "upload";
 }
 
 function decodedBase64Size(value: string): number {

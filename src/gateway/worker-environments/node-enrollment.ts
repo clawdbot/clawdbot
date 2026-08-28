@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
 import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
 import { removePairedDeviceRole } from "../../infra/device-pairing.js";
 import {
@@ -34,26 +35,31 @@ function resolveEnrollmentPackageSpecs(): string[] {
 export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentManagerOptions) {
   const now = options.now ?? Date.now;
   const packageSpecs = resolveEnrollmentPackageSpecs();
+  const controller = new AbortController();
+  const { signal } = controller;
 
   const waitForDeviceId = async (environmentId: string): Promise<string> => {
     const deadline = now() + NODE_ENROLLMENT_TIMEOUT_MS;
     while (now() < deadline) {
+      signal.throwIfAborted();
       const record = options.store.ensureNodeEnrollment(environmentId);
       if (record.destroyRequestedAtMs !== null) {
         throw new Error("Worker node enrollment was canceled by environment teardown");
       }
       if (record.nodeDeviceId) {
         const availability = await options.resolveAvailability(record.nodeDeviceId);
+        signal.throwIfAborted();
         if (availability.available) {
           return record.nodeDeviceId;
         }
       }
-      await sleep(NODE_ENROLLMENT_POLL_MS);
+      await sleep(NODE_ENROLLMENT_POLL_MS, undefined, { signal });
     }
     throw new Error("Worker node did not connect before the enrollment deadline");
   };
 
   const begin = async (record: WorkerEnvironmentRecord): Promise<WorkerNodeEnrollment> => {
+    signal.throwIfAborted();
     let current = options.store.ensureNodeEnrollment(record.environmentId);
     const displayName = enrollmentDisplayName(current);
     const wait = async () => await waitForDeviceId(current.environmentId);
@@ -64,6 +70,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         openclawVersion: VERSION,
         packageSpecs,
         displayName,
+        signal,
         waitForDeviceId: wait,
       };
     }
@@ -74,6 +81,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       setupId: current.nodeSetupId,
       profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     });
+    signal.throwIfAborted();
     if (issued.status === "completed") {
       current = options.store.ensureNodeEnrollment(current.environmentId);
       if (!current.nodeDeviceId || current.nodeDeviceId !== issued.deviceId) {
@@ -85,18 +93,20 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         openclawVersion: VERSION,
         packageSpecs,
         displayName,
+        signal,
         waitForDeviceId: wait,
       };
     }
     const config = options.getConfig();
     const resolved = await resolvePairingSetupFromConfig(config, {
       env: process.env,
-      publicUrl: resolveConfiguredPairingPublicUrl(config),
+      publicUrl: resolveConfiguredPairingPublicUrl(config) ?? resolveGatewayPublicOrigin(config),
       bootstrapProfile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
       issuedBootstrap: issued,
       runCommandWithTimeout: async (argv, runOptions) =>
         await runCommandWithTimeout(argv, { timeoutMs: runOptions.timeoutMs }),
     });
+    signal.throwIfAborted();
     if (!resolved.ok) {
       throw new Error(resolved.error);
     }
@@ -110,6 +120,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       openclawVersion: VERSION,
       packageSpecs,
       displayName,
+      signal,
       waitForDeviceId: wait,
     };
   };
@@ -133,5 +144,5 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     await removePairedDeviceRole({ deviceId, role: "node" });
   };
 
-  return { begin, retire };
+  return { begin, retire, stop: () => controller.abort() };
 }

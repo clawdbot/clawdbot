@@ -3,6 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -109,7 +110,7 @@ async function writeLiveGatewayConfig(params: {
     commands: { ownerAllowFrom: ["*"] },
     plugins: { allow: ["codex"] },
     agents: {
-      entries: { dev: { default: true, tools: { exec: { host: "node" } } } },
+      entries: { dev: { tools: { exec: { host: "node" } } } },
       defaults: {
         workspace: params.workspace,
         skipBootstrap: true,
@@ -138,6 +139,7 @@ async function connectGatewayClient(params: {
     requestTimeoutMs: 60_000,
     tickWatchTimeoutMs: AGENT_REQUEST_TIMEOUT_MS + 120_000,
     clientDisplayName: "trajectory-live",
+    caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
     onEvent: params.onEvent,
   });
   return client;

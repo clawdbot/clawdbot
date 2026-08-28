@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { safeAttachmentHref } from "./chat-attachment-href.ts";
+import { safeAttachmentHref, safeAudioAttachmentHref } from "./chat-attachment-href.ts";
 
 describe("safeAttachmentHref", () => {
   it.each([
@@ -24,5 +24,27 @@ describe("safeAttachmentHref", () => {
     "",
   ])("rejects an unsafe attachment href: %s", (href) => {
     expect(safeAttachmentHref(href)).toBeUndefined();
+  });
+});
+
+describe("safeAudioAttachmentHref", () => {
+  it("allows only a well-formed base64 audio data URL", () => {
+    const href = "data:audio/wav;base64,UklGRg==";
+    expect(safeAudioAttachmentHref(href)).toBe(href);
+  });
+
+  it.each([
+    "data:text/html;base64,PHNjcmlwdD4=",
+    "data:audio/wav,<script>alert(1)</script>",
+    "data:audio/wav;base64,not_base64",
+    "data:audio/wav;base64,UklGRg=",
+  ])("rejects an unsafe inline audio href: %s", (href) => {
+    expect(safeAudioAttachmentHref(href)).toBeUndefined();
+  });
+
+  it("retains the shared safe attachment protocols", () => {
+    expect(safeAudioAttachmentHref("https://cdn.example/audio.mp3")).toBe(
+      "https://cdn.example/audio.mp3",
+    );
   });
 });

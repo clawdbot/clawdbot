@@ -180,6 +180,20 @@ describe("loadControlUiSessionPullRequests", () => {
       },
     ]);
     expect(fetchImpl.mock.calls).toHaveLength(1);
+
+    vi.advanceTimersByTime(60_000);
+    await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    expect(fetchImpl.mock.calls).toHaveLength(1);
+
+    vi.advanceTimersByTime(30_001);
+    await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    expect(fetchImpl.mock.calls).toHaveLength(2);
   });
 
   it("marks in-flight checks pending and failed conclusions failing", async () => {
@@ -298,7 +312,7 @@ describe("loadControlUiSessionPullRequests", () => {
     expect(fresh.rateLimited).toBe(false);
 
     limited = true;
-    vi.advanceTimersByTime(61_000);
+    vi.advanceTimersByTime(91_000);
     const stale = await loadControlUiSessionPullRequests(
       { sessionKey: "agent:main:main" },
       { fetchImpl, resolveGitContext },
@@ -389,14 +403,19 @@ describe("loadControlUiSessionPullRequests", () => {
     await expect(load("/repo/other-context")).rejects.toBeInstanceOf(Error);
     expect(gitOutputImpl).toHaveBeenCalledTimes(6);
 
-    vi.advanceTimersByTime(10_001);
+    vi.advanceTimersByTime(60_000);
+    await expect(load()).rejects.toBeInstanceOf(Error);
+    expect(gitOutputImpl).toHaveBeenCalledTimes(6);
+    expect(fetchImpl.mock.calls).toHaveLength(2);
+
+    vi.advanceTimersByTime(15_001);
     await expect(load()).rejects.toBeInstanceOf(Error);
     expect(gitOutputImpl).toHaveBeenCalledTimes(9);
-    // The longer GitHub failure cache remains independent of local Git expiry.
-    expect(fetchImpl.mock.calls).toHaveLength(1);
+    // GitHub's shorter failure backoff stays independent of local Git expiry.
+    expect(fetchImpl.mock.calls).toHaveLength(2);
   });
 
-  it("caches branch facts by root while refresh only bypasses the GitHub cache", async () => {
+  it("caches local facts across a poll while forced refresh bypasses them", async () => {
     let pulls: Record<string, unknown>[] = [];
     const fetchImpl = routedFetch([
       { match: "/pulls?head=", response: () => githubJson(pulls) },
@@ -411,11 +430,15 @@ describe("loadControlUiSessionPullRequests", () => {
     const gitOutputImpl = vi.fn(async (_root: string, args: string[]) =>
       args[0] === "rev-list" ? "1" : null,
     );
+    let additions = 1;
     const runGitImpl = vi.fn(async (root: string) => ({
-      stdout:
-        root === "/repo/b" ? " 1 file changed, 2 insertions(+)" : " 1 file changed, 1 insertion(+)",
+      stdout: ` 1 file changed, ${root === "/repo/b" ? 3 : additions} insertions(+)`,
       stderr: "",
       code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit" as const,
+      timeoutMs: 120_000,
     }));
     const load = (sessionKey: string, refresh = false) =>
       loadControlUiSessionPullRequests(
@@ -435,10 +458,15 @@ describe("loadControlUiSessionPullRequests", () => {
       );
 
     expect((await load("agent:main:a")).branch?.additions).toBe(1);
-    expect((await load("agent:main:a", true)).branch?.additions).toBe(1);
+    additions = 2;
+    expect((await load("agent:main:a")).branch?.additions).toBe(1);
     expect(resolveBranchLanding).toHaveBeenCalledTimes(1);
     expect(runGitImpl).toHaveBeenCalledTimes(1);
     expect(gitOutputImpl).toHaveBeenCalledTimes(2);
+    expect((await load("agent:main:a", true)).branch?.additions).toBe(2);
+    expect(resolveBranchLanding).toHaveBeenCalledTimes(2);
+    expect(runGitImpl).toHaveBeenCalledTimes(2);
+    expect(gitOutputImpl).toHaveBeenCalledTimes(4);
     expect(
       fetchImpl.mock.calls.filter((call) =>
         requestUrl(call[0] as RequestInfo | URL).includes("/pulls?head="),
@@ -446,21 +474,76 @@ describe("loadControlUiSessionPullRequests", () => {
     ).toHaveLength(2);
 
     pulls = [pullListItem({ merged_at: "2026-07-09T10:00:00Z" })];
-    expect((await load("agent:main:a", true)).branch?.additions).toBe(1);
-    expect(resolveBranchLanding).toHaveBeenCalledTimes(2);
-    expect(runGitImpl).toHaveBeenCalledTimes(2);
-    expect(gitOutputImpl).toHaveBeenCalledTimes(4);
-
-    vi.advanceTimersByTime(10_001);
-    expect((await load("agent:main:a")).branch?.additions).toBe(1);
+    additions = 4;
+    expect((await load("agent:main:a", true)).branch?.additions).toBe(4);
     expect(resolveBranchLanding).toHaveBeenCalledTimes(3);
     expect(runGitImpl).toHaveBeenCalledTimes(3);
     expect(gitOutputImpl).toHaveBeenCalledTimes(6);
 
-    expect((await load("agent:main:b")).branch?.additions).toBe(2);
+    const githubRequests = fetchImpl.mock.calls.length;
+    vi.advanceTimersByTime(60_000);
+    additions = 5;
+    expect((await load("agent:main:a")).branch?.additions).toBe(4);
+    expect(resolveBranchLanding).toHaveBeenCalledTimes(3);
+    expect(runGitImpl).toHaveBeenCalledTimes(3);
+    expect(gitOutputImpl).toHaveBeenCalledTimes(6);
+    expect(fetchImpl.mock.calls).toHaveLength(githubRequests);
+
+    vi.advanceTimersByTime(15_001);
+    additions = 5;
+    expect((await load("agent:main:a")).branch?.additions).toBe(5);
     expect(resolveBranchLanding).toHaveBeenCalledTimes(4);
     expect(runGitImpl).toHaveBeenCalledTimes(4);
     expect(gitOutputImpl).toHaveBeenCalledTimes(8);
+
+    expect((await load("agent:main:b")).branch?.additions).toBe(3);
+    expect(resolveBranchLanding).toHaveBeenCalledTimes(5);
+    expect(runGitImpl).toHaveBeenCalledTimes(5);
+    expect(gitOutputImpl).toHaveBeenCalledTimes(10);
+  });
+
+  it("forced refresh bypasses cached checkout branch context", async () => {
+    let branch = "feature-a";
+    const fetchImpl = routedFetch([
+      { match: "/pulls?head=", response: () => githubJson([]) },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+    const gitOutputImpl = vi.fn(async (_root: string, args: string[]) => {
+      if (args[0] === "rev-parse") {
+        return branch;
+      }
+      if (args[0] === "remote") {
+        return "git@github.com:openclaw/openclaw.git";
+      }
+      if (args[0] === "symbolic-ref") {
+        return "origin/main";
+      }
+      if (args[0] === "rev-list") {
+        return "1";
+      }
+      return null;
+    });
+    const resolveBranchLanding = vi.fn(async () => ({
+      pushedSha: "a".repeat(40),
+      statsBase: null,
+      hasLandedPullRequest: false,
+      provenNewPushedWork: false,
+    }));
+    const load = (refresh = false) =>
+      loadControlUiSessionPullRequests(
+        { sessionKey: "agent:main:context-refresh", ...(refresh ? { refresh: true } : {}) },
+        {
+          fetchImpl,
+          resolveGitRoot: async () => "/repo/forced-context",
+          gitOutput: gitOutputImpl,
+          resolveBranchLanding,
+        },
+      );
+
+    expect((await load()).branch?.branch).toBe("feature-a");
+    branch = "feature-b";
+    expect((await load()).branch?.branch).toBe("feature-a");
+    expect((await load(true)).branch?.branch).toBe("feature-b");
   });
 
   it("refreshes a cached empty result after the assistant creates a PR", async () => {

@@ -389,6 +389,23 @@ describe("installTestEnv", () => {
     expect(process.env.OPENCLAW_HOME).toBe(configuredOpenClawHome);
   });
 
+  it.each([
+    "TWILIO_ACCOUNT_SID",
+    "TWILIO_AUTH_TOKEN",
+    "TWILIO_PHONE_NUMBER",
+    "TWILIO_SMS_FROM",
+    "TWILIO_MESSAGING_SERVICE_SID",
+  ])("isolates and restores the SMS activation variable %s", (key) => {
+    setTestEnvValue(key, "test-channel-value");
+
+    const testEnv = installTestEnv({ mode: "hermetic" });
+    cleanupFns.push(testEnv.cleanup);
+
+    expect(process.env[key]).toBeUndefined();
+    testEnv.cleanup();
+    expect(process.env[key]).toBe("test-channel-value");
+  });
+
   it("does not load ~/.profile for normal isolated test runs", () => {
     const realHome = createTempHome();
     writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");

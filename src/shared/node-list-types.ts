@@ -28,7 +28,7 @@ export type NodeListNode = {
   caps?: string[];
   commands?: string[];
   computerUse?: ComputerUseCapabilityDescriptor;
-  /** Connected node currently has capacity to host another worker session turn. */
+  /** Node has explicitly enabled session hosting; live slots own current capacity. */
   sessionHost?: boolean;
   workerSlots?: WorkerSlotSummary;
   workerBundle?: NodeWorkerBundleStatus;

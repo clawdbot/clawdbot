@@ -11,6 +11,10 @@ import {
 } from "../../../../infra/outbound/session-binding-service.js";
 import type { SessionBindingCapabilities } from "../../../../infra/outbound/session-binding.types.js";
 import { resetPluginRuntimeStateForTest } from "../../../../plugins/runtime.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../../../test-utils/openclaw-test-state.js";
 import { getSessionBindingContractRegistry } from "./registry-session-binding.js";
 
 function resolveSessionBindingContractRuntimeConfig(id: string) {
@@ -63,11 +67,17 @@ export function describeSessionBindingRegistryBackedContract(id: string) {
   }
 
   describe(`${entry.id} session binding contract`, () => {
+    let testState: OpenClawTestState | undefined;
+
     beforeAll(async () => {
       await entry.preload?.();
     });
 
     beforeEach(async () => {
+      testState = await createOpenClawTestState({
+        label: `${entry.id}-session-binding-contract`,
+        layout: "state-only",
+      });
       resetPluginRuntimeStateForTest();
       clearRuntimeConfigSnapshot();
       // Keep the suite hermetic; some contract helpers resolve runtime artifacts through config-aware
@@ -79,8 +89,10 @@ export function describeSessionBindingRegistryBackedContract(id: string) {
       sessionBindingTesting.resetSessionBindingAdaptersForTests();
       await entry.beforeEach?.();
     });
-    afterEach(() => {
+    afterEach(async () => {
       clearRuntimeConfigSnapshot();
+      await testState?.cleanup();
+      testState = undefined;
     });
 
     installSessionBindingContractSuite({

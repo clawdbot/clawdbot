@@ -7,9 +7,12 @@ on:
       - main
     paths:
       - ".github/workflows/plugin-npm-release.yml"
+      - ".github/actions/setup-node-env/**"
       - "extensions/**"
       - "package.json"
-      - "packages/normalization-core/**"
+      - "pnpm-lock.yaml"
+      - "packages/normalization-core/src/**"
+      - "packages/plugin-package-contract/src/**"
       - "scripts/generate-npm-package-lock.mjs"
       - "scripts/generate-npm-package-lock.mts"
       - "scripts/lib/npm-publish-plan.mjs"
@@ -18,10 +21,16 @@ on:
       - "scripts/lib/plugin-npm-package-manifest.mjs"
       - "scripts/lib/plugin-npm-package-manifest.mts"
       - "scripts/lib/tsx-cli-shim.mjs"
+      - "scripts/lib/local-check-runtime.mts"
+      - "scripts/tsx.mjs"
       - "scripts/lib/plugin-npm-release.ts"
+      - "scripts/lib/plugin-publication-candidates.ts"
+      - "scripts/lib/plugin-publication-collector.ts"
       - "scripts/lib/actions-artifact-archive.mjs"
       - "scripts/plugin-npm-publish.sh"
       - "scripts/plugin-publication-artifact.mjs"
+      - "scripts/release-tooling-identity.d.mts"
+      - "scripts/release-tooling-identity.mjs"
       - "scripts/plugin-npm-release-check.ts"
       - "scripts/plugin-npm-release-plan.ts"
       - "scripts/verify-plugin-npm-published-runtime.mts"
@@ -46,6 +55,20 @@ on:
       release_publish_run_id:
         description: Approved OpenClaw Release Publish workflow run id
         required: false
+        type: string
+      release_publish_run_attempt:
+        description: Exact approved OpenClaw Release Publish workflow run attempt
+        required: false
+        type: string
+      release_publish_branch:
+        description: Branch or protected tag name of the approving OpenClaw Release Publish workflow run
+        required: false
+        default: ""
+        type: string
+      release_publish_full_ref:
+        description: Full ref of the approving OpenClaw Release Publish workflow run
+        required: false
+        default: ""
         type: string
       preflight_only:
         description: Prepare and verify immutable plugin npm artifacts without publishing
@@ -72,7 +95,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "24.19.0"
 
 jobs:
   preview_plugins_npm:
@@ -89,16 +112,44 @@ jobs:
       all_matrix: ${{ steps.plan.outputs.all_matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           fetch-depth: 0
           filter: blob:none
 
+      - name: Checkout trusted preflight tooling
+        if: github.event_name == 'workflow_dispatch' && inputs.preflight_only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/lib/record-shared.mjs
+            scripts/release-tooling-identity.mjs
+          sparse-checkout-cone-mode: false
+
       - name: Resolve checked-out ref
         id: ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify trusted preflight tooling identity
+        if: github.event_name == 'workflow_dispatch' && inputs.preflight_only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_FULL_REF: ${{ github.ref }}
+          WORKFLOW_REF: ${{ github.ref_name }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          node .release-tooling/scripts/release-tooling-identity.mjs verify \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-ref "$WORKFLOW_REF" \
+            --workflow-full-ref "$WORKFLOW_FULL_REF" \
+            --workflow-sha "$WORKFLOW_SHA"
 
       - name: Validate ref is on a trusted publish branch
         env:
@@ -107,6 +158,7 @@ jobs:
           TRUSTED_PUBLISHER_PREFLIGHT: ${{ github.event_name == 'workflow_dispatch' && inputs.trusted_publisher_preflight || false }}
           PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ github.event_name == 'workflow_dispatch' && inputs.release_publish_run_attempt || '' }}
           RELEASE_PUBLISH_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id || '' }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           WORKFLOW_REF: ${{ github.ref }}
@@ -118,18 +170,18 @@ jobs:
             exit 1
           fi
           if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
-            if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] || [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-              echo "Plugin npm preflight must run from a trusted main workflow revision." >&2
-              exit 1
-            fi
             if [[ ! "${SOURCE_REF}" =~ ^[0-9a-fA-F]{40}$ ]] || [[ "$(git rev-parse HEAD)" != "$(git rev-parse "${SOURCE_REF}^{commit}")" ]]; then
               echo "Plugin npm preflight requires ref to be the exact 40-character source SHA." >&2
               exit 1
             fi
-            if [[ -n "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
-              echo "Plugin npm preflight must not include release_publish_run_id." >&2
+            if [[ -n "${RELEASE_PUBLISH_RUN_ID// }" || -n "${RELEASE_PUBLISH_RUN_ATTEMPT// }" ]]; then
+              echo "Plugin npm preflight must not include a release publish parent run tuple." >&2
               exit 1
             fi
+          fi
+          if [[ -n "${RELEASE_PUBLISH_RUN_ID// }" && ! "${RELEASE_PUBLISH_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "release_publish_run_id requires the exact positive release_publish_run_attempt." >&2
+            exit 1
           fi
           if [[ "${NPM_DIST_TAG}" == "extended-stable" ]]; then
             if [[ "${PUBLISH_SCOPE}" != "all-publishable" || -n "${RELEASE_PLUGINS// }" ]]; then
@@ -158,10 +210,6 @@ jobs:
           timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
             +refs/heads/main:refs/remotes/origin/main \
             '+refs/heads/release/*:refs/remotes/origin/release/*'
-          if [[ "${PREFLIGHT_ONLY}" == "true" ]] && ! git merge-base --is-ancestor "${WORKFLOW_SHA}" origin/main; then
-            echo "Plugin npm preflight workflow revision is not reachable from main." >&2
-            exit 1
-          fi
           if git merge-base --is-ancestor HEAD origin/main; then
             exit 0
           fi
@@ -187,6 +235,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
@@ -299,7 +348,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -307,7 +356,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
-          EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
+          EXPECTED_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          EXPECTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
         run: |
           set -euo pipefail
           if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
@@ -323,7 +374,12 @@ jobs:
             direct_recovery=true
             echo "Direct Plugin NPM Release recovery with release_publish_run_id; relying on this workflow's npm-release environment approval."
           fi
-          RUN_JSON="$(gh run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
+          if [[ "${EXPECTED_WORKFLOW_BRANCH}" =~ ^release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
+            export EXPECTED_WORKFLOW_FULL_REF="refs/tags/${EXPECTED_WORKFLOW_BRANCH}"
+          else
+            export EXPECTED_WORKFLOW_FULL_REF="refs/heads/${EXPECTED_WORKFLOW_BRANCH}"
+          fi
+          RUN_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}" --jq '{workflowName: .name, headBranch: .head_branch, headSha: .head_sha, event, status, conclusion, url: .html_url, runAttempt: .run_attempt, repository: .repository.full_name, path}')"
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
 
   preview_plugin_pack:
@@ -338,14 +394,14 @@ jobs:
         plugin: ${{ fromJson(github.event_name == 'workflow_dispatch' && inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
           fetch-depth: 1
 
       - name: Checkout trusted packaging tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
@@ -358,6 +414,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
@@ -616,7 +673,7 @@ jobs:
         plugin: ${{ fromJson(inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout trusted npm preflight tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
@@ -657,7 +714,7 @@ jobs:
           artifacts_json="${RUNNER_TEMP}/${EXTENSION_ID}-artifacts.json"
           gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" |
-            jq -s '{artifacts: [.[].artifacts[]]}' > "${artifacts_json}"
+            jq -s '{artifacts: [.[].artifacts[]] | unique_by(.id)}' > "${artifacts_json}"
           artifact_count="$(
             jq --arg name "${ARTIFACT_NAME}" \
               '[.artifacts[] | select(.name == $name and .expired == false)] | length' \
@@ -1028,14 +1085,14 @@ jobs:
       id-token: write
     steps:
       - name: Checkout trusted OIDC preflight tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1
 
       - name: Setup trusted Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -1082,14 +1139,14 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout trusted publication tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1
 
       - name: Setup trusted Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -1103,6 +1160,11 @@ jobs:
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
           PUBLISH_TAG: ${{ matrix.plugin.publishTag }}
+          RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active' || 'manual-recovery') || '' }}
+          RELEASE_PUBLISH_REF: ${{ inputs.release_publish_branch }}
+          RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
           TARGET_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
           WORKFLOW_HEAD_BRANCH: ${{ github.ref_name }}
           WORKFLOW_REF: ${{ github.ref }}
@@ -1161,24 +1223,16 @@ jobs:
             exit 1
           }
           if [[ "$publish_route" == "npm-token-bootstrap" ]]; then
-            sha_pinned_release_publish=false
-            if [[ "$WORKFLOW_REF" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
-              workflow_sha_prefix="${BASH_REMATCH[1]}"
-              [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ && "${WORKFLOW_SHA:0:12}" == "$workflow_sha_prefix" ]] || {
-                echo "npm token bootstrap release-publish tag does not match the workflow SHA." >&2
-                exit 1
-              }
-              sha_pinned_release_publish=true
-            fi
-            [[ "$WORKFLOW_REF" == "refs/heads/main" || "$sha_pinned_release_publish" == "true" ]] || {
-              echo "npm token bootstrap requires trusted main tooling or a protected SHA-pinned release-publish tag." >&2
-              exit 1
-            }
-            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-            git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
-              echo "npm token bootstrap workflow revision is not reachable from current main." >&2
-              exit 1
-            }
+            node scripts/release-tooling-identity.mjs verify \
+              --repository "$GITHUB_REPOSITORY" \
+              --workflow-ref "$WORKFLOW_HEAD_BRANCH" \
+              --workflow-full-ref "$WORKFLOW_REF" \
+              --workflow-sha "$WORKFLOW_SHA" \
+              --release-publish-run-id "$RELEASE_PUBLISH_RUN_ID" \
+              --release-publish-run-attempt "$RELEASE_PUBLISH_RUN_ATTEMPT" \
+              --release-publish-ref "$RELEASE_PUBLISH_REF" \
+              --release-publish-full-ref "$RELEASE_PUBLISH_FULL_REF" \
+              --release-publish-parent-state-policy "$RELEASE_PUBLISH_PARENT_STATE_POLICY"
           fi
           artifact_id="$(jq -er '.id' "$artifact_metadata")"
           artifact_digest="$(jq -er '.digest' "$artifact_metadata")"
@@ -1270,12 +1324,13 @@ jobs:
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' || steps.publication_evidence.outputs.publish_route == 'npm-readback'
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
       - name: Checkout OIDC publication target
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
@@ -1286,6 +1341,7 @@ jobs:
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
@@ -1307,8 +1363,20 @@ jobs:
       - name: Publish with trusted publisher
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc' && steps.npm_package_version.outputs.already_published != 'true'
         env:
+          GH_TOKEN: ${{ github.token }}
           OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
           OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
+          OPENCLAW_RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          OPENCLAW_RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          OPENCLAW_RELEASE_PUBLISH_REF: ${{ inputs.release_publish_branch }}
+          OPENCLAW_RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
+          OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active' || 'manual-recovery') || '' }}
+          OPENCLAW_RELEASE_TOOLING_ALLOW_PREVALIDATED_REF: "true"
+          OPENCLAW_RELEASE_TOOLING_FULL_REF: ${{ github.ref }}
+          OPENCLAW_RELEASE_TOOLING_IDENTITY_REQUIRED: "true"
+          OPENCLAW_RELEASE_TOOLING_REF: ${{ github.ref_name }}
+          OPENCLAW_RELEASE_TOOLING_REPOSITORY: ${{ github.repository }}
+          OPENCLAW_RELEASE_TOOLING_SHA: ${{ github.workflow_sha }}
         run: bash scripts/plugin-npm-publish.sh --repo-root .publication-target --publish "${{ matrix.plugin.packageDir }}"
 
       - name: Verify OIDC published runtime
@@ -1368,12 +1436,21 @@ jobs:
       - name: Publish approved bootstrap tarball
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' && steps.bootstrap_npm_package_version.outputs.already_published != 'true'
         env:
+          GH_TOKEN: ${{ github.token }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
           PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
           PUBLISH_TAG: ${{ steps.publication_evidence.outputs.publish_tag }}
+          RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active' || 'manual-recovery') || '' }}
+          RELEASE_PUBLISH_REF: ${{ inputs.release_publish_branch }}
+          RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
           TARBALL_PATH: ${{ steps.publication_evidence.outputs.tarball_path }}
+          WORKFLOW_FULL_REF: ${{ github.ref }}
+          WORKFLOW_REF: ${{ github.ref_name }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           [[ "$PACKAGE_VERSION" == *"-beta."* && "$PUBLISH_TAG" == "beta" ]] || {
@@ -1399,6 +1476,16 @@ jobs:
           unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS
           # A timeout can race a committed publish. On rerun, the preceding check
           # accepts only this tarball's exact integrity and shasum before skipping.
+          node scripts/release-tooling-identity.mjs verify \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-ref "$WORKFLOW_REF" \
+            --workflow-full-ref "$WORKFLOW_FULL_REF" \
+            --workflow-sha "$WORKFLOW_SHA" \
+            --release-publish-run-id "$RELEASE_PUBLISH_RUN_ID" \
+            --release-publish-run-attempt "$RELEASE_PUBLISH_RUN_ATTEMPT" \
+            --release-publish-ref "$RELEASE_PUBLISH_REF" \
+            --release-publish-full-ref "$RELEASE_PUBLISH_FULL_REF" \
+            --release-publish-parent-state-policy "$RELEASE_PUBLISH_PARENT_STATE_POLICY"
           HOME="$publish_home" \
             NPM_CONFIG_GLOBALCONFIG=/dev/null \
             NPM_CONFIG_IGNORE_SCRIPTS=true \
@@ -1453,7 +1540,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.all_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
@@ -1462,6 +1549,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 

@@ -1,13 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { FailoverReason } from "../failover/signal.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
+import type { ModelFallbackRunOptions } from "../model-fallback-attempt.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
-
-type CandidateOptions = {
-  allowTransientCooldownProbe?: boolean;
-  isFinalFallbackAttempt?: boolean;
-  onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
-};
 
 type FallbackRunnerParams = {
   provider: string;
@@ -47,9 +43,33 @@ type FallbackRunnerParams = {
   run: (
     provider: string,
     model: string,
-    options?: CandidateOptions,
+    options: ModelFallbackRunOptions,
   ) => Promise<EmbeddedAgentRunResult>;
 };
+
+function initialAttemptOptions(params: FallbackRunnerParams): ModelFallbackRunOptions {
+  return {
+    modelRoutingProvenance: {
+      requestedProvider: params.provider,
+      requestedModel: params.model,
+      stage: "initial",
+    },
+  };
+}
+
+function fallbackAttemptOptions(
+  params: FallbackRunnerParams,
+  fallbackReason: FailoverReason,
+): ModelFallbackRunOptions {
+  return {
+    modelRoutingProvenance: {
+      requestedProvider: params.provider,
+      requestedModel: params.model,
+      stage: "fallback",
+      fallbackReason,
+    },
+  };
+}
 
 const state = vi.hoisted(() => ({
   runWithModelFallback: vi.fn(),
@@ -189,6 +209,7 @@ describe("runEmbeddedAgentEntry", () => {
           ),
         });
         const primaryResult = await params.run(params.provider, params.model, {
+          ...initialAttemptOptions(params),
           allowTransientCooldownProbe: true,
         });
         const classification = await params.classifyResult?.({
@@ -210,6 +231,7 @@ describe("runEmbeddedAgentEntry", () => {
           ),
         });
         const result = await params.run(fallbackProvider, fallbackModel, {
+          ...fallbackAttemptOptions(params, "format"),
           isFinalFallbackAttempt: true,
         });
         return {
@@ -243,7 +265,7 @@ describe("runEmbeddedAgentEntry", () => {
       const result = await runEmbeddedAgentEntry({
         selection: { cfg, provider: "primary-provider", model: "primary-model" },
         identity: {
-          runId: `run-${behavior}`,
+          runId: "run-shared-fallback",
           agentId: "main",
           sessionId: "session-1",
         },
@@ -278,6 +300,39 @@ describe("runEmbeddedAgentEntry", () => {
             provider,
             model,
             classification: options.isFallbackRetry ? undefined : "empty",
+            meta: options.isFallbackRetry
+              ? {
+                  executionTrace: {
+                    winnerProvider: provider,
+                    winnerModel: model,
+                    attempts: [
+                      {
+                        provider,
+                        model,
+                        result: "same_model_rate_limit",
+                        reason: "rate_limit",
+                      },
+                      { provider, model, result: "success" },
+                    ],
+                    fallbackUsed: false,
+                    runner: "embedded",
+                  },
+                  agentMeta: {
+                    sessionId: "session-1",
+                    provider,
+                    model,
+                    terminalReceipt: {
+                      runId: "run-shared-fallback",
+                      sessionId: "session-1",
+                      turnId: "turn-1",
+                      requested: { provider, model },
+                      effective: { provider, model, responseModel: model },
+                      successfulToolNames: [],
+                      rerouted: false,
+                    },
+                  },
+                }
+              : undefined,
           });
         },
       });
@@ -295,6 +350,38 @@ describe("runEmbeddedAgentEntry", () => {
     expect(channel.result.model).toBe("fallback-model");
     expect(channel.result.attempts).toEqual(command.result.attempts);
     expect(channel.result.terminal).toEqual(command.result.terminal);
+    expect(channel.result.result.meta.executionTrace).toEqual({
+      winnerProvider: "fallback-provider",
+      winnerModel: "fallback-model",
+      attempts: [
+        {
+          provider: "primary-provider",
+          model: "primary-model",
+          result: "candidate_failed",
+          reason: "format",
+        },
+        {
+          provider: "fallback-provider",
+          model: "fallback-model",
+          result: "same_model_rate_limit",
+          reason: "rate_limit",
+        },
+        { provider: "fallback-provider", model: "fallback-model", result: "success" },
+      ],
+      fallbackUsed: true,
+      runner: "embedded",
+    });
+    expect(channel.result.result.meta.agentMeta?.terminalReceipt).toMatchObject({
+      requested: { provider: "primary-provider", model: "primary-model" },
+      effective: { provider: "fallback-provider", model: "fallback-model" },
+      rerouted: true,
+    });
+    expect(channel.result.terminal.metadata.terminalReceipt).toMatchObject({
+      requested: { provider: "primary-provider", model: "primary-model" },
+      effective: { provider: "fallback-provider", model: "fallback-model" },
+      rerouted: true,
+      terminalDisposition: "not-visible",
+    });
     expect(channel.candidateLeases[0]).toBe(channel.candidateLeases[1]);
     expect(state.selectAgentHarness).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -384,7 +471,7 @@ describe("runEmbeddedAgentEntry", () => {
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       expect(params.classifyResult).toBeUndefined();
       expect(params.mergeExhaustedResult).toBeUndefined();
-      const result = await params.run(params.provider, params.model);
+      const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
       return {
         outcome: "completed" as const,
         result,
@@ -447,7 +534,7 @@ describe("runEmbeddedAgentEntry", () => {
 
   it("accepts an empty result after a committed side effect and finalizes it once", async () => {
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
+      const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
       expect(
         params.classifyResult?.({
           result,
@@ -487,8 +574,16 @@ describe("runEmbeddedAgentEntry", () => {
 
   it("does not finalize any candidate when fallback is exhausted", async () => {
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const preferredResult = await params.run(params.provider, params.model);
-      const latestResult = await params.run("fallback-provider", "fallback-model");
+      const preferredResult = await params.run(
+        params.provider,
+        params.model,
+        initialAttemptOptions(params),
+      );
+      const latestResult = await params.run(
+        "fallback-provider",
+        "fallback-model",
+        fallbackAttemptOptions(params, "unknown"),
+      );
       return {
         outcome: "exhausted" as const,
         result: params.mergeExhaustedResult?.({ latestResult, preferredResult }) ?? latestResult,
@@ -534,7 +629,7 @@ describe("runEmbeddedAgentEntry", () => {
     },
   ])("does not finalize a $label candidate", async ({ meta }) => {
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
+      const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
       return {
         outcome: "completed" as const,
         result,
@@ -567,7 +662,7 @@ describe("runEmbeddedAgentEntry", () => {
   it("does not finalize a candidate when classification throws", async () => {
     const classificationError = new Error("classification failed");
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
+      const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
       params.classifyResult?.({
         result,
         provider: params.provider,
@@ -611,7 +706,9 @@ describe("runEmbeddedAgentEntry", () => {
       // Mirror the fallback loop's thrown-error exit: the attempt error bypasses
       // result classification, so the error-path backstop is the only guard that
       // can stop the next candidate from replaying the delivered turn.
-      await expect(params.run(params.provider, params.model)).rejects.toBe(failure);
+      await expect(
+        params.run(params.provider, params.model, initialAttemptOptions(params)),
+      ).rejects.toBe(failure);
       const allowed = await params.canFallbackAfterError?.({
         provider: params.provider,
         model: params.model,
@@ -654,7 +751,9 @@ describe("runEmbeddedAgentEntry", () => {
   it("still falls back when a thrown channel-delivery attempt delivered nothing", async () => {
     const failure = new Error("insufficient quota");
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await expect(params.run(params.provider, params.model)).rejects.toBe(failure);
+      await expect(
+        params.run(params.provider, params.model, initialAttemptOptions(params)),
+      ).rejects.toBe(failure);
       const allowed = await params.canFallbackAfterError?.({
         provider: params.provider,
         model: params.model,
@@ -666,6 +765,7 @@ describe("runEmbeddedAgentEntry", () => {
       const fallbackProvider = "fallback-provider";
       const fallbackModel = "fallback-model";
       const result = await params.run(fallbackProvider, fallbackModel, {
+        ...fallbackAttemptOptions(params, "billing"),
         isFinalFallbackAttempt: true,
       });
       return {
@@ -717,7 +817,7 @@ describe("runEmbeddedAgentEntry", () => {
 
   it("retains non-visible follow-up results for terminal delivery", async () => {
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
+      const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
       expect(
         params.classifyResult?.({
           result,
@@ -775,6 +875,11 @@ describe("runEmbeddedAgentEntry", () => {
       expected: { disposition: "silent" },
     },
     {
+      name: "normalized silence without raw text",
+      meta: { finalAssistantVisibleText: "no_reply" },
+      expected: { disposition: "silent" },
+    },
+    {
       name: "clean empty reply",
       meta: {},
       expected: { disposition: "empty" },
@@ -783,7 +888,7 @@ describe("runEmbeddedAgentEntry", () => {
     const runId = `terminal-${name}`;
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       outcome: "completed" as const,
-      result: await params.run(params.provider, params.model),
+      result: await params.run(params.provider, params.model, initialAttemptOptions(params)),
       provider: params.provider,
       model: params.model,
       attempts: [],

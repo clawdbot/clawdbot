@@ -4,7 +4,7 @@ import { asSchemaObject, type ConfigJsonSchemaObject } from "./schema.shared.js"
 const ROOT_TIER_PATHS = `
 accessGroups acp agents approvals attachments auth bindings broadcast browser channels
 cloudWorkers commands cron desktop diagnostics discovery env gateway hooks logging mcp memory messages
-meta models nodeHost plugins proxy secrets security session skills surfaces talk tools transcripts
+meta models nodeHost plugins proxy secrets security session skills surfaces talk telemetry tools transcripts
 tts ui update wizard
 `
   .trim()
@@ -159,7 +159,7 @@ tools.media.models.*.request.auth.token tools.profile tools.sessions
 tools.web transcripts.enabled
 tts.auto tts.persona tts.personas.*.providers.*.apiKey tts.provider
 tts.providers.* tts.providers.*.apiKey
-ui.assistant.avatar ui.assistant.name ui.prefs.chatFollowUpMode
+ui.prefs.accent ui.prefs.chatFollowUpMode
 ui.prefs.chatPersistCommentary ui.prefs.chatSendShortcut ui.prefs.chatShowThinking
 ui.prefs.chatShowToolCalls ui.prefs.locale
 ui.prefs.theme ui.prefs.themeMode update.auto.enabled update.channel

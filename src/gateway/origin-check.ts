@@ -1,7 +1,6 @@
 // Browser Origin validator for gateway HTTP and websocket requests.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
-import { isPrivateOrLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -10,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isLocalDirectRequest,
   isLoopbackHost,
+  isPrivateOrLoopbackAddress,
   normalizeHostHeader,
   resolveHostName,
 } from "./net.js";
@@ -170,7 +170,7 @@ function isTrustedSameOriginHost(hostHeader: string, isLocalClient?: boolean): b
     return isLocalClient !== false;
   }
   if (net.isIP(hostname) !== 0) {
-    return isPrivateOrLoopbackIpAddress(hostname);
+    return isPrivateOrLoopbackAddress(hostname);
   }
   return hostname.endsWith(".local") || hostname.endsWith(".ts.net");
 }

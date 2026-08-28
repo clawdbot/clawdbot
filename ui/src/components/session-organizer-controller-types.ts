@@ -17,12 +17,13 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
     | "isSessionMutationScopeCurrent"
     | "publishSessionMutationError"
     | "refreshSidebarSessions"
-    | "resetForStatusFilter"
+    | "resetSessionList"
     | "sessionMutationError"
   >;
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
   sessionsGrouping: SidebarSessionsGrouping;
   sessionsShowCron: boolean;
+  sessionsShowPreview: boolean;
   sessionsShowSystem: boolean;
   sessionsStatusFilter: SidebarSessionStatusFilter;
   clearSessionSelection(): void;

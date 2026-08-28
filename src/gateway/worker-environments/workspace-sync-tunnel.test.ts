@@ -74,6 +74,10 @@ describe("worker tunnel manager", () => {
           localPath,
           sessionId: "session:one",
           generation: 7,
+          gitAuthor: {
+            name: "roboclaw-bot",
+            email: "42+roboclaw-bot@users.noreply.github.com",
+          },
         }),
       ).resolves.toEqual({ mode: "git", remoteWorkspaceDir, manifestRef });
 
@@ -96,6 +100,12 @@ describe("worker tunnel manager", () => {
         entry.argv.at(-1)?.includes("worker workspace symlink escapes"),
       );
       expect(manifest?.argv.at(-1)).toContain(commit);
+      const gitSetup = fake.runs.find(
+        (entry) =>
+          entry.argv.join("\0").includes(remoteWorkspaceDir) &&
+          entry.argv.join("\0").includes("42+roboclaw-bot@users.noreply.github.com"),
+      );
+      expect(gitSetup?.argv.join("\0")).toContain("roboclaw-bot");
     } finally {
       await handle.stop();
       await fs.rm(localPath, { recursive: true });
@@ -193,7 +203,6 @@ describe("worker tunnel manager", () => {
       expect(ports).toEqual(expect.arrayContaining([2222, 22]));
       expect(new Set(ports)).toEqual(new Set([2222, 22]));
       const transfers = freshConnections.filter((entry) => entry.argv[0] === "rsync");
-      expect(transfers).toHaveLength(2);
       expect(transfers.map((entry) => rsyncReceiverNonce(entry.argv))).toEqual([
         expect.stringMatching(/^[a-f0-9]{32}$/u),
         expect.stringMatching(/^[a-f0-9]{32}$/u),

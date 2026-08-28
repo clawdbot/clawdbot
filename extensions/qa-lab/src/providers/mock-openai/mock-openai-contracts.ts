@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { writeJson } from "../shared/http-json.js";
 
@@ -370,6 +371,7 @@ export type MockScenarioState = {
   subagentFanoutCompletedWorkers: Set<"alpha" | "beta">;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
+  repeatedRequestRecoveryAttempts: number;
   toolLoopReadAttempts: number;
 };
 
@@ -408,9 +410,7 @@ export function readBody(req: IncomingMessage): Promise<string> {
 export function parseJsonObjectBody(raw: string): Record<string, unknown> | null {
   try {
     const parsed = raw ? (JSON.parse(raw) as unknown) : {};
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
+    return asNullableRecord(parsed);
   } catch {
     return null;
   }

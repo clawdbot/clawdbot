@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,6 +20,11 @@ vi.mock("../agent-scope.js", () => ({
   resolveAutoFallbackPrimaryProbe: () => undefined,
   resolveAgentConfig: () => undefined,
   resolveAgentEffectiveModelPrimary: () => undefined,
+}));
+vi.mock("../../auto-reply/thinking.js", () => ({
+  formatThinkingLevels: () => "",
+  isThinkingLevelSupported: () => true,
+  normalizeThinkLevel: (value: string | undefined) => value,
 }));
 vi.mock("../../channels/model-overrides.js", () => ({
   resolveChannelModelOverride: (params: {
@@ -47,6 +52,9 @@ vi.mock("../../channels/model-overrides.js", () => ({
       ? { channel, model, matchKey: matchKey ?? "*", matchSource: matchKey ? "exact" : "wildcard" }
       : null;
   },
+}));
+vi.mock("../../utils/message-channel.js", () => ({
+  isDeliverableMessageChannel: (value: string) => value !== "internal",
 }));
 
 vi.mock("../auth-profiles/order.js", () => ({
@@ -130,7 +138,12 @@ vi.mock("./model-ref.js", () => ({
     provider,
     model,
   }),
-  parseAgentCommandModelRef: (_cfg: OpenClawConfig, raw: string, defaultProvider: string) => {
+  parseAgentCommandModelRef: (
+    _cfg: OpenClawConfig,
+    _agentId: string,
+    raw: string,
+    defaultProvider: string,
+  ) => {
     const slash = raw.indexOf("/");
     return slash > 0
       ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
@@ -151,7 +164,12 @@ vi.mock("./runtime-loaders.js", () => ({
 
 const { resolveEmbeddedModelSelection } = await import("./model-selection.js");
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+let suiteTempRoot = "";
+
+beforeAll(() => {
+  suiteTempRoot = tempDirs.make("turn-model-command-");
+});
 
 function createConfig(fixture: TurnModelDifferentialFixture): OpenClawConfig {
   return {
@@ -161,6 +179,7 @@ function createConfig(fixture: TurnModelDifferentialFixture): OpenClawConfig {
 }
 
 async function observeCommandSelection(fixture: TurnModelDifferentialFixture) {
+  const fixtureIndex = TURN_MODEL_DIFFERENTIAL_FIXTURES.indexOf(fixture);
   const sessionKey = "agent:main:telegram:group:selection";
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: fixture.child };
   if (fixture.parent) {
@@ -194,9 +213,9 @@ async function observeCommandSelection(fixture: TurnModelDifferentialFixture) {
     sessionStore,
     sessionKey,
     sessionId: fixture.child.sessionId,
-    storePath: path.join(tempDirs.make("turn-model-command-"), "sessions.json"),
+    storePath: path.join(suiteTempRoot, `sessions-${fixtureIndex}.json`),
     sessionAgentId: "main",
-    workspaceDir: tempDirs.make("turn-model-command-workspace-"),
+    workspaceDir: suiteTempRoot,
     pluginsEnabled: false,
     modelManifestContext: {},
     configuredThinkingCatalog: [],

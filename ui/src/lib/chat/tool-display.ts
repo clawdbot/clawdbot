@@ -9,7 +9,7 @@ import {
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "../../../../src/agents/tool-display-common.js";
 import type { ToolDetailMode } from "../../../../src/agents/tool-display-exec.js";
-import type { ControlUiEmbedSandboxMode } from "../../../../src/gateway/control-ui-contract.js";
+import type { ControlUiEmbedSandboxMode } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
 
 const A2UI_PATH = "/__openclaw__/a2ui";
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";

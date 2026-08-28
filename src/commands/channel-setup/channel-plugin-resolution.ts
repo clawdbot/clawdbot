@@ -5,7 +5,7 @@ import {
   listRawChannelPluginCatalogEntries,
   type ChannelPluginCatalogEntry,
 } from "../../channels/plugins/catalog.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -118,11 +118,28 @@ export async function resolveInstallableChannelPlugin(params: {
   channelId?: ChannelId;
   agentId?: string;
   allowInstall?: boolean;
+  preferRegisteredPlugin?: boolean;
   prompter?: WizardPrompter;
   supports?: (plugin: ChannelPlugin) => boolean;
 }): Promise<ResolveInstallableChannelPluginResult> {
   const supports = params.supports ?? (() => true);
   let nextCfg = params.cfg;
+  const directChannelId = params.channelId ?? normalizeChannelId(params.rawChannel);
+  const registeredPlugin =
+    params.preferRegisteredPlugin && directChannelId
+      ? getLoadedChannelPlugin(directChannelId)
+      : undefined;
+  if (params.preferRegisteredPlugin && directChannelId && registeredPlugin) {
+    return {
+      cfg: nextCfg,
+      channelId: directChannelId,
+      plugin: registeredPlugin,
+      configChanged: false,
+      pluginInstalled: false,
+      supportsRequestedCapability: supports(registeredPlugin),
+    };
+  }
+
   const workspaceDir = resolveWorkspaceDir(nextCfg, params.agentId);
   const catalogEntry =
     (params.rawChannel
@@ -135,7 +152,7 @@ export async function resolveInstallableChannelPlugin(params: {
         })
       : undefined);
   const channelId =
-    params.channelId ??
+    directChannelId ??
     resolveResolvedChannelId({
       rawChannel: params.rawChannel,
       catalogEntry,
@@ -149,7 +166,9 @@ export async function resolveInstallableChannelPlugin(params: {
     };
   }
 
-  const existing = getChannelPlugin(channelId);
+  // Bundled plugin metadata is not runtime-bound; load it through the scoped registry
+  // before returning a plugin that callers can execute.
+  const existing = getLoadedChannelPlugin(channelId);
   if (existing) {
     return {
       cfg: nextCfg,

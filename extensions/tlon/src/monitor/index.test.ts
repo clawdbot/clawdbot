@@ -1,7 +1,12 @@
 // Tlon monitor tests cover authentication, inbound context, and shutdown lifecycle.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { join } from "node:path";
+import { setImmediate } from "node:timers/promises";
+import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -47,7 +52,9 @@ const {
       dmScope: "main",
       sessionKey: "agent:main:main",
     })),
-    resolveEffectiveMessagesConfig: vi.fn(() => ({ responsePrefix: undefined })),
+    resolveEffectiveMessagesConfig: vi.fn((_cfg: OpenClawConfig, _agentId: string) => ({
+      responsePrefix: undefined as string | undefined,
+    })),
     shouldComputeCommandAuthorized: vi.fn(() => false),
   },
   settingsManagerMock: {
@@ -56,6 +63,7 @@ const {
     startSubscription: vi.fn().mockResolvedValue(undefined),
   },
   realUrbitFixture: {
+    config: undefined as OpenClawConfig | undefined,
     enabled: false,
     url: "https://urbit.example.com",
     client: null as {
@@ -89,17 +97,19 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
 vi.mock("../runtime.js", () => ({
   getTlonRuntime: () => ({
     config: {
-      current: () => ({
-        channels: {
-          tlon: {
-            code: "code",
-            ship: "~zod",
-            url: realUrbitFixture.url,
-            network: { dangerouslyAllowPrivateNetwork: true },
-            ownerShip: "~nec",
+      current: () =>
+        realUrbitFixture.config ?? {
+          channels: {
+            tlon: {
+              code: "code",
+              ship: "~zod",
+              url: realUrbitFixture.url,
+              network: { dangerouslyAllowPrivateNetwork: true },
+              ownerShip: "~nec",
+              mediaMaxMb: 1 / 1024,
+            },
           },
         },
-      }),
     },
     logging: {
       getChildLogger: () => ({}),
@@ -156,7 +166,12 @@ beforeEach(() => {
   createChannelInboundEnvelopeBuilderMock.mockReturnValue(buildChannelInboundEnvelopeMock);
   buildChannelInboundEnvelopeMock.mockReturnValue("tlon-envelope");
   formatInboundMediaUnavailableTextMock.mockReturnValue("formatted-inbound-body");
-  inboundRuntimeMock.buildContext.mockReturnValue(builtInboundContextPayload);
+  inboundRuntimeMock.buildContext.mockReset().mockReturnValue(builtInboundContextPayload);
+  inboundRuntimeMock.dispatch.mockReset().mockResolvedValue(undefined);
+  inboundRuntimeMock.resolveEffectiveMessagesConfig
+    .mockReset()
+    .mockReturnValue({ responsePrefix: undefined });
+  ingressMock.receive.mockReset().mockResolvedValue({ kind: "accepted" });
 });
 
 afterEach(async () => {
@@ -169,6 +184,7 @@ afterEach(async () => {
     await realClient.close().catch(() => undefined);
   }
   realUrbitFixture.enabled = false;
+  realUrbitFixture.config = undefined;
   realUrbitFixture.url = "https://urbit.example.com";
   realUrbitFixture.client = null;
   await Promise.all(
@@ -198,6 +214,341 @@ describe("monitorTlonProvider authentication retry", () => {
 
     expect(authenticateMock).toHaveBeenCalledTimes(1);
     expect(sleepWithAbortMock).toHaveBeenCalledWith(1_000, controller.signal);
+  });
+});
+
+it("awaits cumulative Tlon discovery persistence and retries failed writes", async () => {
+  const controller = new AbortController();
+  const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+  authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+  settingsManagerMock.load.mockResolvedValueOnce({
+    groupChannels: ["chat/~zod/base"],
+    autoAcceptGroupInvites: true,
+  });
+
+  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  try {
+    await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
+    const groupSubscription = sseClientMock.subscribe.mock.calls
+      .map(([subscription]) => subscription)
+      .find(({ app, path }) => app === "groups" && path === "/groups/ui");
+    if (!groupSubscription) {
+      throw new Error("expected groups-ui subscription");
+    }
+
+    const firstResult = groupSubscription.event({
+      channels: {
+        "chat/~zod/a": {},
+        "chat/~zod/b": {},
+        "chat/~zod/base": {},
+      },
+      join: { channels: ["chat/~zod/b", "chat/~zod/c", "heap/~zod/no"] },
+    });
+    expect.soft(firstResult).toBeInstanceOf(Promise);
+    await firstResult;
+    await setImmediate();
+
+    sseClientMock.poke.mockRejectedValueOnce(new Error("settings write failed"));
+    const retryEvent = { join: { channels: ["chat/~zod/retry"] } };
+    await Promise.resolve(groupSubscription.event(retryEvent)).catch(() => undefined);
+    await setImmediate();
+    await groupSubscription.event(retryEvent);
+
+    expect(sseClientMock.poke).toHaveBeenCalledTimes(3);
+    expect(sseClientMock.poke.mock.calls[2]?.[0]).toMatchObject({
+      json: {
+        "put-entry": {
+          value: ["chat/~zod/base", "chat/~zod/a", "chat/~zod/b", "chat/~zod/c", "chat/~zod/retry"],
+        },
+      },
+    });
+  } finally {
+    controller.abort();
+    await monitor;
+  }
+});
+
+it.each([
+  { name: "owner", ship: "~nec", settings: {} },
+  {
+    name: "allowlisted",
+    ship: "~bus",
+    settings: { autoAcceptGroupInvites: true, groupInviteAllowlist: ["~bus"] },
+  },
+])("awaits $name group invite acceptance and retries failed writes", async ({ ship, settings }) => {
+  const controller = new AbortController();
+  const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+  authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+  settingsManagerMock.load.mockResolvedValueOnce(settings);
+
+  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  try {
+    await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
+    const foreignsSubscription = sseClientMock.subscribe.mock.calls
+      .map(([subscription]) => subscription)
+      .find(({ app, path }) => app === "groups" && path === "/v1/foreigns");
+    if (!foreignsSubscription) {
+      throw new Error("expected foreigns subscription");
+    }
+    sseClientMock.poke.mockClear();
+
+    let releaseWrite = () => {};
+    sseClientMock.poke.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseWrite = resolve;
+        }),
+    );
+    let settled = false;
+    const firstResult = foreignsSubscription.event({
+      [`${ship}/first`]: { invites: [{ valid: true, from: ship }] },
+    });
+    expect(firstResult).toBeInstanceOf(Promise);
+    const firstProcessing = Promise.resolve(firstResult).then(() => {
+      settled = true;
+    });
+    await setImmediate();
+    expect(sseClientMock.poke).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+
+    releaseWrite();
+    await firstProcessing;
+    expect(settled).toBe(true);
+
+    sseClientMock.poke.mockRejectedValueOnce(new Error("group join failed"));
+    const retryEvent = {
+      [`${ship}/retry`]: { invites: [{ valid: true, from: ship }] },
+    };
+    await expect(foreignsSubscription.event(retryEvent)).rejects.toThrow("group join failed");
+    await foreignsSubscription.event(retryEvent);
+
+    expect(sseClientMock.poke).toHaveBeenCalledTimes(3);
+    expect(sseClientMock.poke.mock.calls[2]?.[0]).toMatchObject({
+      app: "groups",
+      mark: "group-join",
+      json: { flag: `${ship}/retry`, "join-all": true },
+    });
+  } finally {
+    controller.abort();
+    await monitor;
+  }
+});
+
+it.each([
+  { name: "owner", ship: "~nec", settings: {} },
+  {
+    name: "allowlisted",
+    ship: "~bus",
+    settings: { autoAcceptDmInvites: true, dmAllowlist: ["~bus"] },
+  },
+])(
+  "retries failed $name DM invite acceptance before acknowledgement",
+  async ({ ship, settings }) => {
+    const controller = new AbortController();
+    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+    authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+    settingsManagerMock.load.mockResolvedValueOnce(settings);
+
+    const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+    try {
+      await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
+      const chatSubscription = sseClientMock.subscribe.mock.calls
+        .map(([subscription]) => subscription)
+        .find(({ app, path }) => app === "chat" && path === "/v3");
+      if (!chatSubscription) {
+        throw new Error("expected chat subscription");
+      }
+      sseClientMock.poke.mockClear();
+      ingressMock.receive
+        .mockResolvedValueOnce({ kind: "ignored" })
+        .mockResolvedValueOnce({ kind: "ignored" });
+
+      const inviteEvent = [{ ship }];
+      sseClientMock.poke.mockRejectedValueOnce(new Error("DM invite write failed"));
+      await expect(chatSubscription.event(inviteEvent)).rejects.toThrow("DM invite write failed");
+      await chatSubscription.event(inviteEvent);
+
+      expect(sseClientMock.poke).toHaveBeenCalledTimes(2);
+      expect(sseClientMock.poke.mock.calls[1]?.[0]).toMatchObject({
+        app: "chat",
+        mark: "chat-dm-rsvp",
+        json: { ship, ok: true },
+      });
+    } finally {
+      controller.abort();
+      await monitor;
+    }
+  },
+);
+
+it("persists group invite approval before notification and acknowledgement", async () => {
+  const controller = new AbortController();
+  const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+  authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+
+  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  try {
+    await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
+    const foreignsSubscription = sseClientMock.subscribe.mock.calls
+      .map(([subscription]) => subscription)
+      .find(({ app, path }) => app === "groups" && path === "/v1/foreigns");
+    if (!foreignsSubscription) {
+      throw new Error("expected foreigns subscription");
+    }
+    sseClientMock.poke.mockClear();
+
+    const inviteEvent = {
+      "~bus/private": { invites: [{ valid: true, from: "~bus" }] },
+    };
+    sseClientMock.poke.mockRejectedValueOnce(new Error("approval save failed"));
+    await expect(foreignsSubscription.event(inviteEvent)).rejects.toThrow("approval save failed");
+    await foreignsSubscription.event(inviteEvent);
+
+    const pendingWrites = sseClientMock.poke.mock.calls.filter(
+      ([payload]) => payload.json?.["put-entry"]?.["entry-key"] === "pendingApprovals",
+    );
+    expect(pendingWrites).toHaveLength(2);
+    expect(sseClientMock.poke).toHaveBeenCalledTimes(3);
+    expect(sseClientMock.poke.mock.calls[2]?.[0]).toMatchObject({
+      app: "chat",
+      mark: "chat-dm-action",
+    });
+  } finally {
+    controller.abort();
+    await monitor;
+  }
+});
+
+it("continues startup after an initial group invite write fails", async () => {
+  const controller = new AbortController();
+  const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+  authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+  settingsManagerMock.load.mockResolvedValueOnce({
+    autoAcceptGroupInvites: true,
+    autoDiscoverChannels: true,
+  });
+  sseClientMock.scry.mockImplementation(async (path) =>
+    path === "/groups-ui/v6/init.json"
+      ? {
+          foreigns: {
+            "~nec/startup": { invites: [{ valid: true, from: "~nec" }] },
+          },
+        }
+      : {},
+  );
+  sseClientMock.poke.mockImplementation(async (payload) => {
+    if (payload.mark === "group-join") {
+      throw new Error("initial group join failed");
+    }
+  });
+
+  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  try {
+    await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
+    expect(sseClientMock.subscribe.mock.calls.map(([subscription]) => subscription)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ app: "groups", path: "/v1/foreigns" })]),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("initial group join failed"),
+    );
+  } finally {
+    controller.abort();
+    await monitor;
+    sseClientMock.scry.mockReset().mockResolvedValue({});
+    sseClientMock.poke.mockReset().mockResolvedValue(undefined);
+  }
+});
+
+describe("monitorTlonProvider reply prefixes", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  it.for([
+    { name: "global fallback", root: undefined, account: undefined, expected: "[global] reply" },
+    { name: "channel override", root: "[root]", account: undefined, expected: "[root] reply" },
+    { name: "account override", root: "[root]", account: "[account]", expected: "[account] reply" },
+    { name: "empty account override", root: "[root]", account: "", expected: "reply" },
+    { name: "identity", root: "auto", account: undefined, expected: "[Test Bot] reply" },
+    {
+      name: "selected model",
+      root: "[{model}]",
+      account: undefined,
+      expected: "[gpt-5.6-luna] reply",
+    },
+  ])("delivers $name through the shared dispatcher", async (row, { signal }) => {
+    const { name, root, account, expected } = row;
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+      "openclaw/plugin-sdk/channel-inbound",
+    );
+    // A timed-out import must not install fixtures into a later test.
+    signal.throwIfAborted();
+    const stateDir = tempDirs.make("tlon-prefix-");
+    const controller = new AbortController();
+    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+    realUrbitFixture.config = {
+      session: { store: join(stateDir, "sessions.json") },
+      agents: { list: [{ id: "main", identity: { name: "Test Bot" } }] },
+      messages: { responsePrefix: "[global]" },
+      channels: {
+        tlon: {
+          code: "code",
+          ship: "~zod",
+          url: realUrbitFixture.url,
+          ownerShip: "~nec",
+          responsePrefix: root,
+          accounts: { default: { responsePrefix: account } },
+          showModelSignature: true,
+        },
+      },
+    };
+    authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+    ingressMock.receive.mockResolvedValueOnce({ kind: "ignored" });
+    inboundRuntimeMock.buildContext.mockImplementationOnce(actual.buildChannelInboundEventContext);
+    inboundRuntimeMock.resolveEffectiveMessagesConfig.mockImplementationOnce((cfg, agentId) => ({
+      responsePrefix: createChannelMessageReplyPipeline({ cfg, agentId }).responsePrefix,
+    }));
+    inboundRuntimeMock.dispatch.mockImplementationOnce((params) =>
+      actual.dispatchChannelInboundTurn({
+        ...params,
+        // This test observes the native send boundary, not queue persistence.
+        delivery: { ...params.delivery, durable: false },
+        replyResolver: async (_ctx, options) => {
+          options?.onModelSelected?.({
+            provider: "openai",
+            model: "gpt-5.6-luna",
+            thinkLevel: "off",
+          });
+          return { text: "reply" };
+        },
+      }),
+    );
+    const monitor = monitorTlonProvider({
+      abortSignal: AbortSignal.any([controller.signal, signal]),
+      runtime,
+    });
+    try {
+      await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
+      const subscription = sseClientMock.subscribe.mock.calls
+        .map(([value]) => value)
+        .find((value) => value.app === "chat");
+      expect(subscription).toBeDefined();
+      await subscription.event({
+        whom: "~nec",
+        id: `dm-prefix-${name}`,
+        response: {
+          add: { essay: { author: "~nec", content: [{ inline: ["hello"] }], sent: Date.now() } },
+        },
+      });
+      const sends = sseClientMock.poke.mock.calls
+        .map(([value]) => value)
+        .filter((value) => value.mark === "chat-dm-action");
+      expect(sends).toHaveLength(1);
+      const text = extractMessageText(sends[0].json.diff.delta.add.memo.content);
+      expect(text.split("\n")[0]).toBe(expected);
+      expect(text).toContain("Generated by");
+      expect(runtime.error).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      await monitor;
+    }
   });
 });
 
@@ -287,6 +638,7 @@ describe("monitorTlonProvider inbound media truth", () => {
                 code: "code",
                 network: { dangerouslyAllowPrivateNetwork: true },
                 ownerShip: "~nec",
+                mediaMaxMb: 1 / 1024,
                 ship: "~zod",
                 url: "https://urbit.example.com",
               },
@@ -324,6 +676,9 @@ describe("monitorTlonProvider inbound media truth", () => {
         });
         expect(contextInput.extra.Attachments).toHaveLength(expectedAttachments);
         expect(contextInput.extra.Attachments).toEqual(expectedMedia);
+        expect(saveRemoteMediaMock).toHaveBeenCalledWith(
+          expect.objectContaining({ maxBytes: 1024 }),
+        );
 
         expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
         const dispatchCall = inboundRuntimeMock.dispatch.mock.calls[0];

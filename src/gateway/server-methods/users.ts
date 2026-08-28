@@ -3,21 +3,18 @@ import {
   ErrorCodes,
   GatewayErrorDetailCodes,
   errorShape,
-  formatValidationErrors,
   validateUsersLinkEmailParams,
-  validateUsersClearGitHubIdentityParams,
   validateUsersListParams,
   validateUsersPrefsGetParams,
   validateUsersPrefsSetParams,
   validateUsersSelfParams,
   validateUsersSetAvatarParams,
   validateUsersSetDisplayNameParams,
-  validateUsersSetGitHubIdentityParams,
+  validateUsersSetRoleParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
 import {
-  clearGitHubIdentity,
   ensureProfileForEmail,
   getUserProfileDisplay,
   getUserProfileListItem,
@@ -26,14 +23,17 @@ import {
   resolveUserProfileId,
   setAvatar,
   setDisplayName,
-  setGitHubIdentity,
-  UserProfileGitHubIdentityConflictError,
+  setUserProfileRole,
   UserProfileNotFoundError,
 } from "../../state/user-profiles.js";
-import { ControlUiGitHubError } from "../control-ui-github-api.js";
-import { resolveGitHubUserIdentity } from "../github-user-identity.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import {
+  authenticatedProfileUnavailableError,
+  isGatewayClientProfilePending,
+} from "./gateway-client-identity.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function refreshConnectedProfile(
   context: GatewayRequestHandlerOptions["context"],
@@ -59,41 +59,11 @@ function decodeBase64(value: string): Uint8Array | undefined {
   return Buffer.from(trimmed, "base64");
 }
 
-function invalidParams(name: string, errors: Parameters<typeof formatValidationErrors>[0]) {
-  return errorShape(
-    ErrorCodes.INVALID_REQUEST,
-    `invalid ${name} params: ${formatValidationErrors(errors)}`,
-  );
-}
-
 function profileError(error: unknown) {
-  if (error instanceof UserProfileGitHubIdentityConflictError) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, error.message);
-  }
   if (error instanceof UserProfileNotFoundError) {
     return errorShape(ErrorCodes.INVALID_REQUEST, error.message);
   }
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
-}
-
-function githubLookupError(error: unknown) {
-  if (error instanceof TypeError) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, error.message);
-  }
-  if (error instanceof ControlUiGitHubError) {
-    if (error.statusCode === 404) {
-      return errorShape(ErrorCodes.INVALID_REQUEST, "GitHub user not found");
-    }
-    if (error.statusCode === 429) {
-      return errorShape(ErrorCodes.UNAVAILABLE, "GitHub rate limit reached; try again later", {
-        retryable: true,
-      });
-    }
-    return errorShape(ErrorCodes.UNAVAILABLE, "GitHub user lookup is unavailable", {
-      retryable: true,
-    });
-  }
-  return profileError(error);
 }
 
 function resolveAuthenticatedProfileId(
@@ -101,6 +71,9 @@ function resolveAuthenticatedProfileId(
 ): string | undefined {
   if (client?.authenticatedUserProfile?.profileId) {
     return resolveUserProfileId(client.authenticatedUserProfile.profileId);
+  }
+  if (client?.authenticatedGitHubIdentitySync) {
+    return undefined;
   }
   const authenticatedUserId = client?.authenticatedUserId;
   if (!authenticatedUserId) {
@@ -148,15 +121,13 @@ function requireProfileMutationAccess(
 
 export const usersHandlers: GatewayRequestHandlers = {
   "users.list": ({ params, respond }) => {
-    if (!validateUsersListParams(params)) {
-      respond(false, undefined, invalidParams("users.list", validateUsersListParams.errors));
+    if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
       return;
     }
     respond(true, { profiles: listProfiles() });
   },
-  "users.self": ({ client, params, respond }) => {
-    if (!validateUsersSelfParams(params)) {
-      respond(false, undefined, invalidParams("users.self", validateUsersSelfParams.errors));
+  "users.self": async ({ client, params, respond }) => {
+    if (!assertValidParams(params, validateUsersSelfParams, "users.self", respond)) {
       return;
     }
     if (!client?.authenticatedUserId) {
@@ -168,13 +139,16 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      if (client.authenticatedGitHubIdentitySync) {
+        try {
+          await client.authenticatedGitHubIdentitySync();
+        } catch {
+          // A previously attached immutable profile stays usable; unresolved aliases stay hidden.
+        }
+      }
       const profileId = resolveAuthenticatedProfileId(client);
       if (!profileId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
-        );
+        respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
       respond(true, { profile: getUserProfileListItem(profileId) });
@@ -183,27 +157,22 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
   },
   "users.prefs.get": ({ client, params, respond }) => {
-    if (!validateUsersPrefsGetParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("users.prefs.get", validateUsersPrefsGetParams.errors),
-      );
+    if (!assertValidParams(params, validateUsersPrefsGetParams, "users.prefs.get", respond)) {
       return;
     }
     const profileId = client?.authenticatedUserProfile?.profileId ?? "";
     if (!profileId) {
+      if (isGatewayClientProfilePending(client)) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
       respond(true, { status: "no_durable_identity" }, undefined);
       return;
     }
     try {
       const canonicalProfileId = resolveUserProfileId(profileId);
       if (!canonicalProfileId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
-        );
+        respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
       respond(
@@ -215,28 +184,23 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.prefs.set": ({ client, params, respond }) => {
-    if (!validateUsersPrefsSetParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("users.prefs.set", validateUsersPrefsSetParams.errors),
-      );
+  "users.prefs.set": ({ client, context, params, respond }) => {
+    if (!assertValidParams(params, validateUsersPrefsSetParams, "users.prefs.set", respond)) {
       return;
     }
     const profileId = client?.authenticatedUserProfile?.profileId ?? "";
     if (!profileId) {
+      if (isGatewayClientProfilePending(client)) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
       respond(true, { status: "no_durable_identity" }, undefined);
       return;
     }
     try {
       const canonicalProfileId = resolveUserProfileId(profileId);
       if (!canonicalProfileId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
-        );
+        respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
       const result = setUserPreferences(canonicalProfileId, params.entries);
@@ -271,17 +235,31 @@ export const usersHandlers: GatewayRequestHandlers = {
         return;
       }
       respond(true, { status: "ok" }, undefined);
+      const keys = Object.keys(params.entries);
+      if (keys.length === 0) {
+        return;
+      }
+      const connIds = context.getClientConnIds?.((connectedClient) => {
+        const connectedProfileId = connectedClient.authenticatedUserProfile?.profileId;
+        return Boolean(
+          connectedProfileId &&
+          (connectedProfileId === canonicalProfileId ||
+            resolveUserProfileId(connectedProfileId) === canonicalProfileId),
+        );
+      });
+      if (connIds?.size) {
+        context.broadcastToConnIds(
+          "users.prefs.changed",
+          { profileId: canonicalProfileId, keys },
+          connIds,
+        );
+      }
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
   },
   "users.linkEmail": ({ context, params, respond }) => {
-    if (!validateUsersLinkEmailParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("users.linkEmail", validateUsersLinkEmailParams.errors),
-      );
+    if (!assertValidParams(params, validateUsersLinkEmailParams, "users.linkEmail", respond)) {
       return;
     }
     const email = params.email.trim();
@@ -298,12 +276,9 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
   },
   "users.setDisplayName": ({ client, context, params, respond }) => {
-    if (!validateUsersSetDisplayNameParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("users.setDisplayName", validateUsersSetDisplayNameParams.errors),
-      );
+    if (
+      !assertValidParams(params, validateUsersSetDisplayNameParams, "users.setDisplayName", respond)
+    ) {
       return;
     }
     try {
@@ -317,13 +292,36 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setAvatar": ({ client, context, params, respond }) => {
-    if (!validateUsersSetAvatarParams(params)) {
+  "users.setRole": ({ context, params, respond }) => {
+    if (!assertValidParams(params, validateUsersSetRoleParams, "users.setRole", respond)) {
+      return;
+    }
+    const roleDefinitions = context.getRuntimeConfig().gateway?.roles?.definitions;
+    if (
+      params.role !== null &&
+      (!roleDefinitions || !Object.hasOwn(roleDefinitions, params.role))
+    ) {
       respond(
         false,
         undefined,
-        invalidParams("users.setAvatar", validateUsersSetAvatarParams.errors),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `unknown operator role "${params.role}"; define it under gateway.roles.definitions before assigning it`,
+        ),
       );
+      return;
+    }
+    try {
+      const profile = setUserProfileRole(params.profileId, params.role);
+      invalidateOperatorRolePolicy(profile.id);
+      context.disconnectClientsForUserProfile?.(profile.id);
+      respond(true, { profile });
+    } catch (error) {
+      respond(false, undefined, profileError(error));
+    }
+  },
+  "users.setAvatar": ({ client, context, params, respond }) => {
+    if (!assertValidParams(params, validateUsersSetAvatarParams, "users.setAvatar", respond)) {
       return;
     }
     const bytes = decodeBase64(params.avatarBase64);
@@ -346,59 +344,6 @@ export const usersHandlers: GatewayRequestHandlers = {
       }
       const display = refreshConnectedProfile(context, result.value);
       respond(true, { profile: result.value, avatarRevision: display.avatarRevision });
-    } catch (error) {
-      respond(false, undefined, profileError(error));
-    }
-  },
-  "users.setGitHubIdentity": async ({ client, context, params, respond }) => {
-    if (!validateUsersSetGitHubIdentityParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("users.setGitHubIdentity", validateUsersSetGitHubIdentityParams.errors),
-      );
-      return;
-    }
-    const profileId = resolveAuthenticatedProfileId(client);
-    if (!profileId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, "GitHub identity changes require an authenticated user"),
-      );
-      return;
-    }
-    try {
-      const identity = await resolveGitHubUserIdentity(params.username);
-      const profile = setGitHubIdentity(profileId, identity);
-      refreshConnectedProfile(context, profile);
-      respond(true, { profile });
-    } catch (error) {
-      respond(false, undefined, githubLookupError(error));
-    }
-  },
-  "users.clearGitHubIdentity": ({ client, context, params, respond }) => {
-    if (!validateUsersClearGitHubIdentityParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("users.clearGitHubIdentity", validateUsersClearGitHubIdentityParams.errors),
-      );
-      return;
-    }
-    const profileId = resolveAuthenticatedProfileId(client);
-    if (!profileId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, "GitHub identity changes require an authenticated user"),
-      );
-      return;
-    }
-    try {
-      const profile = clearGitHubIdentity(profileId);
-      refreshConnectedProfile(context, profile);
-      respond(true, { profile });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }

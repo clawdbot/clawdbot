@@ -31,10 +31,6 @@ describe("resolveAgentToolSurfacePlan", () => {
     { name: "raw model run", overrides: { isRawModelRun: true } },
     { name: "host-scoped ring-zero run", overrides: {}, ringZero: true },
     { name: "empty explicit allowlist", overrides: { toolsAllow: [] } },
-    {
-      name: "proposal-only skill workshop run",
-      overrides: { skillWorkshopProposalOnly: true },
-    },
   ] satisfies Array<{
     name: string;
     overrides: Partial<AgentToolSurfacePlanParams>;

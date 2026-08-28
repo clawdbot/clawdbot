@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { expect } from "vitest";
-import { loadPersistedAuthProfileStore } from "../../../../src/agents/auth-profiles/persisted.js";
+import { loadPersistedSharedAuthProfileStore } from "../../../../src/agents/auth-profiles/persisted.js";
 import type { OpenClawTestInstance } from "../../../helpers/openclaw-test-instance.js";
 
 const OAUTH_PROFILE_ID = "openai:qa-oauth";
@@ -50,7 +50,7 @@ export async function runCodexAuthDoctorMigrationProof(
   });
   expect(doctor.code, doctor.stderr).toBe(0);
 
-  const canonicalStore = loadPersistedAuthProfileStore(instance.state.agentDir());
+  const canonicalStore = loadPersistedSharedAuthProfileStore(instance.env);
   const expectedProfiles: Record<string, Record<string, unknown>> = {
     [OAUTH_PROFILE_ID]: {
       type: "oauth",

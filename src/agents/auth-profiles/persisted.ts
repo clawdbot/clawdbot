@@ -12,6 +12,7 @@ import { asBoolean } from "../../utils/boolean.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
+import { AuthProfileStoreUnreadableError } from "./legacy-source-diagnostic.js";
 import {
   hasOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
@@ -23,16 +24,14 @@ import {
   setRuntimeExternalCliProfileIds,
 } from "./runtime-external-profile-references.js";
 import {
+  inspectAuthProfileJsonCellReadOnly,
+  readPersistedAuthProfileStateRaw,
   readPersistedAuthProfileStoreRaw,
   readPersistedSharedAuthProfileStateRaw,
   readPersistedSharedAuthProfileStoreRaw,
   type AuthProfileDatabase,
 } from "./sqlite.js";
-import {
-  coerceAuthProfileState,
-  loadPersistedAuthProfileState,
-  mergeAuthProfileState,
-} from "./state.js";
+import { coerceAuthProfileState, mergeAuthProfileState } from "./state.js";
 import type {
   AuthProfileCredential,
   AuthProfileSecretsStore,
@@ -790,42 +789,61 @@ export function applyLegacyAuthStore(store: AuthProfileStore, legacy: LegacyAuth
   }
 }
 
-/** Loads the persisted auth profile store and merges runtime state. */
-export function loadPersistedAuthProfileStore(
-  agentDir?: string,
-  options?: LoadPersistedAuthProfileStoreOptions,
+function mergePersistedAuthProfileState(
+  raw: unknown,
+  readState: () => unknown,
 ): AuthProfileStore | null {
-  const raw = readPersistedAuthProfileStoreRaw(agentDir, options?.database);
-  const store = coercePersistedAuthProfileStore(raw);
-  if (!store) {
-    return null;
-  }
-  const merged = {
-    ...store,
-    ...mergeAuthProfileState(
-      coerceAuthProfileState(raw),
-      loadPersistedAuthProfileState(agentDir, options?.database),
-    ),
-  };
-  return merged;
-}
-
-/** Load the shared auth store from an explicit state root. */
-export function loadPersistedSharedAuthProfileStore(
-  env: NodeJS.ProcessEnv,
-): AuthProfileStore | null {
-  const raw = readPersistedSharedAuthProfileStoreRaw(env);
   const store = coercePersistedAuthProfileStore(raw);
   if (!store) {
     return null;
   }
   return {
     ...store,
-    ...mergeAuthProfileState(
-      coerceAuthProfileState(raw),
-      coerceAuthProfileState(readPersistedSharedAuthProfileStateRaw(env)),
-    ),
+    ...mergeAuthProfileState(coerceAuthProfileState(raw), coerceAuthProfileState(readState())),
   };
+}
+
+/** Loads the persisted auth profile store and merges runtime state. */
+export function loadPersistedAuthProfileStore(
+  agentDir?: string,
+  options?: LoadPersistedAuthProfileStoreOptions,
+): AuthProfileStore | null {
+  return mergePersistedAuthProfileState(
+    readPersistedAuthProfileStoreRaw(agentDir, options?.database),
+    () => readPersistedAuthProfileStateRaw(agentDir, options?.database),
+  );
+}
+
+/** Read an already selected owner without rediscovering an environment or opening a writer. */
+export function loadPersistedAuthProfileStoreAtDatabasePath(
+  databasePath: string,
+  kind: "agent" | "shared-state",
+): AuthProfileStore | null {
+  const target = { path: databasePath, kind };
+  const credentials = inspectAuthProfileJsonCellReadOnly(target, "store");
+  if (credentials.status === "missing") {
+    return null;
+  }
+  if (credentials.status === "unreadable") {
+    throw new AuthProfileStoreUnreadableError(databasePath);
+  }
+  const state = inspectAuthProfileJsonCellReadOnly(target, "state");
+  const store = mergePersistedAuthProfileState(credentials.raw, () =>
+    state.status === "readable" ? state.raw : null,
+  );
+  if (!store) {
+    throw new AuthProfileStoreUnreadableError(databasePath);
+  }
+  return store;
+}
+
+/** Load the shared auth store from an explicit state root. */
+export function loadPersistedSharedAuthProfileStore(
+  env: NodeJS.ProcessEnv,
+): AuthProfileStore | null {
+  return mergePersistedAuthProfileState(readPersistedSharedAuthProfileStoreRaw(env), () =>
+    readPersistedSharedAuthProfileStateRaw(env),
+  );
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -152,13 +152,14 @@ struct MacNodeClaudeSessionCatalogTests {
         }
     }
 
-    @Test func `merges Desktop metadata over CLI indexes and filters archived sessions`() throws {
+    @Test(arguments: [true, false])
+    func `merges Desktop metadata with indexed or Desktop-only transcripts`(indexedDesktop: Bool) throws {
         let fixture = try Fixture()
         let desktopId = "desktop-session"
         let cliId = "cli-session"
         let archivedId = "archived-session"
         let project = try fixture.project()
-        try fixture.writeIndex([
+        var indexEntries = [
             fixture.indexEntry(
                 cliId,
                 in: project,
@@ -175,7 +176,11 @@ struct MacNodeClaudeSessionCatalogTests {
                 in: project,
                 summary: "Archived",
                 modified: "2026-07-03T00:00:00.000Z"),
-        ], in: project)
+        ]
+        if !indexedDesktop {
+            indexEntries.removeAll { $0["sessionId"] as? String == desktopId }
+        }
+        try fixture.writeIndex(indexEntries, in: project)
         for sessionId in [desktopId, cliId, archivedId] {
             try fixture.writeTranscript(
                 [fixture.message(sessionId, sessionId)],
@@ -198,6 +203,9 @@ struct MacNodeClaudeSessionCatalogTests {
                 "isArchived": true,
             ],
             to: fixture.desktopMetadata("local_archived"))
+        try fixture.writeJSON(
+            ["cliSessionId": "missing-session", "title": "Stale Desktop metadata", "isArchived": false],
+            to: fixture.desktopMetadata("local_missing"))
 
         let first = try #require(try fixture.list(paramsJSON: #"{"limit":1}"#))
         let firstSessions = try #require(first["sessions"] as? [[String: Any]])
@@ -276,6 +284,7 @@ struct MacNodeClaudeSessionCatalogTests {
             ("local_sidechain", sidechainId, "Desktop sidechain"),
             ("local_cli_sidechain", cliSidechainId, "Interactive Desktop sidechain"),
             ("local_discovered_sidechain", discoveredSidechainId, "Headless Desktop sidechain"),
+            ("local_escaped", escapedId, "Escaped Desktop session"),
         ] {
             try fixture.writeJSON(
                 ["cliSessionId": sessionId, "title": title, "isArchived": false],

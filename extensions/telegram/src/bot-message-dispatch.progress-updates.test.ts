@@ -3,7 +3,6 @@ import {
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { expect, it } from "vitest";
-import { expectWindowRetiredWithoutSummary } from "./bot-message-dispatch.progress-window.test-helpers.js";
 import {
   appendAssistantMirrorMessageByIdentity,
   type DispatchReplyWithBufferedBlockDispatcherArgs,
@@ -52,7 +51,6 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
-    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: "Branch is up to date" });
   });
 
@@ -83,7 +81,6 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
-    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: "Branch is up to date" });
   });
 
@@ -118,12 +115,11 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
-    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: "Branch is up to date" });
   });
 
   it("uses the transcript final when progress-mode final text is truncated", async () => {
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    setupDraftStreams({ answerMessageId: 2001 });
     const fullAnswer =
       "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man aus der Google Cloud Console. Danach pruefst du die Projekt- und API-Einstellungen.";
     const truncatedFinal =
@@ -149,7 +145,6 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: fullAnswer });
   });
 
@@ -293,7 +288,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
         content: "Photo",
         messageId: 2001,
-        success: true,
+        success: false,
       });
       expect(appendAssistantMirrorMessageByIdentity).toHaveBeenCalledTimes(1);
       expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), {
@@ -447,7 +442,6 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       expect(rollingPreview?.text).toContain(`command-${index}`);
     }
     expectDeliveredReply(0, { text: "Done" });
-    expectWindowRetiredWithoutSummary(draftStream);
   });
 
   it("renders command status without command output in Telegram progress draft previews", async () => {
@@ -587,7 +581,6 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
         "<b>Shelling</b>\n<b>🧠 Thinking… (~200 tokens)</b>",
       ),
     );
-    expectWindowRetiredWithoutSummary(draftStream);
     expectDeliveredReply(0, { text: "Done" });
   });
 
@@ -725,6 +718,90 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
     expect(lastPreview?.text).toContain("💬");
     expect(lastPreview?.text).toContain("Checking recent context");
+  });
+
+  it.each([
+    ["active", true],
+    ["inactive", false],
+  ])(
+    "freezes the durable commentary owner to verbose visibility %s",
+    async (_label, verboseActive) => {
+      const draftStream = createSequencedDraftStream(2001);
+      createTelegramDraftStream.mockReturnValue(draftStream);
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        await replyOptions?.onReplyStart?.();
+        expect(replyOptions?.commentaryPayloadsEnabled).toBe(true);
+        expect(replyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(false);
+        replyOptions?.onVerboseProgressVisibility?.(() => verboseActive);
+        expect(replyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(verboseActive);
+        await replyOptions?.onItemEvent?.({
+          kind: "preamble",
+          itemId: "preamble-1",
+          progressText: "Checking recent context",
+        });
+        return { queuedFinal: false };
+      });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "progress",
+        telegramCfg: {
+          streaming: {
+            mode: "progress",
+            progress: { label: "Shelling", commentary: true },
+          },
+        },
+      });
+
+      const updates = draftStream.updatePreview.mock.calls
+        .map(([preview]) => preview.text)
+        .join("\n");
+      if (verboseActive) {
+        // The durable lane owns commentary: the draft must not repeat it.
+        expect(updates).not.toContain("Checking recent context");
+      } else {
+        // The draft owns commentary: exactly one visible copy per preamble.
+        expect(updates.split("Checking recent context")).toHaveLength(2);
+      }
+    },
+  );
+
+  it.each([
+    {
+      label: "progress commentary is disabled",
+      streamMode: "progress",
+      commentary: false,
+      commentaryPayloadsEnabled: true,
+    },
+    {
+      label: "partial streaming owns the answer preview",
+      streamMode: "partial",
+      commentary: true,
+      commentaryPayloadsEnabled: undefined,
+    },
+    {
+      label: "streaming is disabled",
+      streamMode: "off",
+      commentary: true,
+      commentaryPayloadsEnabled: undefined,
+    },
+  ] as const)("omits the durable commentary owner when $label", async (scenario) => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      expect(replyOptions?.commentaryPayloadsEnabled).toBe(scenario.commentaryPayloadsEnabled);
+      expect(replyOptions?.shouldDeliverCommentaryPayloads).toBeUndefined();
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: scenario.streamMode,
+      telegramCfg: {
+        streaming: {
+          mode: scenario.streamMode,
+          progress: { label: "Shelling", commentary: scenario.commentary },
+        },
+      },
+    });
   });
 
   it("renders the Telegram preamble headline when commentary is disabled", async () => {

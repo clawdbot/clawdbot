@@ -1,4 +1,4 @@
-export type ProfileId = "smoke" | "default" | "large";
+type ProfileId = "smoke" | "default" | "large";
 
 export type IndexRepairJournalMode = "delete" | "wal";
 
@@ -31,11 +31,33 @@ export type CliOptions = {
   stateDir: string | null;
 };
 
+export type CompactionPayloadProof = {
+  bytes: number;
+  idSum: number;
+  rows: number;
+};
+
 export type ReliabilityStateProof = {
   batches: number;
   rows: number;
   sha256: string;
 };
+
+export function assertSameCompactionPayload(
+  actual: CompactionPayloadProof,
+  expected: CompactionPayloadProof,
+  label: string,
+): void {
+  if (
+    actual.bytes !== expected.bytes ||
+    actual.idSum !== expected.idSum ||
+    actual.rows !== expected.rows
+  ) {
+    throw new Error(
+      `${label} changed compaction payload: expected rows=${expected.rows} bytes=${expected.bytes} idSum=${expected.idSum}, got rows=${actual.rows} bytes=${actual.bytes} idSum=${actual.idSum}`,
+    );
+  }
+}
 
 export type ReliabilityReport = {
   arch: string;
@@ -106,16 +128,8 @@ export type ReliabilityReport = {
         signal: NodeJS.Signals | null;
       };
       journalBytesObserved: number;
-      payloadAfterRecovery: {
-        bytes: number;
-        idSum: number;
-        rows: number;
-      };
-      payloadBeforeKill: {
-        bytes: number;
-        idSum: number;
-        rows: number;
-      };
+      payloadAfterRecovery: CompactionPayloadProof;
+      payloadBeforeKill: CompactionPayloadProof;
       recoveryVerified: true;
       stateAfterRecovery: ReliabilityStateProof;
       stateBeforeKill: ReliabilityStateProof;
@@ -137,11 +151,7 @@ export type ReliabilityReport = {
           signal: NodeJS.Signals | null;
         };
         incompleteEntries: 0;
-        payload: {
-          bytes: number;
-          idSum: number;
-          rows: number;
-        };
+        payload: CompactionPayloadProof;
         repositoryVerified: true;
         retryCreated: true;
         sourcePayloadPreserved: true;
@@ -158,11 +168,7 @@ export type ReliabilityReport = {
           signal: NodeJS.Signals | null;
         };
         incompleteEntries: 1;
-        payload: {
-          bytes: number;
-          idSum: number;
-          rows: number;
-        };
+        payload: CompactionPayloadProof;
         repositoryVerified: true;
         retryCreated: true;
         sourcePayloadPreserved: true;
@@ -179,11 +185,7 @@ export type ReliabilityReport = {
           signal: NodeJS.Signals | null;
         };
         incompleteEntries: 0;
-        payload: {
-          bytes: number;
-          idSum: number;
-          rows: number;
-        };
+        payload: CompactionPayloadProof;
         repositoryVerified: true;
         retryCreated: true;
         sourcePayloadPreserved: true;
@@ -200,11 +202,7 @@ export type ReliabilityReport = {
           code: number | null;
           signal: NodeJS.Signals | null;
         };
-        payloadAfterRecovery: {
-          bytes: number;
-          idSum: number;
-          rows: number;
-        };
+        payloadAfterRecovery: CompactionPayloadProof;
         recoveryVerified: true;
         repositoryVerified: true;
         retryRestored: false;
@@ -219,11 +217,7 @@ export type ReliabilityReport = {
           code: number | null;
           signal: NodeJS.Signals | null;
         };
-        payloadAfterRecovery: {
-          bytes: number;
-          idSum: number;
-          rows: number;
-        };
+        payloadAfterRecovery: CompactionPayloadProof;
         recoveryVerified: true;
         repositoryVerified: true;
         retryRestored: true;

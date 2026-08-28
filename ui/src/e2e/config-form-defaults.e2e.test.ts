@@ -135,7 +135,7 @@ suite.define(() => {
         const enabledRow = settingsRow(page, "Enabled");
         const modeRow = settingsRow(page, "Mode");
         const payloadRow = settingsRow(page, "Payload");
-        const profileBlock = panel.locator("details").filter({
+        const profileBlock = panel.locator("details.cfg-object").filter({
           has: page.locator(".cfg-object__summary .settings-row__title").getByText("Profile", {
             exact: true,
           }),
@@ -215,7 +215,7 @@ suite.define(() => {
         const reloadedEnabledRow = settingsRow(page, "Enabled");
         const reloadedModeRow = settingsRow(page, "Mode");
         const reloadedPayloadRow = settingsRow(page, "Payload");
-        const reloadedProfileBlock = reloadedPanel.locator("details").filter({
+        const reloadedProfileBlock = reloadedPanel.locator("details.cfg-object").filter({
           has: page
             .locator(".cfg-object__summary .settings-row__title")
             .getByText("Profile", { exact: true }),

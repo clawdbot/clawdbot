@@ -24,9 +24,9 @@ describe("Codex app-server model catalog", () => {
     listModelsMock.mockResolvedValue({
       models: [
         {
-          id: "gpt-5.6-terra",
-          model: "gpt-5.6-terra",
-          displayName: "GPT-5.6 Terra",
+          id: "gpt-5.6-sol",
+          model: "codex-execution-model",
+          displayName: "GPT-5.6 Sol",
           inputModalities: ["text", "image", "unknown"],
           supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
         },
@@ -39,16 +39,18 @@ describe("Codex app-server model catalog", () => {
         },
       ],
     });
-    expect(await loadCodexAppServerModelCatalog(catalogParams, undefined)).toEqual([
+    const catalog = await loadCodexAppServerModelCatalog(catalogParams, undefined);
+    expect(catalog).toEqual([
       {
         provider: "openai",
-        id: "gpt-5.6-terra",
-        name: "GPT-5.6 Terra",
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
         providerOrder: 0,
         api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         reasoning: true,
         input: ["text", "image"],
+        params: { codexAppServerRuntimeModel: "codex-execution-model" },
         compat: {
           supportsReasoningEffort: true,
           supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
@@ -63,6 +65,10 @@ describe("Codex app-server model catalog", () => {
         baseUrl: "https://chatgpt.com/backend-api/codex",
         reasoning: false,
         input: ["text"],
+        compat: {
+          supportsReasoningEffort: false,
+          supportedReasoningEfforts: [],
+        },
       },
     ]);
     expect(listModelsMock).toHaveBeenCalledExactlyOnceWith(

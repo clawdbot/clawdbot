@@ -1,4 +1,5 @@
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parse as parseToml } from "smol-toml";
 import type {
   CodexAppServerApprovalPolicySource,
   CodexAppServerCommandSource,
@@ -36,6 +37,10 @@ import {
   readCodexPluginConfig,
 } from "./config-parsing.js";
 import {
+  parseAllowedApprovalPoliciesFromCodexRequirements,
+  readCodexRequirementsToml,
+} from "./config-requirements.js";
+import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexConfigEnablesNativeComputerUse,
 } from "./config-reviewer.js";
@@ -59,6 +64,7 @@ import {
   readNumberEnv,
   resolveArgs,
 } from "./config-utils.js";
+import { readCodexAppServerConfigOptions } from "./launch-args.js";
 import type { CodexSandboxPolicy } from "./protocol.js";
 
 /**
@@ -179,6 +185,23 @@ export function resolveCodexAppServerRuntimeOptions(
     params.execPolicy?.touched === true &&
     params.execPolicy.security === "full" &&
     params.execPolicy.ask === "always";
+  const forcePerCommandApprovals = params.execPolicy?.ask === "always";
+  const requirementsToml = forcePerCommandApprovals
+    ? (readCodexRequirementsToml({
+        env,
+        requirementsToml: params.requirementsToml,
+        requirementsPath: params.requirementsPath,
+        readRequirementsFile: params.readRequirementsFile,
+        platform: params.platform,
+      }) ?? null)
+    : params.requirementsToml;
+  if (
+    forcePerCommandApprovals &&
+    requirementsToml &&
+    parseAllowedApprovalPoliciesFromCodexRequirements(requirementsToml)?.has("untrusted") === false
+  ) {
+    throw new Error("tools.exec.ask=always requires Codex app-server per-command approvals");
+  }
   const forceRuntimePolicy =
     forceUserReviewer || forceGuardianReviewer || forceDangerFullAccessSandbox;
   const defaultPolicy =
@@ -190,7 +213,7 @@ export function resolveCodexAppServerRuntimeOptions(
           forceGuardian: normalizedPolicyMode === "guardian",
           forceUserReviewer: forceUserReviewer || !canUseModelBackedReviewer,
           execModeRequiringPromptingApprovals,
-          requirementsToml: params.requirementsToml,
+          requirementsToml,
           requirementsPath: params.requirementsPath,
           readRequirementsFile: params.readRequirementsFile,
           platform: params.platform,
@@ -200,7 +223,11 @@ export function resolveCodexAppServerRuntimeOptions(
   const preserveExplicitAutoSandbox = forceGuardianReviewer && configuredSandbox === "read-only";
   const forcedPolicy = forceRuntimePolicy
     ? {
-        approvalPolicy: defaultPolicy?.approvalPolicy ?? "on-request",
+        // `on-request` lets ordinary commands run without prompting. The native-only
+        // untrusted policy is valid on thread requests and prompts for each command.
+        approvalPolicy: forcePerCommandApprovals
+          ? ("untrusted" as const)
+          : (defaultPolicy?.approvalPolicy ?? "on-request"),
         sandbox: preserveExplicitAutoSandbox
           ? undefined
           : forceDangerFullAccessSandbox
@@ -531,15 +558,8 @@ export function codexSandboxPolicyForTurn(
   }
   let excludeTmpdirEnvVar = false;
   let excludeSlashTmp = false;
-  for (let index = 0; index < nativeArgs.length; index += 1) {
-    const arg = nativeArgs[index];
-    const override =
-      arg === "-c" || arg === "--config"
-        ? nativeArgs[++index]
-        : arg?.startsWith("--config=")
-          ? arg.slice("--config=".length)
-          : undefined;
-    if (!override) {
+  for (const { name, value: override } of readCodexAppServerConfigOptions(nativeArgs)) {
+    if ((name !== "-c" && name !== "--config") || !override) {
       continue;
     }
     const separator = override.indexOf("=");
@@ -547,14 +567,21 @@ export function codexSandboxPolicyForTurn(
       continue;
     }
     const key = override.slice(0, separator).trim();
-    const value = override.slice(separator + 1).trim();
-    if (value !== "true" && value !== "false") {
+    let value: unknown;
+    try {
+      // Match Codex's TOML value wrapper, including comments after booleans.
+      value = parseToml(`_x_ = ${override.slice(separator + 1).trim()}`)["_x_"];
+    } catch {
+      // Native parse failures become strings, never boolean exclusions.
+      continue;
+    }
+    if (typeof value !== "boolean") {
       continue;
     }
     if (key === "sandbox_workspace_write.exclude_tmpdir_env_var") {
-      excludeTmpdirEnvVar = value === "true";
+      excludeTmpdirEnvVar = value;
     } else if (key === "sandbox_workspace_write.exclude_slash_tmp") {
-      excludeSlashTmp = value === "true";
+      excludeSlashTmp = value;
     }
   }
   // Native turn/start overrides replace the thread's sandbox. Carry explicit

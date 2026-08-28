@@ -13,6 +13,7 @@ import path from "node:path";
  */
 
 const STATE_TRANSIENT_EXTENSIONS = new Set([".sock", ".pid", ".tmp"]);
+const CHROMIUM_SINGLETON_FILES = new Set(["SingletonCookie", "SingletonLock", "SingletonSocket"]);
 const SQLITE_REINDEX_TRANSIENT_PATH_PATTERN =
   /(?:^|\/)(?:[^/]+\.sqlite\.reindex-lock\.sqlite|[^/]+\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:-wal|-shm|-journal)?$/iu;
 
@@ -57,6 +58,17 @@ function isAgentSessionTranscriptPath(filePosix: string, stateDirPosix: string):
   return parts.length >= 3 && parts[1] === "sessions";
 }
 
+function isManagedBrowserSingletonPath(filePosix: string, stateDirPosix: string): boolean {
+  const browserRoot = path.posix.join(stateDirPosix, "browser");
+  if (!isUnder(filePosix, browserRoot)) {
+    return false;
+  }
+  const parts = path.posix.relative(browserRoot, filePosix).split("/").filter(Boolean);
+  return (
+    parts.length === 3 && parts[1] === "user-data" && CHROMIUM_SINGLETON_FILES.has(parts[2] ?? "")
+  );
+}
+
 function filePathCandidates(input: string): string[] {
   const normalized = normalizePosix(input);
   if (normalized.startsWith("/") || /^[A-Za-z]:\//u.test(normalized)) {
@@ -82,6 +94,8 @@ type VolatileFilterPlan = {
  *   - `{stateDir}/cron/runs/**`/`*.{jsonl,log}`
  *   - `{stateDir}/logs/**`/`*.{jsonl,log}`
  *   - `{stateDir}/{delivery-queue,session-delivery-queue}/**`/`*.{json,delivered,tmp}`
+ *   - `{stateDir}/browser/<profile>/user-data/Singleton{Cookie,Lock,Socket}`
+ *   - `{stateDir}/sandbox/skills-workspaces/**`
  *   - `{stateDir}/**`/`*.{sock,pid,tmp}`
  */
 export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterPlan): boolean {
@@ -97,6 +111,22 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
     const stateDirPosix = normalizePosix(stateDir);
 
     for (const filePosix of candidates) {
+      if (isManagedBrowserSingletonPath(filePosix, stateDirPosix)) {
+        return true;
+      }
+
+      const sandboxSkillsRoot = path.posix.join(stateDirPosix, "sandbox", "skills-workspaces");
+      if (isUnder(filePosix, sandboxSkillsRoot)) {
+        return true;
+      }
+
+      // Rebuildable, manifest-verified bundles bridge already-open Control UI
+      // documents across updates; restoring them would only copy stale package bytes.
+      const controlUiAssetCacheRoot = path.posix.join(stateDirPosix, "cache", "control-ui-assets");
+      if (isUnder(filePosix, controlUiAssetCacheRoot)) {
+        return true;
+      }
+
       const sessionsRoot = path.posix.join(stateDirPosix, "sessions");
       if (isUnder(filePosix, sessionsRoot) && hasExtension(filePosix, [".jsonl", ".log"])) {
         return true;

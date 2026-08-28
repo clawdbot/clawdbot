@@ -6,6 +6,7 @@ import {
   resolveNodePairingState,
   type NodePairingGeneration,
   type NodePairingState,
+  type PairedDevice,
 } from "./device-pairing.js";
 
 export type { NodePairingGeneration, NodePairingIdentity } from "./device-pairing.js";
@@ -25,6 +26,20 @@ function toPairedDeviceNodeBinding(
         ...(state.generation ? { generation: state.generation.key } : {}),
       }
     : undefined;
+}
+
+/** Project only authenticated node-role bindings from the caller's loaded device snapshot. */
+export function projectPairedDeviceNodeBindings(
+  pairedDevices: readonly PairedDevice[],
+): Map<string, PairedDeviceNodeBinding> {
+  const bindings = new Map<string, PairedDeviceNodeBinding>();
+  for (const device of pairedDevices) {
+    const binding = toPairedDeviceNodeBinding(resolveNodePairingState(device));
+    if (binding) {
+      bindings.set(device.deviceId, binding);
+    }
+  }
+  return bindings;
 }
 
 export async function captureNodePairingState(

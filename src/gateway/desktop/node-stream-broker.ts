@@ -4,7 +4,10 @@ import type { Duplex } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createWebSocketStream, WebSocket, WebSocketServer, type RawData } from "ws";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
-import { NODE_DESKTOP_ATTACH_PATH } from "../../shared/node-desktop-stream.js";
+import {
+  NODE_DESKTOP_ATTACH_PATH,
+  NODE_PORTAL_ATTACH_PATH,
+} from "../../shared/node-desktop-stream.js";
 import type { NodeRegistry } from "../node-registry.js";
 
 const DEFAULT_TICKET_TTL_MS = 60_000;
@@ -17,6 +20,8 @@ type NodeDesktopStreamMetadata = {
 };
 
 type AttachedNodeDesktopStream = NodeDesktopStreamMetadata & { stream: Duplex };
+type AttachedNodePortalStream = { stream: Duplex };
+type NodeStreamKind = "desktop" | "portal";
 
 type NodeDesktopStreamBinding = {
   nodeId: string;
@@ -25,9 +30,10 @@ type NodeDesktopStreamBinding = {
 };
 
 type TicketEntry = {
+  kind: NodeStreamKind;
   binding: NodeDesktopStreamBinding;
   expiresAtMs: number;
-  resolve: (attached: AttachedNodeDesktopStream) => void;
+  resolve: (stream: Duplex, metadata: NodeDesktopStreamMetadata | undefined) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
   redeemed: boolean;
@@ -51,16 +57,26 @@ function rawDataBuffer(data: RawData): Buffer {
   return Buffer.from(data);
 }
 
-function parseStreamMetadata(data: RawData, isBinary: boolean): NodeDesktopStreamMetadata {
+function parseStreamMetadata(
+  data: RawData,
+  isBinary: boolean,
+  kind: NodeStreamKind,
+): NodeDesktopStreamMetadata | undefined {
   const buffer = rawDataBuffer(data);
   if (!isBinary || buffer.length === 0 || buffer.length > MAX_ATTACH_FRAME_BYTES) {
-    throw new Error("invalid node desktop attach metadata");
+    throw new Error(`invalid node ${kind} attach metadata`);
   }
   let value: unknown;
   try {
     value = JSON.parse(buffer.toString("utf8"));
   } catch {
-    throw new Error("invalid node desktop attach metadata");
+    throw new Error(`invalid node ${kind} attach metadata`);
+  }
+  if (kind === "portal") {
+    if (!isRecord(value) || value.ok !== true || Object.keys(value).length !== 1) {
+      throw new Error("invalid node portal attach metadata");
+    }
+    return undefined;
   }
   if (!isRecord(value) || (value.auth !== "vnc-password" && value.auth !== "ard-account")) {
     throw new Error("invalid node desktop attach metadata");
@@ -89,8 +105,9 @@ function writeUnauthorized(socket: Duplex): void {
 
 function readAttachedStream(
   ws: WebSocket,
+  kind: NodeStreamKind,
   onStreamError: (error: Error) => void,
-): Promise<{ metadata: NodeDesktopStreamMetadata; stream: Duplex }> {
+): Promise<{ metadata: NodeDesktopStreamMetadata | undefined; stream: Duplex }> {
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       ws.off("message", onMessage);
@@ -99,12 +116,12 @@ function readAttachedStream(
     const onMessage = (data: RawData, isBinary: boolean) => {
       cleanup();
       try {
-        const metadata = parseStreamMetadata(data, isBinary);
-        // Install the stream listener in the same message turn. The pairing
-        // recheck may yield, but early RFB banner bytes must already be buffered.
+        const metadata = parseStreamMetadata(data, isBinary, kind);
+        // Install the stream listener before the pairing recheck yields so early
+        // desktop banner or portal response bytes cannot disappear.
         const stream = createWebSocketStream(ws, { allowHalfOpen: false });
         // Retain a safety listener through the asynchronous registry handoff;
-        // the observer bridge adds its own lifecycle handler after claiming it.
+        // the consumer adds its own lifecycle handler after claiming the stream.
         stream.on("error", onStreamError);
         resolve({
           metadata,
@@ -116,7 +133,7 @@ function readAttachedStream(
     };
     const onClose = () => {
       cleanup();
-      reject(new Error("node desktop stream closed before attach"));
+      reject(new Error(`node ${kind} stream closed before attach`));
     };
     const onError = (error: Error) => {
       cleanup();
@@ -131,7 +148,7 @@ function readAttachedStream(
   });
 }
 
-/** Owns one-time node stream tickets and turns redeemed WebSockets into RFB duplexes. */
+/** Owns one-time node stream tickets and pairs authenticated desktop or portal duplexes. */
 export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () => number } = {}) {
   const ttlMs = deps.ttlMs ?? DEFAULT_TICKET_TTL_MS;
   const now = deps.now ?? Date.now;
@@ -155,35 +172,51 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     }
     entry.settled = true;
     entry.reject(error);
-    entry.ws?.close(1008, "node desktop attach rejected");
+    entry.ws?.close(1008, `node ${entry.kind} attach rejected`);
     entry.socket?.destroy();
   };
 
-  const resolveTicket = (ticket: string, attached: AttachedNodeDesktopStream): void => {
+  const resolveTicket = (
+    ticket: string,
+    stream: Duplex,
+    metadata: NodeDesktopStreamMetadata | undefined,
+  ): void => {
     const entry = remove(ticket);
     if (!entry || entry.settled) {
-      attached.stream.destroy();
+      stream.destroy();
       return;
     }
     entry.settled = true;
-    entry.resolve(attached);
+    entry.resolve(stream, metadata);
   };
 
-  function mint(binding: NodeDesktopStreamBinding) {
+  function mintStream<T>(
+    binding: NodeDesktopStreamBinding,
+    kind: NodeStreamKind,
+    attach: (stream: Duplex, metadata: NodeDesktopStreamMetadata | undefined) => T,
+  ) {
     const ticket = crypto.randomBytes(24).toString("hex");
     const expiresAtMs = now() + ttlMs;
-    let resolve!: (attached: AttachedNodeDesktopStream) => void;
+    let resolve!: (stream: Duplex, metadata: NodeDesktopStreamMetadata | undefined) => void;
     let reject!: (error: Error) => void;
-    const attached = new Promise<AttachedNodeDesktopStream>((resolvePromise, rejectPromise) => {
-      resolve = resolvePromise;
+    const attached = new Promise<T>((resolvePromise, rejectPromise) => {
+      resolve = (stream, metadata) => {
+        try {
+          resolvePromise(attach(stream, metadata));
+        } catch (error) {
+          stream.destroy();
+          rejectPromise(error instanceof Error ? error : new Error(String(error)));
+        }
+      };
       reject = rejectPromise;
     });
     void attached.catch(() => undefined);
     const timer = setTimeout(() => {
-      rejectTicket(ticket, new Error("node desktop stream ticket expired"));
+      rejectTicket(ticket, new Error(`node ${kind} stream ticket expired`));
     }, ttlMs);
     timer.unref?.();
     tickets.set(ticket, {
+      kind,
       binding,
       expiresAtMs,
       resolve,
@@ -194,13 +227,26 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     });
     return {
       ticket,
-      attachPath: `${NODE_DESKTOP_ATTACH_PATH}?ticket=${ticket}`,
+      attachPath: `${kind === "desktop" ? NODE_DESKTOP_ATTACH_PATH : NODE_PORTAL_ATTACH_PATH}?ticket=${ticket}`,
       expiresAtMs,
       attached,
       cancel() {
-        rejectTicket(ticket, new Error("node desktop stream ticket cancelled"));
+        rejectTicket(ticket, new Error(`node ${kind} stream ticket cancelled`));
       },
     };
+  }
+
+  function mint(binding: NodeDesktopStreamBinding) {
+    return mintStream<AttachedNodeDesktopStream>(binding, "desktop", (stream, metadata) => {
+      if (!metadata) {
+        throw new Error("invalid node desktop attach metadata");
+      }
+      return { ...metadata, stream };
+    });
+  }
+
+  function mintPortal(binding: NodeDesktopStreamBinding) {
+    return mintStream<AttachedNodePortalStream>(binding, "portal", (stream) => ({ stream }));
   }
 
   const bindingIsCurrent = async (
@@ -225,7 +271,13 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     registry: TicketNodeRegistry,
   ): Promise<boolean> {
     const resource = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (resource.pathname !== NODE_DESKTOP_ATTACH_PATH) {
+    const kind =
+      resource.pathname === NODE_DESKTOP_ATTACH_PATH
+        ? "desktop"
+        : resource.pathname === NODE_PORTAL_ATTACH_PATH
+          ? "portal"
+          : undefined;
+    if (!kind) {
       return false;
     }
     const ticket = (resource.searchParams.get("ticket") ?? "").trim();
@@ -234,10 +286,10 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
       return true;
     }
     const entry = tickets.get(ticket);
-    if (!entry || entry.redeemed || entry.expiresAtMs <= now()) {
+    if (!entry || entry.kind !== kind || entry.redeemed || entry.expiresAtMs <= now()) {
       writeUnauthorized(socket);
-      if (entry && !entry.redeemed) {
-        rejectTicket(ticket, new Error("node desktop stream ticket expired"));
+      if (entry && entry.kind === kind && !entry.redeemed) {
+        rejectTicket(ticket, new Error(`node ${kind} stream ticket expired`));
       }
       return true;
     }
@@ -245,7 +297,7 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     entry.socket = socket;
     const onSocketError = (error: Error) => rejectTicket(ticket, error);
     const onSocketClose = () =>
-      rejectTicket(ticket, new Error("node desktop attach closed during authorization"));
+      rejectTicket(ticket, new Error(`node ${kind} attach closed during authorization`));
     socket.once("error", onSocketError);
     socket.once("end", onSocketClose);
     socket.once("close", onSocketClose);
@@ -263,7 +315,7 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
       socket.off("end", onSocketClose);
       socket.off("close", onSocketClose);
       writeUnauthorized(socket);
-      rejectTicket(ticket, new Error("node desktop stream ticket binding is stale"));
+      rejectTicket(ticket, new Error(`node ${kind} stream ticket binding is stale`));
       return true;
     }
     socket.off("error", onSocketError);
@@ -273,17 +325,14 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
       wss.handleUpgrade(req, socket, head, (ws) => {
         entry.socket = undefined;
         entry.ws = ws;
-        const attached = readAttachedStream(ws, (error) => rejectTicket(ticket, error));
+        const attached = readAttachedStream(ws, kind, (error) => rejectTicket(ticket, error));
         void (async () => {
           try {
             const resolved = await attached;
             if (!(await bindingIsCurrent(registry, entry.binding))) {
-              throw new Error("node desktop stream ticket binding is stale");
+              throw new Error(`node ${kind} stream ticket binding is stale`);
             }
-            resolveTicket(ticket, {
-              ...resolved.metadata,
-              stream: resolved.stream,
-            });
+            resolveTicket(ticket, resolved.stream, resolved.metadata);
           } catch (error) {
             rejectTicket(ticket, error instanceof Error ? error : new Error(String(error)));
           }
@@ -295,7 +344,7 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     return true;
   }
 
-  return { mint, handleUpgrade };
+  return { mint, mintPortal, handleUpgrade };
 }
 
 export type NodeDesktopStreamBroker = ReturnType<typeof createNodeDesktopStreamBroker>;

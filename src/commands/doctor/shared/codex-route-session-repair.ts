@@ -13,8 +13,9 @@ import {
 } from "../../../agents/auth-profiles/persisted.js";
 import {
   applySessionEntryReplacements,
-  listSessionEntriesForCanonicalRepair,
-  listSessionEntriesReadOnly,
+  iterateDoctorSessionKeyBatches,
+  scanDoctorSessionEntriesStrict,
+  scanDoctorSessionEntriesTolerant,
 } from "../../../config/sessions/session-accessor.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../../../config/sessions/targets.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -264,61 +265,73 @@ function scanCodexSessionStoreRoutes(
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
   authProfileIdMap?: ReadonlyMap<string, string>,
 ): string[] {
-  return Object.entries(store).flatMap(([sessionKey, entry]) => {
-    if (!entry || isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
-      return [];
-    }
-    const isBlockedPair = (provider: unknown, model: unknown) => {
-      const normalizedProvider = normalizeString(provider);
-      const legacyProviderModelRef =
-        sessionProviderAllowsScopedModelRef(normalizedProvider) &&
-        typeof model === "string" &&
-        isOpenAICodexModelRef(model)
-          ? model
-          : undefined;
-      return (
-        isBlockedLegacyCodexModelPair({
-          providerId: provider,
-          modelId: model,
+  return Object.entries(store).flatMap(([sessionKey, entry]) =>
+    entry &&
+    sessionEntryHasLegacyCodexRoute(sessionKey, entry, blockedModelIdentities, authProfileIdMap)
+      ? [sessionKey]
+      : [],
+  );
+}
+
+function sessionEntryHasLegacyCodexRoute(
+  sessionKey: string,
+  entry: SessionEntry,
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+  authProfileIdMap?: ReadonlyMap<string, string>,
+): boolean {
+  if (isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
+    return false;
+  }
+  const isBlockedPair = (provider: unknown, model: unknown) => {
+    const normalizedProvider = normalizeString(provider);
+    const legacyProviderModelRef =
+      sessionProviderAllowsScopedModelRef(normalizedProvider) &&
+      typeof model === "string" &&
+      isOpenAICodexModelRef(model)
+        ? model
+        : undefined;
+    return (
+      isBlockedLegacyCodexModelPair({
+        providerId: provider,
+        modelId: model,
+        blockedModelIdentities,
+      }) ||
+      (legacyProviderModelRef &&
+        isBlockedLegacyCodexModelRef({
+          modelRef: legacyProviderModelRef,
           blockedModelIdentities,
-        }) ||
-        (legacyProviderModelRef &&
-          isBlockedLegacyCodexModelRef({
-            modelRef: legacyProviderModelRef,
-            blockedModelIdentities,
-          }))
-      );
-    };
-    const fallbackNoticeEndpoints = [
-      entry.fallbackNotice?.selectedModel,
-      entry.fallbackNotice?.activeModel,
-    ];
-    const hasBlockedFallbackNoticeEndpoint = fallbackNoticeEndpoints.some(
-      (modelRef) =>
-        isOpenAICodexModelRef(modelRef) &&
-        isBlockedLegacyCodexModelRef({ modelRef, blockedModelIdentities }),
+        }))
     );
-    const hasRewritableFallbackNotice =
-      !hasBlockedFallbackNoticeEndpoint && fallbackNoticeEndpoints.some(isOpenAICodexModelRef);
-    const hasLegacyRoute =
-      (sessionModelPairHasLegacyRoute(entry.modelProvider, entry.model) &&
-        !isBlockedPair(entry.modelProvider, entry.model)) ||
-      (sessionModelPairHasLegacyRoute(entry.providerOverride, entry.modelOverride) &&
-        !isBlockedPair(entry.providerOverride, entry.modelOverride)) ||
-      (isProviderlessModelRef(entry.modelOverride) &&
-        isOpenAICodexAuthProfileRef(entry.authProfileOverride) &&
-        entry.authProfileOverrideSource === "auto" &&
-        entry.modelOverrideSource === "auto" &&
-        !normalizeString(entry.providerOverride) &&
-        !isBlockedPair(
-          normalizeString(entry.authProfileOverride)?.split(":", 1)[0],
-          entry.modelOverride,
-        )) ||
-      (typeof entry.authProfileOverride === "string" &&
-        authProfileIdMap?.has(entry.authProfileOverride)) ||
-      hasRewritableFallbackNotice;
-    return hasLegacyRoute ? [sessionKey] : [];
-  });
+  };
+  const fallbackNoticeEndpoints = [
+    entry.fallbackNotice?.selectedModel,
+    entry.fallbackNotice?.activeModel,
+  ];
+  const hasBlockedFallbackNoticeEndpoint = fallbackNoticeEndpoints.some(
+    (modelRef) =>
+      isOpenAICodexModelRef(modelRef) &&
+      isBlockedLegacyCodexModelRef({ modelRef, blockedModelIdentities }),
+  );
+  const hasRewritableFallbackNotice =
+    !hasBlockedFallbackNoticeEndpoint && fallbackNoticeEndpoints.some(isOpenAICodexModelRef);
+  const hasLegacyRoute =
+    (sessionModelPairHasLegacyRoute(entry.modelProvider, entry.model) &&
+      !isBlockedPair(entry.modelProvider, entry.model)) ||
+    (sessionModelPairHasLegacyRoute(entry.providerOverride, entry.modelOverride) &&
+      !isBlockedPair(entry.providerOverride, entry.modelOverride)) ||
+    (isProviderlessModelRef(entry.modelOverride) &&
+      isOpenAICodexAuthProfileRef(entry.authProfileOverride) &&
+      entry.authProfileOverrideSource === "auto" &&
+      entry.modelOverrideSource === "auto" &&
+      !normalizeString(entry.providerOverride) &&
+      !isBlockedPair(
+        normalizeString(entry.authProfileOverride)?.split(":", 1)[0],
+        entry.modelOverride,
+      )) ||
+    (typeof entry.authProfileOverride === "string" &&
+      authProfileIdMap?.has(entry.authProfileOverride)) ||
+    hasRewritableFallbackNotice;
+  return hasLegacyRoute;
 }
 
 function resolveVerifiedSessionAuthProfileIdMap(params: {
@@ -397,24 +410,37 @@ export async function maybeRepairCodexSessionRoutes(params: {
       agentId: target.agentId,
       env,
     };
-    // Preview cannot canonicalize legacy rows; its doctor-only inventory must
-    // remain readable without weakening strict post-migration repair writes.
-    const sqliteEntries = params.shouldRepair
-      ? listSessionEntriesReadOnly(sessionScope)
-      : listSessionEntriesForCanonicalRepair(sessionScope);
-    const hasLegacyStore = fs.existsSync(target.storePath);
-    return sqliteEntries.length > 0 || hasLegacyStore
+    const authProfileIdMap = resolveVerifiedSessionAuthProfileIdMap({
+      agentId: target.agentId,
+      cfg: params.cfg,
+      env,
+      authProfileIdMap: params.authProfileIdMap,
+    });
+    const staleSqliteSessionKeys: string[] = [];
+    const scanEntry = ({ entry, sessionKey }: { entry: SessionEntry; sessionKey: string }) => {
+      if (
+        sessionEntryHasLegacyCodexRoute(
+          sessionKey,
+          entry,
+          params.blockedModelIdentities,
+          authProfileIdMap,
+        )
+      ) {
+        staleSqliteSessionKeys.push(sessionKey);
+      }
+    };
+    // Preview tolerates malformed legacy rows; repair mode uses strict canonical validation.
+    const sqliteEntryCount = params.shouldRepair
+      ? scanDoctorSessionEntriesStrict(sessionScope, scanEntry)
+      : scanDoctorSessionEntriesTolerant(sessionScope, scanEntry);
+    const hasLegacyStore = !target.storePath.endsWith(".sqlite") && fs.existsSync(target.storePath);
+    return sqliteEntryCount > 0 || hasLegacyStore
       ? [
           {
             ...target,
-            sqliteEntries,
+            staleSqliteSessionKeys,
             hasLegacyStore,
-            authProfileIdMap: resolveVerifiedSessionAuthProfileIdMap({
-              agentId: target.agentId,
-              cfg: params.cfg,
-              env,
-              authProfileIdMap: params.authProfileIdMap,
-            }),
+            authProfileIdMap,
           },
         ]
       : [];
@@ -424,16 +450,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
   }
   if (!params.shouldRepair) {
     const stale = targets.flatMap((target) => {
-      const sqliteStore = Object.fromEntries(
-        target.sqliteEntries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-      );
-      const sessionKeys = new Set(
-        scanCodexSessionStoreRoutes(
-          sqliteStore,
-          params.blockedModelIdentities,
-          target.authProfileIdMap,
-        ),
-      );
+      const sessionKeys = new Set(target.staleSqliteSessionKeys);
       if (target.hasLegacyStore) {
         for (const sessionKey of scanCodexSessionStoreRoutes(
           loadLegacySessionStore(target.storePath),
@@ -466,19 +483,12 @@ export async function maybeRepairCodexSessionRoutes(params: {
   let repairedSessions = 0;
   for (const target of targets) {
     const repairedSessionKeys = new Set<string>();
-    const sqliteStore = Object.fromEntries(
-      target.sqliteEntries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-    );
-    const staleSqliteSessionKeys = scanCodexSessionStoreRoutes(
-      sqliteStore,
-      params.blockedModelIdentities,
-      target.authProfileIdMap,
-    );
-    if (staleSqliteSessionKeys.length > 0) {
+    const { staleSqliteSessionKeys } = target;
+    for (const sessionKeys of iterateDoctorSessionKeyBatches(staleSqliteSessionKeys)) {
       const result = await applySessionEntryReplacements({
         agentId: target.agentId,
         storePath: target.storePath,
-        sessionKeys: staleSqliteSessionKeys,
+        sessionKeys,
         skipMaintenance: true,
         update: (entries) => {
           const store = Object.fromEntries(

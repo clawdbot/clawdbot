@@ -10,7 +10,13 @@ type CliConfigGuardMode = "run" | "skip" | "validate" | "when-suppressed";
 type CliConfigGuardPolicy =
   | CliConfigGuardMode
   | ((ctx: { argv: string[]; commandPath: string[] }) => CliConfigGuardMode);
-export type CliPluginRegistryScope = "all" | "channels" | "configured-channels" | "memory";
+export type CliPluginRegistryScope =
+  | "all"
+  | "channels"
+  | "configured-channels"
+  | "memory"
+  | "sandbox-backends"
+  | "sandbox-management";
 export type CliPluginRegistryPolicy = {
   scope: CliPluginRegistryScope;
 };
@@ -127,6 +133,25 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
   },
   { commandPath: ["directory"], policy: { loadPlugins: "always" } },
+  {
+    commandPath: ["sandbox"],
+    policy: {
+      loadPlugins: ({ argv, commandPath }) =>
+        !(
+          (commandPath[1] === "list" || commandPath[1] === "recreate") &&
+          hasFlag(argv, "--browser")
+        ),
+      pluginRegistry: { scope: "sandbox-backends" },
+    },
+  },
+  {
+    commandPath: ["sandbox", "list"],
+    policy: { pluginRegistry: { scope: "sandbox-management" } },
+  },
+  {
+    commandPath: ["sandbox", "recreate"],
+    policy: { pluginRegistry: { scope: "sandbox-management" } },
+  },
   { commandPath: ["agents"], policy: { loadPlugins: "always", networkProxy: "bypass" } },
   {
     commandPath: ["agents"],
@@ -186,6 +211,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: "bypass",
     },
     route: { id: "status" },
+  },
+  {
+    commandPath: ["telemetry"],
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   {
     commandPath: ["health"],
@@ -424,6 +453,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       // config-health observation can open the canonical SQLite database.
       networkProxy: ({ argv }) => (hasCliOption(argv, "--state-sqlite") ? "bypass" : "default"),
     },
+  },
+  {
+    commandPath: ["triage"],
+    policy: { configGuard: "skip", loadPlugins: "never" },
   },
   { commandPath: ["exec-approvals"], policy: { networkProxy: "bypass" } },
   { commandPath: ["exec-policy"], policy: { networkProxy: "bypass" } },

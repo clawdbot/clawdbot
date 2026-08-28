@@ -3,13 +3,26 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError } from "../../plugins/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { bindDeviceWorkerAvailability } from "./device-provider.js";
+import { REQUEST } from "./placement-dispatch-test-fixtures.js";
+import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
+import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
@@ -94,6 +107,324 @@ describe("worker environment service provision replay", () => {
     expect(support.testState.store.get(environmentId)).toMatchObject({
       state: "destroyed",
       leaseId: "lease-restarted",
+    });
+  });
+
+  it("replays one node lease once across overlapping reconciliation and activates once", async () => {
+    const events: string[] = [];
+    const operationIds: string[] = [];
+    const physicalLeases = new Set<string>();
+    const enrollmentConnected = createDeferredCore<string>();
+    const destroy = vi.fn(async ({ leaseId }: { leaseId: string }) => {
+      physicalLeases.delete(leaseId);
+    });
+    let provisionCalls = 0;
+    let physicalAllocations = 0;
+    const provider = support.createProvider({
+      supportedExecutionModes: ["worker-turn"],
+      provisionBeforeInstallation: true,
+      requiresNodeEnrollment: true,
+      provision: async (_profile, operationId, options) => {
+        provisionCalls += 1;
+        events.push(`provision:${provisionCalls}`);
+        operationIds.push(operationId);
+        if (!physicalLeases.has("lease-node-replay")) {
+          physicalLeases.add("lease-node-replay");
+          physicalAllocations += 1;
+        }
+        if (provisionCalls === 1) {
+          throw new Error("provider response was lost after exact lease allocation");
+        }
+        let enrollment;
+        try {
+          enrollment = await options?.beginNodeEnrollment?.();
+        } catch (error) {
+          events.push(`enrollment:error:${error instanceof Error ? error.message : String(error)}`);
+          throw error;
+        }
+        if (!enrollment) {
+          throw new Error("node enrollment was not prepared");
+        }
+        events.push("enrollment:start");
+        return {
+          leaseId: "lease-node-replay",
+          node: { deviceId: await enrollment.waitForDeviceId() },
+          sharedHost: false,
+        };
+      },
+      destroy,
+    });
+    support.testState.prepareInstallation = vi.fn(async () => ({
+      ...support.BUNDLE_ARTIFACT,
+      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+    }));
+    let placements = createWorkerSessionPlacementStore({
+      database: support.testState.stateDb,
+      now: () => support.testState.nowMs,
+    });
+    const placement = placements.startDispatch(REQUEST);
+    const idempotencyKey = `session-dispatch:${REQUEST.sessionId}:${placement.generation}`;
+    const intent = deriveEnvironmentIntent(idempotencyKey);
+    placements.transition({
+      sessionId: placement.sessionId,
+      from: "requested",
+      to: "provisioning",
+      expectedGeneration: placement.generation,
+      patch: { environmentId: intent.environmentId },
+    });
+    const first = support.createService(provider, {
+      ensureNodeWorkerBundle: async () => ({
+        ...support.BOOTSTRAP_RECEIPT,
+        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      }),
+      prepareNodeEnrollment: async () => {
+        throw new Error("first provision reply was lost before node enrollment");
+      },
+    });
+
+    await expect(
+      first.create("development", idempotencyKey, undefined, REQUEST.executionMode),
+    ).rejects.toMatchObject({ code: "provider_failure" });
+    events.push("first:failed");
+    expect(support.testState.store.get(intent.environmentId)).toMatchObject({
+      state: "provisioning",
+      leaseId: null,
+      provisionOperationId: intent.provisionOperationId,
+    });
+
+    await first.stop();
+    events.push("first:stopped");
+    support.testState.service = undefined;
+    closeOpenClawStateDatabaseForTest();
+    support.testState.stateDb = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: support.testState.root },
+    });
+    support.testState.store = createWorkerEnvironmentStore({
+      database: support.testState.stateDb,
+      now: () => support.testState.nowMs,
+    });
+    placements = createWorkerSessionPlacementStore({
+      database: support.testState.stateDb,
+      now: () => support.testState.nowMs,
+    });
+    const syncWorkspace = vi.fn(async () => ({
+      mode: "git" as const,
+      remoteWorkspaceDir: "/worker/workspace",
+      manifestRef: `sha256:${"b".repeat(64)}`,
+    }));
+    const nodeTunnelManager = {
+      status: () => "stopped" as const,
+      start: vi.fn(async ({ environmentId, ownerEpoch }) => ({
+        environmentId,
+        ownerEpoch,
+        launchTurn: vi.fn(),
+        runWorkspaceCommand: vi.fn(),
+        quiesceWorkspace: vi.fn(),
+        syncWorkspace,
+        reconcileWorkspace: vi.fn(),
+        stop: vi.fn(),
+      })),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    };
+    const restarted = support.createService(provider, {
+      ensureNodeWorkerBundle: async () => ({
+        ...support.BOOTSTRAP_RECEIPT,
+        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      }),
+      prepareNodeEnrollment: async (record) => {
+        const enrolled = support.testState.store.ensureNodeEnrollment(record.environmentId);
+        return {
+          mode: "connect" as const,
+          setupCode: "setup-code",
+          setupId: enrolled.nodeSetupId!,
+          openclawVersion: "2026.8.19",
+          packageSpecs: ["openclaw@2026.8.19"],
+          displayName: "Cloud worker replay",
+          waitForDeviceId: async () => await enrollmentConnected.promise,
+        };
+      },
+      nodeTunnelManager: nodeTunnelManager as never,
+    });
+    bindDeviceWorkerAvailability(restarted, async (nodeId) => ({
+      available: true,
+      node: {
+        nodeId,
+        connId: `conn-${nodeId}`,
+        pairingIdentity: `identity-${nodeId}`,
+        pairingGeneration: `generation-${nodeId}`,
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+        workerHost: { enabled: true, capacity: { total: 1, available: 1 } },
+        commands: [],
+      },
+    }));
+    const recoveryBarrier = vi.fn(async ({ expectedGeneration, environmentId, run }) => {
+      expect(placements.get(REQUEST.sessionId)).toMatchObject({
+        state: "provisioning",
+        generation: expectedGeneration,
+        environmentId,
+      });
+      await run("/gateway/workspace");
+    });
+    const activationBarrier = vi.fn(async ({ activate }) => activate());
+    const onActivated = vi.fn();
+    const attachSession = vi.spyOn(restarted, "attachSession");
+    const dispatch = createWorkerPlacementDispatchService({
+      placements,
+      environments: restarted,
+      runnerAvailability: { read: () => undefined, version: () => 0 },
+      resolveDevicePlacementRequirement: async () => ({
+        requiredNodeCommands: [],
+        consumesWorkerSlot: true,
+      }),
+      isCurrentNodePlacement: () => true,
+      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+      runLocalBarrier: async ({ startDispatch }) => startDispatch(),
+      runRecoveryBarrier: recoveryBarrier,
+      runActivationBarrier: activationBarrier,
+      runMoveBarrier: async ({ begin }) => begin(),
+      resolveMoveDestination: async () => undefined,
+      runReclaimBarrier: async ({ begin, reclaim }) => await reclaim("/gateway/workspace", begin()),
+      runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
+      resolveWorkspacePath: async () => "/gateway/workspace",
+      reportWorkspaceResultConflict: async () => {},
+      resolveWorkspaceResultConflict: async () => undefined,
+      onActivated,
+    });
+    const uninstallReconcileGuard = restarted.installReconcileEnvironmentGuard(
+      async (environmentId, reconcileEnvironmentCore) => {
+        const owners = placements
+          .list()
+          .filter((candidate) => candidate.environmentId === environmentId);
+        if (owners.length !== 1 || owners[0]?.state !== "provisioning") {
+          await reconcileEnvironmentCore();
+          return;
+        }
+        await dispatch.resumeProvisioning(owners[0], reconcileEnvironmentCore);
+      },
+    );
+
+    let recoverySettled = false;
+    const recovery = dispatch.reconcile().finally(() => {
+      recoverySettled = true;
+    });
+    events.push("recovery:started");
+    await support.waitForFast(
+      () => {
+        if (!events.includes("enrollment:start")) {
+          throw new Error(`node enrollment did not start: ${events.join(",")}`);
+        }
+      },
+      { timeout: 2_000 },
+    );
+    expect(recoverySettled).toBe(false);
+    expect(placements.get(REQUEST.sessionId)).toMatchObject({
+      state: "provisioning",
+      environmentId: intent.environmentId,
+    });
+    expect(support.testState.store.get(intent.environmentId)).toMatchObject({
+      state: "provisioning",
+      leaseId: null,
+    });
+    expect(nodeTunnelManager.start).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+    const overlappingEnvironmentReconcile = restarted.reconcileEnvironment(intent.environmentId);
+    const overlappingPlacementReconcile = dispatch.reconcileActive(intent.environmentId);
+    await Promise.resolve();
+    expect(provisionCalls).toBe(2);
+
+    enrollmentConnected.resolve("device-node-replay");
+    await Promise.all([recovery, overlappingEnvironmentReconcile, overlappingPlacementReconcile]);
+    await uninstallReconcileGuard();
+
+    expect(placements.get(REQUEST.sessionId)).toMatchObject({
+      state: "active",
+      environmentId: intent.environmentId,
+      workerBundleHash: support.BUNDLE_HASH,
+    });
+    expect(support.testState.store.get(intent.environmentId)).toMatchObject({
+      state: "attached",
+      leaseId: "lease-node-replay",
+      nodeDeviceId: "device-node-replay",
+      attachedSessionIds: [REQUEST.sessionId],
+    });
+    expect(physicalAllocations).toBe(1);
+    expect(operationIds).toEqual([intent.provisionOperationId, intent.provisionOperationId]);
+    expect(recoveryBarrier).toHaveBeenCalled();
+    expect(activationBarrier).not.toHaveBeenCalled();
+    expect(attachSession).toHaveBeenCalledOnce();
+    expect(nodeTunnelManager.start).toHaveBeenCalledOnce();
+    expect(syncWorkspace).toHaveBeenCalledOnce();
+    expect(onActivated).toHaveBeenCalledOnce();
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("recovers indeterminate cleanup (released: %s)", async (released) => {
+    const leaseId = "lease:worker-provision-cleanup";
+    const provision = vi.fn(async () => {
+      throw WorkerProviderError.cleanupIndeterminate(
+        leaseId,
+        new Error("worker enrollment failed"),
+        new Error("provider stop timed out after release was requested"),
+      );
+    });
+    const inspect = vi.fn(async () => ({
+      status: released ? ("destroyed" as const) : ("active" as const),
+    }));
+    const destroy = vi.fn(async () => {});
+    const provider = support.createProvider({ provision, inspect, destroy });
+    const workerService = support.createService(provider);
+
+    await expect(
+      workerService.create("development", "request-provision-cleanup"),
+    ).rejects.toMatchObject({
+      code: "provider_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    const pending = expectDefined(support.testState.store.list()[0], "persisted provision cleanup");
+    expect(pending).toMatchObject({
+      state: "destroying",
+      leaseId,
+      destroyRequestedAtMs: expect.any(Number),
+      teardownTerminalState: "failed",
+      lastError: expect.stringMatching(
+        /worker enrollment failed.*provider stop timed out after release was requested/u,
+      ),
+    });
+
+    await workerService.stop();
+    support.testState.service = undefined;
+    closeOpenClawStateDatabaseForTest();
+    support.testState.stateDb = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: support.testState.root },
+    });
+    support.testState.store = createWorkerEnvironmentStore({
+      database: support.testState.stateDb,
+      now: () => support.testState.nowMs,
+    });
+    const restarted = support.createService(provider);
+    restarted.start();
+    await support.waitForFast(() =>
+      expect(support.testState.store.get(pending.environmentId)).toMatchObject({
+        state: "failed",
+        leaseId: null,
+      }),
+    );
+
+    expect(provision).toHaveBeenCalledTimes(1);
+    expect(inspect).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+    expect(destroy).toHaveBeenCalledTimes(released ? 0 : 1);
+    if (!released) {
+      expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+    }
+    expect(support.testState.store.get(pending.environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      teardownTerminalState: "failed",
+      lastError: expect.stringMatching(
+        /worker enrollment failed.*provider stop timed out after release was requested/u,
+      ),
     });
   });
 

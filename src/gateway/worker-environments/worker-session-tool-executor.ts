@@ -1,14 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
+  WorkerGitHubPublishParams,
   WorkerSessionsSendParams,
   WorkerSessionsSpawnParams,
   WorkerSessionToolResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import {
-  WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
-  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-} from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { buildSubagentExecutionSessionSpawnContext } from "../../agents/subagents/spawn/subagent-spawn-execution-identity.js";
 import {
   getGatewayToolCallerIdentity,
@@ -26,10 +22,12 @@ import { createSessionsSpawnTool } from "../../agents/tools/sessions-spawn-tool.
 import { jsonResult } from "../../agents/tools/tool-results.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { inheritSessionCreationPolicy } from "../../config/sessions/session-entry-provenance.js";
 import { sha256Base64Url, sha256HexPrefixCore } from "../../infra/crypto-digest.js";
-import { redactSensitiveText } from "../../logging/redact.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
+import type { GitHubPublicationCoordinator } from "../github-publication.js";
+import type { GatewayContextResolver } from "../server-methods/types.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
@@ -40,6 +38,15 @@ import {
 import type { WorkerPlacementDispatchContract } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
+  createWorkerPortalToolExecutor,
+  type WorkerPortalToolExecutorDependencies,
+  type WorkerPortalToolRequest,
+} from "./worker-portal-tool-executor.js";
+import {
+  serializeWorkerSessionToolResult as serializeResult,
+  workerSessionToolErrorResult as errorResult,
+} from "./worker-session-tool-result.js";
+import {
   assertWorkerSessionToolChild as assertExactChild,
   resolveWorkerSessionToolSource as exactSource,
   resolveWorkerSessionToolTarget as exactAuthorizedTarget,
@@ -49,18 +56,12 @@ import {
 } from "./worker-session-tool-topology.js";
 
 type WorkerSessionToolRequest =
-  | {
-      identity: WorkerConnectionIdentity;
-      toolName: "sessions_spawn";
-      request: WorkerSessionsSpawnParams;
-      signal?: AbortSignal;
-    }
-  | {
-      identity: WorkerConnectionIdentity;
-      toolName: "sessions_send";
-      request: WorkerSessionsSendParams;
-      signal?: AbortSignal;
-    };
+  | WorkerPortalToolRequest
+  | ({ identity: WorkerConnectionIdentity; signal?: AbortSignal } & (
+      | { toolName: "sessions_spawn"; request: WorkerSessionsSpawnParams }
+      | { toolName: "sessions_send"; request: WorkerSessionsSendParams }
+      | { toolName: "github_publish"; request: WorkerGitHubPublishParams }
+    ));
 
 class WorkerSessionToolOutcomeUnknownError extends Error {
   constructor(cause: unknown) {
@@ -77,55 +78,23 @@ function operationKey(operationSeed: string, purpose: string): string {
   return sha256Base64Url(`openclaw.worker-session-tool-operation.v1\0${operationSeed}\0${purpose}`);
 }
 
-function errorResult(error: unknown) {
-  const message = redactSensitiveText(
-    error instanceof Error ? error.message : "Worker session operation failed",
-    { mode: "tools" },
-  );
-  return jsonResult({
-    status: "error",
-    error: truncateUtf16Safe(message, 1_024),
-  });
-}
-
-function responseFrameBytes(resultJson: string): number {
-  return Buffer.byteLength(
-    JSON.stringify({
-      type: "res",
-      id: "x".repeat(WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH),
-      ok: true,
-      payload: { resultJson },
-    }),
-    "utf8",
-  );
-}
-
-function serializeResult(result: unknown): string {
-  const resultJson = JSON.stringify(result);
-  if (responseFrameBytes(resultJson) > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
-    return JSON.stringify(errorResult(new Error("Worker session tool result exceeded the limit")));
-  }
-  return resultJson;
-}
-
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  signal?.throwIfAborted();
-}
-
-function childSessionKey(params: { operationSeed: string; targetAgentId: string }): string {
-  const suffix = sha256HexPrefixCore(
-    `openclaw.worker-session-tool-operation.v1\0${params.operationSeed}\0child-session`,
+function childSessionKey(operationSeed: string, targetAgentId: string): string {
+  return `agent:${targetAgentId}:dashboard:cloud-${sha256HexPrefixCore(
+    `openclaw.worker-session-tool-operation.v1\0${operationSeed}\0child-session`,
     32,
-  );
-  return `agent:${params.targetAgentId}:dashboard:cloud-${suffix}`;
+  )}`;
 }
 
 export function createWorkerSessionToolExecutor(params: {
+  resolveGatewayContext: GatewayContextResolver;
   placements: WorkerSessionPlacementStore;
   environments: Pick<WorkerEnvironmentService, "get">;
   dispatchChild: WorkerPlacementDispatchContract["dispatch"];
+  githubPublication: Pick<GitHubPublicationCoordinator, "requestForClaim">;
+  portals: WorkerPortalToolExecutorDependencies["portals"];
 }) {
   const inFlight = new Map<string, Promise<string>>();
+  const executePortal = createWorkerPortalToolExecutor(params);
 
   const spawn = async (operation: {
     source: ExactSource;
@@ -135,14 +104,13 @@ export function createWorkerSessionToolExecutor(params: {
     childSessionKey: string;
     signal?: AbortSignal;
   }) => {
-    throwIfAborted(operation.signal);
+    operation.signal?.throwIfAborted();
     const sourceEnvironment = params.environments.get(operation.identity.environmentId);
     if (
       !sourceEnvironment ||
       sourceEnvironment.state !== "attached" ||
       sourceEnvironment.ownerEpoch !== operation.identity.ownerEpoch ||
-      sourceEnvironment.attachedSessionIds.length !== 1 ||
-      sourceEnvironment.attachedSessionIds[0] !== operation.source.sessionId
+      !isDeepStrictEqual(sourceEnvironment.attachedSessionIds, [operation.source.sessionId])
     ) {
       throw new Error("Worker source environment changed before child spawn");
     }
@@ -150,12 +118,10 @@ export function createWorkerSessionToolExecutor(params: {
     const authorizedTools = WORKER_TOOL_NAMES.filter((name) =>
       params.placements.isWorkerTurnToolAuthorized(operation.source.turnClaim, name),
     );
-    const lineageCapability = getWorkerTurnExecutionIdentityCapability(params.placements, {
-      sessionId: operation.source.sessionId,
-      environmentId: operation.source.turnClaim.owner.environmentId,
-      ownerEpoch: operation.source.turnClaim.owner.ownerEpoch,
-      runId: operation.source.turnClaim.runId,
-    });
+    const lineageCapability = getWorkerTurnExecutionIdentityCapability(
+      params.placements,
+      operation.source.turnClaim,
+    );
     let workerIdentity: WorkerTurnExecutionIdentity | undefined;
     const gatewayCall: InProcessGatewayCaller = async <T = Record<string, unknown>>(
       method: string,
@@ -169,7 +135,7 @@ export function createWorkerSessionToolExecutor(params: {
           timeoutMs: null,
         });
       }
-      throwIfAborted(operation.signal);
+      operation.signal?.throwIfAborted();
       exactSource({ identity: operation.identity, placements: params.placements });
       let loaded = loadGatewaySessionEntryReadOnly(operation.childSessionKey, {
         agentId: targetAgentId,
@@ -194,8 +160,10 @@ export function createWorkerSessionToolExecutor(params: {
           entry: loaded.entry,
         };
       } else {
+        const { source } = operation;
         const createParams: Record<string, unknown> = {
           ...requestParams,
+          ...(source.entry.permissionMode ? { permissionMode: source.entry.permissionMode } : {}),
           key: operation.childSessionKey,
         };
         delete createParams.task;
@@ -206,11 +174,14 @@ export function createWorkerSessionToolExecutor(params: {
             createParams,
             {
               via: "spawn",
-              actor: { type: "agent", id: operation.source.agentId },
-              requesterSessionKey: operation.source.sessionKey,
+              ...inheritSessionCreationPolicy(source.entry, { type: "agent", id: source.agentId }),
+              requesterSessionKey: source.sessionKey,
               inheritedToolPolicy: { version: 1, allow: authorizedTools, deny: [] },
             },
             {
+              resolveGatewayContext: params.resolveGatewayContext,
+              sessionMutationCommitGuard: () =>
+                exactSource({ identity: operation.identity, placements: params.placements }),
               ...(operation.signal ? { signal: operation.signal } : {}),
               timeoutMs: null,
             },
@@ -272,7 +243,7 @@ export function createWorkerSessionToolExecutor(params: {
           }
         };
         const childPlacement = params.placements.get(childSessionId);
-        throwIfAborted(operation.signal);
+        operation.signal?.throwIfAborted();
         exactSource({ identity: operation.identity, placements: params.placements });
         if (childPlacement?.state !== "active") {
           try {
@@ -297,7 +268,7 @@ export function createWorkerSessionToolExecutor(params: {
         }
         assertActiveChildPlacement();
         exactSource({ identity: operation.identity, placements: params.placements });
-        throwIfAborted(operation.signal);
+        operation.signal?.throwIfAborted();
         assertExactChild({
           childSessionKey: operation.childSessionKey,
           childSessionId,
@@ -334,7 +305,7 @@ export function createWorkerSessionToolExecutor(params: {
             let sendResult: Record<string, unknown> | undefined;
             for (let attempt = 0; attempt < 2; attempt += 1) {
               try {
-                throwIfAborted(operation.signal);
+                operation.signal?.throwIfAborted();
                 exactSource({ identity: operation.identity, placements: params.placements });
                 assertExactChild({
                   childSessionKey: operation.childSessionKey,
@@ -452,8 +423,10 @@ export function createWorkerSessionToolExecutor(params: {
               {
                 agentId: identity.agentId,
                 sessionKey: identity.sessionKey,
+                gatewayContextResolver: params.resolveGatewayContext,
                 operationalRunInstance: identity.operationalRunInstance,
                 executionIdentityToken: identity.executionIdentityToken,
+                receiptAuthority: identity.receiptAuthority,
                 workerTurnClaim: identity.turnClaim,
                 workerTurnExecutionIdentityCapability: lineageCapability,
               },
@@ -463,7 +436,14 @@ export function createWorkerSessionToolExecutor(params: {
             workerIdentity = undefined;
           }
         })
-      : await executeSpawn();
+      : await withGatewayToolCallerIdentity(
+          {
+            agentId: operation.source.agentId,
+            sessionKey: operation.source.sessionKey,
+            gatewayContextResolver: params.resolveGatewayContext,
+          },
+          executeSpawn,
+        );
   };
 
   const send = async (operation: {
@@ -474,7 +454,7 @@ export function createWorkerSessionToolExecutor(params: {
     idempotencyKey: string;
     signal?: AbortSignal;
   }) => {
-    throwIfAborted(operation.signal);
+    operation.signal?.throwIfAborted();
     exactSource({ identity: operation.identity, placements: params.placements });
     const config = getRuntimeConfig();
     const executeFencedSend = async () => {
@@ -507,7 +487,7 @@ export function createWorkerSessionToolExecutor(params: {
       });
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          throwIfAborted(operation.signal);
+          operation.signal?.throwIfAborted();
           exactSource({ identity: operation.identity, placements: params.placements });
           assertCurrentTarget();
           return await tool.execute(operation.request.toolCallId, {
@@ -544,6 +524,30 @@ export function createWorkerSessionToolExecutor(params: {
 
   return async (request: WorkerSessionToolRequest): Promise<WorkerSessionToolResult> => {
     const source = exactSource({ identity: request.identity, placements: params.placements });
+    if (request.toolName === "portal") {
+      return await executePortal(request);
+    }
+    if (request.toolName === "github_publish") {
+      const assertPublicationAuthority = () => {
+        const current = exactSource({ identity: request.identity, placements: params.placements });
+        if (!params.placements.isWorkerTurnToolAuthorized(current.turnClaim, request.toolName)) {
+          throw new Error("Worker session tool authority changed");
+        }
+      };
+      assertPublicationAuthority();
+      request.signal?.throwIfAborted();
+      const publication = await params.githubPublication.requestForClaim({
+        claim: source.turnClaim,
+        sessionKey: source.sessionKey,
+        agentId: source.agentId,
+        idempotencyKey: request.request.toolCallId,
+        ...(request.request.title ? { title: request.request.title } : {}),
+        ...(request.request.body ? { body: request.request.body } : {}),
+        assertCurrent: assertPublicationAuthority,
+      });
+      assertPublicationAuthority();
+      return { resultJson: serializeResult(jsonResult(publication)) };
+    }
     const requestDigest = computeRequestDigest(
       request.toolName === "sessions_spawn"
         ? {
@@ -621,10 +625,7 @@ export function createWorkerSessionToolExecutor(params: {
         let childKey = started.childSessionKey;
         if (request.toolName === "sessions_spawn" && !childKey) {
           const targetAgentId = normalizeAgentId(request.request.agentId ?? source.agentId);
-          childKey = childSessionKey({
-            operationSeed: started.operationSeed,
-            targetAgentId,
-          });
+          childKey = childSessionKey(started.operationSeed, targetAgentId);
           if (
             !params.placements.bindWorkerSessionToolOperationChild({
               sourceSessionId: source.sessionId,

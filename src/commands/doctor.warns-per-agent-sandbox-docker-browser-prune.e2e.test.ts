@@ -51,7 +51,7 @@ describe("doctor command", () => {
       }
       const normalized = message.replace(/\s+/g, " ").trim();
       return (
-        normalized.includes('agents.list (id "work") sandbox docker') &&
+        normalized.includes("agents.entries.work sandbox docker") &&
         normalized.includes('scope resolves to "shared"')
       );
     });

@@ -1,6 +1,14 @@
 // Sessions access tests cover session-tool visibility policy, sandbox clamps,
 // and agent-to-agent allow rules.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { pageExecutionDecisionFactsForContext } from "../../audit/execution-decision-facts.js";
+import { configureExecutionDecisionWorkSink } from "../../audit/execution-decision-work.js";
+import {
+  createExecutionIdentityAdmissionToken,
+  enqueueExecutionIdentityContextAtAdmission,
+} from "../../audit/execution-identity-admission.js";
+import { startAgentLocalAuditWriter } from "../../commands/agent-local-audit.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { GatewayCredentialsRequiredError } from "../../gateway/call.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
@@ -13,13 +21,30 @@ import {
   resolveSandboxSessionToolsVisibility,
   resolveSessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";
-import { resolveSandboxedSessionToolContext, resolveSessionToolAccess } from "./sessions-access.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  formatSessionToolAccessDenial,
+  resolveSandboxedSessionToolContext,
+  resolveSessionToolAccess,
+} from "./sessions-access.js";
 
 const loggerMocks = vi.hoisted(() => ({ logWarn: vi.fn() }));
+const gatewayMocks = vi.hoisted(() => ({ callGateway: vi.fn() }));
 vi.mock("../../logger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../logger.js")>()),
   logWarn: loggerMocks.logWarn,
 }));
+vi.mock("../../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/call.js")>()),
+  callGateway: gatewayMocks.callGateway,
+}));
+
+beforeEach(() => {
+  gatewayMocks.callGateway.mockReset();
+});
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const AUDIT_REF_RE = /^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64}$/u;
 
 function makeConfig(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
   return overrides;
@@ -471,6 +496,161 @@ describe("createSessionVisibilityGuard", () => {
     expect(gateway).toHaveBeenCalledWith(expect.objectContaining({ method: "sessions.resolve" }));
   });
 
+  it("returns a private typed denial without presentation text", async () => {
+    const access = await resolveSessionToolAccess({
+      action: "send",
+      requesterAgentId: "main",
+      requesterSessionKey: "agent:main:main",
+      targetAgentId: "ops",
+      targetSessionKey: "agent:ops:main",
+      requesterOwned: false,
+      visibility: "all",
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
+    });
+
+    expect(access).toMatchObject({
+      allowed: false,
+      status: "forbidden",
+      reasonCode: expect.any(String),
+      policyRefs: expect.arrayContaining(["tools.agentToAgent.enabled"]),
+    });
+    expect(access).not.toHaveProperty("error");
+  });
+
+  it("persists unknown ownership evidence with an opaque target through the local writer", async () => {
+    const now = Date.now();
+    const stateDir = tempDirs.make("openclaw-session-access-audit-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const stopWriter = startAgentLocalAuditWriter({ stateDir });
+    if (!stopWriter) {
+      throw new Error("expected an isolated direct-local audit writer");
+    }
+    const token = createExecutionIdentityAdmissionToken("session-access-run", {
+      contextId: "session-access-context",
+      executionId: "session-access-execution",
+      now,
+    });
+    expect(
+      enqueueExecutionIdentityContextAtAdmission(
+        {
+          runId: token.runId,
+          agentId: "main",
+          ingress: { kind: "local-cli", boundary: "agent-command.local" },
+          runtime: { kind: "embedded" },
+        },
+        { enabled: true, token, runtimeInstanceId: "session-access-runtime" },
+      ),
+    ).toMatchObject({ accepted: true });
+
+    const targetSessionKey = "agent:main:dashboard:owner-unknown";
+    gatewayMocks.callGateway.mockRejectedValue(
+      new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "transport timeout",
+        retryable: true,
+      }),
+    );
+    try {
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          executionIdentityToken: token,
+          receiptAuthority: () => true,
+        },
+        async () => {
+          const access = await resolveSessionToolAccess({
+            action: "send",
+            requesterAgentId: "main",
+            requesterSessionKey: "agent:main:main",
+            targetAgentId: "main",
+            targetSessionKey,
+            requesterOwned: false,
+            visibility: "tree",
+            a2aPolicy: createAgentToAgentPolicy(makeConfig()),
+          });
+          expect(access).toMatchObject({
+            allowed: false,
+            reasonCode: "session_ownership_lookup_failed_transient",
+            contextFieldsUsed: ["requesterSessionKey", "targetSessionKey"],
+            missingEvidence: ["session.owner"],
+          });
+        },
+      );
+    } finally {
+      await stopWriter();
+    }
+
+    const page = pageExecutionDecisionFactsForContext({
+      context: token,
+      limit: 10,
+      now: now + 1,
+      database,
+    });
+    expect(page.receipts).toHaveLength(1);
+    expect(page.receipts[0]).toMatchObject({
+      contextId: token.contextId,
+      executionId: token.executionId,
+      runId: token.runId,
+      action: {
+        family: "session",
+        operation: "send",
+        targetRef: expect.stringMatching(AUDIT_REF_RE),
+      },
+      decision: { outcome: "denied", reasonCode: "session_ownership_lookup_failed_transient" },
+      enforcement: {
+        coverageState: "unknown",
+        policyRefs: ["tools.sessions.visibility"],
+        contextFieldsUsed: ["requesterSessionKey", "targetSessionKey"],
+      },
+      missingEvidence: ["session.owner"],
+    });
+    expect(JSON.stringify(page.receipts)).not.toContain(targetSessionKey);
+  });
+
+  it("revalidates the exact receipt authority after awaited ownership lookup", async () => {
+    const decisionWork: unknown[] = [];
+    const clear = configureExecutionDecisionWorkSink((work) => {
+      decisionWork.push(work);
+      return true;
+    });
+    const token = createExecutionIdentityAdmissionToken("session-access-closed-run", {
+      contextId: "session-access-closed-context",
+      executionId: "session-access-closed-execution",
+    });
+    let authorityActive = true;
+    gatewayMocks.callGateway.mockImplementation(async () => {
+      authorityActive = false;
+      return { sessions: [] };
+    });
+    try {
+      const access = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          executionIdentityToken: token,
+          receiptAuthority: () => authorityActive,
+        },
+        async () =>
+          await resolveSessionToolAccess({
+            action: "history",
+            requesterAgentId: "main",
+            requesterSessionKey: "agent:main:main",
+            targetAgentId: "main",
+            targetSessionKey: "agent:main:dashboard:unowned",
+            requesterOwned: false,
+            visibility: "tree",
+            a2aPolicy: createAgentToAgentPolicy(makeConfig()),
+          }),
+      );
+
+      expect(access).toMatchObject({ allowed: false, reasonCode: "tree_visibility_restricted" });
+      expect(decisionWork).toEqual([]);
+    } finally {
+      clear();
+    }
+  });
+
   it("falls back to spawned-session listing when the exact resolver is unavailable", async () => {
     const gateway = vi.fn(async (request: { method?: string }) => {
       if (request.method === "sessions.resolve") {
@@ -525,9 +705,16 @@ describe("createSessionVisibilityGuard", () => {
     expect(access).toEqual({
       allowed: false,
       status: "forbidden",
-      error:
-        "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+      reasonCode: "agent_to_agent_disabled",
+      policyRefs: ["tools.agentToAgent.enabled"],
+      contextFieldsUsed: ["requesterAgentId", "targetAgentId"],
+      missingEvidence: [],
     });
+    if (!access.allowed) {
+      expect(formatSessionToolAccessDenial(access, { action: "send" })).toBe(
+        "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+      );
+    }
     expect(gateway).not.toHaveBeenCalled();
   });
 
@@ -582,8 +769,19 @@ describe("createSessionVisibilityGuard", () => {
       expect(access).toEqual({
         allowed: false,
         status: "forbidden",
-        error: `Session not visible from session tools: ${targetSessionKey}`,
+        reasonCode: "incognito_session",
+        policyRefs: ["sessions.incognito"],
+        contextFieldsUsed: ["targetSessionKey"],
+        missingEvidence: [],
       });
+      if (!access.allowed) {
+        expect(
+          formatSessionToolAccessDenial(access, {
+            action: "history",
+            targetSessionKey,
+          }),
+        ).toBe(`Session not visible from session tools: ${targetSessionKey}`);
+      }
       expect(gateway).not.toHaveBeenCalled();
     } finally {
       unregister();
@@ -614,9 +812,16 @@ describe("createSessionVisibilityGuard", () => {
     expect(access).toEqual({
       allowed: false,
       status: "forbidden",
-      error:
-        "Session history denied because spawned-session ownership lookup failed (transient); retry once, then ask the operator to inspect OpenClaw logs.",
+      reasonCode: "session_ownership_lookup_failed_transient",
+      policyRefs: ["tools.sessions.visibility"],
+      contextFieldsUsed: ["requesterSessionKey", "targetSessionKey"],
+      missingEvidence: ["session.owner"],
     });
+    if (!access.allowed) {
+      expect(formatSessionToolAccessDenial(access, { action: "history" })).toBe(
+        "Session history denied because spawned-session ownership lookup failed (transient); retry once, then ask the operator to inspect OpenClaw logs.",
+      );
+    }
     expect(gateway).toHaveBeenCalledTimes(1);
   });
 

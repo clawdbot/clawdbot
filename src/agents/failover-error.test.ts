@@ -832,6 +832,11 @@ describe("failover-error", () => {
     it.each([
       ["availability", "WorkerRunnerUnavailableError", "The device runner is offline"],
       ["capacity", "WorkerRunnerCapacityError", "device worker capacity remained full"],
+      [
+        "workspace reconciliation",
+        "WorkerWorkspaceReconciliationError",
+        "cloud worker workspace result could not be reconciled",
+      ],
     ])("returns true for direct and nested runner %s failures", (_label, name, message) => {
       const coordination = new Error(message);
       coordination.name = name;

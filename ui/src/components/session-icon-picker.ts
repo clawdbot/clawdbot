@@ -30,6 +30,7 @@ function sessionEmojiPickerShortcut(): string | null {
 }
 
 type SessionIconPickerProps = {
+  inline?: boolean;
   mode: "grid" | "custom";
   currentIcon: string | null;
   customIconValue: string;
@@ -48,7 +49,10 @@ function renderCustomSessionIconEntry(props: SessionIconPickerProps) {
   const normalized = normalizeSessionIconValue(props.customIconValue);
   const shortcut = sessionEmojiPickerShortcut();
   return html`
-    <div slot="submenu" class="session-menu__icon-picker session-menu__icon-custom-entry">
+    <div
+      slot=${props.inline ? nothing : "submenu"}
+      class="session-menu__icon-picker session-menu__icon-custom-entry"
+    >
       <div class="session-menu__icon-custom-header">
         <button
           type="button"
@@ -96,7 +100,7 @@ export function renderSessionIconPicker(props: SessionIconPickerProps) {
     (icon) => icon === props.currentIcon,
   );
   return html`
-    <div slot="submenu" class="session-menu__icon-picker">
+    <div slot=${props.inline ? nothing : "submenu"} class="session-menu__icon-picker">
       <div
         class="session-menu__icon-options"
         role="group"

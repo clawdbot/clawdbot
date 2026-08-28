@@ -18,9 +18,6 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { GatewayClientOptions } from "./client.js";
 
-const TLS_FINGERPRINT = "ab".repeat(32);
-const DIFFERENT_TLS_FINGERPRINT = "cd".repeat(32);
-
 function waitForFast<T>(
   callback: () => T | Promise<T>,
   options: { timeout?: number; interval?: number } = {},
@@ -99,7 +96,6 @@ class MockWebSocket {
   autoCloseOnClose = true;
   readyState = MockWebSocket.CONNECTING;
   readonly options: unknown;
-  _socket?: { getPeerCertificate: () => { fingerprint256?: string } };
 
   constructor(_url: string, options?: unknown) {
     this.options = options;
@@ -107,13 +103,6 @@ class MockWebSocket {
     for (const observer of wsConstructorObservers) {
       observer(_url, options);
     }
-  }
-
-  setPeerFingerprint(fingerprint256: string): void {
-    Object.defineProperty(this, "_socket", {
-      configurable: true,
-      value: { getPeerCertificate: () => ({ fingerprint256 }) },
-    });
   }
 
   on(event: "open", handler: WsEventHandlers["open"]): void;
@@ -298,6 +287,11 @@ function expectSecurityConnectError(
 
 beforeAll(async () => {
   await loadGatewayClientModule();
+});
+
+beforeEach(() => {
+  logDebugMock.mockClear();
+  logErrorMock.mockClear();
 });
 
 afterEach(() => {
@@ -656,8 +650,6 @@ describe("GatewayClient request errors", () => {
   it("retries startup-unavailable connect failures without terminal callbacks", async () => {
     vi.useFakeTimers();
     wsInstances.length = 0;
-    logDebugMock.mockClear();
-    logErrorMock.mockClear();
     const onClose = vi.fn();
     const onConnectError = vi.fn();
     const client = new GatewayClient({
@@ -726,7 +718,6 @@ describe("GatewayClient close handling", () => {
     wsInstances.length = 0;
     clearDeviceAuthTokenMock.mockClear();
     clearDeviceAuthTokenMock.mockImplementation(() => undefined);
-    logDebugMock.mockClear();
   });
 
   it("clears stale token on device token mismatch close", () => {
@@ -794,35 +785,6 @@ describe("GatewayClient close handling", () => {
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid", {
       phase: "pre-hello",
       socketOpened: false,
-      transportValidated: false,
-      connectRequestSent: false,
-      transientPreHelloCleanClose: false,
-    });
-    client.stop();
-  });
-
-  it("marks an opened TLS transport unvalidated when fingerprint verification fails", () => {
-    const onClose = vi.fn();
-    const onConnectError = vi.fn();
-    const client = new GatewayClient({
-      url: "wss://127.0.0.1:18789",
-      tlsFingerprint: TLS_FINGERPRINT,
-      onClose,
-      onConnectError,
-    });
-
-    client.start();
-    const ws = getLatestWs();
-    ws.setPeerFingerprint(DIFFERENT_TLS_FINGERPRINT);
-    ws.emitOpen();
-
-    expect(onConnectError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "gateway tls fingerprint mismatch" }),
-    );
-    expect(onClose).toHaveBeenCalledWith(1008, "gateway tls fingerprint mismatch", {
-      connectError: expect.objectContaining({ message: "gateway tls fingerprint mismatch" }),
-      phase: "pre-hello",
-      socketOpened: true,
       transportValidated: false,
       connectRequestSent: false,
       transientPreHelloCleanClose: false,
@@ -1132,7 +1094,6 @@ describe("GatewayClient close handling", () => {
 describe("GatewayClient message dispatch", () => {
   beforeEach(() => {
     wsInstances.length = 0;
-    logDebugMock.mockClear();
   });
 
   it("keeps event callback errors inside message dispatch", () => {
@@ -1182,8 +1143,6 @@ describe("GatewayClient connect auth payload", () => {
     storeOriginDeviceTokenMock.mockReset();
     readLoggingConfigMock.mockReset();
     readLoggingConfigMock.mockReturnValue(undefined);
-    logDebugMock.mockClear();
-    logErrorMock.mockClear();
   });
 
   type ParsedConnectRequest = {
@@ -1362,6 +1321,45 @@ describe("GatewayClient connect auth payload", () => {
     },
   );
 
+  it.each([
+    { name: "default operator clients", options: {} },
+    {
+      name: "TUI clients",
+      options: {
+        clientName: GATEWAY_CLIENT_NAMES.TUI,
+        mode: GATEWAY_CLIENT_MODES.UI,
+        minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+      },
+    },
+  ])("pauses $name after a permanent protocol mismatch", async ({ options }) => {
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+      onReconnectPaused,
+      ...options,
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws,
+      connectId: connect.id,
+      failureDetails: {
+        code: "PROTOCOL_MISMATCH",
+        expectedProtocol: PROTOCOL_VERSION + 1,
+      },
+      failureMessage: "incompatible gateway version",
+    });
+
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "PROTOCOL_MISMATCH",
+    });
+  });
+
   it("signs device proof with the emitted node client mode", () => {
     const signDevicePayload = vi.fn((_privateKeyPem: string, _payload: string) => "signature");
     const client = createClientWithIdentity("device-node-mode", vi.fn(), {
@@ -1415,7 +1413,7 @@ describe("GatewayClient connect auth payload", () => {
       emitConnectFailure(
         currentWs,
         currentConnect.id,
-        { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+        { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
         "protocol mismatch",
       );
       const legacyWs = await advanceToNextReconnect();
@@ -1467,7 +1465,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       currentWs,
       currentConnect.id,
-      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
     const v3Ws = await advanceToNextReconnect();
@@ -1489,7 +1487,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       upgradedProbeWs,
       upgradedProbeConnect.id,
-      { expectedProtocol: PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: PROTOCOL_VERSION },
       "protocol mismatch",
     );
 
@@ -1518,7 +1516,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       rolledBackProbeWs,
       rolledBackProbeConnect.id,
-      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
     const rolledBackLegacyWs = await advanceToNextReconnect();
@@ -1569,7 +1567,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       initialWs,
       initialConnect.id,
-      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
     const v3Ws = await advanceToNextReconnect();
@@ -1587,7 +1585,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       v3UpgradeProbeWs,
       v3UpgradeProbe.id,
-      { expectedProtocol: PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: PROTOCOL_VERSION },
       "protocol mismatch",
     );
 
@@ -1598,7 +1596,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       v4Ws,
       v4Connect.id,
-      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
 
@@ -1611,6 +1609,48 @@ describe("GatewayClient connect auth payload", () => {
     });
     expect(onHelloOk).toHaveBeenCalledOnce();
     client.stop();
+  });
+
+  it("pauses a node host after an unsupported protocol mismatch following a supported transition", async () => {
+    const onReconnectPaused = vi.fn();
+    const client = createClientWithIdentity("device-unsupported-node-protocol", vi.fn(), {
+      role: "node",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      onReconnectPaused,
+    });
+
+    const { ws: currentWs, connect: currentConnect } = startClientAndConnect({ client });
+    emitConnectFailure(currentWs, currentConnect.id, {
+      code: "PROTOCOL_MISMATCH",
+      expectedProtocol: MIN_NODE_PROTOCOL_VERSION,
+    });
+    const legacyWs = await advanceToNextReconnect();
+    legacyWs.emitOpen();
+    emitConnectChallenge(legacyWs, "nonce-unsupported-node-protocol");
+    const legacyConnect = connectRequestFrom(legacyWs);
+    expect(legacyConnect.params).toMatchObject({
+      minProtocol: MIN_NODE_PROTOCOL_VERSION,
+      maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+    });
+    expect(onReconnectPaused).not.toHaveBeenCalled();
+
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: legacyWs,
+      connectId: legacyConnect.id,
+      failureDetails: {
+        code: "PROTOCOL_MISMATCH",
+        expectedProtocol: PROTOCOL_VERSION + 1,
+      },
+      failureMessage: "unsupported gateway protocol",
+    });
+
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "PROTOCOL_MISMATCH",
+    });
   });
 
   it("keeps canonical platform metadata for non-node-host node clients", () => {
@@ -1901,6 +1941,7 @@ describe("GatewayClient connect auth payload", () => {
     failureMessage?: string;
   }) {
     vi.useFakeTimers();
+    const socketCount = wsInstances.length;
     try {
       emitConnectFailure(
         params.firstWs,
@@ -1909,7 +1950,7 @@ describe("GatewayClient connect auth payload", () => {
         params.failureMessage,
       );
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(wsInstances).toHaveLength(1);
+      expect(wsInstances).toHaveLength(socketCount);
     } finally {
       params.client.stop();
       vi.useRealTimers();

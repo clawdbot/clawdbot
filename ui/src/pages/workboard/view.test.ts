@@ -820,6 +820,9 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-board")?.className).toContain(
       "workboard-board--single-column",
     );
+    expect(container.querySelector(".workboard-board")?.className).toContain(
+      "workboard-board--page",
+    );
     expect(container.querySelector(".workboard-column h2")?.textContent).toContain("Ready");
     expect(
       [...container.querySelectorAll(".workboard-column h2")].map((heading) => heading.textContent),
@@ -885,7 +888,7 @@ describe("renderWorkboard", () => {
     renderView();
 
     const toolbarFilters = container.querySelector(".workboard-toolbar__filters");
-    expect(toolbarFilters?.querySelectorAll(".workboard-select--toolbar")).toHaveLength(2);
+    expect(toolbarFilters?.querySelectorAll(".workboard-select--toolbar")).toHaveLength(3);
     expect(toolbarFilters?.querySelectorAll("select")).toHaveLength(0);
     expect(toolbarFilters?.textContent).toContain("All cards");
     expect(toolbarFilters?.textContent).toContain("All priorities");
@@ -938,7 +941,7 @@ describe("renderWorkboard", () => {
 
     expect(container.textContent).toContain("Writer card");
     expect(container.textContent).not.toContain("Ops card");
-    expect(container.querySelectorAll(".workboard-select--toolbar")).toHaveLength(2);
+    expect(container.querySelectorAll(".workboard-select--toolbar")).toHaveLength(3);
   });
 
   it("uses labelled controls for Workboard filters", () => {
@@ -950,14 +953,15 @@ describe("renderWorkboard", () => {
         ".workboard-toolbar__filters > wa-select",
       ),
     ];
-    expect(selects).toHaveLength(2);
+    expect(selects).toHaveLength(3);
     expect(selects.map((select) => select.querySelector('[slot="label"]')?.textContent)).toEqual([
       "Workboard view",
       "All priorities",
+      "Empty columns",
     ]);
     expect(
       selects.map((select) => select.querySelector("wa-option[selected]")?.getAttribute("value")),
-    ).toEqual(["all", "all"]);
+    ).toEqual(["all", "all", "show"]);
     const agentSelect = container.querySelector<
       HTMLElement & { accessibleLabel: string; value: string }
     >(".workboard-agent-select--toolbar");
@@ -966,7 +970,7 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-select__trigger")).toBeNull();
   });
 
-  it("can hide empty columns while keeping populated columns visible", () => {
+  it("supports showing, collapsing, and hiding empty columns", () => {
     const { state, container, renderView } = createWorkboardView({
       onRequestUpdate: () => undefined,
     });
@@ -977,23 +981,36 @@ describe("renderWorkboard", () => {
     ];
     renderView();
     expect(container.querySelectorAll(".workboard-column")).toHaveLength(9);
+    expect(container.querySelector(".workboard-column--collapsed")).toBeNull();
 
-    const toggle = container.querySelector<HTMLInputElement>(
-      'input[name="workboard-hide-empty-columns"]',
-    );
-    expect(toggle).toBeInstanceOf(HTMLInputElement);
-    toggle!.checked = true;
-    toggle!.dispatchEvent(new Event("change", { bubbles: true }));
+    const emptyColumns = container.querySelector(".workboard-select--empty-columns");
+    changeWorkboardSelect(emptyColumns, "collapse");
     renderView();
 
-    const columnHeadings = Array.from(
-      container.querySelectorAll<HTMLElement>(".workboard-column__header h2"),
-    ).map((heading) => heading.textContent?.trim());
-    expect(state.hideEmptyColumns).toBe(true);
+    expect(state.emptyColumnMode).toBe("collapse");
+    expect(container.querySelectorAll(".workboard-column")).toHaveLength(9);
+    expect(container.querySelectorAll(".workboard-column--collapsed")).toHaveLength(8);
+    expect(container.querySelector(".workboard-column--todo")?.classList).not.toContain(
+      "workboard-column--collapsed",
+    );
+
+    buttonByLabel(container, "Collapse Todo column")?.click();
+    renderView();
+    expect(state.collapsedStatuses).toContain("todo");
+    expect(container.querySelector(".workboard-column--todo")?.classList).toContain(
+      "workboard-column--collapsed",
+    );
+
+    buttonByLabel(container, "Expand Todo column")?.click();
+    renderView();
+    expect(state.collapsedStatuses).not.toContain("todo");
+
+    changeWorkboardSelect(emptyColumns, "hide");
+    renderView();
+
+    expect(state.emptyColumnMode).toBe("hide");
     expect(container.querySelectorAll(".workboard-column")).toHaveLength(1);
-    expect(columnHeadings).toEqual(["Todo"]);
-    expect(container.textContent).toContain("Todo");
-    expect(container.textContent).toContain("Keep visible");
+    expect(container.querySelector(".workboard-column--todo")).not.toBeNull();
   });
 
   it("does not render Invalid Date for Date-invalid card timestamps", () => {
@@ -1119,7 +1136,6 @@ describe("renderWorkboard", () => {
       expect(launcher).toBeInstanceOf(HTMLButtonElement);
       launcher?.focus();
       launcher?.click();
-      await nextFrame();
 
       const modal = container.querySelector("openclaw-modal-dialog");
       const { dialog } = await getRenderedModalDialog(container);
@@ -1155,7 +1171,8 @@ describe("renderWorkboard", () => {
     try {
       renderInto(container, props);
       container.querySelector<HTMLButtonElement>(".workboard-toolbar__actions .primary")?.click();
-      await nextFrame();
+      const { dialog } = await getRenderedModalDialog(container);
+      expect(dialog.open).toBe(true);
 
       const select = container.querySelector<HTMLElement & { open: boolean }>(
         ".workboard-draft .workboard-select",
@@ -1194,7 +1211,6 @@ describe("renderWorkboard", () => {
       expect(launcher).toBeInstanceOf(HTMLButtonElement);
       launcher?.focus();
       launcher?.click();
-      await nextFrame();
 
       const modal = container.querySelector("openclaw-modal-dialog");
       const { dialog } = await getRenderedModalDialog(container);
@@ -1232,7 +1248,8 @@ describe("renderWorkboard", () => {
       );
       launcher?.focus();
       launcher?.click();
-      await nextFrame();
+      const { dialog } = await getRenderedModalDialog(container);
+      expect(dialog.open).toBe(true);
 
       const titleInput = container.querySelector<HTMLInputElement>(".workboard-draft__title");
       expect(document.activeElement).toBe(titleInput);
@@ -1269,7 +1286,8 @@ describe("renderWorkboard", () => {
       );
       launcher?.focus();
       launcher?.click();
-      await nextFrame();
+      const { dialog } = await getRenderedModalDialog(container);
+      expect(dialog.open).toBe(true);
 
       state.detailCardId = null;
       renderInto(container, props);
@@ -1434,7 +1452,7 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Ready for operator review.");
   });
 
-  it("renders a queued linked session without running copy", () => {
+  it("renders a queued linked session without a concurrency claim", () => {
     const { state, container, renderView } = createWorkboardView({
       sessions: [
         {
@@ -1456,7 +1474,7 @@ describe("renderWorkboard", () => {
 
     expect(container.querySelector(".workboard-lifecycle")?.textContent?.trim()).toBe("Queued");
     expect(container.querySelector(".workboard-card__lifecycle-detail")?.textContent?.trim()).toBe(
-      "Waiting for a concurrency slot",
+      "",
     );
   });
 
@@ -2550,10 +2568,8 @@ describe("renderWorkboard", () => {
 
     expect(request).toHaveBeenCalledWith("workboard.cards.update", {
       id: card.id,
-      patch: expect.objectContaining({
-        title: "Renamed without unlinking",
-        sessionKey: testCase.sessionKey,
-      }),
+      expectedUpdatedAt: card.updatedAt,
+      patch: { title: "Renamed without unlinking" },
     });
     expect(state.cards[0]?.execution?.sessionKey).toBe("agent:main:execution-linked-session");
     renderView();
@@ -2583,6 +2599,7 @@ describe("renderWorkboard", () => {
         ? {
             card: {
               ...state.cards[0],
+              updatedAt: 2,
               metadata: {
                 comments: [
                   ...(state.cards[0]?.metadata?.comments ?? []),
@@ -2596,7 +2613,7 @@ describe("renderWorkboard", () => {
               ...state.cards[0],
               title: "Renamed",
               priority: "high",
-              updatedAt: 2,
+              updatedAt: 3,
             },
           },
     );
@@ -2622,6 +2639,10 @@ describe("renderWorkboard", () => {
     expect(container.querySelector("openclaw-modal-dialog")?.textContent).toContain(
       "Needs owner check",
     );
+    const title = container.querySelector<HTMLInputElement>(".workboard-draft__title");
+    expect(title?.value).toBe("Rename me");
+    title!.value = "Renamed";
+    title!.dispatchEvent(new InputEvent("input", { bubbles: true }));
     const commentInput = container.querySelector<HTMLTextAreaElement>(".workboard-comments__input");
     commentInput!.value = "Ship after CI";
     commentInput!.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -2639,10 +2660,10 @@ describe("renderWorkboard", () => {
     expect(state.cards[0]?.metadata?.comments?.at(-1)?.body).toBe("Ship after CI");
     render(renderWorkboard(props), container);
 
-    const title = container.querySelector<HTMLInputElement>(".workboard-draft__title");
-    expect(title?.value).toBe("Rename me");
-    title!.value = "Renamed";
-    title!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
+      "Renamed",
+    );
+    expect(state.editingCardBase?.updatedAt).toBe(2);
     const priority = [
       ...(container
         .querySelector(".workboard-draft")
@@ -2657,12 +2678,13 @@ describe("renderWorkboard", () => {
 
     expect(request).toHaveBeenCalledWith("workboard.cards.update", {
       id: "card-1",
-      patch: expect.objectContaining({
-        title: "Renamed",
-        priority: "high",
-      }),
+      expectedUpdatedAt: 2,
+      patch: { title: "Renamed", priority: "high" },
     });
-    expect(state.cards[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 2 });
+    expect(
+      request.mock.calls.filter(([method]) => method === "workboard.cards.update"),
+    ).toHaveLength(1);
+    expect(state.cards[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 3 });
 
     render(renderWorkboard(props), container);
     expect(container.querySelector("openclaw-modal-dialog")).toBeNull();

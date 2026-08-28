@@ -12,7 +12,7 @@ scenario:
   successCriteria:
     - A live-frontier run fails fast unless the selected primary model is openai/gpt-5.6-luna.
     - The scenario forces the embedded OpenClaw harness before the build turn.
-    - The OpenClaw harness records a successful `update_plan` tool call before the artifact assertion passes.
+    - The OpenClaw harness records a successful `progress_card` tool call before the artifact assertion passes.
     - The agent writes a self-contained HTML game with a canvas loop, controls, scoring, waves, pause, and restart.
   docsRefs:
     - docs/plugins/sdk-agent-harness.md
@@ -35,7 +35,7 @@ scenario:
       gameTitle: Star Garden Defenders
       minBytes: 5000
       buildPrompt: |-
-        Call update_plan with a short implementation plan before editing.
+        Call progress_card with a short implementation plan before editing.
 
         Then build a medium-complex, self-contained browser game at ./star-garden-defenders-openclaw.html.
 
@@ -108,8 +108,8 @@ flow:
             - afterEventCursor:
                 expr: transcriptBefore.eventCursor
         - assert:
-            expr: "(transcript.successfulToolCallCounts.update_plan ?? 0) > 0"
-            message: missing OpenClaw update_plan signal
+            expr: "(transcript.successfulToolCallCounts.progress_card ?? 0) > 0"
+            message: missing OpenClaw progress_card signal
         - set: artifactPath
           value:
             expr: "path.join(env.gateway.workspaceDir, config.artifactFile)"
@@ -150,4 +150,4 @@ flow:
             expr: "outbound.text.includes(config.artifactFile)"
             message:
               expr: "`final reply did not mention ${config.artifactFile}: ${outbound.text}`"
-      detailsExpr: "`provider=${selected?.provider} model=${selected?.model} runtime=${config.harnessRuntime} agentRun=${turn.started.runId} appServerTurn=n/a planSignal=update_plan:success:${transcript.successfulToolCallCounts.update_plan ?? 0} artifact=${artifactPath} bytes=${artifact.length} visibleReply=${JSON.stringify(outbound.text)}`"
+      detailsExpr: "`provider=${selected?.provider} model=${selected?.model} runtime=${config.harnessRuntime} agentRun=${turn.started.runId} appServerTurn=n/a planSignal=progress_card:success:${transcript.successfulToolCallCounts.progress_card ?? 0} artifact=${artifactPath} bytes=${artifact.length} visibleReply=${JSON.stringify(outbound.text)}`"

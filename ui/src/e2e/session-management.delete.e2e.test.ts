@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   captureUiProof,
@@ -252,6 +253,75 @@ suite.define(() => {
     }
   });
 
+  it("keeps bulk deletion fenced to the session selected before confirmation", async () => {
+    const key = "agent:main:confirmed";
+    const original = sessionRow(key, "Original session", 1, {
+      sessionId: "confirmed-session",
+    });
+    const replacement = sessionRow(key, "Replacement session", 2, {
+      sessionId: "replacement-session",
+    });
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      recordVideo: captureUiProofEnabled
+        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        : undefined,
+    });
+    const page = await context.newPage();
+    const proofVideo = page.video();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.delete": { ok: true, deleted: true },
+        "sessions.list": sessionsListResponse([original]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      const replacementLabel = page.locator(".sessions-table").getByText("Replacement session", {
+        exact: true,
+      });
+      await page.getByRole("checkbox", { name: `Select session: ${key}` }).check();
+      await page.locator(".data-table-bulk-bar").getByRole("button", { name: "Delete" }).click();
+      const confirmModal = await waitForConfirmModal(page);
+      await captureUiProof(page, "sessions-bulk-delete-original-confirm.png");
+
+      await gateway.setMethodResponse("sessions.list", sessionsListResponse([replacement]));
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...replacement,
+        reason: "update",
+        sessionKey: key,
+      });
+      await replacementLabel.waitFor();
+      await gateway.deferNext("sessions.delete");
+      await confirmModal.getByRole("button", { name: "Delete", exact: true }).click();
+
+      const request = await gateway.waitForRequest("sessions.delete");
+      expect(request).toMatchObject({
+        params: { expectedSessionId: "confirmed-session", key },
+      });
+      await gateway.rejectDeferred("sessions.delete", {
+        code: "INVALID_REQUEST",
+        message: `Session ${key} changed before deletion. Retry.`,
+      });
+      await expect
+        .poll(() => page.locator(".sessions-error[role=alert]").textContent())
+        .toContain("changed before deletion. Retry.");
+      await replacementLabel.waitFor();
+      await captureUiProof(page, "sessions-bulk-delete-replacement-protected.png");
+    } finally {
+      await context.close();
+      if (proofVideo) {
+        await proofVideo.saveAs(
+          path.join(uiProofArtifactDir, "sessions-bulk-delete-replaced.webm"),
+        );
+      }
+    }
+  });
+
   it("rejects deleting a same-key replacement after the in-app confirm", async () => {
     const key = "agent:main:research";
     const context = await suite.browser.newContext({
@@ -326,6 +396,74 @@ suite.define(() => {
       if (proofVideo) {
         await proofVideo.saveAs(
           path.join(uiProofArtifactDir, "sidebar-delete-session-replaced.webm"),
+        );
+      }
+    }
+  });
+
+  it("shows the preserved worktree reason before offering forced removal", async () => {
+    const key = "agent:main:snapshot-failed";
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      recordVideo: captureUiProofEnabled
+        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        : undefined,
+    });
+    const page = await context.newPage();
+    const proofVideo = page.video();
+    const gateway = await installMockGateway(page, {
+      featureMethods: [...defaultControlUiFeatureMethods, "worktrees.remove"],
+      methodResponses: {
+        "sessions.delete": {
+          ok: true,
+          key,
+          deleted: true,
+          archived: [],
+          worktreePreserved: {
+            id: "wt-snapshot-failed",
+            branch: "openclaw/snapshot-failed",
+            path: "/worktrees/snapshot-failed",
+            reason: "snapshot-failed",
+          },
+        },
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(key, "Snapshot failed", Date.parse("2026-07-01T15:00:00.000Z")),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      await row.hover();
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      await page
+        .locator("openclaw-session-menu")
+        .getByRole("menuitem", { name: "Delete…" })
+        .click();
+
+      const deleteModal = await waitForConfirmModal(page);
+      await deleteModal.getByRole("button", { name: "Delete", exact: true }).click();
+      await gateway.waitForRequest("sessions.delete");
+
+      const worktreeModal = await waitForConfirmModal(page);
+      await expect
+        .poll(() => worktreeModal.textContent())
+        .toContain("OpenClaw could not create a safety snapshot");
+      await expect.poll(() => worktreeModal.textContent()).toContain("Remove?");
+      await captureUiProof(page, "sidebar-delete-preserved-snapshot-failed.png");
+      await worktreeModal.getByRole("button", { name: "Cancel", exact: true }).click();
+      expect(await gateway.getRequests("worktrees.remove")).toHaveLength(0);
+    } finally {
+      await context.close();
+      if (proofVideo) {
+        await proofVideo.saveAs(
+          path.join(uiProofArtifactDir, "sidebar-delete-preserved-snapshot-failed.webm"),
         );
       }
     }

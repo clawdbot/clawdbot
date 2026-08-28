@@ -180,21 +180,42 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun cameraCapabilityStartsOffEvenWhenScannerPermissionWasGranted() {
+  fun deviceCapabilityStartsOffEvenWhenAndroidPermissionWasGranted() {
     assertBooleanCases(
-      false to initialCameraCapabilityEnabled(savedCapabilityEnabled = false, androidCameraPermissionGranted = false),
-      false to initialCameraCapabilityEnabled(savedCapabilityEnabled = false, androidCameraPermissionGranted = true),
-      false to initialCameraCapabilityEnabled(savedCapabilityEnabled = true, androidCameraPermissionGranted = false),
-      true to initialCameraCapabilityEnabled(savedCapabilityEnabled = true, androidCameraPermissionGranted = true),
+      false to initialDeviceCapabilityEnabled(savedCapabilityEnabled = false, androidPermissionGranted = false),
+      false to initialDeviceCapabilityEnabled(savedCapabilityEnabled = false, androidPermissionGranted = true),
+      false to initialDeviceCapabilityEnabled(savedCapabilityEnabled = true, androidPermissionGranted = false),
+      true to initialDeviceCapabilityEnabled(savedCapabilityEnabled = true, androidPermissionGranted = true),
     )
   }
 
   @Test
-  fun cameraPermissionRowDistinguishesAndroidPermissionFromCapabilityOptIn() {
+  fun locationCapabilityRequiresBothTheSavedModeAndAndroidPermission() {
+    listOf(
+      Triple(LocationMode.Off, false, false),
+      Triple(LocationMode.Off, true, false),
+      Triple(LocationMode.WhileUsing, false, false),
+      Triple(LocationMode.WhileUsing, true, true),
+      Triple(LocationMode.Always, false, false),
+      Triple(LocationMode.Always, true, true),
+    ).forEach { (savedMode, androidPermissionGranted, expected) ->
+      assertEquals(
+        "savedMode=$savedMode androidPermissionGranted=$androidPermissionGranted",
+        expected,
+        initialDeviceCapabilityEnabled(
+          savedCapabilityEnabled = savedMode != LocationMode.Off,
+          androidPermissionGranted = androidPermissionGranted,
+        ),
+      )
+    }
+  }
+
+  @Test
+  fun deviceCapabilityRowDistinguishesAndroidPermissionFromCapabilityOptIn() {
     assertEqualsCases(
-      "Not allowed" to cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = false).resolveNativeText(),
-      "Off" to cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = true).resolveNativeText(),
-      "Enabled" to cameraPermissionRowStatusText(capabilityEnabled = true, androidCameraPermissionGranted = true).resolveNativeText(),
+      "Not allowed" to deviceCapabilityRowStatusText(capabilityEnabled = false, androidPermissionGranted = false).resolveNativeText(),
+      "Off" to deviceCapabilityRowStatusText(capabilityEnabled = false, androidPermissionGranted = true).resolveNativeText(),
+      "Enabled" to deviceCapabilityRowStatusText(capabilityEnabled = true, androidPermissionGranted = true).resolveNativeText(),
     )
   }
 
@@ -207,10 +228,10 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun cameraPermissionRowTogglesCapabilityWhenAndroidPermissionAlreadyGranted() {
-    assertNull(cameraCapabilityAfterRowTap(currentCapabilityEnabled = false, androidCameraPermissionGranted = false))
-    assertTrue(cameraCapabilityAfterRowTap(currentCapabilityEnabled = false, androidCameraPermissionGranted = true)!!)
-    assertFalse(cameraCapabilityAfterRowTap(currentCapabilityEnabled = true, androidCameraPermissionGranted = true)!!)
+  fun deviceCapabilityRowTogglesOnlyWhenAndroidPermissionAlreadyGranted() {
+    assertNull(deviceCapabilityAfterRowTap(currentCapabilityEnabled = false, androidPermissionGranted = false))
+    assertTrue(deviceCapabilityAfterRowTap(currentCapabilityEnabled = false, androidPermissionGranted = true)!!)
+    assertFalse(deviceCapabilityAfterRowTap(currentCapabilityEnabled = true, androidPermissionGranted = true)!!)
   }
 
   @Test
@@ -219,12 +240,39 @@ class OnboardingFlowLogicTest {
       PermissionApprovalCase(expected = true, requestedCameraEnabled = true),
       PermissionApprovalCase(expected = true, requestedLocationMode = LocationMode.WhileUsing),
       PermissionApprovalCase(expected = true, currentSmsGranted = false),
+      PermissionApprovalCase(expected = true, requestedSmsGranted = false),
+      PermissionApprovalCase(expected = false),
       PermissionApprovalCase(
         expected = false,
         currentCameraEnabled = true,
         requestedCameraEnabled = true,
         currentLocationMode = LocationMode.WhileUsing,
         requestedLocationMode = LocationMode.WhileUsing,
+      ),
+      PermissionApprovalCase(
+        expected = false,
+        currentLocationMode = LocationMode.Always,
+        requestedLocationMode = LocationMode.Always,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.Always,
+        requestedLocationMode = LocationMode.WhileUsing,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.Always,
+        requestedLocationMode = LocationMode.Off,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.WhileUsing,
+        requestedLocationMode = LocationMode.Always,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.Off,
+        requestedLocationMode = LocationMode.Always,
       ),
     ).forEach { case ->
       assertBoolean(
@@ -235,7 +283,7 @@ class OnboardingFlowLogicTest {
           currentLocationMode = case.currentLocationMode,
           requestedLocationMode = case.requestedLocationMode,
           currentSmsGranted = case.currentSmsGranted,
-          requestedSmsGranted = true,
+          requestedSmsGranted = case.requestedSmsGranted,
         ),
       )
     }
@@ -347,6 +395,22 @@ class OnboardingFlowLogicTest {
         currentlyGranted = { true },
       )
     assertFalse(deniedRead)
+
+    val afterUnrelatedPermission =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.RECORD_AUDIO to true),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { true },
+      )
+    assertTrue(afterUnrelatedPermission)
+
+    val afterUnrelatedPermissionWithSmsDenied =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.RECORD_AUDIO to true),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { false },
+      )
+    assertFalse(afterUnrelatedPermissionWithSmsDenied)
   }
 
   @Test
@@ -912,6 +976,7 @@ class OnboardingFlowLogicTest {
     val currentLocationMode: LocationMode = LocationMode.Off,
     val requestedLocationMode: LocationMode = LocationMode.Off,
     val currentSmsGranted: Boolean = true,
+    val requestedSmsGranted: Boolean = true,
   )
 
   private data class GatewayContinueCase(

@@ -13,9 +13,25 @@ import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
 const backendMocks = vi.hoisted(() => ({
   runSettledFinalization: vi.fn(),
+  resolveRuntimeModelAttempt: vi.fn(
+    (runtimePlan?: {
+      resolvedRef?: { provider?: string; modelId?: string };
+      auth?: { credentialSource?: unknown };
+    }) =>
+      runtimePlan?.resolvedRef?.provider &&
+      runtimePlan.resolvedRef.modelId &&
+      runtimePlan.auth?.credentialSource
+        ? {
+            provider: runtimePlan.resolvedRef.provider,
+            model: runtimePlan.resolvedRef.modelId,
+            credentialSource: runtimePlan.auth.credentialSource,
+          }
+        : undefined,
+  ),
 }));
 
 vi.mock("./backend.js", () => ({
+  resolveRuntimeModelAttempt: backendMocks.resolveRuntimeModelAttempt,
   runEmbeddedSettledTurnFinalizationWithBackend: backendMocks.runSettledFinalization,
 }));
 
@@ -33,6 +49,11 @@ function settledFailedAttempt(): EmbeddedRunAttemptWithReceiptEvidence {
     { role: "toolResult", toolCallId: "tool-exec", toolName: "exec", isError: true },
   ] as never;
   const attempt = makeEmbeddedRunnerAttempt({
+    terminal: {
+      kind: "failed",
+      source: "compaction",
+      error: new Error("native context compaction failed"),
+    },
     sessionIdUsed: "session-settled",
     sessionFileUsed: "/tmp/session-settled.jsonl",
     assistantTexts: [],
@@ -197,6 +218,10 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     const input = finalizationInput(attempt);
     input.terminalBase.outerContextTokenMeta = { contextTokens: 272_000 };
     input.finalization.preparedAttempt.agentHarnessId = "codex";
+    input.finalization.preparedAttempt.runtimePlan = {
+      resolvedRef: { provider: "openai", modelId: "gpt-5.6-luna" },
+      auth: { credentialSource: { kind: "profile" } },
+    } as never;
     const finalAssistant = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: "The exec tool failed: post-processing error." }],
     });
@@ -213,11 +238,17 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
 
     expect(result.attempt).toMatchObject({
       agentHarnessId: "codex",
+      modelAttempt: {
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        credentialSource: { kind: "profile" },
+      },
       contextTokens: 1_000_000,
       contextTokensSource: "runtime",
     });
     expect(result.prepared.agentMeta).toMatchObject({
       agentHarnessId: "codex",
+      credentialSource: { kind: "profile" },
       contextTokens: 1_000_000,
       contextTokensSource: "runtime",
     });

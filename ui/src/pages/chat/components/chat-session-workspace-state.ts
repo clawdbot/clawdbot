@@ -14,8 +14,9 @@ import type {
   SessionWorkspaceHost,
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
+import type { SidebarContent } from "./chat-sidebar.ts";
 
-export function resolvePaneAgent(state: SessionScopeHostWithKey): string {
+function resolvePaneAgent(state: SessionScopeHostWithKey): string {
   const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
   const activeAgentId =
     normalizedKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);
@@ -42,37 +43,68 @@ export function clearSessionWorkspaceTimers(state: SessionWorkspaceHost) {
   clearWorkspaceTimer(state.sessionWorkspaceState);
 }
 
-export function getSessionWorkspace(state: SessionWorkspaceHost): SessionWorkspaceState {
-  const sessionKey = state.sessionKey;
-  const agentId = resolvePaneAgent(state);
-  const current = state.sessionWorkspaceState;
-  if (current?.sessionKey === sessionKey && current.agentId === agentId) {
-    return current;
+const checkoutSidebarContents = new WeakSet<object>();
+
+export function trackSessionCheckoutSidebar(content: SidebarContent) {
+  checkoutSidebarContents.add(content);
+}
+
+export function openSessionCheckoutSidebar(state: SessionWorkspaceHost, content: SidebarContent) {
+  trackSessionCheckoutSidebar(content);
+  state.handleOpenSidebar(content);
+}
+
+function clearSessionCheckoutSidebar(state: SessionWorkspaceHost) {
+  if (state.sidebarContent && checkoutSidebarContents.has(state.sidebarContent)) {
+    state.handleOpenSidebar(null);
   }
-  clearWorkspaceTimer(current);
-  const next: SessionWorkspaceState = {
+}
+
+function createSessionWorkspaceState(
+  state: SessionWorkspaceHost,
+  previous?: SessionWorkspaceState,
+): SessionWorkspaceState {
+  return {
     activeId: null,
-    agentId,
+    agentId: resolvePaneAgent(state),
     browserPath: "",
     browserSearch: "",
     browserSearchTimer: null,
-    collapsed: true,
+    collapsed: previous?.collapsed ?? true,
+    connectionEpoch: state.connectionEpoch,
     // Dock preference is app-wide, seeded from the host's loaded settings;
     // per-session state just carries it forward.
-    dock: current?.dock ?? normalizeChatWorkspaceDock(state.settings?.chatWorkspaceDock),
+    dock: previous?.dock ?? normalizeChatWorkspaceDock(state.settings?.chatWorkspaceDock),
     error: null,
     list: null,
     loading: false,
     pendingReload: false,
-    requestId: 0,
-    sessionKey,
+    sessionKey: state.sessionKey,
   };
-  state.sessionWorkspaceState = next;
-  return next;
 }
 
-export function currentSessionWorkspace(state: SessionWorkspaceHost): SessionWorkspaceState {
-  return getSessionWorkspace(state);
+export function isCurrentSessionWorkspace(
+  state: SessionWorkspaceHost,
+  workspace: SessionWorkspaceState,
+) {
+  return (
+    state.sessionWorkspaceState === workspace &&
+    workspace.sessionKey === state.sessionKey &&
+    workspace.agentId === resolvePaneAgent(state) &&
+    workspace.connectionEpoch === state.connectionEpoch
+  );
+}
+
+export function getSessionWorkspace(state: SessionWorkspaceHost): SessionWorkspaceState {
+  const current = state.sessionWorkspaceState;
+  if (current && isCurrentSessionWorkspace(state, current)) {
+    return current;
+  }
+  clearSessionCheckoutSidebar(state);
+  clearWorkspaceTimer(current);
+  const next = createSessionWorkspaceState(state, current);
+  state.sessionWorkspaceState = next;
+  return next;
 }
 
 export function requestWorkspaceUpdate(state: SessionWorkspaceHost) {
@@ -93,8 +125,6 @@ export function loadSessionWorkspace(
     }
     return;
   }
-  const requestId = workspace.requestId + 1;
-  workspace.requestId = requestId;
   workspace.loading = true;
   workspace.error = null;
   if (force) {
@@ -103,6 +133,7 @@ export function loadSessionWorkspace(
   workspace.pendingReload = false;
   const sessionKey = state.sessionKey;
   const agentId = workspace.agentId;
+  const client = state.client;
   void (async () => {
     try {
       const files = await state.sessions.listFiles(sessionKey, {
@@ -110,20 +141,22 @@ export function loadSessionWorkspace(
         search: workspace.browserSearch,
         agentId,
       });
-      const artifacts = await state.client?.request<{
+      if (!isCurrentSessionWorkspace(state, workspace)) {
+        return;
+      }
+      const artifacts = await client.request<{
         artifacts?: SessionWorkspaceListResult["artifacts"];
       } | null>("artifacts.list", {
         sessionKey,
         ...(agentId ? { agentId } : {}),
       });
-      const current = currentSessionWorkspace(state);
-      if (current !== workspace || current.requestId !== requestId) {
+      if (!isCurrentSessionWorkspace(state, workspace)) {
         return;
       }
       const fileItems = files?.files ?? [];
       const artifactItems = artifacts?.artifacts ?? [];
       const browserItems = files?.browser?.entries ?? [];
-      current.list = {
+      workspace.list = {
         sessionKey,
         ...(files?.root ? { root: files.root } : {}),
         ...(typeof files?.gitCheckout === "boolean" ? { gitCheckout: files.gitCheckout } : {}),
@@ -132,27 +165,20 @@ export function loadSessionWorkspace(
         artifacts: artifactItems,
       };
       if (
-        current.activeId &&
-        !fileItems.some((file) => `file:${file.path}` === current.activeId) &&
-        !browserItems.some((entry) => `file:${entry.path}` === current.activeId) &&
-        !artifactItems.some((artifact) => `artifact:${artifact.id}` === current.activeId)
+        workspace.activeId &&
+        !fileItems.some((file) => `file:${file.path}` === workspace.activeId) &&
+        !browserItems.some((entry) => `file:${entry.path}` === workspace.activeId) &&
+        !artifactItems.some((artifact) => `artifact:${artifact.id}` === workspace.activeId)
       ) {
-        current.activeId = null;
+        workspace.activeId = null;
       }
     } catch (error) {
-      const current = currentSessionWorkspace(state);
-      if (current === workspace && current.requestId === requestId) {
-        current.error = formatUiError(error);
+      if (isCurrentSessionWorkspace(state, workspace)) {
+        workspace.error = formatUiError(error);
       }
     } finally {
-      const current = currentSessionWorkspace(state);
-      if (current === workspace && current.requestId === requestId) {
-        current.loading = false;
-        const reload = current.pendingReload;
-        current.pendingReload = false;
-        if (reload) {
-          loadSessionWorkspace(state, current);
-        }
+      if (isCurrentSessionWorkspace(state, workspace)) {
+        workspace.loading = false;
       }
       requestWorkspaceUpdate(state);
     }
@@ -160,14 +186,38 @@ export function loadSessionWorkspace(
 }
 
 /** Refresh workspace facts after a run, which may have created a git checkout. */
-export function refreshSessionWorkspace(state: SessionWorkspaceHost) {
+export function refreshSessionWorkspaceState(
+  state: SessionWorkspaceHost,
+  refreshFiles: boolean,
+): boolean {
   const workspace = state.sessionWorkspaceState;
   if (!workspace || workspace.sessionKey !== state.sessionKey) {
-    return;
+    return false;
+  }
+  const diffOpen =
+    workspace.diffContent !== undefined && state.sidebarContent === workspace.diffContent;
+  delete workspace.diffContent;
+  if (!refreshFiles) {
+    workspace.pendingReload = true;
+    return diffOpen;
   }
   if (workspace.loading) {
     workspace.pendingReload = true;
   } else {
     loadSessionWorkspace(state, workspace);
   }
+  return diffOpen;
+}
+
+/** Retire facts owned by one checkout without disturbing panel layout or retained drafts. */
+export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost) {
+  const current = state.sessionWorkspaceState;
+  if (!current || current.sessionKey !== state.sessionKey) {
+    return;
+  }
+  clearSessionCheckoutSidebar(state);
+  clearWorkspaceTimer(current);
+  const next = createSessionWorkspaceState(state, current);
+  state.sessionWorkspaceState = next;
+  requestWorkspaceUpdate(state);
 }

@@ -138,8 +138,9 @@ function sniffCharset(contentType: string | null, bytes: Uint8Array): string | u
   if (bytes[0] === 0xfe && bytes[1] === 0xff) {
     return "utf-16be";
   }
-  if (!shouldSniffDocumentCharset(contentType)) {
-    return undefined;
+  const declaredCharset = readCharsetParam(contentType);
+  if (declaredCharset || !shouldSniffDocumentCharset(contentType)) {
+    return declaredCharset;
   }
 
   const head = latin1Decoder.decode(
@@ -186,7 +187,7 @@ function responseContentType(res: Response): string | null {
 
 function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
   const contentType = responseContentType(res);
-  const charset = readCharsetParam(contentType) ?? sniffCharset(contentType, bytes);
+  const charset = sniffCharset(contentType, bytes);
   try {
     return decodeTextPrefix(bytes, { encoding: charset ?? "utf-8", truncated });
   } catch {

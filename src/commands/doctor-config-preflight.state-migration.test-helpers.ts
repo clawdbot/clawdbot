@@ -1,3 +1,5 @@
+import { vi } from "vitest";
+
 export type StateMigrationResult = {
   migrated: boolean;
   skipped: boolean;
@@ -5,6 +7,23 @@ export type StateMigrationResult = {
   warnings: string[];
   notices?: string[];
 };
+
+const maybeRepairPluginOpenClawHostLinks = vi.hoisted(() =>
+  vi.fn(
+    async (_params: {
+      env: NodeJS.ProcessEnv;
+      prompter: { shouldRepair: boolean };
+    }): Promise<boolean> => false,
+  ),
+);
+
+vi.mock("./doctor-plugin-host-links.js", () => ({
+  maybeRepairPluginOpenClawHostLinks,
+}));
+
+export function getMaybeRepairPluginOpenClawHostLinksMock() {
+  return maybeRepairPluginOpenClawHostLinks;
+}
 
 type StartupConvergenceWarning = {
   pluginId?: string;

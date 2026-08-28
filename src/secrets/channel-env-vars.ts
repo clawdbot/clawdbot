@@ -1,7 +1,7 @@
 /** Discovers plugin-declared environment variable names for channel credential setup. */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { appendUniqueEnvVarCandidates } from "../shared/env-var-candidates.js";
 
 type ChannelEnvVarLookupParams = {
@@ -20,8 +20,8 @@ type ChannelEnvVarLookupParams = {
 function resolveChannelEnvVars(
   params?: ChannelEnvVarLookupParams,
 ): Record<string, readonly string[]> {
-  const snapshot = loadPluginMetadataSnapshot({
-    config: params?.config ?? {},
+  const snapshot = resolvePluginMetadataSnapshot({
+    config: params?.config,
     workspaceDir: params?.workspaceDir,
     env: params?.env ?? process.env,
   });

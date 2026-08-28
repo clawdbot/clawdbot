@@ -50,13 +50,14 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import {
   asBoolean,
   asFiniteNumber,
+  asOptionalRecord,
   asSafeIntegerInRange,
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
-import { resolveGoogleGemini3ThinkingLevel } from "./thinking.js";
+import { resolveGoogleGemini3ThinkingLevel } from "./thinking-api.js";
 
 const GOOGLE_REALTIME_DEFAULT_MODEL = "gemini-3.1-flash-live-preview";
 const GOOGLE_REALTIME_DEFAULT_VOICE = "Kore";
@@ -226,18 +227,8 @@ function asGoogleRealtimeThinkingBudget(value: unknown): number | undefined {
 function resolveGoogleRealtimeProviderConfigRecord(
   config: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const providers =
-    typeof config.providers === "object" &&
-    config.providers !== null &&
-    !Array.isArray(config.providers)
-      ? (config.providers as Record<string, unknown>)
-      : undefined;
-  const nested = providers?.google;
-  return typeof nested === "object" && nested !== null && !Array.isArray(nested)
-    ? (nested as Record<string, unknown>)
-    : typeof config.google === "object" && config.google !== null && !Array.isArray(config.google)
-      ? (config.google as Record<string, unknown>)
-      : config;
+  const providers = asOptionalRecord(config.providers);
+  return asOptionalRecord(providers?.google) ?? asOptionalRecord(config.google) ?? config;
 }
 
 function normalizeProviderConfig(

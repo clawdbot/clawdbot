@@ -92,7 +92,7 @@ describe("registerNodeCli", () => {
         "--host",
         "gateway.example",
         "--runtime",
-        "node",
+        "bun",
         "--force",
         "--json",
       ],
@@ -103,7 +103,7 @@ describe("registerNodeCli", () => {
       expect.objectContaining({
         port: "19000",
         host: "gateway.example",
-        runtime: "node",
+        runtime: "bun",
         force: true,
         json: true,
       }),

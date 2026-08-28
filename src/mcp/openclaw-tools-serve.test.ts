@@ -1,6 +1,6 @@
 // OpenClaw MCP tools tests cover core tool server startup and registration.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { hashSystemAgentOperation } from "../agents/tools/system-agent-tool.js";
+import { hashSystemAgentOperation } from "../system-agent/operator-approval.js";
 import {
   buildSystemAgentToolsMcpServerConfig,
   OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV,
@@ -137,5 +137,55 @@ describe("OpenClaw tools MCP server", () => {
       [OPENCLAW_TOOLS_MCP_TOOLS_ENV]: "openclaw",
       [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]: "gateway",
     });
+  });
+
+  it("serializes operator-approval-only through the native CLI MCP config", () => {
+    const config = buildSystemAgentToolsMcpServerConfig({
+      surface: "cli",
+      operatorApprovalOnly: true,
+      proposalRef: { current: "deadbeef" },
+    });
+    const server = config.mcpServers.openclaw as { env?: Record<string, string> };
+    expect(server.env?.[OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV]).toBe("operator-only");
+
+    // Non-delegated configs must not arm approval (direct sessions keep the
+    // interactive "reply yes" approval flow until the host arms a turn).
+    const direct = buildSystemAgentToolsMcpServerConfig({ surface: "cli" });
+    const directServer = direct.mcpServers.openclaw as { env?: Record<string, string> };
+    expect(directServer.env).not.toHaveProperty(OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV);
+
+    // A host-armed direct turn uses "1", distinct from the delegated value.
+    const armed = buildSystemAgentToolsMcpServerConfig({ surface: "cli", approvalArmed: true });
+    const armedServer = armed.mcpServers.openclaw as { env?: Record<string, string> };
+    expect(armedServer.env?.[OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV]).toBe("1");
+  });
+
+  it("reconstructs the delegated refusal from env on the native CLI MCP tool", async () => {
+    const operation = {
+      kind: "config-set",
+      path: "agents.defaults.subagents.thinking",
+      value: "high",
+    } as const;
+    vi.stubEnv(OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV, "operator-only");
+    vi.stubEnv(OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV, hashSystemAgentOperation(operation));
+    const handlers = createPluginToolsMcpHandlers(
+      resolveOpenClawToolsForMcp({ tools: ["openclaw"], systemAgentSurface: "cli" }),
+    );
+
+    const result = await handlers.callTool({
+      name: "openclaw",
+      arguments: {
+        action: "config_set",
+        path: "agents.defaults.subagents.thinking",
+        value: "high",
+        approved: true,
+      },
+    });
+
+    const text = JSON.stringify(result);
+    expect(text).toContain("needs-approval:");
+    expect(text).toContain("OpenClaw operator UI");
+    expect(text).toContain("cannot be applied from this chat");
+    expect(text).not.toContain("ask the user to reply yes");
   });
 });

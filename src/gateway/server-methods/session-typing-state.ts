@@ -2,20 +2,28 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
-const TYPING_THROTTLE_MS = 1_000;
+export const TYPING_THROTTLE_MS = 1_000;
+export const TYPING_PREVIEW_THROTTLE_MS = 250;
 const TYPING_ACTIVE_TTL_MS = 2_500;
 const MAX_TYPING_THROTTLE_KEYS = 2_048;
-type PendingTypingBroadcast = { typing: boolean; emit: () => boolean };
+type PendingTypingBroadcast = {
+  typing: boolean;
+  signature: string;
+  intervalMs: number;
+  emit: () => boolean;
+};
 type TypingBroadcastState = {
   at: number;
   typing: boolean;
+  signature: string;
   pending?: PendingTypingBroadcast;
   timer?: ReturnType<typeof setTimeout>;
 };
+type TypingConnectionState = { updatedAt: number; preview?: string };
 
 type SessionTypingState = {
   broadcasts: Map<string, TypingBroadcastState>;
-  connections: Map<string, Map<string, number>>;
+  connections: Map<string, Map<string, TypingConnectionState>>;
 };
 
 function clearSessionTypingStateValue(state: SessionTypingState): void {
@@ -73,24 +81,30 @@ function rememberTypingBroadcast(key: string, state: TypingBroadcastState): void
 export function broadcastTypingThrottled(params: {
   key: string;
   typing: boolean;
+  signature: string;
+  intervalMs: number;
   now: number;
   emit: () => boolean;
 }): boolean {
   const previous = typingBroadcastState.get(params.key);
-  if (!previous || params.now - previous.at >= TYPING_THROTTLE_MS) {
+  if (!previous || params.now - previous.at >= params.intervalMs) {
     if (previous?.timer) {
       clearTimeout(previous.timer);
     }
     const emitted = params.emit();
     if (emitted) {
-      rememberTypingBroadcast(params.key, { at: params.now, typing: params.typing });
+      rememberTypingBroadcast(params.key, {
+        at: params.now,
+        typing: params.typing,
+        signature: params.signature,
+      });
     } else {
       typingBroadcastState.delete(params.key);
     }
     return emitted;
   }
 
-  if (params.typing === previous.typing && previous.pending?.typing !== params.typing) {
+  if (params.signature === previous.signature && previous.pending?.signature !== params.signature) {
     if (previous.timer) {
       clearTimeout(previous.timer);
     }
@@ -102,7 +116,16 @@ export function broadcastTypingThrottled(params: {
     }
   }
 
-  previous.pending = { typing: params.typing, emit: params.emit };
+  if (previous.timer && previous.pending?.intervalMs !== params.intervalMs) {
+    clearTimeout(previous.timer);
+    delete previous.timer;
+  }
+  previous.pending = {
+    typing: params.typing,
+    signature: params.signature,
+    intervalMs: params.intervalMs,
+    emit: params.emit,
+  };
   if (!previous.timer) {
     const timer = setTimeout(
       () => {
@@ -111,14 +134,18 @@ export function broadcastTypingThrottled(params: {
           return;
         }
         const pending = current.pending;
-        const next = { at: Date.now(), typing: pending.typing } satisfies TypingBroadcastState;
+        const next = {
+          at: Date.now(),
+          typing: pending.typing,
+          signature: pending.signature,
+        } satisfies TypingBroadcastState;
         if (pending.emit()) {
           rememberTypingBroadcast(params.key, next);
         } else {
           typingBroadcastState.delete(params.key);
         }
       },
-      TYPING_THROTTLE_MS - (params.now - previous.at),
+      params.intervalMs - (params.now - previous.at),
     );
     timer.unref?.();
     previous.timer = timer;
@@ -131,11 +158,12 @@ export function updateTypingConnections(params: {
   key: string;
   connectionId: string;
   typing: boolean;
+  preview?: string;
   now: number;
-}): boolean {
+}): { typing: boolean; preview?: string } {
   for (const [typingKey, activeConnections] of typingConnections) {
-    for (const [connectionId, updatedAt] of activeConnections) {
-      if (params.now - updatedAt >= TYPING_ACTIVE_TTL_MS) {
+    for (const [connectionId, connection] of activeConnections) {
+      if (params.now - connection.updatedAt >= TYPING_ACTIVE_TTL_MS) {
         activeConnections.delete(connectionId);
       }
     }
@@ -143,18 +171,27 @@ export function updateTypingConnections(params: {
       typingConnections.delete(typingKey);
     }
   }
-  const connections = typingConnections.get(params.key) ?? new Map<string, number>();
+  const connections = typingConnections.get(params.key) ?? new Map<string, TypingConnectionState>();
   if (params.typing) {
-    connections.set(params.connectionId, params.now);
+    connections.set(params.connectionId, {
+      updatedAt: params.now,
+      ...(params.preview ? { preview: params.preview } : {}),
+    });
   } else {
     connections.delete(params.connectionId);
   }
   if (connections.size === 0) {
     typingConnections.delete(params.key);
-    return false;
+    return { typing: false };
   }
   typingConnections.delete(params.key);
   typingConnections.set(params.key, connections);
   pruneMapToMaxSize(typingConnections, MAX_TYPING_THROTTLE_KEYS);
-  return true;
+  let latestPreview: TypingConnectionState | undefined;
+  for (const connection of connections.values()) {
+    if (connection.preview && (!latestPreview || connection.updatedAt >= latestPreview.updatedAt)) {
+      latestPreview = connection;
+    }
+  }
+  return { typing: true, ...(latestPreview?.preview ? { preview: latestPreview.preview } : {}) };
 }

@@ -1,19 +1,20 @@
 // Gateway managed media attachment store.
-// Validates, stores, serves, and cleans up outgoing image/audio/video attachments.
+// Validates, stores, serves, and cleans up outgoing media and document attachments.
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { maxBytesForKind, mediaKindFromMime, type MediaKind } from "@openclaw/media-core/constants";
-import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
   asNonNegativeFiniteNumber,
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import pLimit from "p-limit";
-import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
+import type { ReplyMediaAttachment, ReplyPayload } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadExactSessionEntryReadOnlyResult } from "../config/sessions/session-accessor.sqlite-entry-availability.js";
@@ -22,8 +23,10 @@ import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
 } from "../config/sessions/targets-read-availability.js";
+import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
 import { probePlaybackMediaFileDescriptor } from "../media/media-probe.js";
@@ -75,7 +78,7 @@ import {
 const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
 const MANAGED_OUTGOING_IMAGE_TICKET_SCOPE = "managed-outgoing-image";
-export const MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS = 5 * 60 * 1000;
+const MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS = 5 * 60 * 1000;
 export const MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX = "artifact_managed_image_";
 export const MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX = "artifact_managed_media_";
 const MANAGED_IMAGE_THUMBNAIL_MAX_SIDE = 300;
@@ -108,7 +111,32 @@ type ManagedImageAttachmentLimitsConfig = Partial<
   Pick<ManagedImageAttachmentLimits, "maxBytes" | "maxWidth" | "maxHeight" | "maxPixels">
 >;
 
-type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video">;
+type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video" | "document">;
+
+const MANAGED_DOCUMENT_MIME_TYPES = new Set([
+  "application/json",
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/yaml",
+  "application/zip",
+  "text/csv",
+  "text/html",
+  "text/markdown",
+  "text/plain",
+]);
+
+function resolveManagedMediaKind(contentType: string | undefined): ManagedMediaKind | null {
+  const normalized = normalizeMimeType(contentType);
+  if (normalized === "image/svg+xml") {
+    return null;
+  }
+  const kind = mediaKindFromMime(normalized);
+  if (kind === "image" || kind === "audio" || kind === "video") {
+    return kind;
+  }
+  return normalized && MANAGED_DOCUMENT_MIME_TYPES.has(normalized) ? "document" : null;
+}
 
 type ParsedMediaDataUrl =
   | { kind: "not-data-url" }
@@ -121,6 +149,16 @@ type ParsedMediaDataUrl =
     };
 
 type ManagedMediaBlock = Record<string, unknown>;
+
+export type PreparedOutgoingMedia = {
+  url: string;
+  filename?: string;
+  mimeType?: string;
+  trustedLocal: boolean;
+  durationMs?: number;
+  width?: number;
+  height?: number;
+};
 
 type CleanupManagedOutgoingMediaRecordsResult = {
   deletedRecordCount: number;
@@ -163,7 +201,7 @@ type ManagedOutgoingImageTicketPayload = {
 export type ManagedOutgoingMediaArtifactDownload = {
   artifactId: string;
   sessionKey: string;
-  type: ManagedMediaKind;
+  type: Exclude<ManagedMediaKind, "document"> | "file";
   title: string;
   mimeType?: string;
   sizeBytes?: number;
@@ -695,6 +733,7 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
       : undefined;
   const forceDeleteSessionRecords = params?.forceDeleteSessionRecords === true;
   const entries = listManagedImageRecordEntries({ stateDir });
+  let pendingPreparedAttachmentIds: Set<string> | null | undefined;
 
   let deletedRecordCount = 0;
   let deletedFileCount = 0;
@@ -744,11 +783,19 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
       shouldDelete = transcriptMatch === "missing";
     } else if (!entry.cleanupPending) {
       const createdAtMs = Date.parse(record.createdAt);
-      shouldDelete =
+      const otherwiseDeletable =
         Number.isFinite(createdAtMs) &&
         nowMs - createdAtMs >= transientMaxAgeMs &&
         params?.hasActiveSessionRun?.(record.sessionKey, record.agentId?.trim() || undefined) !==
           true;
+      if (otherwiseDeletable) {
+        if (pendingPreparedAttachmentIds === undefined) {
+          pendingPreparedAttachmentIds = await loadPendingPreparedAttachmentIds(stateDir);
+        }
+        shouldDelete =
+          pendingPreparedAttachmentIds !== null &&
+          !pendingPreparedAttachmentIds.has(record.attachmentId);
+      }
     }
 
     if (shouldDelete) {
@@ -777,6 +824,22 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   return { deletedRecordCount, deletedFileCount, retainedCount };
 }
 
+export async function removeManagedOutgoingMediaBlocks(params: {
+  blocks: readonly Record<string, unknown>[];
+  messageId: string;
+  stateDir?: string;
+}): Promise<void> {
+  const stateDir = params.stateDir ?? resolveStateDir();
+  await Promise.all(
+    collectManagedOutgoingAttachmentRefs(params.blocks).map(async ({ attachmentId }) => {
+      const record = readManagedImageRecord(attachmentId, stateDir);
+      if (record?.messageId === params.messageId) {
+        await deleteManagedImageRecordArtifacts(record, stateDir);
+      }
+    }),
+  );
+}
+
 function resolveManagedSessionOwnerAgentId(
   sessionKey: string,
   explicitAgentId?: string,
@@ -790,8 +853,7 @@ function resolveManagedSessionOwnerAgentId(
 }
 
 function resolveManagedRecordKind(record: ManagedImageRecord): ManagedMediaKind | null {
-  const kind = mediaKindFromMime(record.original.contentType);
-  return kind === "image" || kind === "audio" || kind === "video" ? kind : null;
+  return resolveManagedMediaKind(record.original.contentType);
 }
 
 function buildManagedMediaBlock(
@@ -803,9 +865,23 @@ function buildManagedMediaBlock(
     throw new Error("Managed media record has an unsupported content type");
   }
   const fullUrl = buildOutgoingVariantUrl(record.sessionKey, record.attachmentId, "full");
+  const artifactId = buildManagedOutgoingArtifactId(record.attachmentId, kind);
+  if (kind === "document") {
+    return {
+      type: "attachment",
+      attachment: {
+        artifactId,
+        url: fullUrl,
+        kind,
+        label: record.original.filename ?? record.alt,
+        mimeType: record.original.contentType,
+        sizeBytes: record.original.sizeBytes,
+      },
+    };
+  }
   return {
     type: kind,
-    artifactId: buildManagedOutgoingArtifactId(record.attachmentId, kind),
+    artifactId,
     url: fullUrl,
     openUrl: fullUrl,
     ...(kind === "image" ? { alt: record.alt } : { fileName: record.original.filename }),
@@ -835,15 +911,87 @@ function buildManagedImageResizeWarningBlock(params: {
   };
 }
 
-function toRecordFilename(filePath: string) {
-  const name = path.basename(filePath).trim();
-  return name || null;
+function toRecordFilename(
+  filePath: string,
+  attachmentName?: string,
+  fallbackName?: string,
+  contentType?: string,
+) {
+  const fallback = fallbackName ?? path.basename(filePath).trim();
+  if (!attachmentName?.trim()) {
+    return fallback || null;
+  }
+  const safeName = sanitizeUntrustedFileName(attachmentName, fallback);
+  const extension =
+    contentType === "application/octet-stream" || mimeTypeFromFilePath(safeName) === contentType
+      ? path.extname(safeName)
+      : path.extname(filePath);
+  return `${path.parse(safeName).name}${extension}`;
 }
 
-function asArray(value: string[] | undefined | null) {
-  return Array.isArray(value)
-    ? value.filter((item) => typeof item === "string" && item.trim())
-    : [];
+function collectReplyMediaEntries(payload: ReplyPayload) {
+  const attachmentByReference = new Map<string, ReplyMediaAttachment>();
+  for (const attachment of payload.attachments ?? []) {
+    const reference = (
+      attachment.path ??
+      attachment.url ??
+      attachment.mediaUrl ??
+      attachment.filePath
+    )?.trim();
+    if (reference && !attachmentByReference.has(reference)) {
+      attachmentByReference.set(reference, attachment);
+    }
+  }
+  const mediaUrlCount = payload.mediaUrls?.length ?? 0;
+  return [
+    ...(payload.mediaUrls ?? []).map((url, index) => ({
+      url,
+      attachment: attachmentByReference.get(url.trim()) ?? payload.attachments?.[index],
+    })),
+    ...(typeof payload.mediaUrl === "string"
+      ? [
+          {
+            url: payload.mediaUrl,
+            attachment:
+              attachmentByReference.get(payload.mediaUrl.trim()) ??
+              payload.attachments?.[mediaUrlCount],
+          },
+        ]
+      : []),
+  ];
+}
+
+export function prepareOutgoingMediaFromReplyPayload(
+  payload: ReplyPayload,
+  metadataSource: ReplyPayload = payload,
+): PreparedOutgoingMedia[] {
+  const metadataByUrl = new Map<string, ReplyMediaAttachment>();
+  for (const entry of collectReplyMediaEntries(metadataSource)) {
+    const key = entry.url.trim();
+    if (key && entry.attachment && !metadataByUrl.has(key)) {
+      metadataByUrl.set(key, entry.attachment);
+    }
+  }
+  const seen = new Set<string>();
+  return collectReplyMediaEntries(payload).flatMap((entry) => {
+    const key = entry.url.trim();
+    if (!key || seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    const attachment = metadataByUrl.get(key) ?? entry.attachment;
+    return [
+      {
+        url: entry.url,
+        ...(attachment?.name ? { filename: attachment.name } : {}),
+        ...(attachment?.mimeType ? { mimeType: attachment.mimeType } : {}),
+        trustedLocal: attachment?.trustedLocalMedia ?? payload.trustedLocalMedia === true,
+        ...(attachment?.durationMs !== undefined ? { durationMs: attachment.durationMs } : {}),
+        ...(attachment?.width !== undefined ? { width: attachment.width } : {}),
+        ...(attachment?.height !== undefined ? { height: attachment.height } : {}),
+      },
+    ];
+  });
 }
 
 function parseManagedOutgoingRoute(value: string) {
@@ -877,10 +1025,17 @@ function collectManagedOutgoingAttachmentRefs(
 ) {
   const refs = new Map<string, { attachmentId: string; sessionKey: string }>();
   for (const block of blocks ?? []) {
-    if (block?.type !== "image" && block?.type !== "audio" && block?.type !== "video") {
+    const attachment =
+      block?.type === "attachment" ? asOptionalRecord(block.attachment) : undefined;
+    if (
+      block?.type !== "image" &&
+      block?.type !== "audio" &&
+      block?.type !== "video" &&
+      !attachment
+    ) {
       continue;
     }
-    for (const candidate of [block.url, block.openUrl]) {
+    for (const candidate of [block.url, block.openUrl, attachment?.url]) {
       if (typeof candidate !== "string") {
         continue;
       }
@@ -899,6 +1054,40 @@ function collectManagedOutgoingAttachmentRefs(
     }
   }
   return [...refs.values()];
+}
+
+async function removePreparedManagedOutgoingMedia(
+  blocks: readonly ManagedMediaBlock[],
+  stateDir: string,
+): Promise<void> {
+  await Promise.all(
+    collectManagedOutgoingAttachmentRefs(blocks).map(async ({ attachmentId }) => {
+      const record = readManagedImageRecord(attachmentId, stateDir);
+      if (record) {
+        await deleteManagedImageRecordArtifacts(record, stateDir);
+      }
+    }),
+  );
+}
+
+async function loadPendingPreparedAttachmentIds(stateDir: string): Promise<Set<string> | null> {
+  try {
+    const attachmentIds = new Set<string>();
+    for (const entry of await loadPendingSessionDeliveries(stateDir)) {
+      if (entry.kind !== "agentTurn") {
+        continue;
+      }
+      for (const blocks of Object.values(entry.preparedMediaBlocks ?? {})) {
+        for (const ref of collectManagedOutgoingAttachmentRefs(blocks, entry.sessionKey)) {
+          attachmentIds.add(ref.attachmentId);
+        }
+      }
+    }
+    return attachmentIds;
+  } catch {
+    // Queue ownership must be readable before transient artifacts can be reaped safely.
+    return null;
+  }
 }
 
 function getCachedSessionManagedOutgoingAttachmentIndex(
@@ -1201,7 +1390,7 @@ async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
   return {
     artifactId: buildManagedOutgoingArtifactId(record.attachmentId, kind),
     sessionKey: record.sessionKey,
-    type: kind,
+    type: kind === "document" ? "file" : kind,
     title: kind === "image" ? record.alt : (record.original.filename ?? record.alt),
     ...(record.original.contentType ? { mimeType: record.original.contentType } : {}),
     ...(record.original.sizeBytes != null ? { sizeBytes: record.original.sizeBytes } : {}),
@@ -1259,42 +1448,40 @@ export async function resolveManagedOutgoingMediaUrlDownload(params: {
   return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record, params.stateDir);
 }
 
-export async function attachManagedOutgoingMediaToMessage(params: {
+export function attachManagedOutgoingMediaToMessage(params: {
   messageId: string;
   blocks?: readonly Record<string, unknown>[];
   stateDir?: string;
 }) {
   const messageId = params.messageId.trim();
   if (!messageId) {
-    return;
+    return false;
   }
   const refs = collectManagedOutgoingAttachmentRefs(params.blocks);
   if (refs.length === 0) {
-    return;
+    return false;
   }
-  await Promise.all(
-    refs.map(async ({ attachmentId, sessionKey }) => {
+  return refs
+    .map(({ attachmentId, sessionKey }) =>
       attachManagedImageRecordToMessage({
         attachmentId,
         sessionKey,
         messageId,
         updatedAt: new Date().toISOString(),
         stateDir: params.stateDir,
-      });
-    }),
-  );
+      }),
+    )
+    .every(Boolean);
 }
 
 export async function createManagedOutgoingMediaBlocks(params: {
   sessionKey: string;
   agentId?: string;
-  mediaUrls?: string[] | null;
-  attachments?: readonly ReplyMediaAttachment[] | null;
+  items?: readonly PreparedOutgoingMedia[] | null;
   stateDir?: string;
   messageId?: string | null;
   limits?: ManagedImageAttachmentLimitsConfig | null;
   localRoots?: readonly string[] | "any";
-  allowLocalNonImage?: boolean;
   continueOnPrepareError?: boolean;
   onPrepareError?: (error: Error) => void;
 }): Promise<ManagedMediaBlock[]> {
@@ -1302,27 +1489,34 @@ export async function createManagedOutgoingMediaBlocks(params: {
   if (!sessionKey) {
     return [];
   }
-  const mediaUrls = asArray(params.mediaUrls);
-  if (mediaUrls.length === 0) {
+  const items = params.items ?? [];
+  if (items.length === 0) {
     return [];
   }
   const stateDir = params.stateDir ?? resolveStateDir();
   const limits = resolveManagedImageAttachmentLimits(params.limits);
   const blocks: ManagedMediaBlock[] = [];
   let resolvedLocalRoots: readonly string[] | undefined;
-  for (const [index, mediaUrl] of mediaUrls.entries()) {
-    const attachmentMetadata = params.attachments?.[index];
+  for (const [index, item] of items.entries()) {
+    const mediaUrl = item.url;
     const trimmedMediaUrl = mediaUrl.trim();
     const dataUrlKind = /^data:(image|audio|video)\//iu.exec(trimmedMediaUrl)?.[1];
     const fallbackLabel = `Generated ${dataUrlKind ?? "media"} ${index + 1}`;
     const isDataUrl = trimmedMediaUrl.startsWith("data:");
     const localMediaPath = isDataUrl ? undefined : resolveLocalMediaPath(mediaUrl);
-    const label = isDataUrl ? fallbackLabel : deriveAltText(localMediaPath ?? mediaUrl, index);
-    const inferredKind = mediaKindFromMime(mimeTypeFromFilePath(localMediaPath ?? mediaUrl));
+    const label = isDataUrl
+      ? fallbackLabel
+      : item.filename?.trim() || deriveAltText(localMediaPath ?? mediaUrl, index);
+    const inferredKind = resolveManagedMediaKind(
+      item.mimeType ?? mimeTypeFromFilePath(localMediaPath ?? mediaUrl),
+    );
     const hintedKind =
       dataUrlKind === "image" || dataUrlKind === "audio" || dataUrlKind === "video"
         ? dataUrlKind
-        : inferredKind === "image" || inferredKind === "audio" || inferredKind === "video"
+        : inferredKind === "image" ||
+            inferredKind === "audio" ||
+            inferredKind === "video" ||
+            inferredKind === "document"
           ? inferredKind
           : "media";
 
@@ -1330,12 +1524,12 @@ export async function createManagedOutgoingMediaBlocks(params: {
     try {
       const parsedDataUrl = parseMediaDataUrl(mediaUrl, fallbackLabel, limits);
       if (parsedDataUrl.kind === "unsupported-data-url") {
-        continue;
+        throw new Error("Managed media attachment has an unsupported data URL content type");
       }
       if (
         localMediaPath &&
         (hintedKind === "audio" || hintedKind === "video") &&
-        params.allowLocalNonImage !== true
+        !item.trustedLocal
       ) {
         throw new Error("Local audio/video media requires an explicitly trusted reply payload");
       }
@@ -1374,24 +1568,21 @@ export async function createManagedOutgoingMediaBlocks(params: {
                   limits.maxBytes,
                   maxBytesForKind("audio"),
                   maxBytesForKind("video"),
+                  maxBytesForKind("document"),
                   MEDIA_MAX_BYTES,
                 ),
               );
             })();
       savedOriginalPath = savedOriginal.path;
-      let savedOriginalContentType = savedOriginal.contentType;
+      let savedOriginalContentType = savedOriginal.contentType ?? item.mimeType;
       if (!savedOriginalContentType) {
-        await fs.rm(savedOriginal.path, { force: true }).catch(() => {});
-        savedOriginalPath = null;
-        continue;
+        throw new Error("Managed media attachment has no detectable content type");
       }
-      const mediaKind = mediaKindFromMime(savedOriginalContentType);
-      if (mediaKind !== "image" && mediaKind !== "audio" && mediaKind !== "video") {
-        await fs.rm(savedOriginal.path, { force: true }).catch(() => {});
-        savedOriginalPath = null;
-        continue;
+      const mediaKind = resolveManagedMediaKind(savedOriginalContentType);
+      if (!mediaKind) {
+        throw new Error("Managed media attachment has an unsupported content type");
       }
-      if (localMediaPath && mediaKind !== "image" && params.allowLocalNonImage !== true) {
+      if (localMediaPath && mediaKind !== "image" && !item.trustedLocal) {
         throw new Error("Local audio/video media requires an explicitly trusted reply payload");
       }
       const maxBytes = maxBytesForManagedMediaKind(mediaKind, limits);
@@ -1498,10 +1689,12 @@ export async function createManagedOutgoingMediaBlocks(params: {
           width: originalStats.width,
           height: originalStats.height,
           sizeBytes: originalStats.sizeBytes,
-          filename:
-            mediaKind === "image"
-              ? toRecordFilename(savedOriginal.path)
-              : attachmentMetadata?.name?.trim() || label,
+          filename: toRecordFilename(
+            savedOriginal.path,
+            item.filename,
+            mediaKind === "image" ? undefined : label,
+            savedOriginalContentType,
+          ),
         },
       };
       let playback: "native" | "transcode" | undefined;
@@ -1522,9 +1715,9 @@ export async function createManagedOutgoingMediaBlocks(params: {
       }
       const block = buildManagedMediaBlock(record, playback);
       insertManagedImageRecord(record, stateDir);
-      const durationMs = asNonNegativeFiniteNumber(attachmentMetadata?.durationMs);
-      const width = asNonNegativeFiniteNumber(attachmentMetadata?.width);
-      const height = asNonNegativeFiniteNumber(attachmentMetadata?.height);
+      const durationMs = asNonNegativeFiniteNumber(item.durationMs);
+      const width = asNonNegativeFiniteNumber(item.width);
+      const height = asNonNegativeFiniteNumber(item.height);
       blocks.push({
         ...block,
         ...(durationMs !== undefined ? { durationMs } : {}),
@@ -1543,6 +1736,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
         params.onPrepareError?.(sanitizedError);
         continue;
       }
+      await removePreparedManagedOutgoingMedia(blocks, stateDir);
       throw sanitizedError;
     }
   }
@@ -1562,6 +1756,9 @@ function buildManagedMediaContentDisposition(value: string | null, contentType: 
   const fallback = contentType.startsWith("image/") ? "generated-image" : "generated-media";
   const base = (value ?? fallback).replace(/[\r\n"\\]/g, "_").trim();
   const filename = base || fallback;
+  if (mediaKindFromMime(contentType) === "document") {
+    return buildAssistantMediaContentDisposition(filename, contentType);
+  }
   return /^[\x20-\x7e]+$/u.test(filename)
     ? `inline; filename="${filename}"`
     : buildAssistantMediaContentDisposition(filename, contentType);
@@ -1664,6 +1861,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
+  const mediaKind = resolveManagedRecordKind(record);
+  if (!mediaKind) {
+    sendStatus(res, 404, "not found");
+    return true;
+  }
 
   let opened: Awaited<ReturnType<typeof openLocalFileSafely>>;
   try {
@@ -1678,7 +1880,6 @@ export async function handleManagedOutgoingMediaHttpRequest(
 
   let responseContentType = record.original.contentType || "application/octet-stream";
   let responseFilename = record.original.filename;
-  const mediaKind = resolveManagedRecordKind(record);
   if (variant === "thumbnail") {
     if (mediaKind !== "image") {
       await opened.handle.close();

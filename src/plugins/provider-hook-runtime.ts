@@ -6,7 +6,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveModelCatalogScope } from "../agents/model-discovery-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import {
+  getLoadedRuntimePluginRegistry,
+  registryContainsRuntimePluginIds,
+} from "./active-runtime-registry.js";
 import {
   PluginLruCache,
   resolveConfigScopedRuntimeCacheValue,
@@ -227,19 +230,39 @@ export function resolveProviderPluginsForHooks(params: {
   applyAutoEnable?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
-  const generationRegistry = getPluginRuntimeGenerationRegistry();
-  if (generationRegistry) {
-    const plugins = listProviderRuntimePluginsInRegistry(generationRegistry);
+  const filterRegistryPlugins = (registry: PluginRegistry) => {
     const onlyPluginIds = params.onlyPluginIds ? new Set(params.onlyPluginIds) : undefined;
-    return plugins.filter(
+    return listProviderRuntimePluginsInRegistry(registry).filter(
       (plugin) =>
         (!onlyPluginIds || onlyPluginIds.has(plugin.pluginId)) &&
         (!params.providerRefs?.length ||
           params.providerRefs.some((providerRef) => matchesProviderPluginRef(plugin, providerRef))),
     );
+  };
+  const generationRegistry = getPluginRuntimeGenerationRegistry();
+  if (generationRegistry) {
+    return filterRegistryPlugins(generationRegistry);
   }
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  // Request/lifecycle scopes and the active process registry already own loaded plugin runtime.
+  // Reuse them like findProviderRuntimePluginInLoadedRegistries does: a scoped load here rebuilds
+  // plugin runtime from source on the request path and stalls the gateway event loop for seconds.
+  // Only a hit proves the prepared registry serves this query; an empty result may mean the scope
+  // never loaded these plugins, so the scoped load below stays authoritative on a miss.
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const preparedRegistry =
+    scopedRegistry && registryContainsRuntimePluginIds(scopedRegistry, params.onlyPluginIds)
+      ? scopedRegistry
+      : getLoadedRuntimePluginRegistry({
+          env,
+          workspaceDir,
+          requiredPluginIds: params.onlyPluginIds,
+        });
+  const preparedPlugins = preparedRegistry ? filterRegistryPlugins(preparedRegistry) : [];
+  if (preparedPlugins.length > 0) {
+    return preparedPlugins;
+  }
   return resolvePluginProvidersCore({
     ...params,
     workspaceDir,

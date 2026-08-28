@@ -85,6 +85,8 @@ export type PairedDeviceNodeSurface = {
   commands?: string[];
   permissions?: Record<string, boolean>;
   bins?: string[];
+  /** Last current-generation runner publication explicitly enabled session hosting. */
+  sessionHost?: boolean;
   createdAtMs: number;
   approvedAtMs: number;
   lastConnectedAtMs?: number;

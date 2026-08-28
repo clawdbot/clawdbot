@@ -2,6 +2,7 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
 import {
   loadMergedWorkspaceSkills,
@@ -15,10 +16,9 @@ import { ensureSkillsWatcher } from "./refresh.js";
 import { fingerprintSkillSnapshotConfig } from "./snapshot-config-fingerprint.js";
 import { hydrateResolvedSkills } from "./snapshot-hydration.js";
 
-// The resolved index is gateway-process state. Mutation RPCs and watcher events
-// must bump that same process's version so a new-session key cannot reuse it.
-const resolvedSkillsCache = new Map<string, SkillSnapshot["resolvedSkills"]>();
-const RESOLVED_SKILLS_CACHE_MAX = 10;
+// Full snapshots let fresh sessions and runtime-only hydration share one versioned rebuild.
+const skillSnapshotCache = new Map<string, SkillSnapshot>();
+const SKILL_SNAPSHOT_CACHE_MAX = 10;
 
 /** Inputs that make a resolved skill snapshot reusable within a process. */
 type ReusableSkillSnapshotParams = {
@@ -33,6 +33,7 @@ type ReusableSkillSnapshotParams = {
   snapshotVersion?: number;
   watch?: boolean;
   hydrateExisting?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 type ReusableSkillSnapshotResult = {
@@ -41,9 +42,9 @@ type ReusableSkillSnapshotResult = {
   snapshotVersion: number;
 };
 
-function cacheResolvedSkills(cacheKey: string, snapshot: SkillSnapshot): SkillSnapshot {
-  resolvedSkillsCache.set(cacheKey, snapshot.resolvedSkills);
-  pruneMapToMaxSize(resolvedSkillsCache, RESOLVED_SKILLS_CACHE_MAX);
+function cacheSkillSnapshot(cacheKey: string, snapshot: SkillSnapshot): SkillSnapshot {
+  skillSnapshotCache.set(cacheKey, snapshot);
+  pruneMapToMaxSize(skillSnapshotCache, SKILL_SNAPSHOT_CACHE_MAX);
   return snapshot;
 }
 
@@ -66,6 +67,9 @@ export function resolveReusableWorkspaceSkillSnapshot(
       workspaceDir: watcherWorkspaceDir,
       ...(skillRoots ? { executionSkillsDir: skillRoots.executionSkillsDir } : {}),
       config: params.config,
+      ...(params.pluginMetadataSnapshot
+        ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+        : {}),
     });
   }
   const snapshotVersion = params.snapshotVersion ?? getSkillsSnapshotVersion(watcherWorkspaceDir);
@@ -99,6 +103,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
           skillFilter: params.skillFilter,
           skillOverrides: params.skillOverrides,
           eligibility: params.eligibility,
+          pluginMetadataSnapshot: params.pluginMetadataSnapshot,
         })
       : undefined;
     const snapshot = buildSkillSnapshot(params.workspaceDir, {
@@ -108,6 +113,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
       skillFilter: params.skillFilter,
       skillOverrides: params.skillOverrides,
       eligibility: params.eligibility,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       snapshotVersion,
     });
     return skillRoots ? { ...snapshot, skillRoots } : snapshot;
@@ -126,15 +132,16 @@ export function resolveReusableWorkspaceSkillSnapshot(
     ]);
 
   const cachedRebuild = (snapshotCacheKey = buildSnapshotCacheKey()): SkillSnapshot => {
-    if (resolvedSkillsCache.has(snapshotCacheKey)) {
-      return { resolvedSkills: resolvedSkillsCache.get(snapshotCacheKey) } as SkillSnapshot;
+    const cachedSnapshot = skillSnapshotCache.get(snapshotCacheKey);
+    if (cachedSnapshot) {
+      return cachedSnapshot;
     }
-    return cacheResolvedSkills(snapshotCacheKey, buildSnapshot());
+    return cacheSkillSnapshot(snapshotCacheKey, buildSnapshot());
   };
 
   const snapshot =
     !params.existingSnapshot || shouldRefresh
-      ? cacheResolvedSkills(buildSnapshotCacheKey(), buildSnapshot())
+      ? cachedRebuild()
       : params.hydrateExisting === false
         ? params.existingSnapshot
         : hydrateResolvedSkills(params.existingSnapshot, cachedRebuild);

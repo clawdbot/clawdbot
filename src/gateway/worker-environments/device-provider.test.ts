@@ -68,6 +68,7 @@ function deviceRuntime(params: {
   if (params.listCurrentNodes) {
     runtime.bindNodeTransport({
       listCurrentNodes: params.listCurrentNodes,
+      hasCurrentRunner: () => true,
       ...(params.getIssue ? { getIssue: params.getIssue } : {}),
       isCurrent: () => true,
       invoke: async () => ({ ok: false }),
@@ -94,7 +95,7 @@ describe("device worker provider", () => {
       listCurrentNodes: async () => [connectedNode()],
     }).provider;
 
-    expect(provider.supportedExecutionModes).toEqual(["worker-turn"]);
+    expect(provider.supportedExecutionModes).toEqual(["worker-turn", "remote-exec"]);
     const first = await provider.provision({ device: DEVICE_ID }, "operation-1");
     const repeated = await provider.provision({ device: DEVICE_ID }, "operation-1");
     const next = await provider.provision({ device: DEVICE_ID }, "operation-2");
@@ -106,6 +107,20 @@ describe("device worker provider", () => {
     });
     expect(repeated.leaseId).toBe(first.leaseId);
     expect(next.leaseId).not.toBe(first.leaseId);
+  });
+
+  it("keeps a connected paired host available when all worker slots are occupied", async () => {
+    const runtime = deviceRuntime({
+      getPairedDevice: async () => pairedDevice(),
+      listCurrentNodes: async () => [connectedNode(DEVICE_ID, false)],
+    });
+
+    await expect(runtime.resolveAvailability(DEVICE_ID)).resolves.toMatchObject({
+      available: true,
+    });
+    await expect(runtime.provider.provision({ device: DEVICE_ID }, "remote-exec")).resolves.toEqual(
+      expect.objectContaining({ node: { deviceId: DEVICE_ID }, sharedHost: true }),
+    );
   });
 
   it.each([
@@ -120,12 +135,6 @@ describe("device worker provider", () => {
       getPairedDevice: async () => pairedDevice(),
       listCurrentNodes: async () => [],
       expectedMessage: `device worker node is not connected: ${DEVICE_ID}; reconnect it before retrying`,
-    },
-    {
-      name: "connected node at capacity",
-      getPairedDevice: async () => pairedDevice(),
-      listCurrentNodes: async () => [connectedNode(DEVICE_ID, false)],
-      expectedMessage: `device worker is at capacity (all worker slots in use): ${DEVICE_ID}; retry after a running turn completes`,
     },
   ])(
     "rejects $name during provision",

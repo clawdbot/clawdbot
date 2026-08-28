@@ -2,12 +2,15 @@ import OpenClawProtocol
 
 public enum GatewayServerCapability: String, CaseIterable, Sendable {
     case chatSendRoutingContract = "chat-send-routing-contract"
+    case sessionUnreadAckContract = "session-unread-ack-contract"
     case systemAgentSetupModelRef = "openclaw-setup-model-ref"
 }
 
 extension HelloOk {
-    func advertisedServerMethods() -> Set<String> {
-        let values = features["methods"]?.value as? [AnyCodable] ?? []
+    /// nil when the hello carries no method catalog: gates must treat that as
+    /// unknown, not "advertises nothing", so pre-catalog gateways keep working.
+    public func advertisedServerMethods() -> Set<String>? {
+        guard let values = features["methods"]?.value as? [AnyCodable] else { return nil }
         return Set(values.compactMap { $0.value as? String })
     }
 

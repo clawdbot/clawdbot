@@ -35,7 +35,7 @@ export function buildAgentRunTerminalReplySnapshot(params: {
 }): AgentRunTerminalReplySnapshot {
   if (
     params.terminalReplyKind === "silent-empty" ||
-    isSilentReplyText(params.rawText, SILENT_REPLY_TOKEN)
+    isSilentReplyText(params.rawText ?? params.visibleText, SILENT_REPLY_TOKEN)
   ) {
     return { disposition: "silent" };
   }

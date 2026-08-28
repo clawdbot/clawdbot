@@ -19,6 +19,7 @@ openclaw tasks
 openclaw tasks list
 openclaw tasks list --runtime acp
 openclaw tasks list --status running
+openclaw tasks list --status blocked
 openclaw tasks show <lookup>
 openclaw tasks notify <lookup> state_changes
 openclaw tasks cancel <lookup>
@@ -34,11 +35,11 @@ openclaw tasks flow cancel <lookup>
 
 ## Root Options
 
-| Flag               | Description                                                                                        |
-| ------------------ | -------------------------------------------------------------------------------------------------- |
-| `--json`           | Output JSON.                                                                                       |
-| `--runtime <name>` | Filter by kind: `subagent`, `acp`, `cron`, or `cli`.                                               |
-| `--status <name>`  | Filter by status: `queued`, `running`, `succeeded`, `failed`, `timed_out`, `cancelled`, or `lost`. |
+| Flag               | Description                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `--json`           | Output JSON.                                                                                                  |
+| `--runtime <name>` | Filter by kind: `subagent`, `acp`, `cron`, or `cli`.                                                          |
+| `--status <name>`  | Filter by status: `queued`, `running`, `succeeded`, `failed`, `timed_out`, `cancelled`, `lost`, or `blocked`. |
 
 ## Subcommands
 
@@ -49,6 +50,11 @@ openclaw tasks list [--runtime <name>] [--status <name>] [--json]
 ```
 
 Lists tracked background tasks newest first.
+
+Use `--status blocked` to find completed tasks whose result delivery is blocked.
+These tasks retain their stored `succeeded` status and also remain included in
+`--status succeeded` results; JSON task records keep the same stored status and
+`terminalOutcome` fields.
 
 ### `show`
 

@@ -2,6 +2,7 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { dispatchReplyWithBufferedBlockDispatcher as dispatchThroughSharedOwner } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
@@ -45,6 +46,26 @@ const visibleFinalReceipt = {
   },
   anyVisibleDelivered: true,
 } as const;
+
+function createMessageToolOnlyGroupContext(): TelegramMessageContext {
+  return createContext({
+    chatId: -1001234,
+    isGroup: true,
+    ctxPayload: {
+      SessionKey: "agent:test:telegram:group:-1001234",
+      ChatType: "group",
+    } as TelegramMessageContext["ctxPayload"],
+    primaryCtx: {
+      message: { chat: { id: -1001234, type: "supergroup" } },
+    } as TelegramMessageContext["primaryCtx"],
+    msg: {
+      chat: { id: -1001234, type: "supergroup" },
+      message_id: 456,
+    } as TelegramMessageContext["msg"],
+    threadSpec: { id: undefined, scope: "none" },
+    replyThreadId: undefined,
+  });
+}
 
 describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
   it("uses resolved DM config for auto-topic-label overrides", async () => {
@@ -172,23 +193,7 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     });
 
     await dispatchWithContext({
-      context: createContext({
-        chatId: -1001234,
-        isGroup: true,
-        ctxPayload: {
-          SessionKey: "agent:test:telegram:group:-1001234",
-          ChatType: "group",
-        } as TelegramMessageContext["ctxPayload"],
-        primaryCtx: {
-          message: { chat: { id: -1001234, type: "supergroup" } },
-        } as TelegramMessageContext["primaryCtx"],
-        msg: {
-          chat: { id: -1001234, type: "supergroup" },
-          message_id: 456,
-        } as TelegramMessageContext["msg"],
-        threadSpec: { id: undefined, scope: "none" },
-        replyThreadId: undefined,
-      }),
+      context: createMessageToolOnlyGroupContext(),
       streamMode: "off",
     });
 
@@ -219,6 +224,40 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [{ text: "No response generated. Please try again." }],
+      }),
+    );
+  });
+
+  it("delivers exactly one replay fallback when the provider fails before visible output", async () => {
+    const providerError = new Error("provider returned HTTP 500");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) =>
+      dispatchThroughSharedOwner({
+        ...params,
+        replyResolver: async (_ctx, options) => {
+          options?.onAgentRunTerminalOutcome?.("failed");
+          throw providerError;
+        },
+      }),
+    );
+
+    await dispatchWithContext({
+      cfg: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      context: createMessageToolOnlyGroupContext(),
+      retryDispatchErrors: true,
+      streamMode: "off",
+      suppressFailureFallback: true,
+      telegramCfg: { silentErrorReplies: true },
+    });
+
+    expect(deliverReplies).toHaveBeenCalledOnce();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        silent: true,
+        replies: [
+          {
+            text: "Something went wrong while processing your request. Please try again.",
+          },
+        ],
       }),
     );
   });

@@ -80,7 +80,11 @@ export async function getCachedLiveCatalogValue<T>(params: {
   now?: () => number;
 }): Promise<T> {
   const rawNow = params.now?.() ?? Date.now();
-  const ttlMs = params.ttlMs ?? 30_000;
+  const expiresAt = resolveExpiresAtMsFromDurationMs(params.ttlMs ?? 30_000, { nowMs: rawNow });
+  // Uncached callers must neither reuse nor disturb an existing entry.
+  if (expiresAt === undefined) {
+    return await params.load();
+  }
   const key = buildLiveCatalogCacheKey(params.keyParts);
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
   if (existing) {
@@ -89,27 +93,22 @@ export async function getCachedLiveCatalogValue<T>(params: {
     }
     liveCatalogCache.delete(key);
   }
-  const value = params.load();
-  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
-  if (expiresAt !== undefined) {
-    // Auth-scoped live provider catalogs can vary by token; keep this
-    // process-local cache bounded so discovery cannot grow without limit.
-    pruneMapToMaxSize(liveCatalogCache, LIVE_CATALOG_CACHE_MAX_ENTRIES - 1);
-    liveCatalogCache.set(key, {
-      expiresAt,
-      value,
-    });
-  }
+  const entry = { expiresAt, value: params.load() };
+  // Auth-scoped live provider catalogs can vary by token; keep this
+  // process-local cache bounded so discovery cannot grow without limit.
+  pruneMapToMaxSize(liveCatalogCache, LIVE_CATALOG_CACHE_MAX_ENTRIES - 1);
+  liveCatalogCache.set(key, entry);
+  let retain = false;
   try {
-    const resolved = await value;
-    if (params.shouldCache && !params.shouldCache(resolved)) {
+    const resolved = await entry.value;
+    retain = params.shouldCache?.(resolved) ?? true;
+    return resolved;
+  } finally {
+    // Expired work may finish after a replacement load. Only its own entry
+    // can be removed when loading or the cache predicate fails.
+    if (!retain && liveCatalogCache.get(key) === entry) {
       liveCatalogCache.delete(key);
     }
-    return resolved;
-  } catch (err) {
-    // Failed live discovery should not poison later retries for the same provider/config.
-    liveCatalogCache.delete(key);
-    throw err;
   }
 }
 
@@ -309,32 +308,6 @@ export function buildManifestProviderCatalogFamily(params: {
           contextWindow: entry.contextWindow,
         })),
       ),
-  };
-}
-
-/** Builds one normalized runtime model row from a provider manifest catalog entry. */
-export function buildManifestModelDefinition(params: {
-  /** Provider id that owns the manifest catalog row. */
-  providerId: string;
-  /** Raw manifest modelCatalog provider block that contains the row. */
-  catalog: unknown;
-  /** Optional provider policy applied after manifest normalization. */
-  decorate?: (model: ModelDefinitionConfig) => ModelDefinitionConfig;
-}): (model: unknown) => ModelDefinitionConfig {
-  if (!params.catalog || typeof params.catalog !== "object" || Array.isArray(params.catalog)) {
-    throw new Error(`Missing modelCatalog.providers.${params.providerId}`);
-  }
-  const catalog = params.catalog;
-  return (rawModel) => {
-    const provider = buildManifestModelProviderConfig({
-      providerId: params.providerId,
-      catalog: { ...catalog, models: [rawModel] },
-    });
-    const model = provider.models[0];
-    if (!model) {
-      throw new Error(`Missing modelCatalog.providers.${params.providerId}.models[0]`);
-    }
-    return params.decorate?.(model) ?? model;
   };
 }
 

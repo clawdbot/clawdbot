@@ -21,6 +21,7 @@ import {
 } from "../../../plugins/hook-agent-context.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
@@ -159,6 +160,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   };
   const promptBuildMessages =
     pruneProcessedHistoryImages(input.activeSession.messages) ?? input.activeSession.messages;
+  const promptEvent = { prompt: attempt.prompt, messages: promptBuildMessages };
   const hookResult =
     input.isRawModelRun || isSettledTurnFinalization
       ? undefined
@@ -171,6 +173,23 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
           bootstrapContextRunKind: attempt.bootstrapContextRunKind,
         });
   const promptCacheToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
+  const hookRunner = input.hookRunner;
+  const assertHostActive = resolveAdmittedRunActiveAssertion(
+    attempt.admittedRunContext,
+    attempt.abortSignal,
+  );
+  const authorizedHookResult =
+    input.isRawModelRun ||
+    isSettledTurnFinalization ||
+    !hookRunner ||
+    !attempt.toolAuthorityFingerprint ||
+    !assertHostActive
+      ? undefined
+      : await hookRunner.runAuthorizedPromptBuild(promptEvent, hookCtx, {
+          toolAuthorityFingerprint: attempt.toolAuthorityFingerprint,
+          activeToolNames: promptCacheToolNames,
+          assertHostActive,
+        });
   const promptCacheToolNameSet = new Set(promptCacheToolNames.map(normalizeToolPolicyName));
   const promptBeforeResolvedToolFinalization = effectivePrompt;
   effectivePrompt = applyResolvedToolPromptFinalizer({
@@ -186,18 +205,26 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     promptCacheToolNameSet.has(normalizeToolPolicyName(tool.name)),
   );
   const promptBeforePromptBuildHooks = effectivePrompt;
-  const promptBuildPrependContext = hookResult?.prependContext;
-  const promptBuildAppendContext = hookResult?.appendContext;
+  const joinHookContext = (...values: Array<string | undefined>) =>
+    values.filter((value): value is string => Boolean(value?.trim())).join("\n\n") || undefined;
+  const promptBuildPrependContext = joinHookContext(
+    hookResult?.prependContext,
+    authorizedHookResult?.prependContext,
+  );
+  const promptBuildAppendContext = joinHookContext(
+    hookResult?.appendContext,
+    authorizedHookResult?.appendContext,
+  );
   const hasPromptBuildContext =
     Boolean(promptBuildPrependContext?.trim()) || Boolean(promptBuildAppendContext?.trim());
 
-  if (hookResult?.prependContext) {
-    effectivePrompt = `${hookResult.prependContext}\n\n${effectivePrompt}`;
-    log.debug(`hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`);
+  if (promptBuildPrependContext) {
+    effectivePrompt = `${promptBuildPrependContext}\n\n${effectivePrompt}`;
+    log.debug(`hooks: prepended context to prompt (${promptBuildPrependContext.length} chars)`);
   }
-  if (hookResult?.appendContext) {
-    effectivePrompt = `${effectivePrompt}\n\n${hookResult.appendContext}`;
-    log.debug(`hooks: appended context to prompt (${hookResult.appendContext.length} chars)`);
+  if (promptBuildAppendContext) {
+    effectivePrompt = `${effectivePrompt}\n\n${promptBuildAppendContext}`;
+    log.debug(`hooks: appended context to prompt (${promptBuildAppendContext.length} chars)`);
   }
   const legacySystemPrompt = normalizeOptionalString(hookResult?.systemPrompt) ?? "";
   if (legacySystemPrompt) {

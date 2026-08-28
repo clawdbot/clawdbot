@@ -19,22 +19,24 @@ import {
   type PreparedModelRuntimeAuth,
   type PreparedModelRuntimeAuthScope,
 } from "./prepared-model-runtime-auth.js";
+import type {
+  PreparedModelRuntimeAgentFacts,
+  PreparedModelRuntimeCatalogFacts,
+  PreparedModelRuntimeCatalogSource,
+} from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   fingerprintPreparedRuntimeFacts,
   prepareAgentCatalogSource,
   prepareConfiguredRuntimeFactsBatch,
-  prepareFullCatalogFacts,
   prepareWorkspaceBuildGroup,
-  type PreparedModelRuntimeAgentFacts,
-  type PreparedModelRuntimeCatalogFacts,
-  type PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.facts.js";
+import { prepareFullCatalogFacts } from "./prepared-model-runtime.full-catalog.js";
 import {
   createPreparedInboundRegistryLoader,
   preparedModelRuntimeWorkspaceFactsKey,
 } from "./prepared-model-runtime.inbound-registry.js";
-import { projectPreparedPluginGeneration } from "./prepared-model-runtime.plugin-generation.js";
+import { notifyPreparedModelRuntimePublication } from "./prepared-model-runtime.publication-events.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
@@ -213,6 +215,7 @@ function createFullModelCatalogAccess(params: {
         pending = build
           .then((catalog) => {
             fullCatalog = catalog;
+            notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
             return catalog;
           })
           .finally(() => {
@@ -281,6 +284,7 @@ async function buildSnapshotBatch(
     PreparedModelRuntimeInput,
     PreparedModelRuntimePluginGeneration
   >,
+  pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
 ): Promise<PreparedModelRuntimeBuildResult[]> {
   const freshGroups = new Map<string, PreparedModelRuntimeInput[]>();
@@ -340,12 +344,15 @@ async function buildSnapshotBatch(
     const prepareInboundPluginRegistry = groupInputs.some((input) =>
       inboundPluginRegistryInputs.has(input),
     );
+    const preferBuiltPluginArtifacts =
+      pluginGeneration?.preferBuiltPluginArtifacts ?? prepareInboundPluginRegistry;
     const prepared = await prepareWorkspaceBuildGroup(
       groupInputs,
       catalogMode,
-      {},
+      { preferBuiltPluginArtifacts },
       prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
       pluginGeneration,
+      pluginMetadataSnapshot,
     );
     assertPreparedModelRuntimeInputsCurrent(groupInputs, buildGuards);
     runtimePluginMs += prepared.buildStats.runtimePluginMs;
@@ -356,13 +363,7 @@ async function buildSnapshotBatch(
     configuredProjectionMs += prepared.buildStats.configuredProjectionMs;
     for (const agentFacts of prepared.agentFacts) {
       preparedInputs.set(agentFacts.input, agentFacts);
-      pluginGenerations.set(
-        agentFacts.input,
-        projectPreparedPluginGeneration({
-          input: agentFacts.input,
-          pluginGeneration: prepared.pluginGeneration,
-        }),
-      );
+      pluginGenerations.set(agentFacts.input, prepared.pluginGeneration);
     }
   }
   const workspaceFactsMs = performance.now() - workspaceFactsStartedAt;
@@ -552,6 +553,7 @@ export function startSerializedSnapshotBuildBatch(
     PreparedModelRuntimeInput,
     PreparedModelRuntimePluginGeneration
   > = new Map(),
+  pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult[]>;
   completion: Promise<void>;
@@ -579,6 +581,7 @@ export function startSerializedSnapshotBuildBatch(
         buildGuards,
         inboundPluginRegistryInputs,
         reusablePluginGenerations,
+        pluginMetadataSnapshot,
         onBuildStats,
       ),
     };
@@ -618,6 +621,7 @@ export function startSerializedSnapshotBuild(
   generationGuard: () => boolean = () => true,
   prepareInboundPluginRegistry = false,
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
+  pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult>;
   completion: Promise<void>;
@@ -632,6 +636,7 @@ export function startSerializedSnapshotBuild(
     undefined,
     prepareInboundPluginRegistry ? new Set([input]) : undefined,
     reusablePluginGeneration ? new Map([[input, reusablePluginGeneration]]) : undefined,
+    pluginMetadataSnapshot,
   );
   return {
     pending: build.pending.then((results) => results[0]!),

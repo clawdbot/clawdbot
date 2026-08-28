@@ -23,7 +23,6 @@ import {
   getActiveDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
-import { isPluginMetadataSnapshotCompatible } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
   resolveProviderRuntimePluginHandle,
@@ -127,26 +126,26 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
   const effectiveWorkspace =
     sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-  if (params.permissionMode && !params.sessionRoot) {
-    throw new Error("session permission mode requires a recorded session root");
-  }
-  const sessionPermissionPolicy =
-    params.permissionMode && params.sessionRoot
-      ? { root: params.sessionRoot, mode: params.permissionMode }
-      : undefined;
+  // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
+  // the agent's canonical workspace as their permission boundary.
+  const sessionPermissionPolicy = params.permissionMode
+    ? {
+        root: params.sessionRoot ?? (await fs.realpath(resolvedWorkspace)),
+        mode: params.permissionMode,
+      }
+    : undefined;
   if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
     throw new Error(
       "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
     );
   }
   await fs.mkdir(effectiveWorkspace, { recursive: true });
-  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+  const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
     agentId: params.agentId,
   });
   return {
-    defaultAgentId,
     effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
     effectiveFsWorkspaceOnly: resolveAttemptFsWorkspaceOnly({
       config: params.config,
@@ -224,17 +223,6 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
       return providerRuntimeHandle;
     }
     const pluginMetadataSnapshot = getCurrentAttemptPluginMetadataSnapshot();
-    const compatibleMetadataSnapshot =
-      pluginMetadataSnapshot &&
-      pluginMetadataSnapshot.pluginIds === undefined &&
-      isPluginMetadataSnapshotCompatible({
-        snapshot: pluginMetadataSnapshot,
-        config: params.config,
-        env: process.env,
-        workspaceDir: effectiveWorkspace,
-      })
-        ? pluginMetadataSnapshot
-        : undefined;
     providerRuntimeHandle = {
       ...resolveProviderRuntimePluginHandle({
         provider: params.provider,
@@ -242,9 +230,7 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
         config: params.config,
         workspaceDir: effectiveWorkspace,
         env: process.env,
-        ...(compatibleMetadataSnapshot
-          ? { pluginMetadataSnapshot: compatibleMetadataSnapshot }
-          : {}),
+        ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
       }),
       provider: params.provider,
       modelId: params.modelId,

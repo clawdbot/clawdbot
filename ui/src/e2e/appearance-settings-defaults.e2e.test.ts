@@ -3,10 +3,11 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { importCustomThemeFromUrl } from "../app/custom-theme.ts";
+import { importCustomThemeFromUrl } from "../pages/config/custom-theme-import.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
+  createControlUiMockBootstrapConfig,
   installMockGateway,
   waitForControlUiSettingsTakeover,
   type MockGatewayControls,
@@ -112,6 +113,34 @@ async function readPersistedSettings(page: Page): Promise<Record<string, unknown
     const raw = localStorage.getItem(key);
     return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
   }, settingsStorageKey());
+}
+
+async function readAccentPresentation(page: Page) {
+  return page.evaluate(() => {
+    const styles = getComputedStyle(document.documentElement);
+    return {
+      accent: styles.getPropertyValue("--accent").trim(),
+      accentForeground: styles.getPropertyValue("--accent-foreground").trim(),
+      primaryForeground: styles.getPropertyValue("--primary-foreground").trim(),
+    };
+  });
+}
+
+/** Resolves --primary-hover to concrete channels via a painted probe; computed
+ * custom-property reads return the raw color-mix() expression, not a color. */
+async function readResolvedPrimaryHover(page: Page): Promise<number[]> {
+  return page.evaluate(() => {
+    const probe = document.createElement("div");
+    probe.style.backgroundColor = "var(--primary-hover)";
+    document.body.append(probe);
+    const value = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    // Chromium serializes mixed colors as color(srgb r g b) with 0-1 floats.
+    const channels = (value.match(/\d+(?:\.\d+)?/g) ?? []).slice(0, 3).map(Number);
+    return channels.every((channel) => channel <= 1)
+      ? channels.map((channel) => channel * 255)
+      : channels;
+  });
 }
 
 async function readThemeImportRaceState(page: Page) {
@@ -245,8 +274,7 @@ suite.define(() => {
       await resetSyncedPreference({
         click: () =>
           themeSection
-            .locator(":scope > .settings-section__header")
-            .getByRole("button", { name: "Reset to default" })
+            .locator(".settings-theme-card--claw")
             .click()
             .then(() => undefined),
         expectedKey: "theme",
@@ -260,7 +288,7 @@ suite.define(() => {
       await resetSyncedPreference({
         click: () =>
           colorModeRow
-            .getByRole("button", { name: "Reset to default" })
+            .locator('wa-radio[value="system"]')
             .click()
             .then(() => undefined),
         expectedKey: "themeMode",
@@ -269,10 +297,7 @@ suite.define(() => {
         remainingPrefs: withoutThemeMode,
       });
 
-      await textSizeSection
-        .locator(":scope > .settings-section__header")
-        .getByRole("button", { name: "Reset to default" })
-        .click();
+      await textSizeSection.locator(".settings-text-scale__btn", { hasText: "100%" }).click();
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
 
       await resetSyncedPreference({
@@ -351,6 +376,164 @@ suite.define(() => {
       await captureViewport(page, "03-inherited-defaults.png");
       await reloadedSendShortcutRow.scrollIntoViewIfNeeded();
       await captureViewport(page, "04-inherited-chat-default.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("applies synced accent preferences immediately and restores the operator seam color", async () => {
+    const localAccent = "#f5b942";
+    const serverAccent = "#5b9cf6";
+    const mintAccent = "#52c99a";
+    const customAccent = "#243b6b";
+    const operatorAccent = "#123456";
+    const context = await suite.browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1440 },
+    });
+    await context.addInitScript(
+      ({ accent, gatewayUrl, key }) => {
+        localStorage.setItem(key, JSON.stringify({ accent, gatewayUrl }));
+      },
+      {
+        accent: localAccent,
+        gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
+        key: settingsStorageKey(),
+      },
+    );
+    const page = await context.newPage();
+    const initialPrefs = { accent: serverAccent, theme: "knot" };
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["config.get"],
+      methodResponses: {
+        "config.get": configResponse(initialPrefs, "appearance-accent-1"),
+        "config.patch": { ok: true },
+      },
+    });
+    await page.route("**/control-ui-config.json", (route) =>
+      route.fulfill({
+        json: { ...createControlUiMockBootstrapConfig(), seamColor: operatorAccent },
+      }),
+    );
+
+    try {
+      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      expect(response?.status()).toBe(200);
+      await gateway.waitForRequest("config.get");
+      await expect
+        .poll(() => readAccentPresentation(page))
+        .toEqual({
+          accent: localAccent,
+          accentForeground: "#000000",
+          primaryForeground: "#000000",
+        });
+
+      await gateway.resolveDeferred(
+        "config.get",
+        configResponse(initialPrefs, "appearance-accent-1"),
+      );
+      await waitForControlUiSettingsTakeover(page);
+      const accentSection = page.locator("#settings-appearance-accent");
+      const mintPreset = accentSection.locator('[data-accent-preset="mint"]');
+      await expect
+        .poll(() =>
+          accentSection.locator('[data-accent-preset="blue"]').getAttribute("aria-pressed"),
+        )
+        .toBe("true");
+      await expect.poll(() => readAccentPresentation(page)).toMatchObject({ accent: serverAccent });
+      await accentSection.scrollIntoViewIfNeeded();
+      await captureViewport(page, "08-accent-server-preference.png");
+
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse({ accent: mintAccent, theme: "knot" }, "appearance-accent-2"),
+      );
+      await mintPreset.click();
+      await waitForRequestCount(gateway, "config.patch", 1);
+      expect(patchPrefs((await gateway.getRequests("config.patch"))[0]!)).toEqual({
+        accent: mintAccent,
+      });
+      await expect.poll(() => mintPreset.getAttribute("aria-pressed")).toBe("true");
+      await expect
+        .poll(() => readAccentPresentation(page))
+        .toEqual({
+          accent: mintAccent,
+          accentForeground: "#000000",
+          primaryForeground: "#000000",
+        });
+      await expect.poll(() => readPersistedSettings(page)).toMatchObject({ accent: mintAccent });
+      // Dark Knot primary buttons hover on --primary-hover; it must track the
+      // selected accent (mint mixed 18% toward white), not the theme default.
+      const hoverChannels = await readResolvedPrimaryHover(page);
+      const expectedHover = [0x52, 0xc9, 0x9a].map((channel) =>
+        Math.round(channel * 0.82 + 255 * 0.18),
+      );
+      expect(hoverChannels).toHaveLength(3);
+      for (const [index, channel] of hoverChannels.entries()) {
+        expect(Math.abs(channel - expectedHover[index]!)).toBeLessThanOrEqual(2);
+      }
+      await captureViewport(page, "09-accent-mint-selected.png");
+
+      await resetSyncedPreference({
+        click: () =>
+          page
+            .locator("#settings-appearance-theme .settings-theme-card--claw")
+            .click()
+            .then(() => undefined),
+        expectedKey: "theme",
+        gateway,
+        hash: "appearance-accent-3",
+        remainingPrefs: { accent: mintAccent },
+      });
+      await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("dark");
+      await expect.poll(() => readAccentPresentation(page)).toMatchObject({ accent: mintAccent });
+      await expect.poll(() => mintPreset.getAttribute("aria-pressed")).toBe("true");
+
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse({ accent: customAccent }, "appearance-accent-4"),
+      );
+      await accentSection.locator('input[type="color"][data-accent-custom]').fill(customAccent);
+      await waitForRequestCount(gateway, "config.patch", 3);
+      expect(patchPrefs((await gateway.getRequests("config.patch"))[2]!)).toEqual({
+        accent: customAccent,
+      });
+      await expect
+        .poll(() => readAccentPresentation(page))
+        .toEqual({
+          accent: customAccent,
+          accentForeground: "#ffffff",
+          primaryForeground: "#ffffff",
+        });
+      await expect.poll(() => readPersistedSettings(page)).toMatchObject({ accent: customAccent });
+
+      await resetSyncedPreference({
+        click: () =>
+          accentSection
+            .locator('[data-accent-preset="default"]')
+            .click()
+            .then(() => undefined),
+        expectedKey: "accent",
+        gateway,
+        hash: "appearance-accent-5",
+        remainingPrefs: {},
+      });
+      await expect
+        .poll(() =>
+          accentSection.locator('[data-accent-preset="default"]').getAttribute("aria-pressed"),
+        )
+        .toBe("true");
+      await expect
+        .poll(() => readAccentPresentation(page))
+        .toEqual({
+          accent: operatorAccent,
+          accentForeground: "#ffffff",
+          primaryForeground: "#ffffff",
+        });
+      await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("accent");
+      await captureViewport(page, "10-accent-operator-default-restored.png");
     } finally {
       await context.close();
     }
@@ -453,10 +636,7 @@ suite.define(() => {
           .poll(() => followUpRow.textContent())
           .toContain("Stocké uniquement dans ce navigateur");
 
-        await themeSection
-          .locator(":scope > .settings-section__header")
-          .locator("button.btn--icon")
-          .click();
+        await themeSection.locator(".settings-theme-card--claw").click();
         await languageRow.locator("button.btn--icon").click();
         await followUpRow.locator("button.btn--sm").click();
 
@@ -519,10 +699,7 @@ suite.define(() => {
       await expect.poll(() => readPersistedSettings(page)).toMatchObject({ theme: "claw" });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
-      await themeSection
-        .locator(":scope > .settings-section__header")
-        .locator("button.btn--icon")
-        .click();
+      await themeSection.locator(".settings-theme-card--knot").click();
       await expect
         .poll(() => themeSection.locator(".settings-theme-card--knot").getAttribute("aria-pressed"))
         .toBe("true");
@@ -598,6 +775,83 @@ suite.define(() => {
     } finally {
       await context.close();
     }
+  });
+
+  it("announces a failed custom-theme import, then persists a successful retry across reload", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse({}, "custom-theme-invalid-1"),
+            "config.patch": { ok: true },
+          },
+        });
+        await page.route("https://tweakcn.com/r/themes/network-failure", async (route) => {
+          await route.fulfill({ status: 503 });
+        });
+        let successfulImports = 0;
+        await page.route("https://tweakcn.com/r/themes/retry-theme", async (route) => {
+          successfulImports += 1;
+          await route.fulfill({ json: createTweakcnThemePayload() });
+        });
+
+        const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
+        expect(response?.status()).toBe(200);
+        await waitForControlUiSettingsTakeover(page);
+        await gateway.waitForRequest("config.get");
+
+        await page.locator(".settings-theme-card--custom").click();
+        const importer = page.locator(".settings-theme-import");
+        await importer.locator("input").fill("https://tweakcn.com/themes/network-failure");
+        await importer.locator("button.primary").click();
+
+        await expect
+          .poll(async () => (await importer.getByRole("alert").textContent())?.trim())
+          .toBe("tweakcn import failed (503).");
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        await captureViewport(page, "07-custom-theme-import-error-announced.png");
+
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse({ theme: "custom" }, "custom-theme-imported-2"),
+        );
+        await importer.locator("input").fill("https://tweakcn.com/themes/retry-theme");
+        await importer.locator("button.primary").click();
+        await expect.poll(() => importer.getByRole("status").textContent()).toContain("Imported");
+        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("custom");
+        const importedSettings = await readPersistedSettings(page);
+        expect(importedSettings).toMatchObject({
+          customTheme: { themeId: "retry-theme", label: "Light Green" },
+          theme: "custom",
+        });
+        const importedAccent = await readAccentPresentation(page);
+        expect(importedAccent.accent).toBe(createTweakcnThemePayload().cssVars.dark.accent);
+        await waitForRequestCount(gateway, "config.patch", 1);
+        const [themePatch] = await gateway.getRequests("config.patch");
+        expect(patchPrefs(themePatch!)).toEqual({ theme: "custom" });
+        await captureViewport(page, "08-custom-theme-imported.png");
+
+        await page.reload();
+        await waitForControlUiSettingsTakeover(page);
+        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("custom");
+        await expect
+          .poll(() => importer.locator(".settings-theme-import__meta-value").textContent())
+          .toContain("Light Green");
+        expect((await readPersistedSettings(page)).customTheme).toEqual(
+          importedSettings.customTheme,
+        );
+        expect(await readAccentPresentation(page)).toEqual(importedAccent);
+        expect(successfulImports).toBe(1);
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        await captureViewport(page, "09-custom-theme-reloaded.png");
+      },
+    );
   });
 
   it("keeps Clear authoritative after a delayed custom-theme replacement", async () => {
@@ -693,6 +947,7 @@ suite.define(() => {
       await expect
         .poll(() => importer.locator(".settings-theme-import__message").textContent())
         .toContain("removed");
+      await expect.poll(() => importer.getByRole("status").count()).toBe(1);
       const afterDelayedResponse = await readThemeImportRaceState(page);
       expect(beforeReplace).toMatchObject({
         clawSelected: false,
@@ -797,6 +1052,7 @@ suite.define(() => {
       await expect
         .poll(() => importer.locator(".settings-theme-import__message").textContent())
         .toContain("Imported");
+      await expect.poll(() => importer.getByRole("status").count()).toBe(1);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
     } finally {
       releaseImport();

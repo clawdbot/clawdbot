@@ -30,6 +30,7 @@ describe("buildDeviceInventory", () => {
           deviceId: "node-1",
           displayName: "megaclaw",
           roles: ["operator", "node"],
+          connected: true,
           lastSeenAtMs: 1_000,
         }),
       ],
@@ -37,7 +38,7 @@ describe("buildDeviceInventory", () => {
         {
           nodeId: "node-1",
           displayName: "megaclaw",
-          connected: true,
+          connected: false,
           paired: true,
           caps: ["screen"],
           commands: ["system.run"],
@@ -54,6 +55,7 @@ describe("buildDeviceInventory", () => {
     const entry = firstGroup(groups).primary;
     expect(entry.id).toBe("node-1");
     expect(entry.connected).toBe(true);
+    expect(entry.node?.connected).toBe(false);
     expect(entry.roles).toEqual(["operator", "node"]);
     expect(entry.version).toBe("2026.6.11");
     expect(entry.node?.caps).toEqual(["screen"]);

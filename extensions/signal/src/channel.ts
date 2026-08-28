@@ -1,3 +1,4 @@
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 // Signal plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
@@ -18,7 +19,6 @@ import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { chunkText, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
@@ -82,9 +82,7 @@ async function resolveSignalSendContext(params: {
     (await loadSignalSendRuntime()).sendMessageSignal;
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
-    resolveChannelLimitMb: ({ cfg, accountId }) =>
-      cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ?? cfg.channels?.signal?.mediaMaxMb,
-    accountId: params.accountId,
+    resolveChannelLimitMb: () => resolveSignalAccount(params).config.mediaMaxMb,
   });
   return { send, maxBytes };
 }
@@ -200,6 +198,7 @@ function attachSignalVisibleText<T extends object>(result: T, visibleText: strin
     ...result,
     meta: {
       ...meta,
+      visibleText,
       signalVisibleText: visibleText,
     },
   };
@@ -211,6 +210,9 @@ const signalMessageAdapter = defineChannelMessageAdapter({
     capabilities: {
       text: true,
       media: true,
+      payload: true,
+      replyTo: true,
+      messageSendingHooks: true,
     },
   },
   send: {
@@ -300,16 +302,17 @@ async function sendFormattedSignalText(ctx: {
   if (chunks.length === 0 && ctx.text) {
     chunks = [{ text: ctx.text, styles: [] }];
   }
+  const effectiveReplyToMode =
+    ctx.replyToMode ??
+    resolveSignalReplyToMode({
+      cfg: ctx.cfg,
+      accountId: ctx.accountId,
+      chatType: inferSignalTargetChatType(to),
+    });
   const nextReplyToId = createReplyToFanout({
     replyToId: ctx.replyToId,
     replyToIdSource: ctx.replyToIdSource,
-    replyToMode:
-      ctx.replyToMode ??
-      resolveSignalReplyToMode({
-        cfg: ctx.cfg,
-        accountId: ctx.accountId,
-        chatType: inferSignalTargetChatType(to),
-      }),
+    replyToMode: effectiveReplyToMode,
   });
   const results = [];
   for (const chunk of chunks) {

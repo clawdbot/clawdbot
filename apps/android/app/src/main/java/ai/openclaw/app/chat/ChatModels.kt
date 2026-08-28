@@ -31,6 +31,7 @@ data class ChatMessage(
   val entryId: String? = null,
   val provenance: ChatMessageProvenance? = null,
   val transcriptMarker: ChatTranscriptMarker? = null,
+  val senderLabel: String? = null,
 )
 
 data class ChatMessageProvenance(
@@ -315,6 +316,8 @@ data class ChatSessionEntry(
   val archived: Boolean? = null,
   val unread: Boolean? = null,
   val lastReadAt: Long? = null,
+  val markedUnreadAt: Long? = null,
+  val hasMarkedUnreadMetadata: Boolean = markedUnreadAt != null,
   val agentStatus: ChatSessionAgentStatus? = null,
   val hasAgentStatusMetadata: Boolean = agentStatus != null,
   val observerDigest: SessionObserverDigest? = null,
@@ -332,6 +335,7 @@ data class ChatSessionEntry(
   val hasActiveRun: Boolean? = null,
   val activeRunIds: List<String>? = null,
   val hasActiveRunMetadata: Boolean = hasActiveRun != null || activeRunIds != null,
+  val hasActiveRunIdsMetadata: Boolean = activeRunIds != null,
   val parentSessionKey: String? = null,
   val spawnedBy: String? = null,
   val hasActiveSubagentRun: Boolean? = null,
@@ -350,6 +354,10 @@ data class ChatSessionEntry(
     status != null || startedAt != null || endedAt != null || runtimeMs != null || outputTokens != null,
 )
 
+data class ChatSessionUnreadExpectation(
+  val markedUnreadAt: Long?,
+)
+
 data class ChatSessionAgentStatus(
   val note: String,
   val expiresAt: Long,
@@ -364,7 +372,7 @@ fun filterSessionEntries(
   val query = search.trim().lowercase()
   if (query.isEmpty()) return sessions
   return sessions.filter { session ->
-    listOfNotNull(session.displayName, session.label, session.key)
+    listOfNotNull(session.displayName, session.label, session.category, session.key)
       .any { it.lowercase().contains(query) }
   }
 }

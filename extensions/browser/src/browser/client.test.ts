@@ -6,6 +6,9 @@ import {
   browserArmDialog,
   browserArmFileChooser,
   browserConsoleMessages,
+  browserRequests,
+  browserPageText,
+  browserEmulateSetting,
   browserNavigate,
   browserPdfSave,
   browserScreenshotAction,
@@ -67,6 +70,18 @@ describe("browser client", () => {
     await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/sandboxed session/i);
   });
 
+  it("preserves unavailable tab state from a disconnected browser", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ running: false, tabs: [] })),
+    );
+
+    await expect(browserTabs("http://127.0.0.1:18791")).resolves.toEqual({
+      running: false,
+      tabs: [],
+    });
+  });
+
   it("adds useful cancellation messaging for abort-like failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("aborted")));
     await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/cancelled/i);
@@ -96,6 +111,63 @@ describe("browser client", () => {
     const parsed = new URL(requireSnapshotCall(calls));
     expect(parsed.searchParams.get("labels")).toBe("1");
     expect(parsed.searchParams.get("mode")).toBe("efficient");
+  });
+
+  it("encodes observation filters and routes emulation through the selected profile", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, init });
+        return jsonResponse({
+          ok: true,
+          targetId: "canonical",
+          requests: [],
+          text: "Prose",
+          truncated: false,
+        });
+      }),
+    );
+    const baseUrl = "http://127.0.0.1:18791";
+    const profile = "test profile";
+    await browserRequests(baseUrl, { targetId: "t1", filter: "/api?q=a&b", clear: false, profile });
+    await browserPageText(baseUrl, {
+      targetId: "t1",
+      selector: "article > p",
+      maxChars: 123,
+      profile,
+    });
+    await browserEmulateSetting(baseUrl, {
+      setting: "device",
+      body: { targetId: "t1", name: "iPhone 15" },
+      profile,
+    });
+    expect(calls).toHaveLength(3);
+    const requestUrl = new URL(calls[0]!.url);
+    expect(requestUrl.pathname).toBe("/requests");
+    expect(Object.fromEntries(requestUrl.searchParams)).toEqual({
+      targetId: "t1",
+      filter: "/api?q=a&b",
+      clear: "false",
+      profile,
+    });
+    const textUrl = new URL(calls[1]!.url);
+    expect(textUrl.pathname).toBe("/text");
+    expect(Object.fromEntries(textUrl.searchParams)).toEqual({
+      targetId: "t1",
+      selector: "article > p",
+      maxChars: "123",
+      profile,
+    });
+    const deviceUrl = new URL(calls[2]!.url);
+    expect(deviceUrl.pathname).toBe("/set/device");
+    expect(deviceUrl.searchParams.get("profile")).toBe(profile);
+    expect(calls[2]!.init?.method).toBe("POST");
+    const deviceBody = calls[2]!.init?.body;
+    if (typeof deviceBody !== "string") {
+      throw new Error("expected a JSON request body");
+    }
+    expect(JSON.parse(deviceBody)).toEqual({ targetId: "t1", name: "iPhone 15" });
   });
 
   it("adds refs=aria to snapshots when requested", async () => {
@@ -295,7 +367,10 @@ describe("browser client", () => {
     expect(deepDoctorResult.ok).toBe(true);
     expect(deepDoctorResult.profile).toBe("openclaw");
 
-    await expect(browserTabs("http://127.0.0.1:18791")).resolves.toHaveLength(1);
+    await expect(browserTabs("http://127.0.0.1:18791")).resolves.toEqual({
+      running: true,
+      tabs: [expect.objectContaining({ targetId: "t1" })],
+    });
     const openedTab = await browserOpenTab("http://127.0.0.1:18791", "https://example.com");
     expect(openedTab.targetId).toBe("t2");
 

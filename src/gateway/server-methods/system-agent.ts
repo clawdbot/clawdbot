@@ -27,7 +27,6 @@ import {
   SystemAgentChatEngine,
   SystemAgentWizardAnswerError,
 } from "../../system-agent/chat-engine.js";
-import { resolveSystemAgentDelegationKey } from "../../system-agent/delegation-session.js";
 import {
   acknowledgeSystemAgentGreetingDelivery,
   buildSystemAgentGreetingQuestion,
@@ -51,6 +50,10 @@ import {
   listVisiblePendingApprovalRequests,
 } from "./approval-shared.js";
 import {
+  authenticatedProfileUnavailableError,
+  isGatewayClientProfilePending,
+} from "./gateway-client-identity.js";
+import {
   createAdmittedWizardSession,
   runExclusiveSystemAgentSetupActivation,
   SETUP_ADMISSION_BUSY_MESSAGE,
@@ -63,12 +66,8 @@ import {
   getSystemAgentChatInputError,
   runSystemAgentChatInput,
 } from "./system-agent-chat-turn.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  GatewayRequestHandlers,
-  RespondFn,
-} from "./types.js";
+import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 /**
@@ -126,30 +125,6 @@ async function runSystemAgentGatewayTask<T>(task: () => Promise<T>): Promise<T> 
     // setup writes atomic with respect to other OpenClaw gateway requests.
     systemAgentGatewayExecutionQueue.enqueue(SYSTEM_AGENT_GATEWAY_EXECUTION_KEY, task),
   );
-}
-
-function resolveSystemAgentSessionOwnerKey(params: {
-  delegation?: { agentId?: string; sessionKey?: string };
-  client: GatewayClient | null;
-}): string | undefined {
-  const delegationKey = resolveSystemAgentDelegationKey(params.delegation);
-  if (delegationKey !== undefined) {
-    // Delegation is the host-only, cross-connection owner asserted by the regular-agent
-    // tool path. Keep its agent/session tuple authoritative across gateway reconnects.
-    return delegationKey;
-  }
-  // Authenticated users survive reconnects and may span paired devices. Otherwise
-  // bind to the verified device, with the server-issued connection as a last resort.
-  const userId = params.client?.authenticatedUserId?.trim();
-  if (userId) {
-    return `user:${userId}`;
-  }
-  const deviceId = params.client?.connect.device?.id.trim();
-  if (deviceId) {
-    return `device:${deviceId}`;
-  }
-  const connId = params.client?.connId?.trim();
-  return connId ? `connection:${connId}` : undefined;
 }
 
 async function evictOldestSession(
@@ -264,7 +239,13 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     const manager = context.systemAgentApprovalManager;
     respond(
       true,
-      manager ? listVisiblePendingApprovalRequests({ manager, client }) : [],
+      manager
+        ? listVisiblePendingApprovalRequests({
+            manager,
+            client,
+            ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+          })
+        : [],
       undefined,
     );
   },
@@ -527,6 +508,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           client,
         });
         if (!ownerKey) {
+          if (isGatewayClientProfilePending(client)) {
+            respond(false, undefined, authenticatedProfileUnavailableError());
+            return;
+          }
           respond(
             false,
             undefined,
@@ -619,6 +604,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             );
           }
           const welcomeHistoryStart = engine.historyLength();
+          let persistWelcome = !welcomeOnly;
           let welcome: string;
           let welcomeQuestion: SystemAgentChatQuestion | undefined;
           try {
@@ -632,6 +618,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               const overview = await engine.loadOverview();
               const facts = loadSystemAgentGreetingFacts();
               greetingAuditSequence = facts.auditSequence;
+              persistWelcome ||= facts.recentExternalEdit;
               welcome = (
                 await resolveSystemAgentGreeting({
                   overview,
@@ -651,7 +638,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
             return;
           }
-          persistEngineHistory(engine, welcomeHistoryStart);
+          // Passive welcomes are ephemeral; an external-edit alert must survive
+          // before delivery acknowledges the audit cursor that would hide it.
+          if (persistWelcome) {
+            persistEngineHistory(engine, welcomeHistoryStart);
+          }
           await evictOldestSession(sessions, context);
           session = {
             engine,

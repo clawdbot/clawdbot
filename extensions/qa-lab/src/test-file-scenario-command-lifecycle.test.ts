@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -29,6 +29,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
+import { isProcessAlive, waitForDead, waitForPidFile } from "./process-wait.test-helper.js";
 import {
   resetQaScenarioCommandCleanupTimings,
   runQaScenarioCommandLifecycle,
@@ -52,46 +53,18 @@ function createChild(pid = 42) {
   return child;
 }
 
-function runCommand(timeoutMs?: number) {
+function runCommand(
+  timeoutMs?: number,
+  onOutput?: (stream: "stderr" | "stdout", chunk: Buffer) => void,
+) {
   return runQaScenarioCommandLifecycle({
     command: "/usr/local/bin/scenario-command",
     args: ["--run"],
     cwd: "/tmp/qa",
     env: { OPENCLAW_QA_REF: "test" },
+    ...(onOutput ? { onOutput } : {}),
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   });
-}
-
-function isProcessRunning(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function waitForPidFile(filePath: string, timeoutMs = 2_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const value = await readFile(filePath, "utf8").catch(() => "");
-    if (/^[1-9]\d*$/u.test(value.trim())) {
-      return Number(value.trim());
-    }
-    await sleep(10);
-  }
-  throw new Error(`timed out waiting for pid file ${filePath}`);
-}
-
-async function waitForProcessExit(pid: number, timeoutMs = 2_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isProcessRunning(pid)) {
-      return;
-    }
-    await sleep(10);
-  }
-  throw new Error(`timed out waiting for process ${pid} to exit`);
 }
 
 describe.skipIf(process.platform === "win32")("qa scenario command real POSIX lifecycle", () => {
@@ -103,7 +76,6 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
   it("settles within a bound after the leader writes its final result with inherited stdio open", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "qa-command-settlement-"));
     const descendantPidPath = path.join(root, "descendant.pid");
-    let descendantPid: number | undefined;
     spawnMock.mockImplementation((...args: Parameters<NonNullable<typeof actualSpawn.value>>) => {
       if (!actualSpawn.value) {
         throw new Error("real spawn unavailable");
@@ -133,7 +105,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
         env: process.env,
         timeoutMs: 5_000,
       });
-      descendantPid = await waitForPidFile(descendantPidPath);
+      await waitForPidFile(descendantPidPath);
       const startedAt = Date.now();
       const deadline = new AbortController();
       const result = await Promise.race([
@@ -144,20 +116,15 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       ]).finally(() => deadline.abort());
 
       expect(Date.now() - startedAt).toBeLessThan(1_500);
+      // The exact result proves cleanup succeeded. A later numeric PID probe can
+      // race PID reuse and inspect an unrelated process.
       expect(result).toEqual({
         exitCode: 7,
         signal: null,
         stdout: "Docker scheduling finished\ndelayed descendant output\n",
         stderr: "",
       });
-      if (descendantPid === undefined) {
-        throw new Error("scenario command descendant did not expose its pid");
-      }
-      expect(isProcessRunning(descendantPid)).toBe(false);
     } finally {
-      if (descendantPid && isProcessRunning(descendantPid)) {
-        process.kill(descendantPid, "SIGKILL");
-      }
       await rm(root, { force: true, recursive: true });
     }
   });
@@ -197,12 +164,12 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       expect(result.exitCode).toBe(1);
       expect(result.failureMessage).toBe("stdio-drain-timeout");
       expect(result.stdout).toContain("escaped descendant output");
-      expect(isProcessRunning(descendantPid)).toBe(true);
+      expect(isProcessAlive(descendantPid)).toBe(true);
     } finally {
       // A true setsid descendant is outside the original PGID by design.
-      if (descendantPid && isProcessRunning(descendantPid)) {
+      if (descendantPid && isProcessAlive(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
-        await waitForProcessExit(descendantPid).catch(() => undefined);
+        await waitForDead(descendantPid).catch(() => undefined);
       }
       await rm(root, { force: true, recursive: true });
     }
@@ -257,7 +224,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       { cwd: process.cwd(), env: process.env, stdio: "ignore" },
     );
     try {
-      descendantPid = await waitForPidFile(descendantPidPath, 10_000);
+      descendantPid = await waitForPidFile(descendantPidPath);
       controller.kill("SIGTERM");
       const [exitCode, signal] = await new Promise<[number | null, NodeJS.Signals | null]>(
         (resolve) => {
@@ -267,12 +234,12 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
 
       expect(exitCode).toBeNull();
       expect(signal).toBe("SIGTERM");
-      await waitForProcessExit(descendantPid);
+      await waitForDead(descendantPid);
     } finally {
       if (controller.exitCode === null && controller.signalCode === null) {
         controller.kill("SIGKILL");
       }
-      if (descendantPid && isProcessRunning(descendantPid)) {
+      if (descendantPid && isProcessAlive(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
       }
       await rm(root, { force: true, recursive: true });
@@ -319,12 +286,18 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
 
   it("preserves the exact close result and removes parent handlers", async () => {
     const child = createChild();
-    const resultPromise = runCommand(5_000);
+    const output = vi.fn();
+    const resultPromise = runCommand(5_000, output);
 
     child.stdout?.emit("data", Buffer.from("out\n"));
     child.stderr?.emit("data", Buffer.from("err\n"));
     child.emit("exit", 3, null);
     child.emit("close", 3, null);
+
+    expect(output.mock.calls).toEqual([
+      ["stdout", Buffer.from("out\n")],
+      ["stderr", Buffer.from("err\n")],
+    ]);
 
     await expect(resultPromise).resolves.toEqual({
       exitCode: 3,

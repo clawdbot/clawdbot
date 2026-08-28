@@ -47,7 +47,7 @@ describe("Detail chip state", () => {
         baseRef: "main",
         worktreeName: "",
         submitting: false,
-        pendingCloud: false,
+        pendingPlacement: false,
         popoverOpen: true,
         popoverHiding: false,
         onGuardTransition: () => undefined,

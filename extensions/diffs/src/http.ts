@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createAuthRateLimiter, type AuthRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import type { PluginLogger } from "../api.js";
 import { resolveRequestClientIp } from "../runtime-api.js";
 import type { DiffArtifactStore } from "./store.js";
@@ -38,7 +39,14 @@ export function createDiffsHttpHandler(params: {
     allowRealIpFallback?: boolean;
   };
 }) {
-  const viewerFailureLimiter = new ViewerFailureLimiter();
+  const viewerFailureLimiter = createAuthRateLimiter({
+    maxAttempts: VIEWER_MAX_FAILURES_PER_WINDOW,
+    windowMs: VIEWER_FAILURE_WINDOW_MS,
+    lockoutMs: VIEWER_LOCKOUT_MS,
+    exemptLoopback: false,
+    pruneIntervalMs: 0,
+    maxEntries: VIEWER_LIMITER_MAX_KEYS,
+  });
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const parsed = parseRequestUrl(req.url);
@@ -76,10 +84,8 @@ export function createDiffsHttpHandler(params: {
     if (!access.localRequest) {
       const throttled = viewerFailureLimiter.check(access.remoteKey);
       if (!throttled.allowed) {
-        res.statusCode = 429;
-        setSharedHeaders(res, "text/plain; charset=utf-8");
         res.setHeader("Retry-After", String(Math.max(1, Math.ceil(throttled.retryAfterMs / 1000))));
-        res.end("Too Many Requests");
+        respondText(res, 429, "Too Many Requests");
         return true;
       }
     }
@@ -162,6 +168,7 @@ async function serveAsset(
       asset.contentType,
       pathname === VIEWER_RUNTIME_PATH ? IMMUTABLE_ASSET_CACHE_CONTROL : undefined,
     );
+    res.setHeader("content-length", String(Buffer.byteLength(asset.body)));
     if (req.method === "HEAD") {
       res.end();
     } else {
@@ -178,6 +185,9 @@ async function serveAsset(
 function respondText(res: ServerResponse, statusCode: number, body: string): void {
   res.statusCode = statusCode;
   setSharedHeaders(res, "text/plain; charset=utf-8");
+  // Node suppresses the HEAD body but never synthesizes Content-Length; set it
+  // explicitly so error responses keep GET/HEAD header parity (RFC 9110 §8.6).
+  res.setHeader("content-length", String(Buffer.byteLength(body)));
   res.end(body);
 }
 
@@ -243,7 +253,7 @@ function resolveViewerAccess(
 }
 
 function recordRemoteFailure(
-  limiter: ViewerFailureLimiter,
+  limiter: AuthRateLimiter,
   access: { remoteKey: string; localRequest: boolean },
 ): void {
   if (!access.localRequest) {
@@ -252,85 +262,10 @@ function recordRemoteFailure(
 }
 
 function resetRemoteFailures(
-  limiter: ViewerFailureLimiter,
+  limiter: AuthRateLimiter,
   access: { remoteKey: string; localRequest: boolean },
 ): void {
   if (!access.localRequest) {
     limiter.reset(access.remoteKey);
-  }
-}
-
-type RateLimitCheckResult = {
-  allowed: boolean;
-  retryAfterMs: number;
-};
-
-type ViewerFailureState = {
-  windowStartMs: number;
-  failures: number;
-  lockUntilMs: number;
-};
-
-class ViewerFailureLimiter {
-  private readonly failures = new Map<string, ViewerFailureState>();
-
-  check(key: string): RateLimitCheckResult {
-    this.prune();
-    const state = this.failures.get(key);
-    if (!state) {
-      return { allowed: true, retryAfterMs: 0 };
-    }
-    const now = Date.now();
-    if (state.lockUntilMs > now) {
-      return { allowed: false, retryAfterMs: state.lockUntilMs - now };
-    }
-    if (now - state.windowStartMs >= VIEWER_FAILURE_WINDOW_MS) {
-      this.failures.delete(key);
-      return { allowed: true, retryAfterMs: 0 };
-    }
-    return { allowed: true, retryAfterMs: 0 };
-  }
-
-  recordFailure(key: string): void {
-    this.prune();
-    const now = Date.now();
-    const current = this.failures.get(key);
-    const next =
-      !current || now - current.windowStartMs >= VIEWER_FAILURE_WINDOW_MS
-        ? {
-            windowStartMs: now,
-            failures: 1,
-            lockUntilMs: 0,
-          }
-        : {
-            ...current,
-            failures: current.failures + 1,
-          };
-    if (next.failures >= VIEWER_MAX_FAILURES_PER_WINDOW) {
-      next.lockUntilMs = now + VIEWER_LOCKOUT_MS;
-    }
-    this.failures.set(key, next);
-  }
-
-  reset(key: string): void {
-    this.failures.delete(key);
-  }
-
-  private prune(): void {
-    if (this.failures.size < VIEWER_LIMITER_MAX_KEYS) {
-      return;
-    }
-    const now = Date.now();
-    for (const [key, state] of this.failures) {
-      if (state.lockUntilMs <= now && now - state.windowStartMs >= VIEWER_FAILURE_WINDOW_MS) {
-        this.failures.delete(key);
-      }
-      if (this.failures.size < VIEWER_LIMITER_MAX_KEYS) {
-        return;
-      }
-    }
-    if (this.failures.size >= VIEWER_LIMITER_MAX_KEYS) {
-      this.failures.clear();
-    }
   }
 }

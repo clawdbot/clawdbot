@@ -24,6 +24,7 @@ import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
+import { validatePackageSourceDir } from "./package-source-preflight.mjs";
 import { createPrepublishPluginRegistryArtifact } from "./prepublish-plugin-registry-artifact.mjs";
 
 const ROOT_DIR = resolveRepoRoot(import.meta.url);
@@ -191,7 +192,7 @@ Options:
   --output-name <name>        Output tarball filename. Default: ${DEFAULT_OUTPUT_NAME}
   --metadata <file>           Write package metadata JSON.
   --plugin-registry-output-dir <dir>
-                              Build an immutable registry for source=ref before cleanup.
+                              Build an immutable registry for source=ref, npm, or artifact.
   --required-plugin-packages-json <json>
                               Scoped package names to include in that registry.
   --github-output <file>      Append tarball, sha256, package name/version outputs.`;
@@ -1659,6 +1660,7 @@ async function resolveCandidate(options: PackageCandidateOptions) {
   let packageTrustedReason = "";
   let packageTrustedSourceId = "";
   let packageWorktreeDir = "";
+  let packageBuildSourceSha: string | undefined;
   let pluginRegistrySource: Awaited<ReturnType<typeof preparePackageSourceWorktree>> | undefined;
   let artifactMetadata: ArtifactMetadata = {};
   let pluginRegistryIdentity:
@@ -1676,6 +1678,7 @@ async function resolveCandidate(options: PackageCandidateOptions) {
       }
       packageSourceSha = packageSource.selectedSha;
       packageTrustedReason = packageSource.trustedReason;
+      validatePackageSourceDir(packageSource.sourceDir, { allowUnreleasedChangelog: true });
       await installPackageSourceDeps(packageSource.sourceDir);
       await run("node", [
         "scripts/package-openclaw-for-docker.mjs",
@@ -1703,12 +1706,6 @@ async function resolveCandidate(options: PackageCandidateOptions) {
         packOutput,
         options.outputName || DEFAULT_OUTPUT_NAME,
       );
-      if (options.pluginRegistryOutputDir) {
-        pluginRegistrySource = await preparePackageSourceWorktree(options.packageRef);
-        packageWorktreeDir = pluginRegistrySource.sourceDir;
-        packageRef = options.packageRef;
-        await installPackageSourceDeps(pluginRegistrySource.sourceDir);
-      }
     } else if (options.source === "url" || options.source === "trusted-url") {
       if (!options.packageUrl) {
         throw new Error(`${options.source} requires --package-url`);
@@ -1747,15 +1744,43 @@ async function resolveCandidate(options: PackageCandidateOptions) {
           : "";
       const input = await findSingleTarball(options.artifactDir);
       await fs.copyFile(input, target);
+      packageBuildSourceSha = await readPackageBuildSourceSha(target);
+      if (packageSourceSha && packageBuildSourceSha && packageSourceSha !== packageBuildSourceSha) {
+        throw new Error(
+          `artifact packageSourceSha ${packageSourceSha} does not match package build-info commit ${packageBuildSourceSha}`,
+        );
+      }
+      if (!packageSourceSha && packageBuildSourceSha) {
+        packageSourceSha = packageBuildSourceSha;
+        packageTrustedReason = "package-build-info";
+      }
+      if (options.pluginRegistryOutputDir) {
+        if (!packageBuildSourceSha) {
+          throw new Error(
+            "source=artifact requires a valid package build-info commit for prerelease plugin registry creation",
+          );
+        }
+        packageTrustedReason ||= "package-build-info";
+      }
     } else {
       throw new Error(
         `source must be one of: ref, npm, url, trusted-url, artifact. Got: ${options.source}`,
       );
     }
     if (options.pluginRegistryOutputDir && !pluginRegistrySource) {
-      throw new Error(
-        "--plugin-registry-output-dir is only supported with source=ref or source=npm",
+      if (options.source !== "npm" && options.source !== "artifact") {
+        throw new Error(
+          "--plugin-registry-output-dir is only supported with source=ref, source=npm, or source=artifact",
+        );
+      }
+      if (options.source === "npm") {
+        packageRef = options.packageRef;
+      }
+      pluginRegistrySource = await preparePackageSourceWorktree(
+        options.source === "npm" ? packageRef : packageSourceSha,
       );
+      packageWorktreeDir = pluginRegistrySource.sourceDir;
+      await installPackageSourceDeps(pluginRegistrySource.sourceDir);
     }
     if (options.pluginRegistryOutputDir && pluginRegistrySource) {
       const requiredPackages = JSON.parse(options.requiredPluginPackagesJson) as string[];
@@ -1796,7 +1821,7 @@ async function resolveCandidate(options: PackageCandidateOptions) {
   );
   const pkg = await readPackageJson(target);
   if (!packageSourceSha) {
-    packageSourceSha = await readPackageBuildSourceSha(target);
+    packageSourceSha = packageBuildSourceSha ?? (await readPackageBuildSourceSha(target));
     if (packageSourceSha && !packageTrustedReason) {
       packageTrustedReason = "package-build-info";
     }

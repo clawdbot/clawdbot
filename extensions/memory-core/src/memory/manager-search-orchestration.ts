@@ -1,7 +1,10 @@
 // Memory Core plugin module owns public search orchestration.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import {
+  createSubsystemLogger,
+  resolveUserPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
@@ -19,6 +22,7 @@ import {
 import { applyImportanceMultiplier } from "./importance.js";
 import { startAsyncSearchSync } from "./manager-async-state.js";
 import { MemoryKeywordRetrieval, type KeywordSearchHit } from "./manager-keyword-retrieval.js";
+import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
 import { resolveExactPathSpecificity, searchVector } from "./manager-search.js";
 import { applyProjectRanking } from "./project-ranking.js";
@@ -439,6 +443,13 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       snippetMaxChars: SNIPPET_MAX_CHARS,
       signal,
       ensureVectorReady: async (dimensions) => await this.ensureVectorReady(dimensions),
+      runVectorKnn: async (request, knnSignal) =>
+        await runVectorKnnInSubprocess({
+          databasePath: resolveUserPath(this.settings.store.databasePath),
+          extensionPath: this.vector.extensionPath,
+          request,
+          signal: knnSignal,
+        }),
       sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
       sourceFilterChunks: this.buildSourceFilter(undefined, sourceFilterList),
     });
@@ -480,6 +491,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         source: r.source,
         snippet: r.snippet,
         textScore: r.textScore,
+        hasBodyMatch: r.hasBodyMatch,
         importance: r.importance,
         triggers: r.triggers,
         projectKey: r.projectKey,

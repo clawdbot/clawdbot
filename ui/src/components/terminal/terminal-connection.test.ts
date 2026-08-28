@@ -194,6 +194,21 @@ describe("TerminalConnection", () => {
     },
   );
 
+  it("closes a session-scoped open when its response is unusable", async () => {
+    const { client, conn } = makeHarness();
+    const { shell: _dropped, ...incomplete } = sessionResult();
+    client.nextResponse = incomplete;
+
+    await expect(openSession(conn, {}, { sessionKey: "agent:main:chat" })).rejects.toBeInstanceOf(
+      TerminalOpenUnusableSessionError,
+    );
+
+    expect(client.requests.at(-1)).toMatchObject({
+      method: "terminal.close",
+      params: { sessionId: "s1" },
+    });
+  });
+
   it("opens a session and routes its data to the registered sink", async () => {
     const { client, conn } = makeHarness();
     const data: string[] = [];
@@ -543,6 +558,7 @@ describe("TerminalConnection", () => {
       "terminal.resize",
       "terminal.close",
     ]);
+    expect(client.requests.at(-1)?.params).toEqual({ sessionId: "s1" });
   });
 
   it.each([
@@ -954,4 +970,33 @@ describe("TerminalConnection", () => {
     expect(client.listenerCount()).toBe(0);
     expect(conn.size).toBe(0);
   });
+
+  // A reply that lands after panel teardown races a dead owner. Registering its
+  // stream would retain the sink forever and arm the liveness probe loop
+  // against the replaced client, so the owner must refuse post-dispose work.
+  it.each([
+    ["attach", "terminal.attach"],
+    ["open", "terminal.open"],
+  ] as const)(
+    "a late %s reply after dispose() leaves no resurrected stream or liveness probes",
+    (kind, method) =>
+      withFakeTimers(async () => {
+        const { client, conn } = makeHarness();
+        const response = createDeferred<TestSessionResult & { buffer: string }>();
+        deferRequest(client, method, response);
+        const settle =
+          kind === "attach"
+            ? conn.attach("s1", testSink())
+            : conn.open({ cols: 80, rows: 24 }, testSink());
+        // Panel teardown (reconnect or element removal) discards the connection
+        // while the RPC is still in flight.
+        conn.dispose();
+        response.resolve({ ...sessionResult(), buffer: "replayed\n" });
+        await expect(settle).resolves.toMatchObject({ sessionId: "s1" });
+        expect(conn.size).toBe(0);
+        expect(client.listenerCount()).toBe(0);
+        await vi.advanceTimersByTimeAsync(IDLE_PLUS_PROBE_MS);
+        expect(client.requests.filter((request) => request.method === "terminal.list")).toEqual([]);
+      }),
+  );
 });

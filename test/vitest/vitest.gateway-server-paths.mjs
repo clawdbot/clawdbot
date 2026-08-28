@@ -7,6 +7,19 @@ export const gatewayServerBackedHttpTestFiles = [
   "src/gateway/probe.auth.integration.test.ts",
 ];
 
+// Gateway method tests whose deep module mocks can be defeated by a neighbour's
+// shared cache. These keep the shared methods runner but use a fresh module graph.
+export const gatewayMethodsIsolatedTestFiles = [
+  "src/gateway/server-methods/agent.test.ts",
+  "src/gateway/server-methods/board.runtime-boundaries.test.ts",
+];
+
+// Gateway server tests that replace a module the Gateway reaches only through
+// re-exports. These need both a fresh graph and the plain Vitest runner.
+export const gatewayServerIsolatedTestFiles = [
+  "src/gateway/server.sessions.compaction-read-errors.test.ts",
+];
+
 export const gatewayServerExcludedTestFiles = [
   "src/gateway/gateway.test.ts",
   "src/gateway/server.startup-matrix-migration.integration.test.ts",
@@ -15,6 +28,7 @@ export const gatewayServerExcludedTestFiles = [
 
 const gatewayServerBackedHttpTestFileSet = new Set(gatewayServerBackedHttpTestFiles);
 const gatewayServerExcludedTestFileSet = new Set(gatewayServerExcludedTestFiles);
+const gatewayServerIsolatedTestFileSet = new Set(gatewayServerIsolatedTestFiles);
 
 export function isGatewayServerBackedHttpTestFile(file) {
   return gatewayServerBackedHttpTestFileSet.has(file.replaceAll("\\", "/"));
@@ -24,6 +38,7 @@ export function isGatewayServerTestFile(file) {
   const normalized = file.replaceAll("\\", "/");
   if (
     gatewayServerExcludedTestFileSet.has(normalized) ||
+    gatewayServerIsolatedTestFileSet.has(normalized) ||
     normalized.startsWith("src/gateway/server-methods/") ||
     normalized.endsWith(".e2e.test.ts")
   ) {

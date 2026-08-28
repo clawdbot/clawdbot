@@ -54,7 +54,7 @@ suite.define(() => {
           terminalEnabled: true,
         });
 
-        await page.goto(`${suite.server.baseUrl}?view=terminal`);
+        await page.goto(`${suite.server.baseUrl}focus/terminal`);
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");
         await gateway.waitForRequest("terminal.open");

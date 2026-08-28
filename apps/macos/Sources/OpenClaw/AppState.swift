@@ -79,16 +79,10 @@ enum ExecApprovalsPolicyLoadState: Equatable {
 @Observable
 final class AppState {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app-state")
-    private static let execApprovalsReadRetryAttempts = 5
 
-    private let isPreview: Bool
-    @ObservationIgnored private let execApprovalsDefaultsAsyncResolver:
-        @MainActor () async -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError>
-    @ObservationIgnored private let execApprovalsReadRetryDelay: Duration
+    let isPreview: Bool
     @ObservationIgnored private let gatewayConfigSaver: ([String: Any]) -> Bool
     @ObservationIgnored let bundleLocationAllowsPersistentIntegration: Bool
-    @ObservationIgnored private var execApprovalsReadRetryTask: Task<Void, Never>?
-    @ObservationIgnored private var execApprovalsReadGeneration = 0
     @ObservationIgnored private var isHydratingLaunchAtLogin = false
     private var isInitializing = true
     private var isApplyingGatewayConfig = false
@@ -260,6 +254,10 @@ final class AppState {
         }
     }
 
+    var talkRealtimeRelayEnabled = isTalkRealtimeRelayEnabled() {
+        didSet { self.persistTalkRealtimeRelayPreference(previousValue: oldValue) }
+    }
+
     var talkPhaseSoundsEnabled: Bool {
         didSet {
             self.ifNotPreview {
@@ -279,6 +277,15 @@ final class AppState {
 
     /// Gateway-provided UI accent color (hex). Optional; clients provide a default.
     var seamColorHex: String?
+
+    /// Caller's per-profile accent (users.prefs.get). Kept separate from
+    /// seamColorHex so settings-pane config refreshes cannot clobber it.
+    var profileAccentHex: String?
+
+    /// Accent the UI renders: the profile accent wins over the gateway seam color.
+    var effectiveAccentHex: String? {
+        self.profileAccentHex ?? self.seamColorHex
+    }
 
     var iconOverride: IconOverrideSelection {
         didSet { self.ifNotPreview { AppDefaults.standard.set(self.iconOverride.rawValue, forKey: iconOverrideKey) } }
@@ -353,10 +360,6 @@ final class AppState {
     var activeComputerPresenceEnabled: Bool {
         didSet { self.scheduleActiveComputerPresenceUpdate() }
     }
-
-    var execApprovalMode: ExecApprovalQuickMode
-    var execApprovalPolicyLoadState: ExecApprovalsPolicyLoadState
-    var execApprovalMutationError: String?
 
     /// Tracks whether the Canvas panel is currently visible (not persisted).
     var canvasPanelVisible: Bool = false
@@ -475,13 +478,6 @@ final class AppState {
 
     init(
         preview: Bool = false,
-        execApprovalsDefaultsAsyncResolver: @escaping @MainActor () async -> Result<
-            ExecApprovalsResolvedDefaults,
-            ExecApprovalsReadError,
-        > = {
-            await ExecApprovalsStore.resolveDefaultsAsyncResult()
-        },
-        execApprovalsReadRetryDelay: Duration = .milliseconds(250),
         gatewayConfigSaver: @escaping ([String: Any]) -> Bool = { OpenClawConfigFile.saveDict($0) })
     {
         let isPreview = preview || ProcessInfo.processInfo.isRunningTests
@@ -489,11 +485,9 @@ final class AppState {
         self.bundleLocationAllowsPersistentIntegration =
             !AppProfile.current.isActive &&
             (isPreview || ApplicationRelocator.currentBundleAllowsPersistentIntegration())
-        self.execApprovalsDefaultsAsyncResolver = execApprovalsDefaultsAsyncResolver
-        self.execApprovalsReadRetryDelay = execApprovalsReadRetryDelay
         self.gatewayConfigSaver = gatewayConfigSaver
         let onboardingSeen = AppDefaults.standard.bool(forKey: onboardingSeenKey)
-        self.isPaused = AppDefaults.standard.bool(forKey: pauseDefaultsKey)
+        self.isPaused = AppLaunchRuntimePlan.current.resolvePaused(AppDefaults.standard.bool(forKey: pauseDefaultsKey))
         self.launchAtLogin = false
         self.onboardingSeen = onboardingSeen
         self.debugPaneEnabled = AppDefaults.standard.bool(forKey: debugPaneEnabledKey)
@@ -543,6 +537,7 @@ final class AppState {
             AppDefaults.standard.set(true, forKey: talkShiftToStopEnabledKey)
         }
         self.seamColorHex = nil
+        self.profileAccentHex = nil
         if let storedHeartbeats = AppDefaults.standard.object(forKey: heartbeatsEnabledKey) as? Bool {
             self.heartbeatsEnabled = storedHeartbeats
         } else {
@@ -604,10 +599,8 @@ final class AppState {
         self.quickChatEnabled = AppDefaults.standard.object(forKey: quickChatEnabledKey) as? Bool ?? true
         (self.cookieSyncEnabled, self.cookieSyncIntoProfile, self.cookieSyncDomains) = Self.loadCookieSyncDefaults()
         self.activeComputerPresenceEnabled = Self.resolveActiveComputerPresenceEnabled()
-        self.execApprovalMode = .deny
-        self.execApprovalPolicyLoadState = .loading
-        self.peekabooBridgeEnabled = AppDefaults.standard
-            .object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true
+        self.peekabooBridgeEnabled = AppLaunchRuntimePlan.current.resolvePeekabooBridgeEnabled(
+            AppDefaults.standard.object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true)
         if !self.isPreview, !AppProfile.current.isActive {
             Task.detached(priority: .utility) { [weak self] in
                 let current = await LaunchAgentManager.status()
@@ -634,9 +627,6 @@ final class AppState {
         }
         self.isInitializing = false
         if !self.isPreview {
-            scheduleExecApprovalModeReadRetry()
-        }
-        if !self.isPreview {
             self.startConfigWatcher()
         }
     }
@@ -650,7 +640,6 @@ final class AppState {
 
     @MainActor
     deinit {
-        self.execApprovalsReadRetryTask?.cancel()
         self.gatewayConfigSyncTask?.cancel()
         self.configWatcher?.stop()
     }
@@ -1170,7 +1159,7 @@ extension AppState {
     }
 }
 
-// MARK: - Exec approval settings
+// MARK: - App state helpers
 
 extension AppState {
     private func ifNotPreview(_ action: () -> Void) {
@@ -1185,112 +1174,6 @@ extension AppState {
         bundleLocationAllowsPersistentIntegration: Bool) -> Bool
     {
         !isInitializing && !isHydrating && (!isEnabling || bundleLocationAllowsPersistentIntegration)
-    }
-
-    var execApprovalPolicyAvailable: Bool {
-        self.execApprovalPolicyLoadState.isAvailable
-    }
-
-    var execApprovalLoadError: String? {
-        self.execApprovalPolicyLoadState.errorMessage
-    }
-
-    func updateExecApprovalMode(_ mode: ExecApprovalQuickMode) {
-        guard !self.isPreview else {
-            self.syncExecApprovalMode(mode)
-            return
-        }
-        let result = ExecApprovalsStore.updateDefaults { defaults in
-            defaults.security = mode.security
-            defaults.ask = mode.ask
-        }
-        self.applyExecApprovalModeMutation(mode, result: result)
-    }
-
-    func applyExecApprovalModeMutation(
-        _ mode: ExecApprovalQuickMode,
-        result: Result<Void, ExecApprovalsMutationError>)
-    {
-        switch result {
-        case .success:
-            self.syncExecApprovalMode(mode)
-        case let .failure(error):
-            self.execApprovalMutationError = error.message
-        }
-    }
-
-    func syncExecApprovalMode(_ mode: ExecApprovalQuickMode) {
-        self.execApprovalsReadGeneration += 1
-        self.execApprovalsReadRetryTask?.cancel()
-        self.execApprovalsReadRetryTask = nil
-        self.execApprovalMode = mode
-        self.execApprovalPolicyLoadState = .available
-        self.execApprovalMutationError = nil
-    }
-
-    func retryExecApprovalModeRead() {
-        self.scheduleExecApprovalModeReadRetry()
-    }
-
-    func waitForExecApprovalModeRead() async {
-        await self.execApprovalsReadRetryTask?.value
-    }
-
-    func recoverExecApprovalModeRead(maxAttempts: Int) async {
-        self.execApprovalsReadGeneration += 1
-        let generation = self.execApprovalsReadGeneration
-        self.execApprovalsReadRetryTask?.cancel()
-        self.execApprovalsReadRetryTask = nil
-        await self.performExecApprovalModeReadAttempts(
-            maxAttempts: maxAttempts,
-            generation: generation)
-    }
-
-    private func performExecApprovalModeReadAttempts(maxAttempts: Int, generation: Int) async {
-        guard self.execApprovalsReadGeneration == generation else { return }
-        guard maxAttempts > 0 else {
-            self.execApprovalPolicyLoadState = .unavailable(ExecApprovalsReadError.unavailable.message)
-            return
-        }
-        self.execApprovalPolicyLoadState = .loading
-        for attempt in 0..<maxAttempts {
-            if attempt > 0 {
-                do {
-                    try await Task.sleep(for: self.execApprovalsReadRetryDelay)
-                } catch {
-                    return
-                }
-            }
-            guard self.execApprovalsReadGeneration == generation else { return }
-            let result = await execApprovalsDefaultsAsyncResolver()
-            guard self.execApprovalsReadGeneration == generation else { return }
-            switch result {
-            case let .success(defaults):
-                self.syncExecApprovalMode(
-                    ExecApprovalQuickMode.from(security: defaults.security, ask: defaults.ask))
-                return
-            case let .failure(.migrationRequired(error)):
-                self.execApprovalPolicyLoadState = .unavailable(
-                    ExecApprovalsReadError.migrationRequired(error).message)
-                return
-            case .failure(.unavailable):
-                continue
-            }
-        }
-        guard self.execApprovalsReadGeneration == generation else { return }
-        self.execApprovalPolicyLoadState = .unavailable(ExecApprovalsReadError.unavailable.message)
-    }
-
-    private func scheduleExecApprovalModeReadRetry() {
-        self.execApprovalsReadGeneration += 1
-        let generation = self.execApprovalsReadGeneration
-        self.execApprovalsReadRetryTask?.cancel()
-        self.execApprovalPolicyLoadState = .loading
-        self.execApprovalsReadRetryTask = Task { [weak self] in
-            await self?.performExecApprovalModeReadAttempts(
-                maxAttempts: Self.execApprovalsReadRetryAttempts,
-                generation: generation)
-        }
     }
 }
 

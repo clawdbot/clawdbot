@@ -314,6 +314,7 @@ async function runCronRunAndCaptureExit(params: {
   runId?: string;
   runStatus?: "ok" | "error" | "skipped";
   runStatuses?: Array<"ok" | "error" | "skipped" | undefined>;
+  completionStatus?: "succeeded" | "failed" | "unknown";
   args?: string[];
 }) {
   resetGatewayMock();
@@ -336,7 +337,17 @@ async function runCronRunAndCaptureExit(params: {
         const runStatus = params.runStatuses?.[runPollCount] ?? params.runStatus;
         runPollCount += 1;
         return {
-          entries: runStatus ? [{ status: runStatus }] : [],
+          entries: runStatus
+            ? [
+                {
+                  status: runStatus,
+                  completionStatus: params.completionStatus,
+                  ...(params.completionStatus === undefined && runStatus === "ok"
+                    ? { deliveryStatus: "not-requested" }
+                    : {}),
+                },
+              ]
+            : [],
         };
       }
       return { ok: true, params: callParams };
@@ -377,6 +388,18 @@ describe("cron cli", () => {
       expect(command.opts()).toMatchObject({ port: "65267", token: "parent-token" });
     },
   );
+
+  it("uses legacy stored delivery for --wait completion", async () => {
+    const { calls, exitSpy } = await runCronRunAndCaptureExit({
+      enqueued: true,
+      runId: "manual:legacy:123:0",
+      runStatus: "ok",
+      args: ["cron", "run", "job-1", "--wait", "--wait-timeout", "1s", "--poll-interval", "1ms"],
+    });
+
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(calls.some((call) => call[0] === "cron.get")).toBe(false);
+  });
 
   it.each(CRON_GATEWAY_COMMANDS)(
     "accepts leaf Gateway options for cron $name",
@@ -454,16 +477,17 @@ describe("cron cli", () => {
   });
 
   it.each([
-    { status: "ok" as const, expectedExitCode: 0 },
-    { status: "error" as const, expectedExitCode: 1 },
-    { status: "skipped" as const, expectedExitCode: 1 },
+    { status: "ok" as const, completionStatus: "succeeded" as const, expectedExitCode: 0 },
+    { status: "ok" as const, completionStatus: "failed" as const, expectedExitCode: 1 },
+    { status: "ok" as const, completionStatus: "unknown" as const, expectedExitCode: 1 },
   ])(
-    "waits for queued cron run completion with status $status",
-    async ({ status, expectedExitCode }) => {
+    "waits for execution $status with completion $completionStatus",
+    async ({ status, completionStatus, expectedExitCode }) => {
       const { calls, exitSpy } = await runCronRunAndCaptureExit({
         enqueued: true,
         runId: "manual:job-1:123:0",
         runStatus: status,
+        completionStatus,
         args: ["cron", "run", "job-1", "--wait", "--wait-timeout", "1s", "--poll-interval", "1ms"],
       });
 
@@ -476,6 +500,8 @@ describe("cron cli", () => {
       });
       expect(stdoutText()).toContain('"completed": true');
       expect(stdoutText()).toContain(`"status": "${status}"`);
+      expect(stdoutText()).toContain(`"completionStatus": "${completionStatus}"`);
+      expect(calls.some((call) => call[0] === "cron.get")).toBe(false);
     },
   );
 
@@ -594,9 +620,19 @@ describe("cron cli", () => {
     },
   );
 
-  it("reduces each history RPC timeout as the cron run wait budget elapses", async () => {
+  it.each([
+    { name: "without a system clock jump", clockJumpMs: 0 },
+    { name: "after the system clock jumps forward", clockJumpMs: 3_600_000 },
+    { name: "after the system clock jumps backward", clockJumpMs: -3_600_000 },
+  ])("reduces each history RPC timeout $name", async ({ clockJumpMs }) => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-27T12:00:00.000Z"));
+    const monotonicNow = performance.now.bind(performance);
+    let monotonicSample = 0;
+    vi.spyOn(performance, "now").mockImplementation(
+      () => monotonicNow() + ++monotonicSample / 1_000,
+    );
+    const startedAt = new Date("2026-07-27T12:00:00.000Z");
+    vi.setSystemTime(startedAt);
 
     const pendingRun = runCronRunAndCaptureExit({
       enqueued: true,
@@ -618,6 +654,7 @@ describe("cron cli", () => {
     expect(callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.runs")).toHaveLength(
       1,
     );
+    vi.setSystemTime(new Date(startedAt.getTime() + clockJumpMs));
     await vi.advanceTimersByTimeAsync(25);
 
     const { calls, exitSpy, runOpts } = await pendingRun;
@@ -628,6 +665,7 @@ describe("cron cli", () => {
     expect(exitSpy).toHaveBeenCalledWith(0);
     expect(runOpts.timeout).toBe("600000");
     expect(pollTimeouts).toHaveLength(2);
+    expect(pollTimeouts.every(Number.isSafeInteger)).toBe(true);
     expect(pollTimeouts[0]).toBeLessThanOrEqual(100);
     expect(pollTimeouts[1]).toBeLessThanOrEqual(75);
     expect(pollTimeouts[1]).toBeLessThan(pollTimeouts[0] ?? 0);
@@ -743,6 +781,23 @@ describe("cron cli", () => {
       accountId: undefined,
       bestEffort: undefined,
     });
+  });
+
+  it.each(["", "not-a-url"])("rejects invalid cron add --webhook %j", async (value) => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "Webhook reminder",
+      "--at",
+      "20m",
+      "--system-event",
+      "Summarize the latest status",
+      "--webhook",
+      value,
+    ]);
+
+    expectRuntimeErrorContaining("--webhook must be a valid http(s) URL");
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 
   it("accepts Hermes-style positional cron schedule and message on cron create", async () => {

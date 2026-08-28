@@ -6,7 +6,8 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
-import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
+import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
+import type { JsonObject } from "./protocol.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
@@ -15,6 +16,13 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => (
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 type AgentHarnessHostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
+
+async function handleCodexAppServerElicitationRequest(
+  params: Parameters<typeof routeCodexAppServerElicitationRequest>[0],
+) {
+  const result = await routeCodexAppServerElicitationRequest(params);
+  return result.kind === "handled" ? result.response : undefined;
+}
 
 function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
   return mock.mock.calls.at(index);
@@ -147,6 +155,7 @@ function buildPluginApprovalElicitation(overrides: Record<string, unknown> = {})
     mode: "form",
     message: "Approve app action?",
     _meta: {
+      codex_approval_kind: "mcp_tool_call",
       app_id: "google-calendar-app",
     },
     requestedSchema: {
@@ -356,6 +365,28 @@ describe("Codex app-server elicitation bridge", () => {
     ]);
   });
 
+  it("declines timed-out MCP approvals with explanatory metadata", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-timeout", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-timeout",
+        decision: "deny",
+        terminalReason: "timeout",
+      });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildApprovalElicitation(),
+      paramsForRun: createParams(),
+      ...codexTestTurnIds(),
+    });
+
+    expect(result).toEqual({
+      action: "decline",
+      content: null,
+      _meta: { message: "Approval timed out before an operator responded." },
+    });
+  });
+
   it("does not treat inherited request-time MCP decisions as final", async () => {
     const inheritedDecisionResult = Object.assign(Object.create({ decision: null }), {
       id: "plugin:approval-inherited",
@@ -563,7 +594,7 @@ describe("Codex app-server elicitation bridge", () => {
     });
   });
 
-  it("does not bridge Computer Use elicitations outside form mode", async () => {
+  it("declines Computer Use elicitations outside form mode", async () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildComputerUseApprovalElicitation({
         mode: "notification",
@@ -574,7 +605,7 @@ describe("Codex app-server elicitation bridge", () => {
       computerUseMcpServerName: "computer-use",
     });
 
-    expect(result).toBeUndefined();
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
@@ -954,7 +985,7 @@ describe("Codex app-server elicitation bridge", () => {
   it("does not trust account app ids from non-connector MCP servers", async () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildPluginApprovalElicitation({
-        _meta: { app_id: "chatgpt_meetings" },
+        _meta: { codex_approval_kind: "mcp_tool_call", app_id: "chatgpt_meetings" },
       }),
       paramsForRun: createParams(),
       ...codexTestTurnIds(),
@@ -1427,7 +1458,7 @@ describe("Codex app-server elicitation bridge", () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildPluginApprovalElicitation({
         serverName: "shared-mcp",
-        _meta: {},
+        _meta: { codex_approval_kind: "mcp_tool_call" },
       }),
       paramsForRun: createParams(),
       ...codexTestTurnIds(),
@@ -1457,6 +1488,7 @@ describe("Codex app-server elicitation bridge", () => {
       requestParams: buildPluginApprovalElicitation({
         serverName: "unknown-mcp",
         _meta: {
+          codex_approval_kind: "mcp_tool_call",
           connector_name: "Google Calendar",
         },
       }),
@@ -1526,16 +1558,33 @@ describe("Codex app-server elicitation bridge", () => {
     ]);
   });
 
+  it("declines approval-shaped requests with unmappable schemas before ordinary input", async () => {
+    const result = await routeCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildCurrentCodexApprovalElicitation(),
+        requestedSchema: { type: "array", items: { type: "string" } },
+      },
+      paramsForRun: createParams(),
+      ...codexTestTurnIds(),
+    });
+
+    expect(result).toEqual({
+      kind: "handled",
+      response: { action: "decline", content: null, _meta: null },
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("ignores unscoped approval elicitations without the active thread id", async () => {
     const { turnId, serverName, mode, message, _meta, requestedSchema } =
       buildCurrentCodexApprovalElicitation();
-    const result = await handleCodexAppServerElicitationRequest({
+    const result = await routeCodexAppServerElicitationRequest({
       requestParams: { turnId, serverName, mode, message, _meta, requestedSchema },
       paramsForRun: createParams(),
       ...codexTestTurnIds(),
     });
 
-    expect(result).toBeUndefined();
+    expect(result).toEqual({ kind: "not-mine" });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
@@ -1708,6 +1757,56 @@ describe("Codex app-server elicitation bridge", () => {
     expect(result).toBeUndefined();
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
+
+  it.each<{ name: string; request: JsonObject }>([
+    {
+      name: "an ordinary form",
+      request: {
+        mode: "form",
+        message: "Choose a calendar",
+        requestedSchema: {
+          type: "object",
+          properties: { calendar: { type: "string", enum: ["work", "personal"] } },
+          required: ["calendar"],
+        },
+      },
+    },
+    {
+      name: "an OAuth URL",
+      request: {
+        mode: "url",
+        message: "Connect your calendar",
+        url: "https://example.com/oauth/authorize",
+        elicitationId: "connect-calendar",
+      },
+    },
+    {
+      name: "an extended OpenAI form",
+      request: {
+        mode: "openai/form",
+        message: "Choose an event image",
+        requestedSchema: { type: "object", properties: { image: { type: "string" } } },
+      },
+    },
+  ])(
+    "leaves $name from a plugin-owned MCP server to the ordinary input bridge",
+    async ({ request }) => {
+      const result = await routeCodexAppServerElicitationRequest({
+        requestParams: {
+          ...codexTestTurnIds(),
+          serverName: "google-calendar-mcp",
+          _meta: { app_id: "google-calendar-app" },
+          ...request,
+        },
+        paramsForRun: createParams(),
+        ...codexTestTurnIds(),
+        pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: false }),
+      });
+
+      expect(result).toEqual({ kind: "not-mine" });
+      expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    },
+  );
 
   it("logs and declines approved elicitations that do not expose an approval field", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);

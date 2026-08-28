@@ -1,17 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+  readSessionTranscriptMessageEvents,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import {
   addSessionSuggestion,
   listSessionSuggestions,
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
 } from "../../config/sessions/session-suggestion-store.js";
+import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resolveSessionSharingTarget } from "../session-sharing.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
 import {
   call,
@@ -74,7 +76,7 @@ describe("session suggestion handlers", () => {
     });
   });
 
-  it("attributes an ownerless active run to the persisted bare-key owner", async () => {
+  it("attributes a bare-key suggestion send to the persisted owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = state.path("shared-sessions.sqlite");
       await upsertSessionEntryCore(
@@ -95,10 +97,6 @@ describe("session suggestion handlers", () => {
         },
       } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
       const requestContext = context(vi.fn(), ownedConfig);
-      requestContext.chatAbortControllers.set("run-ops", {
-        sessionKey: "global",
-        sessionId: "session-ops-global",
-      } as never);
       const added = await call(
         "session.suggestions.add",
         { sessionKey: "global", text: "steer the owner" },
@@ -118,195 +116,6 @@ describe("session suggestion handlers", () => {
       expect(mocks.handleChatSend.mock.calls[0]?.[0]?.params).toMatchObject({
         agentId: "ops",
         queueMode: "steer",
-        expectedRunId: "run-ops",
-      });
-    });
-  });
-
-  it("lets a suggest viewer add and list only their own suggestion", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertDefaultSuggestionSession();
-      const alice = client("alice", "Alice");
-      const add = await call(
-        "session.suggestions.add",
-        { sessionKey: "main", text: "  Try the focused fix\n" },
-        alice,
-      );
-      expect(add.responses[0]?.[0]).toBe(true);
-      expect(add.responses[0]?.[1]).toMatchObject({
-        suggestion: {
-          author: { id: "alice", label: "Alice" },
-          text: "  Try the focused fix\n",
-          state: "pending",
-        },
-      });
-      expect(add.context.broadcast).toHaveBeenCalledWith(
-        "session.suggestion",
-        expect.objectContaining({ action: "added" }),
-        expect.objectContaining({ sessionKeys: [sessionKey, "main"] }),
-      );
-      expect(mocks.appendSessionAudit).not.toHaveBeenCalled();
-
-      await call(
-        "session.suggestions.add",
-        { sessionKey, text: "Bob's idea" },
-        client("bob", "Bob"),
-      );
-      const listed = await call("session.suggestions.list", { sessionKey }, alice);
-      expect(listed.responses[0]?.[1]).toMatchObject({
-        role: "viewer",
-        suggestions: [{ author: { id: "alice" }, text: "  Try the focused fix\n" }],
-      });
-    });
-  });
-
-  it("hides draft suggestions from members while owner and admin can list", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const draftKey = "agent:main:draft-suggestions";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: draftKey },
-        {
-          sessionId: "session-draft",
-          updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
-          visibility: "draft",
-        },
-      );
-      addSessionMember(
-        { agentId: "main", sessionKey: draftKey },
-        { identityId: "member", addedBy: "owner", expectedSessionId: "session-draft" },
-      );
-      addSessionSuggestion(
-        { agentId: "main", sessionKey: draftKey },
-        {
-          id: "draft-suggestion",
-          authorId: "member",
-          text: "private draft suggestion",
-          expectedSessionId: "session-draft",
-        },
-      );
-
-      const member = client("member", "Member");
-      const expectHiddenDraft = (result: Awaited<ReturnType<typeof call>>) => {
-        expect(result.responses[0]?.[0]).toBe(false);
-        expect(result.responses[0]?.[1]).toBeUndefined();
-        expect(result.responses[0]?.[2]).toMatchObject({
-          message: "session is draft for this connection",
-          details: {
-            code: "SESSION_PARTICIPATION_REQUIRED",
-            sessionKey: draftKey,
-            visibility: "draft",
-          },
-        });
-      };
-
-      expectHiddenDraft(await call("session.suggestions.list", { sessionKey: draftKey }, member));
-      expectHiddenDraft(
-        await call("session.suggestions.add", { sessionKey: draftKey, text: "leak draft" }, member),
-      );
-      expectHiddenDraft(
-        await call(
-          "session.suggestions.resolve",
-          { sessionKey: draftKey, id: "draft-suggestion", resolution: "dismiss" },
-          member,
-        ),
-      );
-      expect(
-        (
-          await call(
-            "session.typing",
-            { sessionKey: draftKey, sessionId: "session-draft", typing: true },
-            member,
-          )
-        ).responses[0]?.[1],
-      ).toEqual({ ok: true, broadcast: false });
-
-      const ownerList = await call(
-        "session.suggestions.list",
-        { sessionKey: draftKey },
-        client("owner", "Owner"),
-      );
-      expect(ownerList.responses[0]?.[1]).toMatchObject({
-        role: "owner",
-        suggestions: [{ id: "draft-suggestion", text: "private draft suggestion" }],
-      });
-      const adminList = await call(
-        "session.suggestions.list",
-        { sessionKey: draftKey },
-        client("admin", "Admin", true),
-      );
-      expect(adminList.responses[0]?.[1]).toMatchObject({
-        role: "admin",
-        suggestions: [{ id: "draft-suggestion", text: "private draft suggestion" }],
-      });
-    });
-  });
-
-  it("keeps incognito suggestion and typing surfaces admin-only", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const incognitoKey = "agent:main:dashboard:incognito-suggestions";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: incognitoKey },
-        {
-          sessionId: "session-incognito",
-          updatedAt: 1,
-          incognito: true,
-          createdActor: { type: "human", id: "owner" },
-          visibility: "suggest",
-        },
-      );
-      addSessionSuggestion(
-        { agentId: "main", sessionKey: incognitoKey },
-        {
-          id: "incognito-suggestion",
-          authorId: "owner",
-          text: "private suggestion",
-          expectedSessionId: "session-incognito",
-        },
-      );
-      const owner = client("owner", "Owner");
-      const expectHidden = (result: Awaited<ReturnType<typeof call>>) => {
-        expect(result.responses[0]?.[0]).toBe(false);
-        expect(result.responses[0]?.[1]).toBeUndefined();
-        expect(result.responses[0]?.[2]?.message).toBe(
-          `Incognito session "${incognitoKey}" was not found.`,
-        );
-      };
-
-      expectHidden(await call("session.suggestions.list", { sessionKey: incognitoKey }, owner));
-      expectHidden(
-        await call("session.suggestions.add", { sessionKey: incognitoKey, text: "probe" }, owner),
-      );
-      expectHidden(
-        await call(
-          "session.suggestions.resolve",
-          { sessionKey: incognitoKey, id: "incognito-suggestion", resolution: "dismiss" },
-          owner,
-        ),
-      );
-      expectHidden(
-        await call(
-          "session.typing",
-          { sessionKey: incognitoKey, sessionId: "wrong-session", typing: true },
-          owner,
-        ),
-      );
-      expectHidden(
-        await call(
-          "session.typing",
-          { sessionKey: incognitoKey, sessionId: "session-incognito", typing: true },
-          owner,
-        ),
-      );
-
-      const adminList = await call(
-        "session.suggestions.list",
-        { sessionKey: incognitoKey },
-        client("admin", "Admin", true),
-      );
-      expect(adminList.responses[0]?.[1]).toMatchObject({
-        role: "admin",
-        suggestions: [{ id: "incognito-suggestion", text: "private suggestion" }],
       });
     });
   });
@@ -380,13 +189,6 @@ describe("session suggestion handlers", () => {
         );
         const id = responseSuggestionId(added);
         const requestContext = context();
-        if (resolution === "send") {
-          requestContext.chatAbortControllers.set("active-run", {
-            sessionKey,
-            sessionId: "session-main",
-            agentId: "main",
-          } as never);
-        }
 
         const resolved = await call(
           "session.suggestions.resolve",
@@ -400,7 +202,6 @@ describe("session suggestion handlers", () => {
             params: expect.objectContaining({
               message: "Ship the focused change",
               queueMode,
-              ...(resolution === "send" ? { expectedRunId: "active-run" } : {}),
               idempotencyKey: `session-suggestion:${id}`,
             }),
             client: expect.objectContaining({
@@ -419,7 +220,7 @@ describe("session suggestion handlers", () => {
     },
   );
 
-  it("sends immediately without a steer override when the session is idle", async () => {
+  it("sends immediately through start-or-steer when the session is idle", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertDefaultSuggestionSession();
       const added = await call(
@@ -439,83 +240,9 @@ describe("session suggestion handlers", () => {
       const chatParams = mocks.handleChatSend.mock.calls[0]?.[0]?.params;
       expect(chatParams).toMatchObject({
         message: "send while idle",
+        queueMode: "steer",
         idempotencyKey: `session-suggestion:${id}`,
       });
-      expect(chatParams).not.toHaveProperty("queueMode");
-      expect(chatParams).not.toHaveProperty("expectedRunId");
-    });
-  });
-
-  it("keeps a suggestion pending when multiple active runs make send-now ambiguous", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertDefaultSuggestionSession();
-      const added = await call(
-        "session.suggestions.add",
-        { sessionKey, text: "ambiguous send" },
-        client("alice", "Alice"),
-      );
-      const id = responseSuggestionId(added);
-      const requestContext = context();
-      for (const runId of ["run-a", "run-b"]) {
-        requestContext.chatAbortControllers.set(runId, {
-          sessionKey,
-          sessionId: "session-main",
-          agentId: "main",
-        } as never);
-      }
-
-      const resolved = await call(
-        "session.suggestions.resolve",
-        { sessionKey, id, resolution: "send" },
-        client("owner", "Owner"),
-        requestContext,
-      );
-
-      expect(resolved.responses[0]?.[0]).toBe(false);
-      expect(resolved.responses[0]?.[2]).toMatchObject({
-        message:
-          "session has multiple active runs; choose the target run before sending the suggestion",
-        details: { code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS", sessionKey },
-      });
-      expect(mocks.handleChatSend).not.toHaveBeenCalled();
-      expect(listSessionSuggestions({ agentId: "main", sessionKey })).toEqual([
-        expect.objectContaining({ id, state: "pending" }),
-      ]);
-    });
-  });
-
-  it("rejects send-now when active work has no exact gateway run identity", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertDefaultSuggestionSession();
-      const added = await call(
-        "session.suggestions.add",
-        { sessionKey, text: "hidden active run" },
-        client("alice", "Alice"),
-      );
-      const id = responseSuggestionId(added);
-      const hiddenHandle = {
-        runId: "embedded-only-run",
-        abort: () => {},
-        queueMessage: async () => {},
-      } as never;
-      setActiveEmbeddedRun("session-main", hiddenHandle, sessionKey);
-
-      try {
-        const resolved = await call(
-          "session.suggestions.resolve",
-          { sessionKey, id, resolution: "send" },
-          client("owner", "Owner"),
-        );
-
-        expect(resolved.responses[0]?.[0]).toBe(false);
-        expect(resolved.responses[0]?.[2]).toMatchObject({
-          message: "active session run has no exact dispatch identity; refresh and retry",
-          details: { code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS", sessionKey },
-        });
-        expect(mocks.handleChatSend).not.toHaveBeenCalled();
-      } finally {
-        clearActiveEmbeddedRun("session-main", hiddenHandle, sessionKey);
-      }
     });
   });
 
@@ -552,44 +279,102 @@ describe("session suggestion handlers", () => {
       );
       expect(owner.responses[0]?.[0]).toBe(true);
       expect(mocks.handleChatSend).not.toHaveBeenCalled();
-      expect(mocks.appendSessionAudit).toHaveBeenCalledWith(
-        expect.objectContaining({ text: "Owner moved a suggestion into the composer." }),
-      );
-      expect(mocks.appendSessionAudit).not.toHaveBeenCalledWith(
-        expect.objectContaining({ text: expect.stringContaining("forged") }),
-      );
+      expect(
+        readSessionTranscriptMessageEvents({ agentId: "main", sessionId: "session-main" }),
+      ).toEqual([]);
     });
   });
 
-  it("publishes a fenced resolution before awaiting the transcript audit", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertDefaultSuggestionSession();
-      const added = await call(
-        "session.suggestions.add",
-        { sessionKey, text: "resolve before audit" },
-        client("alice", "Alice"),
-      );
-      const audit = createDeferred<undefined>();
-      mocks.appendSessionAudit.mockImplementationOnce(() => audit.promise);
-      const broadcast = vi.fn();
-      const pending = call(
-        "session.suggestions.resolve",
-        { sessionKey, id: responseSuggestionId(added), resolution: "edit" },
-        client("owner", "Owner"),
-        context(broadcast),
-      );
+  it.each([
+    ["send", "accepted", true],
+    ["queue", "accepted", true],
+    ["edit", "accepted", false],
+    ["dismiss", "dismissed", false],
+  ] as const)(
+    "finalizes and publishes %s without administrative transcript narration",
+    async (resolution, state, dispatchesConversation) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await upsertDefaultSuggestionSession();
+        const added = await call(
+          "session.suggestions.add",
+          { sessionKey, text: "Ship the focused change" },
+          client("alice", "Alice"),
+        );
+        const id = responseSuggestionId(added);
+        const broadcast = vi.fn();
+        const transcriptScope = { agentId: "main", sessionId: "session-main" };
+        const target = resolveSessionSharingTarget({ cfg: {}, sessionKey, agentId: "main" });
+        if (!target) {
+          throw new Error("Default suggestion session target was not found");
+        }
+        expect(readSessionTranscriptMessageEvents(transcriptScope)).toEqual([]);
 
-      await vi.waitFor(() => expect(mocks.appendSessionAudit).toHaveBeenCalledOnce());
-      expect(broadcast).toHaveBeenCalledWith(
-        "session.suggestion",
-        expect.objectContaining({ action: "resolved" }),
-        expect.any(Object),
-      );
+        if (dispatchesConversation) {
+          mocks.handleChatSend.mockImplementationOnce(
+            ({
+              params,
+              client: attributedClient,
+              respond,
+            }: {
+              params: { message: string; idempotencyKey: string };
+              client: { internal?: { senderAttribution?: { id?: string; name?: string } } };
+              respond: RespondFn;
+            }) => {
+              SessionManager.appendMessageToTranscript(
+                { ...transcriptScope, sessionKey, storePath: target.storePath },
+                buildPersistedUserTurnMessage({
+                  text: params.message,
+                  idempotencyKey: params.idempotencyKey,
+                  sender: attributedClient.internal?.senderAttribution,
+                }),
+              );
+              respond(true, { runId: "suggestion-run", status: "started" });
+            },
+          );
+        }
 
-      audit.resolve(undefined);
-      expect((await pending).responses[0]?.[0]).toBe(true);
-    });
-  });
+        const resolved = await call(
+          "session.suggestions.resolve",
+          { sessionKey, id, resolution },
+          client("owner", "Owner"),
+          context(broadcast),
+        );
+
+        expect(resolved.responses[0]).toMatchObject([
+          true,
+          { suggestion: { id, state, text: "Ship the focused change" } },
+        ]);
+        expect(listSessionSuggestions({ agentId: "main", sessionKey })).toMatchObject([
+          { id, state, text: "Ship the focused change" },
+        ]);
+        expect(broadcast).toHaveBeenCalledWith(
+          "session.suggestion",
+          expect.objectContaining({
+            action: "resolved",
+            suggestion: expect.objectContaining({ id, state }),
+          }),
+          expect.objectContaining({ sessionKeys: [sessionKey] }),
+        );
+
+        const events = readSessionTranscriptMessageEvents(transcriptScope);
+        if (dispatchesConversation) {
+          expect(events).toHaveLength(1);
+          expect(events[0]?.event).toMatchObject({
+            message: {
+              role: "user",
+              content: "Ship the focused change",
+              idempotencyKey: `session-suggestion:${id}`,
+              __openclaw: { senderId: "alice", senderName: "Suggested by Alice" },
+            },
+          });
+          expect(mocks.handleChatSend).toHaveBeenCalledOnce();
+        } else {
+          expect(events).toEqual([]);
+          expect(mocks.handleChatSend).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
 
   it("keeps typing dormant for one identity and broadcasts for two live viewers", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

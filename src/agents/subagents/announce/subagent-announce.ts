@@ -193,6 +193,7 @@ export async function runSubagentAnnounceFlow(params: {
   bestEffortDeliver?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   onBeforeDeleteChildSession?: () => boolean;
+  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<SubagentAnnounceFlowOutcome> {
   let announceOutcome: SubagentAnnounceFlowOutcome = "retryable";
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
@@ -320,8 +321,10 @@ export async function runSubagentAnnounceFlow(params: {
         taskLabel: params.label || params.task || "task",
         findings: childCompletionFindings,
         announceId,
-        isChildSessionEffectsAllowed: childSessionEffectsAllowed,
+        isChildSessionEffectsAllowed: () =>
+          childSessionEffectsAllowed() && completionDeliveryAllowed(),
         hasUsableSessionEntry,
+        resolveGatewayContext: params.resolveGatewayContext,
         deps: {
           callGateway: subagentAnnounceDeps.callGateway,
           dispatchGatewayMethodInProcess: subagentAnnounceDeps.dispatchGatewayMethodInProcess,
@@ -457,7 +460,9 @@ export async function runSubagentAnnounceFlow(params: {
       outcome.status === "ok"
         ? "completed; ready for parent review"
         : outcome.status === "timeout"
-          ? "timed out"
+          ? outcome.error
+            ? `timed out: ${outcome.error}`
+            : "timed out"
           : outcome.status === "error"
             ? `failed: ${outcome.error || "unknown error"}`
             : "finished with unknown status";
@@ -589,6 +594,7 @@ export async function runSubagentAnnounceFlow(params: {
       directIdempotencyKey,
       onDeliveryResult: reportDeliveryResult,
       signal: params.signal,
+      resolveGatewayContext: params.resolveGatewayContext,
     });
     reportDeliveryResult(delivery);
     announceOutcome = delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");

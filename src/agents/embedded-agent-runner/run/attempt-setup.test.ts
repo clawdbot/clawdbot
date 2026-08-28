@@ -33,7 +33,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
     resolveSandboxContext.mockClear();
   });
 
-  it("prepares the default and session agent identities together", async () => {
+  it("prepares the identity that owns the current agent session", async () => {
     const setup = await prepareEmbeddedAttemptSetup({
       config: {
         agents: {
@@ -50,7 +50,6 @@ describe("prepareEmbeddedAttemptSetup", () => {
       workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-agent-identities"),
     } as unknown as EmbeddedRunAttemptParams);
 
-    expect(setup.defaultAgentId).toBe("main");
     expect(setup.sessionAgentId).toBe("marketing");
   });
 
@@ -195,12 +194,13 @@ describe("prepareEmbeddedAttemptSetup", () => {
     expect(resolveProviderRuntimePluginHandle).not.toHaveBeenCalled();
   });
 
-  it("resolves partial handles without trusting scoped metadata", async () => {
+  it("resolves partial handles with the exact lifecycle metadata", async () => {
     const resolvedHandle: ProviderRuntimePluginHandle = {
       provider: "openai",
       modelId: "gpt-5.4",
     };
     resolveProviderRuntimePluginHandle.mockReturnValue(resolvedHandle);
+    const metadataSnapshot = { pluginIds: ["other"] };
     const setup = await prepareEmbeddedAttemptSetup({
       config: {},
       modelId: "gpt-5.4",
@@ -211,7 +211,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       timeoutMs: 30_000,
       workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-partial"),
       preparedModelRuntime: {
-        metadataSnapshot: { pluginIds: ["other"] },
+        metadataSnapshot,
       } as never,
       runtimePlan: { providerRuntimeHandle: { provider: "openai" } } as never,
     } as unknown as EmbeddedRunAttemptParams);
@@ -223,7 +223,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
     expect(resolveProviderRuntimePluginHandle).toHaveBeenCalledOnce();
     const call = resolveProviderRuntimePluginHandle.mock.calls[0]?.[0];
     expect(call).toMatchObject({ provider: "openai", modelId: "gpt-5.4" });
-    expect(call).not.toHaveProperty("pluginMetadataSnapshot");
+    expect(call?.pluginMetadataSnapshot).toBe(metadataSnapshot);
   });
 });
 

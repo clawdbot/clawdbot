@@ -176,6 +176,31 @@ describe("worker environment protocol schemas", () => {
     ).toBe(false);
   });
 
+  it("accepts only bounded, unique effective node command authority", () => {
+    const node = {
+      id: "node:build-mac",
+      type: "node",
+      status: "available",
+    };
+
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        invocableCommands: ["codex.exec-server.stdio.v1", "system.run"],
+      }),
+    ).toBe(true);
+    expect(Value.Check(EnvironmentSummarySchema, { ...node, invocableCommands: [] })).toBe(true);
+
+    for (const invocableCommands of [
+      [""],
+      ["system.run", "system.run"],
+      ["x".repeat(129)],
+      Array.from({ length: 129 }, (_, index) => `command.${index}`),
+    ]) {
+      expect(Value.Check(EnvironmentSummarySchema, { ...node, invocableCommands })).toBe(false);
+    }
+  });
+
   it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {
     const node = {
       id: "node:build-mac",
@@ -229,15 +254,26 @@ describe("worker environment protocol schemas", () => {
             id: "aws",
             providerId: "crabbox",
             trust: "disposable",
+            executionMode: "worker-turn",
+            executionModes: ["worker-turn", "remote-exec"],
             machines: [
               {
                 id: "standard",
                 label: "Standard",
-                description: "Cheap smoke checks and small repos",
+                cpu: 32,
+                memoryGb: 64,
                 default: true,
               },
             ],
           },
+          {
+            id: "worker",
+            providerId: "static-ssh",
+            executionMode: "remote-exec",
+            executionModes: ["remote-exec"],
+          },
+          { id: "legacy-primary", providerId: "static-ssh", executionMode: "worker-turn" },
+          { id: "legacy", providerId: "static-ssh" },
         ],
       }),
     ).toBe(true);
@@ -256,11 +292,31 @@ describe("worker environment protocol schemas", () => {
     expect(
       Value.Check(EnvironmentsListResultSchema, {
         environments: [],
+        profiles: [{ id: "aws", providerId: "crabbox", executionMode: "sandbox" }],
+      }),
+    ).toBe(false);
+    for (const executionModes of [
+      [],
+      ["worker-turn", "worker-turn"],
+      ["remote-exec", "worker-turn"],
+      ["worker-turn", "sandbox"],
+      ["worker-turn", "remote-exec", "worker-turn"],
+    ]) {
+      expect(
+        Value.Check(EnvironmentsListResultSchema, {
+          environments: [],
+          profiles: [{ id: "aws", providerId: "crabbox", executionModes }],
+        }),
+      ).toBe(false);
+    }
+    expect(
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
         profiles: [
           {
             id: "aws",
             providerId: "crabbox",
-            machines: [{ id: "standard", label: "Standard", cpu: 32 }],
+            machines: [{ id: "standard", label: "Standard", cpu: 0 }],
           },
         ],
       }),

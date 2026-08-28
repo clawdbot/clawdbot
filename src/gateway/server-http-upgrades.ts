@@ -5,13 +5,17 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
 import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
   isGatewayWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { NODE_DESKTOP_ATTACH_PATH } from "../shared/node-desktop-stream.js";
+import {
+  NODE_DESKTOP_ATTACH_PATH,
+  NODE_PORTAL_ATTACH_PATH,
+} from "../shared/node-desktop-stream.js";
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "./auth.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
@@ -117,14 +121,22 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
   preauthConnectionBudget: PreauthConnectionBudget;
   preauthBudgetKey: string | undefined;
   ingressName: "Gateway" | "Worker";
+  isStartupPending?: () => boolean;
   prepareSocket?: (socket: GatewayIngressWebSocket) => void;
 }): void {
   const { req, socket, head, wss, preauthConnectionBudget, preauthBudgetKey, ingressName } = params;
+  const allowsRestartStartupPreauth =
+    ingressName === "Gateway" &&
+    isGatewayRestartDraining() &&
+    getGatewaySuspendAdmissionPhase() === "accepting" &&
+    params.isStartupPending?.() === true;
   if (
     isGatewayWorkAdmissionClosed() &&
+    !allowsRestartStartupPreauth &&
     (ingressName === "Worker" ||
       isGatewayRestartDraining() ||
-      getGatewaySuspendAdmissionPhase() !== "prepared")
+      (getGatewaySuspendAdmissionPhase() !== "draining" &&
+        getGatewaySuspendAdmissionPhase() !== "prepared"))
   ) {
     writeGatewayUpgradeServiceUnavailable(socket, `${ingressName} websocket admission closed`);
     socket.destroy();
@@ -190,6 +202,7 @@ export function attachGatewayUpgradeHandler(opts: {
   desktopSessionRegistry?: DesktopSessionRegistry;
   nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
+  isStartupPending?: () => boolean;
   ingressTransport?: GatewayIngressTransport;
   reportUnattributableProxy?: GatewayUnattributableProxyReporter;
 }) {
@@ -210,7 +223,7 @@ export function attachGatewayUpgradeHandler(opts: {
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   httpServer.on("upgrade", (req, socket, head) => {
     markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
-    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), async () => {
+    const handleUpgrade = async () => {
       const configSnapshot = getRuntimeConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
@@ -401,10 +414,11 @@ export function attachGatewayUpgradeHandler(opts: {
         });
         return;
       }
-      if (requestPath === NODE_DESKTOP_ATTACH_PATH) {
+      if (requestPath === NODE_DESKTOP_ATTACH_PATH || requestPath === NODE_PORTAL_ATTACH_PATH) {
         const context = opts.getGatewayRequestContext?.();
         if (!opts.nodeDesktopStreamBroker || !context) {
-          writeGatewayUpgradeServiceUnavailable(socket, "node desktop attach unavailable");
+          const feature = requestPath === NODE_DESKTOP_ATTACH_PATH ? "desktop" : "portal";
+          writeGatewayUpgradeServiceUnavailable(socket, `node ${feature} attach unavailable`);
           socket.destroy();
           return;
         }
@@ -417,7 +431,7 @@ export function attachGatewayUpgradeHandler(opts: {
         return;
       }
       // Plugin-owned upgrade routes have already had the opportunity to claim the socket.
-      // Core Gateway control connections remain reachable while suspension is prepared.
+      // Core Gateway control connections remain reachable throughout a held suspension.
       try {
         handleBudgetedGatewayWebSocketUpgrade({
           req,
@@ -427,11 +441,17 @@ export function attachGatewayUpgradeHandler(opts: {
           preauthConnectionBudget,
           preauthBudgetKey: requestClientIp,
           ingressName: "Gateway",
+          isStartupPending: opts.isStartupPending,
         });
       } catch {
         throw new Error("gateway websocket upgrade failed");
       }
-    }).catch((err: unknown) => {
+    };
+    void runHttpConnectionRequest(
+      req,
+      () => runWithDiagnosticTraceContext(createDiagnosticTraceContext(), handleUpgrade),
+      "upgrade",
+    ).catch((err: unknown) => {
       const remoteAddress = (socket as { remoteAddress?: string }).remoteAddress ?? "unknown";
       const errorMessage = err instanceof Error ? err.message : String(err);
       log?.warn(`ws upgrade error from ${remoteAddress}: ${errorMessage}`);

@@ -11,7 +11,7 @@ import { pathForMemoryTab } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import type { AgentSelectOption } from "../../components/agent-select.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
@@ -614,7 +614,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     return html`
       <p class="settings-page__intro">
         ${t("memoryPage.dreaming.intro", { plugin: pluginId })}
-        ${renderDocsLink(DREAMING_DOCS_URL, t("common.learnMore"))}
+        ${renderLearnMoreLink(DREAMING_DOCS_URL)}
       </p>
       ${this.support === "unsupported"
         ? renderDreamingUnsupported(pluginId)
@@ -668,6 +668,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       onAddonChange: (pluginId, enabled) => void this.changeAddon(pluginId, enabled),
       pluginsHref: this.pluginsHref,
       memoryImportHref: this.memoryImportHref,
+      canImportMemory: readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin,
       agentId,
       agents: this.agentOptions(),
       onAgentChange: (next) => this.selectAgent(next),

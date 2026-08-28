@@ -49,27 +49,63 @@ function routeVariantKey(entry: ModelCatalogEntry): string {
   ].join("\0");
 }
 
+function mergeHarnessCompat(
+  observed: ModelCatalogEntry["compat"],
+  provider: ModelCatalogEntry["compat"],
+): ModelCatalogEntry["compat"] {
+  if (!observed && !provider) {
+    return undefined;
+  }
+  const compat = { ...provider, ...observed };
+  if (observed?.supportedReasoningEfforts?.length === 0) {
+    return { ...compat, supportsReasoningEffort: false, supportedReasoningEfforts: [] };
+  }
+  const efforts = [
+    ...new Set([
+      ...(provider?.supportedReasoningEfforts ?? []),
+      ...(observed?.supportedReasoningEfforts ?? []),
+    ]),
+  ];
+  return efforts.length > 0
+    ? { ...compat, supportsReasoningEffort: true, supportedReasoningEfforts: efforts }
+    : compat;
+}
+
 function enrichHarnessRows(
   rows: readonly ModelCatalogEntry[],
   snapshot: ModelCatalogSnapshot,
 ): ModelCatalogEntry[] {
-  const donors = new Map<string, ModelCatalogEntry>();
+  const routeDonors = new Map<string, ModelCatalogEntry>();
+  const identityDonors = new Map<string, ModelCatalogEntry>();
   // First donor wins: live snapshot entries take precedence over static rows.
   for (const donor of [...snapshot.entries, ...(snapshot.staticEntries ?? [])]) {
-    const key = resolveModelCatalogIdentityKey(donor);
-    if (!donors.has(key)) {
-      donors.set(key, donor);
+    const routeKey = routeVariantKey(donor);
+    const identityKey = resolveModelCatalogIdentityKey(donor);
+    if (!routeDonors.has(routeKey)) {
+      routeDonors.set(routeKey, donor);
+    }
+    if (!identityDonors.has(identityKey)) {
+      identityDonors.set(identityKey, donor);
     }
   }
   return rows.map((entry) => {
-    const donor = donors.get(resolveModelCatalogIdentityKey(entry));
-    return donor
-      ? {
-          ...donor,
-          ...entry,
-          ...(donor.compat || entry.compat ? { compat: { ...donor.compat, ...entry.compat } } : {}),
-        }
-      : entry;
+    const donor =
+      routeDonors.get(routeVariantKey(entry)) ??
+      (entry.api === undefined && entry.baseUrl === undefined
+        ? identityDonors.get(resolveModelCatalogIdentityKey(entry))
+        : undefined);
+    if (!donor) {
+      return entry;
+    }
+    const compat = mergeHarnessCompat(entry.compat, donor.compat);
+    const mergedParams =
+      donor.params || entry.params ? { ...donor.params, ...entry.params } : undefined;
+    return {
+      ...donor,
+      ...entry,
+      ...(mergedParams ? { params: mergedParams } : {}),
+      ...(compat ? { compat } : {}),
+    };
   });
 }
 

@@ -6,7 +6,11 @@ import type { LiveSessionModelSelection } from "../../agents/live-model-switch.j
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
-import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import {
+  buildSessionCreationStamp,
+  inheritSessionCreationPolicy,
+} from "../../config/sessions/session-entry-provenance.js";
+import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
@@ -132,6 +136,8 @@ function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
 export function createPersistCronSessionEntry(params: {
   cronSession: MutableCronSession;
   agentSessionKey: string;
+  createdActor?: SessionCreatedActor;
+  sandbox?: "required";
   persistSessionEntry: PersistSessionEntry;
 }): PersistCronSessionEntry {
   return async () => {
@@ -158,7 +164,8 @@ export function createPersistCronSessionEntry(params: {
         if (!currentEntry) {
           const creationStamp = buildSessionCreationStamp({
             via: "cron",
-            actor: { type: "system" },
+            actor: params.createdActor ?? { type: "system" },
+            sandbox: params.sandbox,
           });
           committedEntry = { ...persistedEntry, ...creationStamp };
           mergedLiveEntry = { ...liveEntry, ...creationStamp };
@@ -238,6 +245,8 @@ export function createPersistCronSessionEntry(params: {
 export function createCronRunContinuationSession(params: {
   cronSession: MutableCronSession;
   runSessionKey: string;
+  createdActor?: SessionCreatedActor;
+  sandbox?: "required";
   thinkingLevel?: string;
   toolsAllow?: string[];
   toolsAllowIsDefault?: boolean;
@@ -303,7 +312,14 @@ export function createCronRunContinuationSession(params: {
           ...current,
           ...source,
           ...(!current
-            ? buildSessionCreationStamp({ via: "cron", actor: { type: "system" } })
+            ? buildSessionCreationStamp({
+                via: "cron",
+                ...inheritSessionCreationPolicy(
+                  params.cronSession.sessionEntry,
+                  params.createdActor ?? { type: "system" },
+                ),
+                sandbox: params.cronSession.sessionEntry.sandbox ?? params.sandbox,
+              })
             : {}),
           ...(params.thinkingLevel ? { thinkingLevel: params.thinkingLevel } : {}),
           cronRunContinuation: {

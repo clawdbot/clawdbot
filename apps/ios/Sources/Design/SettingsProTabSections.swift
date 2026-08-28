@@ -347,6 +347,8 @@ extension SettingsProTab {
                         .font(OpenClawType.body)
                 }
                 .disabled(self.isRefreshingGateway)
+            } footer: {
+                self.gatewayActionStatusView
             }
 
             self.gatewaySetupCard
@@ -542,13 +544,11 @@ extension SettingsProTab {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if self.directRoute == nil {
-                Button {
-                    self.openNotificationsRouteFromApprovals()
-                } label: {
-                    Label("Open Notifications", systemImage: "bell.badge")
-                        .font(OpenClawType.body)
-                }
+            Button {
+                self.openNotificationsRouteFromApprovals()
+            } label: {
+                Label("Open Notifications", systemImage: "bell.badge")
+                    .font(OpenClawType.body)
             }
         }
     }
@@ -831,6 +831,17 @@ extension SettingsProTab {
             {
                 Task { await self.runDiagnostics() }
             }
+
+            self.gatewayActionStatusView
+        }
+    }
+
+    @ViewBuilder
+    var gatewayActionStatusView: some View {
+        if let gatewayActionStatusText {
+            Text(verbatim: gatewayActionStatusText)
+                .font(OpenClawType.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -1502,7 +1513,6 @@ extension SettingsProTab {
             self.settingsToggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled) { enabled in
                 self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
             }
-            self.settingsToggle("Debug Screen Status", isOn: self.$canvasDebugStatusEnabled)
             NavigationLink {
                 GatewayDiscoveryDebugLogView()
             } label: {

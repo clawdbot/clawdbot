@@ -39,6 +39,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
 import { resolveRuntimeThinkingCatalog } from "./runtime-agent-thinking.js";
 import { defineCachedValue } from "./runtime-cache.js";
@@ -91,6 +92,13 @@ type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
 );
+const loadAgentCommandRuntime = createLazyRuntimeModule(async () => {
+  const [command, identity] = await Promise.all([
+    import("../../agents/agent-command.js"),
+    import("../../agents/agent-command-execution-identity.js"),
+  ]);
+  return { command, identity };
+});
 
 function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAccessScope {
   // Keep plugin runtime parameters aligned with the public SDK wrapper while
@@ -175,13 +183,19 @@ async function createSessionEntry(
     { createGatewaySession },
     { resolveGatewaySessionStoreTarget },
     { readAcpSessionMetaForEntry, upsertAcpSessionMeta },
+    { resolveSandboxedSessionCreation },
   ] = await Promise.all([
     import("../../gateway/session-create-service.js"),
     import("../../gateway/session-utils.js"),
     // session-meta rides the same lazy boundary: session-utils already pulls it
     // in transitively, so a separate import here would only duplicate the edge.
     import("../../acp/runtime/session-meta.js"),
+    import("../../gateway/operator-role-policy.js"),
   ]);
+  const requiredCreation = resolveSandboxedSessionCreation(
+    getPluginRuntimeGatewayRequestScope()?.client,
+    params.cfg,
+  );
   type CreatedContext = Parameters<
     NonNullable<Parameters<typeof createGatewaySession>[0]["afterCreate"]>
   >[0];
@@ -364,6 +378,8 @@ async function createSessionEntry(
         } else {
           const result = await createGatewaySession({
             cfg: params.cfg,
+            operatorRoleActor: requiredCreation ? undefined : { kind: "system" },
+            requestingOperatorProfileId: requiredCreation?.actor?.id,
             key: params.key,
             ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
             ...(params.label !== undefined ? { label: params.label } : {}),
@@ -405,7 +421,7 @@ async function createSessionEntry(
             ...(pluginInitial?.pluginOwnerId
               ? { authorizedPluginId: pluginInitial.pluginOwnerId }
               : {}),
-            creation: {
+            creation: requiredCreation ?? {
               via: "plugin",
               actor: {
                 type: "system",
@@ -417,6 +433,11 @@ async function createSessionEntry(
           });
           if (!result.ok) {
             throw new Error(result.error.message);
+          }
+          if (result.postCommit.status === "failed") {
+            // Plugin initialization owns guarded rollback and recovery. Do not
+            // finalize an initializationPending row whose callback failed.
+            throw result.postCommit.error;
           }
           created = result;
         }
@@ -623,9 +644,31 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveAgentTimeoutMs,
     resolveCliBackendDispatchEligibility: resolveEmbeddedCliBackendDispatchEligibility,
     ensureAgentWorkspace,
-  } satisfies Omit<PluginRuntime["agent"], "runEmbeddedAgent" | "session"> &
-    Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "session">>;
+  } satisfies Omit<
+    PluginRuntime["agent"],
+    "runCommandFromIngress" | "runEmbeddedAgent" | "session"
+  > &
+    Partial<Pick<PluginRuntime["agent"], "runCommandFromIngress" | "runEmbeddedAgent" | "session">>;
 
+  defineCachedValue(agentRuntime, "runCommandFromIngress", () =>
+    createLazyRuntimeMethod(
+      loadAgentCommandRuntime,
+      ({ command, identity }) =>
+        async (
+          opts: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[0],
+          runtime: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[1],
+        ) =>
+          await command.agentCommandFromGatewayIngress(
+            {
+              ...identity.sanitizePublicAgentCommandIngressOpts(opts),
+              senderIsOwner: opts.senderIsOwner === true,
+            },
+            runtime,
+            undefined,
+            {},
+          ),
+    ),
+  );
   defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>
     createLazyRuntimeMethod(loadEmbeddedAgentRuntime, (runtime) => runtime.runPluginEmbeddedAgent),
   );

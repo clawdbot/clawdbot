@@ -185,6 +185,23 @@ function seedTestAuthProfile(params: {
 }
 
 vi.mock("../agents/auth-profiles.js", () => ({
+  persistAuthProfileBatch: async (params: {
+    profiles: readonly {
+      profileId: string;
+      credential: StoredAuthProfile;
+      replaceExisting?: boolean;
+    }[];
+    agentDir?: string;
+  }) => {
+    for (const profile of params.profiles) {
+      const existing = readTestAuthProfileStore(params.agentDir).profiles[profile.profileId];
+      if (profile.replaceExisting === false && existing) {
+        continue;
+      }
+      seedTestAuthProfile({ ...profile, agentDir: params.agentDir });
+    }
+    return { rollback() {} };
+  },
   upsertAuthProfile: (params: {
     profileId: string;
     credential: StoredAuthProfile;

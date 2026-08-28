@@ -1,5 +1,6 @@
 ---
 summary: "Step-by-step behavior for openclaw onboard: what each step does, config it writes, and internals"
+doc-schema-version: 1
 read_when:
   - You need detailed behavior for a specific openclaw onboard step
   - You are debugging onboarding results or integrating onboarding clients
@@ -37,13 +38,22 @@ not install or modify anything on the remote host.
     - With a configured default model, **Keep existing model config** appears
       first and becomes the default, followed by **QuickStart (recommended)**
       and **Manual setup**.
-    - Each detected migration source adds an **Import from &lt;source&gt;** choice
-      after those setup choices. Explicit import flags dispatch the import
-      directly and skip this menu.
+      An explicit non-`skip` `--auth-choice` or a single provider credential
+      flag still configures that provider without changing the existing default
+      model, unless the provider requires you to select a model. Multiple
+      provider flags require an explicit `--auth-choice`.
+    - When a migration provider is available, **Import from another agent**
+      appears after those setup choices. Selecting it opens a provider list
+      with entries such as **Import from Claude**, **Import from Codex**, and
+      **Import from Hermes**. Detected sources appear first with their paths;
+      other available providers ask for a source path. Explicit import flags
+      dispatch the import directly and skip this menu. Use Back from the
+      provider list to return to **Setup mode** before an import begins.
     - Re-running the wizard does not wipe anything unless you pass `--reset`.
       Reset is a command flag, not a setup-mode choice.
-    - `--reset` defaults to `config+creds+sessions`; use `--reset-scope full` to
-      also remove the workspace. Before moving state to Trash, the command
+    - `--reset-scope` accepts `config` (config only),
+      `config+creds+sessions` (default), or `full` (also removes the workspace).
+      Before moving state to Trash, the command
       validates TTY availability and rejectable CLI options. Non-interactive
       setup also requires `--accept-risk` before reset. Interactive classic
       setup performs reset before showing its risk acknowledgement; declining
@@ -53,6 +63,17 @@ not install or modify anything on the remote host.
       `--reset`; run the import without `--reset`.
     - Without `--reset`, invalid config or legacy keys stop the wizard and ask
       you to run `openclaw doctor` before continuing.
+
+  </Step>
+  <Step title="Risk acknowledgment">
+    - The first run asks you to acknowledge that agents are powerful and full
+      system access is risky. The wizard stores the acknowledgment in
+      `wizard.securityAcknowledgedAt`, so reruns do not ask again.
+    - Interactive runs show a confirmation prompt; declining cancels setup.
+    - `--non-interactive` requires `--accept-risk` and exits with an error when
+      the flag is missing.
+    - Interactive classic setup performs `--reset` before this prompt. Declining
+      after a reset does not restore state already moved to Trash.
 
   </Step>
   <Step title="Workspace">
@@ -74,6 +95,10 @@ not install or modify anything on the remote host.
     - In token mode, interactive setup offers:
       - **Generate/store plaintext token** (default)
       - **Use SecretRef** (opt-in)
+      - QuickStart reuses an existing `gateway.auth.token` SecretRef from an
+        `env`, `file`, `exec`, or `store` provider for its probe and dashboard
+        handoff. An unresolved configured ref stops onboarding with remediation
+        guidance instead of silently weakening Gateway auth.
     - In password mode, interactive setup also supports plaintext or SecretRef storage.
     - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
       - Requires a non-empty env var in the onboarding process environment.
@@ -90,11 +115,15 @@ not install or modify anything on the remote host.
     - [Mattermost](/channels/mattermost): bot token + base URL
     - [Signal](/channels/signal): optional `signal-cli` install + account config
     - [iMessage](/channels/imessage): `imsg` CLI path + Messages DB access; use an SSH wrapper when the Gateway runs off-Mac
+    - Other bundled or separately installed channel plugins can add their own
+      onboarding steps. See the complete [channel catalog](/channels).
     - DM security: default is pairing. First DM sends a code; approve via
       `openclaw pairing approve <channel> <code>` or use allowlists.
   </Step>
   <Step title="Web search">
-    - Pick a provider (Brave, DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web Search, Perplexity, SearXNG, Tavily) or skip.
+    - Pick a provider (Brave, Codex Hosted Search, DuckDuckGo, Exa, Firecrawl,
+      Gemini, Grok, Kimi, MiniMax Search, Ollama Web Search, Parallel,
+      Perplexity, SearXNG, or Tavily) or skip.
     - Skip this step with `--skip-search`; reconfigure later with `openclaw configure --section web`.
 
   </Step>
@@ -117,7 +146,13 @@ not install or modify anything on the remote host.
     - Native Windows: Scheduled Task first
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
-    - Runtime selection: Node is required because OpenClaw's canonical runtime state store uses `node:sqlite`.
+    - Runtime selection: Node is the primary, default, and recommended runtime. Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in.
+    - A SecretRef-managed `gateway.auth.token` is validated without copying its
+      resolved plaintext value into supervisor service metadata. An unresolved
+      token ref blocks daemon installation with remediation guidance.
+    - If both `gateway.auth.token` and `gateway.auth.password` exist while
+      `gateway.auth.mode` is unset, daemon installation blocks until you choose
+      a mode explicitly.
 
   </Step>
   <Step title="Health check">
@@ -183,6 +218,11 @@ instead of exiting. Explicit `--auth-choice` runs still fail fast for automation
   </Accordion>
   <Accordion title="Anthropic Claude CLI">
     Preferred local path in interactive onboarding/configure; reuses an existing Claude CLI sign-in when available.
+  </Accordion>
+  <Accordion title="Anthropic setup token">
+    Supports the long-lived token created by `claude setup-token`. Choose
+    **Anthropic setup-token** during onboarding, or manage it later with
+    [`openclaw models auth`](/cli/models#auth-profiles).
   </Accordion>
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.
@@ -300,8 +340,11 @@ Model behavior:
 
 Credential and profile paths:
 
-- Auth profiles (API keys + OAuth): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
-- Legacy OAuth import: `~/.openclaw/credentials/oauth.json`
+- Agent-local auth profiles (API keys, tokens, and OAuth): `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (`auth_profile_store`).
+- Shared auth profiles: `~/.openclaw/state/openclaw.sqlite`; agent-local profiles override this read-through base. Older installs keep the shared store in the main agent's database until `openclaw doctor --fix` relocates it.
+- Legacy import only: `auth-profiles.json`, per-agent `auth.json`, and `~/.openclaw/credentials/oauth.json`. Run `openclaw doctor --fix` to import them into SQLite; new logins do not write these files.
+
+Paths respect `$OPENCLAW_STATE_DIR`. See [Auth credential semantics](/auth-credential-semantics#agent-copy-portability) for shared-store and agent-local behavior.
 
 Credential storage mode:
 
@@ -325,15 +368,40 @@ Credential storage mode:
   - Token mode: **Generate/store plaintext token** (default) or **Use SecretRef**.
   - Password mode: plaintext or SecretRef.
 - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
+- The named environment variable must be non-empty in the onboarding process.
+  `--gateway-token` and `--gateway-token-ref-env` are mutually exclusive.
 - Existing plaintext setups continue to work unchanged.
 
-<Note>
-Headless and server tip: complete OAuth on a machine with a browser, then copy
-that agent's `auth-profiles.json` (for example
-`~/.openclaw/agents/<agentId>/agent/auth-profiles.json`, or the matching
-`$OPENCLAW_STATE_DIR/...` path) to the gateway host. `credentials/oauth.json`
-is only a legacy import source.
-</Note>
+## Headless and server setup
+
+Run auth setup **on the Gateway host**, using the same OS user and state directory
+as the Gateway. Over SSH, use an interactive terminal:
+
+```bash
+openclaw configure --section model
+```
+
+Choose your provider's supported auth method. For a browser OAuth flow, open the
+displayed URL in your local browser and paste the redirect URL or authorization
+code back into the terminal on the Gateway host when prompted. If the provider
+offers device-code login, complete the displayed URL/code in your local browser
+while the Gateway host's login process waits. The completed login persists the
+credential on that host in SQLite; no credential file handoff is needed.
+
+For a specific agent, run `openclaw models auth login --provider <id> --agent <agentId>`
+on the Gateway host. See [Models CLI](/cli/models#auth-profiles) and
+[OAuth](/concepts/oauth).
+
+For unattended setup, use a provider API key with
+[non-interactive onboarding](/cli/onboard#non-interactive-setup). If you use
+`--secret-input-mode ref`, make the referenced environment variable available to
+the Gateway service as well as the onboarding process. See
+[Authentication](/gateway/authentication).
+
+Verify the result on the Gateway host with `openclaw models status` (add
+`--agent <agentId>` for a specific agent). Remote-client onboarding only configures
+the local client connection; it does not set up provider credentials on the server.
+Do not copy `auth-profiles.json` or replace a SQLite database to transfer a login.
 
 ## Outputs and internals
 
@@ -341,12 +409,14 @@ Typical fields in `~/.openclaw/openclaw.json`:
 
 - `agents.defaults.workspace`
 - `agents.defaults.skipBootstrap` when `--skip-bootstrap` is passed
-- `agents.defaults.model` / `models.providers` (if Minimax chosen)
+- `agents.defaults.model` and provider config when the selected provider needs it
 - `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)
 - `session.dmScope` (onboarding preserves explicit values and otherwise leaves it unset, so the `main` default keeps all direct messages across channels in the agent's rolling main session—the personal-agent default. For shared or multi-user inboxes, use `per-channel-peer`; `openclaw security audit` recommends isolation when it detects multi-user DM traffic)
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.matrix.*`, `channels.signal.*`, `channels.imessage.*`
-- Channel allowlists (Discord, iMessage, Signal, Slack, Telegram, WhatsApp) when you opt in during prompts; Discord and Slack also resolve entered names to IDs
+- Channel allowlists when you opt in during prompts. Discord, Matrix,
+  Microsoft Teams, and Slack resolve names to IDs when possible; other channels
+  accept their native IDs directly.
 - `skills.install.nodeManager`
   - The `setup --node-manager` flag accepts `npm`, `pnpm`, or `bun`.
   - Manual config can still set `skills.install.nodeManager: "yarn"` later.
@@ -387,7 +457,10 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --anthropic-api-key "$ANTHROPIC_API_KEY"
 ```
 
-Full flag reference and provider-specific examples: [`openclaw onboard`](/cli/onboard), [CLI automation](/start/wizard-cli-automation).
+`--mode` defaults to `local`. `--json` changes output format but does not imply
+non-interactive mode. For complete flag semantics and Gateway SecretRef
+examples, see [`openclaw onboard`](/cli/onboard). Provider-specific scripts live
+in [CLI automation](/start/wizard-cli-automation).
 
 ## Gateway wizard RPC
 

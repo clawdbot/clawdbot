@@ -99,10 +99,8 @@ vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
       : undefined,
 }));
 
-vi.mock("./message-action-threading.js", async () => {
-  const { createOutboundThreadingMock } =
-    await import("./message-action-threading.test-helpers.js");
-  const threading = createOutboundThreadingMock();
+vi.mock("./message-action-threading.js", async (importOriginal) => {
+  const threading = await importOriginal<typeof import("./message-action-threading.js")>();
   messageActionRunnerMocks.prepareOutboundMirrorRoute.mockImplementation(
     threading.prepareOutboundMirrorRoute,
   );

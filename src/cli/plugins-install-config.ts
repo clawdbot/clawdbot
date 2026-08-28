@@ -1,6 +1,6 @@
 // Owns config snapshots, include boundaries, and recovery for plugin installation.
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,
@@ -35,9 +35,7 @@ export function resolveFullyBlockedConfigMutationReason(
 }
 
 function buildInvalidPluginInstallConfigError(message: string): Error {
-  const error = new Error(message);
-  (error as { code?: string }).code = "INVALID_CONFIG";
-  return error;
+  return Object.assign(new Error(message), { code: "INVALID_CONFIG" });
 }
 
 function assertPluginConfigMutationAllowed(preflight: ConfigMutationPreflight): void {
@@ -53,8 +51,8 @@ function supportsPluginRecoveryIncludeShape(parsed: Record<string, unknown>): bo
   return supportsInstallConfigSingleTopLevelIncludeShape(parsed.plugins);
 }
 
-function extractMissingPluginLoadPath(issue: { path?: string; message?: string }): string | null {
-  if (issue.path !== "plugins.load.paths" || typeof issue.message !== "string") {
+function extractMissingPluginLoadPath(issue: ConfigValidationIssue): string | null {
+  if (issue.path !== "plugins.load.paths") {
     return null;
   }
   const marker = "plugin path not found:";
@@ -67,7 +65,7 @@ function extractMissingPluginLoadPath(issue: { path?: string; message?: string }
 }
 
 function isOwnedMissingPluginLoadPathIssue(
-  issue: { path?: string; message?: string },
+  issue: ConfigValidationIssue,
   ownedLoadPaths: ReadonlySet<string>,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
@@ -76,7 +74,7 @@ function isOwnedMissingPluginLoadPathIssue(
 }
 
 function isAllowedPluginRecoveryIssue(
-  issue: { path?: string; message?: string },
+  issue: ConfigValidationIssue,
   request: PluginInstallRequestContext,
   ownedLoadPaths: ReadonlySet<string>,
 ): boolean {
@@ -87,13 +85,14 @@ function isAllowedPluginRecoveryIssue(
   return (
     (issue.path === `channels.${pluginId}` &&
       issue.message === `unknown channel id: ${pluginId}`) ||
+    // The outgoing schema must not block its replacement. The validator names
+    // the schema owner; a plugin may own a channel whose id differs from its own.
+    (issue.path.startsWith("channels.") &&
+      issue.message.startsWith(`invalid config for plugin ${pluginId}:`)) ||
     isOwnedMissingPluginLoadPathIssue(issue, ownedLoadPaths) ||
     (issue.path === `plugins.entries.${pluginId}` &&
-      typeof issue.message === "string" &&
       issue.message.includes("requires compiled runtime output")) ||
-    (issue.path === "tools.web.search.provider" &&
-      typeof issue.message === "string" &&
-      issue.message.includes(`plugin "${pluginId}"`))
+    (issue.path === "tools.web.search.provider" && issue.message.includes(`plugin "${pluginId}"`))
   );
 }
 
@@ -135,7 +134,7 @@ async function collectRequestedPluginLocationBridgePaths(
 
 function removeOwnedMissingPluginLoadPaths(
   cfg: OpenClawConfig,
-  issues: readonly { path?: string; message?: string }[],
+  issues: readonly ConfigValidationIssue[],
   ownedLoadPaths: ReadonlySet<string>,
   env: NodeJS.ProcessEnv,
 ): OpenClawConfig {
@@ -174,7 +173,7 @@ function removeOwnedMissingPluginLoadPaths(
 
 async function resolveRequestedPluginInstallPaths(
   cfg: OpenClawConfig,
-  issues: readonly { path?: string; message?: string }[],
+  issues: readonly ConfigValidationIssue[],
   request: PluginInstallRequestContext,
   env: NodeJS.ProcessEnv,
 ): Promise<Set<string>> {

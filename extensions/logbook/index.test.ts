@@ -19,6 +19,29 @@ function registerLogbookPolicies(): OpenClawPluginNodeInvokePolicy[] {
   return policies;
 }
 
+describe("logbook gateway methods", () => {
+  it("keeps only process-wide status independent of the authenticated profile", () => {
+    const registrations: Array<{ method: string; options: unknown }> = [];
+    plugin.register({
+      pluginConfig: {},
+      session: { controls: { registerControlUiDescriptor: () => {} } },
+      registerNodeInvokePolicy: () => {},
+      registerService: () => {},
+      registerGatewayMethod: (method: string, _handler: unknown, options: unknown) => {
+        registrations.push({ method, options });
+      },
+    } as unknown as OpenClawPluginApi);
+
+    expect(registrations.find((entry) => entry.method === "logbook.status")?.options).toEqual({
+      scope: "operator.read",
+      profileAccess: "independent",
+    });
+    for (const registration of registrations.filter((entry) => entry.method !== "logbook.status")) {
+      expect(registration.options).not.toHaveProperty("profileAccess");
+    }
+  });
+});
+
 describe("logbook snapshot invoke policy", () => {
   it("blocks logbook.snapshot when gateway.nodes.commands.deny lists screen.snapshot", async () => {
     const [policy] = registerLogbookPolicies();

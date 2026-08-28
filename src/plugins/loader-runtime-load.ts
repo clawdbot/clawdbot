@@ -8,6 +8,7 @@ import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import {
   getReusableCachedPluginRegistry,
+  isPluginRegistryCacheEnabled,
   pluginLoaderCacheState,
   setCachedPluginRegistry,
 } from "./loader-cache.js";
@@ -59,6 +60,7 @@ function createDeferredGatewayNodesRuntime(runtime: PluginRuntime): PluginRuntim
   return {
     list: (...args) => runtime.nodes.list(...args),
     invoke: (...args) => runtime.nodes.invoke(...args),
+    openDuplex: (...args) => runtime.nodes.openDuplex(...args),
   };
 }
 
@@ -98,10 +100,11 @@ function loadOpenClawPluginsInternal(
   const logger = options.logger ?? createPluginLoaderLogger();
   const validateOnly = options.mode === "validate";
   const onlyPluginIdSet = createPluginIdScopeSet(context.onlyPluginIds);
-  const cacheEnabled = options.cache !== false && options.resolveRawConfigEnvVars !== true;
+  const cacheEnabled = isPluginRegistryCacheEnabled(options);
   if (cacheEnabled) {
     const cached = getReusableCachedPluginRegistry(context.cacheKey);
     if (cached) {
+      maybeThrowOnPluginLoadError(cached, options.throwOnLoadError);
       if (context.shouldActivate) {
         activatePluginRegistry(
           cached,

@@ -14,6 +14,28 @@ function createWebhookContext(rawBody: string): WebhookContext {
 }
 
 describe("MockProvider", () => {
+  it.each([undefined, "", "   ", "\t\n"])(
+    "does not emit blank speech payloads %#",
+    (transcript) => {
+      const provider = new MockProvider();
+      const result = provider.parseWebhookEvent(
+        createWebhookContext(
+          JSON.stringify({
+            event: {
+              id: "evt-blank-speech",
+              type: "call.speech",
+              callId: "call-blank",
+              transcript,
+              isFinal: true,
+            },
+          }),
+        ),
+      );
+
+      expect(result.events).toEqual([]);
+    },
+  );
+
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -97,7 +119,6 @@ describe("MockProvider", () => {
     );
     const afterParse = Date.now();
     const endedTimestamp = result.events[1]?.timestamp;
-    const speechTimestamp = result.events[2]?.timestamp;
 
     expect(result.events).toEqual([
       {
@@ -118,16 +139,6 @@ describe("MockProvider", () => {
         reason: "",
       },
       {
-        id: "evt-speech",
-        type: "call.speech",
-        callId: "call-3",
-        providerCallId: undefined,
-        timestamp: speechTimestamp,
-        transcript: "",
-        isFinal: false,
-        confidence: undefined,
-      },
-      {
         id: "evt-assistant-speech",
         type: "call.assistant-speech",
         callId: "call-4",
@@ -138,7 +149,5 @@ describe("MockProvider", () => {
     ]);
     expect(endedTimestamp).toBeGreaterThanOrEqual(beforeParse);
     expect(endedTimestamp).toBeLessThanOrEqual(afterParse);
-    expect(speechTimestamp).toBeGreaterThanOrEqual(beforeParse);
-    expect(speechTimestamp).toBeLessThanOrEqual(afterParse);
   });
 });

@@ -17,6 +17,7 @@ export function resolveSessionPermissionCoreToolPolicy(
     readOnly: policy.mode === "read-only",
     applyPatchWorkspaceOnly: workspaceOnly,
     execMode: EXEC_MODE_BY_PERMISSION_MODE[policy.mode],
+    bypassHostApprovalFloors: policy.mode === "full",
   };
 }
 

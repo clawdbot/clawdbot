@@ -200,7 +200,7 @@ describe("QA suite Control UI ownership", () => {
 });
 
 describe("QA runtime parity scenario retry isolation", () => {
-  it("does not report terminal success when cleanup fails after writing artifacts", async () => {
+  it("does not publish terminal artifacts when cleanup fails", async () => {
     const lab = makeRetryTestLab();
     const cleanupError = Object.assign(new Error("gateway shutdown socket reset"), {
       code: "ECONNRESET",
@@ -225,12 +225,11 @@ describe("QA runtime parity scenario retry isolation", () => {
     expect((thrown as Error).message).toContain(
       "failed cleanup phases: gateway stop: gateway shutdown socket reset",
     );
-    expect((thrown as Error).message).toContain(
-      "retained artifacts: output=/qa-output report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json",
-    );
     expect((thrown as Error).cause).toBe(cleanupError);
-    expect(lab.setLatestReport).toHaveBeenCalledWith(
-      expect.objectContaining({ outputPath: "/qa-output/qa-suite-report.md" }),
+    expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+    expect(lab.setLatestReport).not.toHaveBeenCalled();
+    expect(lab.setScenarioRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed" }),
     );
     expect(
       mocks.writeQaSuiteProgress.mock.calls.filter(([, message]) =>

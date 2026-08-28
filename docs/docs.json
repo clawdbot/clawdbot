@@ -89,6 +89,10 @@
       "destination": "/gateway/external-apps"
     },
     {
+      "source": "/reference/wizard",
+      "destination": "/start/wizard-cli-reference"
+    },
+    {
       "source": "/reference/maturity-scorecard",
       "destination": "/maturity/scorecard"
     },
@@ -1050,6 +1054,7 @@
                 "pages": [
                   "index",
                   "start/showcase",
+                  "start/why-openclaw",
                   "concepts/features"
                 ]
               },
@@ -1178,6 +1183,7 @@
               {
                 "group": "Developer and self-hosted",
                 "pages": [
+                  "channels/a2a",
                   "channels/buzz",
                   "channels/clickclack",
                   "channels/irc",
@@ -1261,6 +1267,7 @@
                     "pages": [
                       "concepts/memory",
                       "concepts/memory-architecture",
+                      "concepts/memory-provenance",
                       "concepts/user-model",
                       "concepts/standing-intents",
                       "concepts/memory-builtin",
@@ -1330,6 +1337,7 @@
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
+                  "plugins/geolocation",
                   "plugins/beam",
                   "plugins/voice-call",
                   "plugins/vault",
@@ -1358,6 +1366,7 @@
                 "group": "Skills",
                 "pages": [
                   "tools/skills",
+                  "tools/custodian-skills",
                   "tools/skill-workshop",
                   "tools/self-learning",
                   "tools/creating-skills",
@@ -1371,6 +1380,7 @@
                 "pages": [
                   "automation/index",
                   "automation/cron-jobs",
+                  "automation/imap",
                   "automation/tasks",
                   "automation/taskflow",
                   "automation/standing-orders",
@@ -1402,6 +1412,7 @@
                   "tools/music-generation",
                   "tools/pdf",
                   "tools/reactions",
+                  "tools/secrets",
                   "tools/thinking",
                   "tools/tokenjuice",
                   "tools/tool-search",
@@ -1672,6 +1683,7 @@
                       "gateway/heartbeat",
                       "gateway/doctor",
                       "gateway/audit",
+                      "gateway/telemetry",
                       "logging",
                       "gateway/opentelemetry",
                       "gateway/prometheus",
@@ -1686,6 +1698,7 @@
                       "gateway/gateway-lock",
                       "gateway/background-process",
                       "gateway/restart-recovery",
+                      "gateway/cloud-sessions",
                       "gateway/cloud-workers",
                       "gateway/multiple-gateways",
                       "gateway/multi-tenant-hosting"
@@ -1740,7 +1753,8 @@
                   "gateway/remote",
                   "gateway/remote-gateway-readme",
                   "gateway/stable-https-url",
-                  "gateway/tailscale"
+                  "gateway/tailscale",
+                  "gateway/cloudflare-access"
                 ]
               },
               {
@@ -1822,6 +1836,7 @@
                       "cli/security",
                       "cli/setup",
                       "cli/status",
+                      "cli/triage",
                       "cli/uninstall",
                       "cli/update"
                     ]
@@ -1978,7 +1993,6 @@
                 "group": "Technical reference",
                 "pages": [
                   "agent-runtime-architecture",
-                  "reference/wizard",
                   "reference/token-use",
                   "reference/secretref-credential-surface",
                   "reference/openclaw-ai",

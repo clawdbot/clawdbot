@@ -3,6 +3,11 @@
 install_update_restart_systemctl_shim() {
   local shim_dir="$npm_config_prefix/bin"
   mkdir -p "$shim_dir"
+  cp "$(dirname "${BASH_SOURCE[0]}")/systemd-fixture.mjs" "$shim_dir/systemd-fixture.mjs"
+  cat >"$shim_dir/busctl" <<'BUSCTL'
+#!/usr/bin/env bash
+exec node "$(dirname "$0")/systemd-fixture.mjs" busctl "$@"
+BUSCTL
   cat >"$shim_dir/systemctl" <<'SHIM'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -11,6 +16,7 @@ log_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG:-/tmp/openclaw-systemct
 pid_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-/tmp/openclaw-systemctl-shim.pid}"
 daemon_log="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-/tmp/openclaw-systemctl-shim-gateway.log}"
 supervisor_script="${pid_file}.supervisor.mjs"
+manager_script="$(dirname "$0")/systemd-fixture.mjs"
 printf '%s\n' "$*" >>"$log_file"
 
 filtered=()
@@ -38,6 +44,12 @@ for ((i = 1; i <= $#; i++)); do
 done
 
 command="${filtered[0]:-status}"
+unit_name="${filtered[1]:-}"
+if [ "${#filtered[@]}" -gt 2 ] ||
+  { [ -n "$unit_name" ] && [ "$unit_name" != openclaw-gateway.service ] && [ "$unit_name" != openclaw.service ]; }; then
+  echo "systemctl shim unsupported unit or arguments: $*" >&2
+  exit 1
+fi
 
 is_running() {
   [ -s "$pid_file" ] || return 1
@@ -71,40 +83,9 @@ unit_path() {
   printf '%s/.config/systemd/user/openclaw-gateway.service\n' "${HOME:?missing HOME}"
 }
 
-load_unit_environment() {
-  local unit="$1"
-  while IFS= read -r line; do
-    case "$line" in
-      EnvironmentFile=*)
-        local spec="${line#EnvironmentFile=}"
-        for token in $spec; do
-          local file="${token#-}"
-          [ -f "$file" ] || continue
-          set -a
-          # shellcheck disable=SC1090
-          . "$file"
-          set +a
-        done
-        ;;
-      Environment=*)
-        local assignment="${line#Environment=}"
-        assignment="${assignment#\"}"
-        assignment="${assignment%\"}"
-        export "$assignment"
-        ;;
-    esac
-  done <"$unit"
-}
-
 start_gateway() {
-  local unit
   local exec_start
-  unit="$(unit_path)"
-  exec_start="$(sed -n 's/^ExecStart=//p' "$unit" | tail -n 1)"
-  [ -n "$exec_start" ] || {
-    echo "systemctl shim could not find ExecStart in $unit" >&2
-    return 1
-  }
+  exec_start="$(node "$manager_script" command)"
   rm -f "$pid_file" "$supervisor_script"
   cat >"$supervisor_script" <<'SUPERVISOR'
 import fs from "node:fs";
@@ -218,7 +199,7 @@ const start = () => {
     return finish();
   }
   starts.push(now);
-  child = spawn("bash", ["-lc", `exec ${command}`], {
+  child = spawn("bash", ["-c", command], {
     detached: true,
     env: childEnv,
     stdio: ["ignore", output, output],
@@ -244,7 +225,6 @@ process.on("SIGTERM", stop);
 start();
 SUPERVISOR
   (
-    load_unit_environment "$unit"
     OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start" \
       OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG="$daemon_log" \
       nohup node "$supervisor_script" </dev/null >/dev/null 2>&1 &
@@ -253,26 +233,48 @@ SUPERVISOR
 }
 
 case "$command" in
-  daemon-reload | enable | disable)
+  daemon-reload)
+    [ "$system_scope" = 0 ] && [ -z "$unit_name" ] || exit 1
+    node "$manager_script" reload
+    exit 0
+    ;;
+  enable | disable | reset-failed)
+    [ "$system_scope" = 0 ] && [ "$unit_name" = openclaw-gateway.service ] || exit 1
+    [ -f "$(unit_path)" ] || exit 1
+    if [ "$command" = enable ]; then
+      mkdir -p "$(dirname "$(unit_path)")/default.target.wants"
+      ln -sf ../openclaw-gateway.service "$(dirname "$(unit_path)")/default.target.wants/openclaw-gateway.service"
+    elif [ "$command" = disable ]; then
+      stop_gateway
+      rm -f "$(dirname "$(unit_path)")/default.target.wants/openclaw-gateway.service"
+    fi
     exit 0
     ;;
   status)
-    is_running && exit 0
-    exit 0
+    [ "$system_scope" = 0 ] || exit 1
+    [ -z "$unit_name" ] && exit 0
+    [ "$unit_name" = openclaw-gateway.service ] && is_running && exit 0
+    exit 3
     ;;
   stop)
+    [ "$system_scope" = 0 ] && [ "$unit_name" = openclaw-gateway.service ] || exit 1
     stop_gateway
     exit 0
     ;;
   restart | start)
+    [ "$system_scope" = 0 ] && [ "$unit_name" = openclaw-gateway.service ] || exit 1
     stop_gateway
     start_gateway
     exit 0
     ;;
   is-enabled)
-    exit 0
+    [ "$system_scope" = 0 ] && [ "$unit_name" = openclaw-gateway.service ] &&
+      [ -f "$(unit_path)" ] && [ -L "$(dirname "$(unit_path)")/default.target.wants/openclaw-gateway.service" ] && exit 0
+    printf 'disabled\n'
+    exit 1
     ;;
   is-active)
+    [ "$system_scope" = 0 ] && [ "$unit_name" = openclaw-gateway.service ] || exit 1
     is_running && exit 0
     exit 3
     ;;
@@ -280,9 +282,11 @@ case "$command" in
     if [ "$system_scope" = "1" ]; then
       case "$property" in
         LoadState)
+          [ -n "$unit_name" ] || exit 1
           printf 'not-found\n'
           ;;
         UnitPath)
+          [ -z "$unit_name" ] || exit 1
           printf '/etc/systemd/system /usr/lib/systemd/system\n'
           ;;
         *)
@@ -292,6 +296,11 @@ case "$command" in
       esac
       exit 0
     fi
+    [ "$unit_name" = openclaw-gateway.service ] || exit 1
+    [ "$property" = 'Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent' ] || {
+      echo "systemctl shim unsupported user-scope show: $*" >&2
+      exit 1
+    }
     if is_running; then
       printf 'ActiveState=active\nSubState=running\nMainPID=%s\nExecMainStatus=0\nExecMainCode=0\n' "$(cat "$pid_file")"
     else
@@ -305,8 +314,21 @@ case "$command" in
     ;;
 esac
 SHIM
-  chmod +x "$shim_dir/systemctl"
+  chmod +x "$shim_dir/systemctl" "$shim_dir/busctl"
   export PATH="$shim_dir:$PATH"
+}
+
+assert_update_restart_service_replaced() {
+  local previous_pid="$1" previous_log_lines="$2" current_pid
+  current_pid="$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")"
+  if [ "$current_pid" = "$previous_pid" ] ||
+    ! systemctl --user is-active --quiet openclaw-gateway.service ||
+    ! tail -n +"$((previous_log_lines + 1))" "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG" |
+      grep -Fx -- '--user restart openclaw-gateway.service' >/dev/null; then
+    echo "Update did not replace the managed gateway supervisor through restart." >&2
+    return 1
+  fi
+  echo "Update-owned fixture restart replaced supervisor $previous_pid with $current_pid."
 }
 
 seed_update_restart_probe_device_auth() {
@@ -413,29 +435,85 @@ prepare_update_restart_probe_current_install() {
   local log_file="$2"
   local command_timeout="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
   local doctor_log="${log_file}.doctor"
+  local authored_config="${log_file}.authored-config"
+  local parking_helper="${OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER:-scripts/e2e/lib/upgrade-survivor/config-parking.mjs}"
+  local failure_stage=""
+  local probe_status=0
+  local restore_status=0
   local start_epoch
   local ready_epoch
 
   echo "Preparing candidate-auth gateway for automatic update restart."
   install_update_restart_systemctl_shim
   seed_update_restart_probe_device_auth
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >"$doctor_log" 2>&1; then
+  # Service installation persists OPENCLAW_CONFIG_PATH, so isolate the canonical file in place.
+  # Reload stays off through service setup; restoring authored bytes cannot restart this probe.
+  node "$parking_helper" \
+    park-restart-probe "$OPENCLAW_CONFIG_PATH" "$authored_config" "$port" || probe_status=$?
+  if [ "$probe_status" -ne 0 ]; then
+    echo "failed to park authored config for candidate restart probe" >&2
+    if [ -e "$authored_config" ]; then
+      node "$parking_helper" restore "$OPENCLAW_CONFIG_PATH" "$authored_config" ||
+        restore_status=$?
+    fi
+    if [ "$restore_status" -ne 0 ]; then
+      return "$restore_status"
+    fi
+    return "$probe_status"
+  fi
+  # This setup pass migrates candidate device identity while deferring plugin convergence.
+  # Parent-write support lets that migration persist before the real update begins.
+  openclaw_e2e_maybe_timeout \
+    "$command_timeout" \
+    env \
+    OPENCLAW_UPDATE_IN_PROGRESS=1 \
+    OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR=1 \
+    OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1 \
+    openclaw doctor --fix --non-interactive >"$doctor_log" 2>&1 || {
+      probe_status=$?
+      failure_stage="doctor"
+    }
+  if [ "$probe_status" -ne 0 ]; then
     echo "candidate device identity migration failed" >&2
     cat "$doctor_log" >&2 || true
-    return 1
   fi
-  start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
-  env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
-  gateway_pid="$!"
-  printf '%s\n' "$gateway_pid" >"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" 360 "$port"
-  ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
-  start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
-  write_update_restart_service_auth_env
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway install --force --json >"$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON" 2>"$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR"; then
+  if [ "$probe_status" -eq 0 ]; then
+    start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
+    env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+    gateway_pid="$!"
+    printf '%s\n' "$gateway_pid" >"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE"
+    openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" 360 "$port" || {
+      probe_status=$?
+      failure_stage="readiness"
+    }
+  fi
+  if [ "$probe_status" -eq 0 ]; then
+    ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
+    start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
+    write_update_restart_service_auth_env || {
+      probe_status=$?
+      failure_stage="service-env"
+    }
+  fi
+  if [ "$probe_status" -eq 0 ]; then
+    openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway install --force --json >"$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON" 2>"$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR" || {
+      probe_status=$?
+      failure_stage="install"
+    }
+  fi
+  if [ "$failure_stage" = "install" ]; then
     echo "gateway service install failed" >&2
     cat "$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR" >&2 || true
     cat "$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON" >&2 || true
-    return 1
+  elif [ "$failure_stage" = "readiness" ]; then
+    echo "candidate restart probe gateway did not become ready" >&2
+  elif [ "$failure_stage" = "service-env" ]; then
+    echo "failed to write candidate restart service environment" >&2
   fi
+  node "$parking_helper" restore "$OPENCLAW_CONFIG_PATH" "$authored_config" || restore_status=$?
+  if [ "$restore_status" -ne 0 ]; then
+    echo "failed to restore authored config after candidate restart probe" >&2
+    return "$restore_status"
+  fi
+  return "$probe_status"
 }

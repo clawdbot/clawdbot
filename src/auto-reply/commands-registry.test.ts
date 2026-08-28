@@ -569,11 +569,9 @@ describe("commands registry", () => {
     ]);
   });
 
-  it("scopes configured-default wording to direct model selections", () => {
+  it("documents explicit model persistence scopes", () => {
     const model = requireChatCommand("model");
-    expect(model.description).toBe(
-      "Show or set the model; direct owner/admin selections request a default update.",
-    );
+    expect(model.description).toBe("Show or set the model; use -s, -a, or -g to choose scope.");
   });
 
   it("detects known text commands", () => {

@@ -181,6 +181,7 @@ vi.mock("../auth-profiles.js", () => ({
 }));
 
 vi.mock("../auth-profiles/external-cli-sync.js", () => ({
+  listExternalCliSyncProviderIds: () => [],
   resolveExternalCliAuthProfiles: (
     _store: unknown,
     options?: { providerIds?: Iterable<string> },

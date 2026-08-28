@@ -51,7 +51,6 @@ describe("command explainer tree-sitter runtime", () => {
     const source = "echo café😀 && echo 雪";
     const explanation = await explainShellCommand(source);
 
-    expect(explanation.topLevelCommands).toHaveLength(2);
     expect(explanation.topLevelCommands.map((command) => command.argv)).toEqual([
       ["echo", "café😀"],
       ["echo", "雪"],
@@ -278,6 +277,35 @@ describe("command explainer tree-sitter runtime", () => {
     expect(doubleBracket.topLevelCommands).toHaveLength(1);
     expect(doubleBracket.topLevelCommands[0]?.executable).toBe("[[");
     expect(doubleBracket.topLevelCommands[0]?.argv).toEqual(["[[", "-f", "package.json"]);
+  });
+
+  it.each([
+    ["echo 42 $VALUE", ["echo", "42", "$VALUE"], "echo", 2, "$VALUE"],
+    [
+      "export COUNT=42 NEXT=$VALUE",
+      ["export", "COUNT=42", "NEXT=$VALUE"],
+      "export",
+      2,
+      "NEXT=$VALUE",
+    ],
+    ["[[ 42 -gt $LIMIT ]]", ["[[", "42", "-gt", "$LIMIT"], "[[", 3, "$LIMIT"],
+  ] as const)("projects command arguments for %s", async (source, argv, command, index, text) => {
+    const explanation = await explainShellCommand(source);
+
+    expect(explanation.topLevelCommands[0]?.argv).toEqual(argv);
+    const risk = expectRisk(explanation.risks, {
+      kind: "dynamic-argument",
+      command,
+      argumentIndex: index,
+      text,
+    });
+    const startIndex = source.indexOf(text);
+    expect(risk.span).toEqual({
+      startIndex,
+      endIndex: startIndex + text.length,
+      startPosition: { row: 0, column: startIndex },
+      endPosition: { row: 0, column: startIndex + text.length },
+    });
   });
 
   it("detects shell wrappers", async () => {

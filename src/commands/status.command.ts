@@ -163,12 +163,23 @@ export async function statusCommand(
     agentStatus,
     channels,
     summary,
+    configDiagnostics,
     secretDiagnostics,
     memory,
     memoryPlugin,
     pluginCompatibility,
     env,
   } = scan;
+
+  if (configDiagnostics) {
+    const { formatStatusConfigDiagnosticEntries, theme } =
+      await statusCommandTextRuntimeLoader.load();
+    runtime.log(theme.warn("Config diagnostics:"));
+    for (const entry of formatStatusConfigDiagnosticEntries(configDiagnostics)) {
+      runtime.log(entry);
+    }
+    runtime.log("");
+  }
 
   const {
     securityAudit,
@@ -370,7 +381,5 @@ export async function statusCommand(
       updateRestartValue,
     }),
   );
-  for (const line of lines) {
-    runtime.log(line);
-  }
+  runtime.log(lines.join("\n"));
 }

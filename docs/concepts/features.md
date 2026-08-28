@@ -68,8 +68,8 @@ title: "Features"
 
 - WebChat and browser Control UI
 - macOS menu bar companion app
-- iOS node with pairing, Canvas, camera, screen recording, location, and voice
-- Android node with pairing, chat, voice, Canvas, camera, and device commands
+- iOS node with pairing, camera, screen recording, location, and voice
+- Android node with pairing, chat, voice, camera, and device commands
 
 **Tools and automation:**
 

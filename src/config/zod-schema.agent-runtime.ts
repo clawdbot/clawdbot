@@ -518,6 +518,7 @@ const ToolExecBaseShape = {
   safeBins: z.array(z.string()).optional(),
   strictInlineEval: z.boolean().optional(),
   commandHighlighting: z.boolean().optional(),
+  grantExpiryDays: z.number().int().min(1).max(3650).optional(),
   safeBinTrustedDirs: z.array(z.string()).optional(),
   safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
   reviewer: z
@@ -718,6 +719,7 @@ const MessageToolConfigSchema = z
 const GitHubToolIdentitySchema = z
   .object({
     profileId: z.string().regex(MANAGED_GITHUB_PROFILE_ID_PATTERN),
+    kind: z.literal("oauth").optional(),
     gitAuthor: z
       .object({
         name: z.string().trim().min(1).optional(),

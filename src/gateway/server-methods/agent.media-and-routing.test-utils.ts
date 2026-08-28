@@ -9,13 +9,15 @@ import {
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
 import {
+  getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
-  waitForActiveGatewayRootWork,
 } from "../../process/gateway-work-admission.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { registerSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import {
   getAgentTestMocks,
+  operatorWriteCliClient,
   makeContext,
   type AgentHandlerArgs,
   type AgentParams,
@@ -379,11 +381,7 @@ describe("gateway agent handler", () => {
         idempotencyKey: "plugin-runtime-owner",
       },
       {
-        client: {
-          internal: {
-            pluginRuntimeOwnerId: "memory-core",
-          },
-        } as never,
+        client: createSyntheticPluginRuntimeClient({ pluginRuntimeOwnerId: "memory-core" }),
       },
     );
 
@@ -401,16 +399,14 @@ describe("gateway agent handler", () => {
         idempotencyKey: "plugin-tools-also-allow",
       },
       {
-        client: {
-          internal: {
-            agentRunTracking: "plugin_subagent",
-            pluginRuntimeOwnerId: "workboard",
-            runtimePluginToolGrant: {
-              pluginId: "workboard",
-              toolNames: ["workboard_heartbeat", "workboard_complete"],
-            },
+        client: createSyntheticPluginRuntimeClient({
+          agentRunTracking: "plugin_subagent",
+          pluginRuntimeOwnerId: "workboard",
+          runtimePluginToolGrant: {
+            pluginId: "workboard",
+            toolNames: ["workboard_heartbeat", "workboard_complete"],
           },
-        } as never,
+        }),
       },
     );
 
@@ -421,6 +417,28 @@ describe("gateway agent handler", () => {
       pluginId: "workboard",
       toolNames: ["workboard_heartbeat", "workboard_complete"],
     });
+  });
+
+  it("forwards a tracked plugin subagent exact empty tool cap", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "write a tool-free narrative",
+        sessionKey: "agent:main:subagent:dreaming-narrative",
+        idempotencyKey: "plugin-tools-disabled",
+      },
+      {
+        client: createSyntheticPluginRuntimeClient({
+          agentRunTracking: "plugin_subagent",
+          pluginRuntimeOwnerId: "memory-core",
+          pluginSubagentToolsAllow: [],
+        }),
+      },
+    );
+
+    const call = await waitForAgentCommandCall<{ toolsAllow?: string[] }>();
+    expect(call.toolsAllow).toEqual([]);
   });
 
   it("forwards trusted delegated policy handoffs only from internal client metadata", async () => {
@@ -538,11 +556,7 @@ describe("gateway agent handler", () => {
         idempotencyKey: "plugin-runtime-existing-owner",
       },
       {
-        client: {
-          internal: {
-            pluginRuntimeOwnerId: "memory-core",
-          },
-        } as never,
+        client: createSyntheticPluginRuntimeClient({ pluginRuntimeOwnerId: "memory-core" }),
       },
     );
 
@@ -563,11 +577,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "test-idem-model-override",
-        client: {
-          connect: {
-            scopes: ["operator.admin"],
-          },
-        } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -678,11 +688,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "test-idem-model-override-write",
-        client: {
-          connect: {
-            scopes: ["operator.write"],
-          },
-        } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.write"]),
         respond,
       },
     );
@@ -708,9 +714,7 @@ describe("gateway agent handler", () => {
       {
         reqId: "test-idem-model-override-internal",
         client: {
-          connect: {
-            scopes: ["operator.write"],
-          },
+          ...operatorWriteCliClient(["operator.write"]),
           internal: {
             allowModelOverride: true,
           },
@@ -1982,7 +1986,7 @@ describe("gateway agent handler", () => {
         phase: "ready",
         basePersisted: true,
       });
-      await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,
         "cron-media-release-recovered",
@@ -2071,7 +2075,7 @@ describe("gateway agent handler", () => {
       expect(context.logGateway.warn).toHaveBeenCalledWith(
         "cron continuation release recovery exhausted for cron-media-release-exhausts",
       );
-      await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,
         "cron-media-release-exhausted",

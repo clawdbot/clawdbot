@@ -9,14 +9,19 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  COMMAND_TIMEOUT_MS,
   createContainerizedSutSpawnSpec,
+  createOpenClawGatewaySpawnSpec,
+  runSutContainerAction,
+  waitForLog,
+  writeSutConfig,
+} from "../../scripts/e2e/telegram-mantis-sut.ts";
+import {
+  COMMAND_TIMEOUT_MS,
   createCrabboxWarmupArgs,
   createOpenClawCliSpawnSpec,
-  createOpenClawGatewaySpawnSpec,
+  hasBoundaryVerifiedChannelAdmissionAssurance,
   parseArgs,
   processTargetExists,
-  readCodexProxyPort,
   readLogAfterOffset,
   readLogTail,
   readTelegramUserProofLogTailBytes,
@@ -30,14 +35,11 @@ import {
   renderTailscaleSshProxy,
   restartSessionGateway,
   runCommand,
-  runSutContainerAction,
   selectCrabboxSshPort,
   signalPidTree,
   stageFullSessionArtifacts,
   startLocalSut,
-  waitForLog,
   waitForLogAfterOffset,
-  writeSutConfig,
 } from "../../scripts/e2e/telegram-user-crabbox-proof.ts";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
@@ -162,11 +164,37 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(spec.options.env?.OPENCLAW_CONFIG_PATH).toBe("/tmp/openclaw.json");
   });
 
+  it("requires the persisted boundary-verified channel admission assurance", () => {
+    const context = {
+      ingress: { kind: "channel", state: "present" },
+      assurance: [
+        {
+          kind: "channel-admission",
+          strength: "boundary-verified",
+          evidenceRef: "hmac-sha256:v1:test",
+        },
+      ],
+    };
+
+    expect(hasBoundaryVerifiedChannelAdmissionAssurance(context)).toBe(true);
+    expect(
+      hasBoundaryVerifiedChannelAdmissionAssurance({
+        ...context,
+        assurance: [{ ...context.assurance[0], strength: "self-asserted" }],
+      }),
+    ).toBe(false);
+    expect(
+      hasBoundaryVerifiedChannelAdmissionAssurance({
+        ...context,
+        ingress: { kind: "local-cli", state: "present" },
+      }),
+    ).toBe(false);
+  });
+
   it("routes fork SUT startup through the root-owned validating wrapper", () => {
     const repoRoot = makeTempDir(tempDirs, "openclaw-telegram-proof-");
     const runtimeRoot = makeTempDir(tempDirs, "openclaw-telegram-proof-");
     const spec = createContainerizedSutSpawnSpec({
-      codexProxyPort: 43123,
       containerName: "openclaw-telegram-sut-test",
       gatewayEnv: {
         TELEGRAM_BOT_TOKEN: "telegram-burner-token",
@@ -183,6 +211,8 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(spec.args).toContain("/usr/local/sbin/openclaw-mantis-sut-container");
     expect(spec.args).toContain("run");
     expect(spec.args).toContain("candidate");
+    expect(spec.args.at(-2)).toBe("19042");
+    expect(spec.args.at(-1)).toBe("19043");
     expect(spec.args).not.toContain("docker");
     expect(spec.args.join("\n")).not.toContain("--preserve-env");
     expect(spec.args.join("\n")).not.toContain("CODEX_HOME");
@@ -194,20 +224,6 @@ describe("telegram user Crabbox proof log polling", () => {
       mockResponseText: "streamed response",
       telegramBotToken: "telegram-burner-token",
     });
-  });
-
-  it("reads only the loopback Responses proxy port from Codex config", () => {
-    const codexHome = makeTempDir(tempDirs, "openclaw-telegram-proof-");
-    fs.writeFileSync(
-      path.join(codexHome, "config.toml"),
-      '[model_providers.codex-action-responses-proxy]\nbase_url = "http://127.0.0.1:43123/v1"\n',
-    );
-    expect(readCodexProxyPort(codexHome)).toBe(43123);
-    fs.writeFileSync(
-      path.join(codexHome, "config.toml"),
-      '[model_providers.codex-action-responses-proxy]\nbase_url = "https://api.openai.com/v1"\n',
-    );
-    expect(readCodexProxyPort(codexHome)).toBeUndefined();
   });
 
   it("requires successful privileged SUT teardown commands", () => {
@@ -505,6 +521,7 @@ describe("telegram user Crabbox proof log polling", () => {
       gatewayPort: 19042,
       groupId: "group",
       mcpAppFixture: true,
+      mockHost: "127.0.0.1",
       mockPort: 19043,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       repoRoot: "/repo",
@@ -532,6 +549,7 @@ describe("telegram user Crabbox proof log polling", () => {
     const configRoot = writeSutConfig({
       gatewayPort: 19042,
       groupId: "group",
+      mockHost: "127.0.0.1",
       mockPort: 19043,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
@@ -544,13 +562,15 @@ describe("telegram user Crabbox proof log polling", () => {
       executionIdentity: true,
       messages: "direct",
     });
+    expect(config.models.providers.openai.baseUrl).toBe("http://127.0.0.1:19043/v1");
   });
 
   it("injects the requested Telegram link-preview setting before startup", () => {
     const disabledConfigRoot = writeSutConfig({
+      configPatch: { channels: { telegram: { linkPreview: false } } },
       gatewayPort: 19042,
       groupId: "group",
-      linkPreview: false,
+      mockHost: "127.0.0.1",
       mockPort: 19043,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
@@ -558,6 +578,7 @@ describe("telegram user Crabbox proof log polling", () => {
     const defaultConfigRoot = writeSutConfig({
       gatewayPort: 19044,
       groupId: "group",
+      mockHost: "127.0.0.1",
       mockPort: 19045,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
@@ -573,9 +594,16 @@ describe("telegram user Crabbox proof log polling", () => {
 
   it("injects the requested fixed human delay before startup", () => {
     const delayedConfigRoot = writeSutConfig({
+      configPatch: {
+        agents: {
+          defaults: {
+            humanDelay: { maxMs: 1200, minMs: 1200, mode: "custom" },
+          },
+        },
+      },
       gatewayPort: 19042,
       groupId: "group",
-      humanDelayFixedMs: 1200,
+      mockHost: "127.0.0.1",
       mockPort: 19043,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
@@ -583,6 +611,7 @@ describe("telegram user Crabbox proof log polling", () => {
     const defaultConfigRoot = writeSutConfig({
       gatewayPort: 19044,
       groupId: "group",
+      mockHost: "127.0.0.1",
       mockPort: 19045,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
@@ -957,6 +986,19 @@ setInterval(() => {}, 1000);
       `tdlib_url='${payload}'`,
     );
     expect(renderSelectDesktopChat({ chatTitle: payload })).toContain(`chat_title='${payload}'`);
+  });
+
+  it("bounds native apt lock waits without disturbing the lock holder", () => {
+    const script = renderRemoteSetup({});
+
+    expect(script).toContain(
+      'run_setup_step "apt-get update" "$apt_timeout" sudo apt-get -o DPkg::Lock::Timeout=900 update -y',
+    );
+    expect(script).toContain(
+      'run_setup_step "apt-get install" "$apt_timeout" sudo env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=900 install -y',
+    );
+    expect(script).not.toMatch(/\b(?:kill|pkill|fuser)\b[^\n]*(?:apt|dpkg)/u);
+    expect(script).not.toMatch(/\brm\b[^\n]*(?:\/var\/lib\/(?:apt|dpkg)|lock-frontend)/u);
   });
 
   it("stages full publish artifacts without session control files", () => {

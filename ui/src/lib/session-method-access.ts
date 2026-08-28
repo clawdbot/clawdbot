@@ -1,8 +1,8 @@
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import {
-  resolveDynamicSessionMutationRequiredScope,
+  resolveBaseSessionMutationRequiredScope,
   type SessionMutationOperatorScope,
-} from "../../../src/shared/session-method-scopes.js";
+} from "../../../src/shared/session-method-scopes-base.js";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
@@ -44,15 +44,15 @@ function sessionMethodAccessReason(
 }
 
 /**
- * Resolves the same session mutation policy enforced by the Gateway, plus
- * connection and advertised-method state owned by the active browser client.
+ * Resolves browser-safe shared mutation policy or a caller-supplied placement
+ * scope, plus connection and advertised-method state.
  */
 export function readSessionMethodAccess(
   snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> | null | undefined,
   request: SessionMethodAccessRequest,
 ): SessionMethodAccess {
   const requiredScope =
-    resolveDynamicSessionMutationRequiredScope(request.method, request.params) ??
+    resolveBaseSessionMutationRequiredScope(request.method, request.params) ??
     request.requiredScope;
   if (!requiredScope) {
     throw new Error(`Missing required scope for session mutation method: ${request.method}`);

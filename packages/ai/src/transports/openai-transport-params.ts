@@ -358,7 +358,7 @@ export function buildOpenAIClientHeaders(
     );
   }
   const callerHeaders = { ...optionHeaders, ...turnHeaders };
-  const headers = resolveProviderRequestPolicyConfig({
+  const headers = resolveProviderRequestPolicyConfig(model, {
     provider: model.provider,
     api: model.api,
     baseUrl: model.baseUrl,

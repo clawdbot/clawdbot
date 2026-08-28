@@ -20,7 +20,7 @@ describe("CUA Driver doctor check", () => {
     mocks.verify.mockReturnValue({
       ok: false,
       code: "COMPUTER_DRIVER_VERSION_MISMATCH",
-      diagnostic: "COMPUTER_DRIVER_VERSION_MISMATCH: expected 0.19.3. Fix: reinstall OpenClaw.",
+      diagnostic: "COMPUTER_DRIVER_VERSION_MISMATCH: expected 0.20.0. Fix: reinstall OpenClaw.",
       fixHint: "Reinstall OpenClaw.",
     });
     let check: HealthCheck | undefined;

@@ -374,8 +374,9 @@ export function createManagedReloadSecretHandlers(options: {
       let publishedSharedGatewaySessionGeneration: SharedGatewaySessionGenerationOwnership | null =
         null;
       let terminalConfigReconciled = false;
+      let applicationStatus: Awaited<ReturnType<typeof applyHotReload>>;
       try {
-        await applyHotReload(plan, prepared.config, {
+        applicationStatus = await applyHotReload(plan, prepared.config, {
           isCurrent: transactionOwnership.isCurrent,
           ...(transactionOwnership.runtimeEnv
             ? { runtimeEnv: transactionOwnership.runtimeEnv.env }
@@ -605,7 +606,7 @@ export function createManagedReloadSecretHandlers(options: {
           publishedSharedGatewaySessionGeneration,
         );
       }
-      return;
+      return applicationStatus;
     }
   };
 

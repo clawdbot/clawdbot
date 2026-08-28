@@ -80,7 +80,16 @@ import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-r
 import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
 import type { PluginRuntime } from "./types.js";
 
-export function createRuntimeChannel(): PluginRuntime["channel"] {
+export function createRuntimeChannel(options?: {
+  dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
+}): PluginRuntime["channel"] {
+  const dispatchInbound: typeof dispatchRoutedChannelTurn = (params) =>
+    dispatchRoutedChannelTurn({
+      ...params,
+      ...(options?.dispatchReplyFromConfig
+        ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
+        : {}),
+    });
   const sessionRuntime = {
     resolveStorePath: resolveSessionStorePathCore,
     readSessionUpdatedAt: readSessionUpdatedAtCore,
@@ -109,7 +118,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       createReplyDispatcherWithTyping,
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,
-      dispatchReplyFromConfig,
+      dispatchReplyFromConfig: options?.dispatchReplyFromConfig ?? dispatchReplyFromConfig,
       withReplyDispatcher,
       settleReplyDispatcher,
       finalizeInboundContext,
@@ -188,7 +197,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       buildContext: buildChannelInboundEventContext,
       run: runChannelTurn,
       runPreparedReply: runPreparedChannelTurn,
-      dispatch: dispatchRoutedChannelTurn,
+      dispatch: dispatchInbound,
       dispatchReply: dispatchAssembledChannelTurn,
     },
     threadBindings: {

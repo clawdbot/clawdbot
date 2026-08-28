@@ -26,6 +26,16 @@ describe("resolveExtraParams", () => {
     });
   });
 
+  it("does not apply OpenAI GPT-5 defaults to OpenRouter models", () => {
+    const result = resolveExtraParams({
+      cfg: undefined,
+      provider: "openrouter",
+      modelId: "gpt-5.4",
+    });
+
+    expect(result).toBeUndefined();
+  });
+
   it("returns params for exact provider/model key", () => {
     const result = resolveExtraParams({
       cfg: {

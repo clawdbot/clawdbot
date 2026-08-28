@@ -149,12 +149,8 @@ describe("gateway hooks helpers", () => {
         sessionKey: "hook:wake:later",
       }),
     ).toEqual({
-      ok: true,
-      value: {
-        text: "wake later",
-        mode: "next-heartbeat",
-        sessionKey: "hook:wake:later",
-      },
+      ok: false,
+      error: "sessionKey requires mode=now",
     });
     expect(normalizeWakePayload({ text: "  ", mode: "now" }).ok).toBe(false);
     expect(normalizeWakePayload({ text: "wake", agentId: 42 })).toEqual({

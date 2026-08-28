@@ -12,6 +12,7 @@ import {
   deliverWithFinalizableLivePreviewAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
@@ -164,9 +165,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     payload: ReplyPayload,
     info: { kind: ReplyDispatchKind },
   ): Promise<{ visibleReplySent: false } | void> => {
-    if (payload.isReasoning === true) {
-      return { visibleReplySent: false };
-    }
     if (info.kind === "final" && slackStreaming.mode === "progress" && progress.isProgressMode) {
       if (progress.useNativeProgressStreaming) {
         await progress.deliverNativeFinal(payload, info.kind);
@@ -236,7 +234,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     const previewFinalText =
       replyRenderPlan.mode === "single" && replyRenderPlan.textIsSlackMrkdwn
         ? trimmedFinalText
-        : normalizeSlackOutboundText((replySourceText ?? "").trim());
+        : normalizeSlackOutboundText((replySourceText ?? "").trim(), {
+            tableMode: resolveMarkdownTableMode({
+              cfg,
+              channel: "slack",
+              accountId: account.accountId,
+            }),
+          });
     const previewFinalTextFitsEdit =
       countSlackTextUtf8Bytes(previewFinalText) <= SLACK_EDIT_TEXT_MAX_BYTES;
     const shouldRestoreTtsSupplementTextForPreviewFallback =
@@ -248,83 +252,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       previewStreamingEnabled &&
       !payload.text?.trim();
 
-    if (
-      info.kind === "final" &&
-      ttsSupplement &&
-      draftStream &&
-      !hasSlackCustomIdentity &&
-      !draftPreviewCommitted.value &&
-      !delivery.observedFinalReplyDelivery &&
-      previewStreamingEnabled &&
-      !payload.isError &&
-      !requiresSeparateFallbackDelivery &&
-      previewFinalTextFitsEdit &&
-      trimmedFinalText.length > 0
-    ) {
-      await draftStream.flush();
-      const channelId = draftStream.channelId();
-      const messageId = draftStream.messageId();
-      if (channelId && messageId) {
-        const finalThreadTs = delivery.usedReplyThreadTs ?? statusThreadTs;
-        await draftStream.seal();
-        try {
-          const finalized = await draftStream.finalizeMessage(messageId, async () => {
-            await finalizeSlackPreviewEdit({
-              client: slackClient,
-              token: ctx.botToken,
-              accountId: account.accountId,
-              channelId,
-              messageId,
-              text: previewFinalText,
-              ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
-              threadTs: finalThreadTs,
-            });
-          });
-          if (!finalized) {
-            throw new Error("Slack preview moved below a newer conversation message");
-          }
-        } catch (err) {
-          logVerbose(
-            `slack: preview final edit failed; falling back to standard send (${formatSlackError(err)})`,
-          );
-          await draftStream.discardPending();
-          let delivered = false;
-          try {
-            await delivery.deliverNormally({
-              payload: payload.text?.trim()
-                ? payload
-                : {
-                    ...payload,
-                    // Keep presentation semantic here; deliverReplies adds its
-                    // accessible chart summary exactly once.
-                    text: ttsSupplement.spokenText,
-                  },
-              kind: info.kind,
-              forcedThreadTs: finalThreadTs,
-            });
-            delivered = true;
-          } finally {
-            if (delivered) {
-              await draftStream.clear();
-            }
-          }
-          return;
-        }
-        draftPreviewCommitted.value = true;
-        delivery.observedFinalReplyDelivery = true;
-        delivery.observedReplyDelivery = true;
-        replyPlan.markSent();
-        await delivery.deliverNormally({
-          payload: buildTtsSupplementMediaPayload(payload),
-          kind: info.kind,
-          forcedThreadTs: finalThreadTs,
-        });
-        delivery.markPreviewPayloadDelivered({ kind: info.kind, payload, threadTs: finalThreadTs });
-        progress.progressDraft.markFinalReplyDelivered();
-        return;
-      }
-    }
-
+    let ttsPreviewFinalization: { threadTs: string | undefined } | undefined;
     await deliverWithFinalizableLivePreviewAdapter({
       kind: info.kind,
       payload,
@@ -364,6 +292,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         editFinal: async (preview, edit) => {
           if (delivery.hasDelivered({ kind: info.kind, payload, threadTs: edit.threadTs })) {
             return;
+          }
+          if (ttsSupplement) {
+            ttsPreviewFinalization = { threadTs: edit.threadTs };
           }
           const finalized = await draftStream?.finalizeMessage(preview.messageId, async () => {
             await finalizeSlackPreviewEdit({
@@ -434,13 +365,18 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }),
       deliverNormally: async () => {
         await delivery.deliverNormally({
-          payload: shouldRestoreTtsSupplementTextForPreviewFallback
-            ? {
-                ...payload,
-                text: ttsSupplement?.spokenText,
-              }
-            : payload,
+          payload:
+            shouldRestoreTtsSupplementTextForPreviewFallback ||
+            (ttsPreviewFinalization && !payload.text?.trim())
+              ? {
+                  ...payload,
+                  text: ttsSupplement?.spokenText,
+                }
+              : payload,
           kind: info.kind,
+          ...(ttsPreviewFinalization?.threadTs
+            ? { forcedThreadTs: ttsPreviewFinalization.threadTs }
+            : {}),
         });
       },
     });
@@ -458,6 +394,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       accountId: route.accountId,
       route: { agentId: route.agentId, sessionKey: route.sessionKey },
       ctxPayload: prepared.ctxPayload,
+      dispatchReplyFromConfig: ctx.dispatchReplyFromConfig,
       dispatcherOptions: {
         ...replyPipeline,
         // A channel transform marks intentional silence before core can synthesize an empty-reply error.

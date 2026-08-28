@@ -69,6 +69,7 @@ export async function writeSubagentSessionEntry(params: {
   sessionId?: string;
   updatedAt?: number;
   abortedLastRun?: boolean;
+  lifecycleRevision?: string;
   agentId: string;
   defaultSessionId: string;
 }): Promise<string> {
@@ -81,6 +82,7 @@ export async function writeSubagentSessionEntry(params: {
     ...(typeof params.abortedLastRun === "boolean"
       ? { abortedLastRun: params.abortedLastRun }
       : {}),
+    ...(params.lifecycleRevision ? { lifecycleRevision: params.lifecycleRevision } : {}),
   };
   await replaceSessionEntry({ storePath, sessionKey: params.sessionKey }, entry);
   return storePath;
@@ -111,11 +113,6 @@ export function createSubagentRegistryTestDeps(
     ensureContextEnginesInitialized: vi.fn(),
     loadAgentRuntimePluginRegistryHandle: vi.fn(),
     getRuntimeConfig: vi.fn(() => ({})),
-    getGatewayRecoveryRuntime: vi.fn(() => ({
-      dispatchAgent: vi.fn(),
-      waitForAgent: vi.fn(),
-      sendRecoveryNotice: vi.fn(),
-    })),
     resolveAgentTimeoutMs: vi.fn(() => 100),
     resolveContextEngine: vi.fn(async () => ({
       info: { id: "test", name: "Test", version: "0.0.1" },

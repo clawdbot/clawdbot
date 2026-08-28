@@ -60,6 +60,7 @@ const mergeSessionOrigin = (
   if (channelChanged) {
     delete merged.nativeChannelId;
     delete merged.nativeDirectUserId;
+    delete merged.avatar;
     delete merged.accountId;
     delete merged.threadId;
   }
@@ -86,6 +87,9 @@ const mergeSessionOrigin = (
   }
   if (next?.nativeDirectUserId) {
     merged.nativeDirectUserId = next.nativeDirectUserId;
+  }
+  if (next?.avatar) {
+    merged.avatar = next.avatar;
   }
   if (next?.accountId) {
     merged.accountId = next.accountId;
@@ -118,6 +122,7 @@ export function deriveSessionOrigin(
   );
   const nativeChannelId = normalizeOptionalString(ctx.NativeChannelId);
   const nativeDirectUserId = normalizeOptionalString(ctx.NativeDirectUserId);
+  const avatar = normalizeOptionalString(ctx.ConversationAvatar);
   const accountId = normalizeOptionalString(ctx.AccountId);
   const threadId = ctx.MessageThreadId ?? undefined;
 
@@ -145,6 +150,9 @@ export function deriveSessionOrigin(
   }
   if (nativeDirectUserId) {
     origin.nativeDirectUserId = nativeDirectUserId;
+  }
+  if (avatar) {
+    origin.avatar = avatar;
   }
   if (accountId) {
     origin.accountId = accountId;

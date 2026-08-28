@@ -162,7 +162,7 @@ function resolveManagedTailscaleIngress(params: {
   }
   const funnelMarker = headerValue(req.headers?.["tailscale-funnel-request"]);
   if (mode === "funnel") {
-    return funnelMarker === "?1"
+    return !funnelMarker || funnelMarker === "?1"
       ? attributed("tailscale-funnel", clientIp)
       : unattributableProxy(remoteAddress);
   }

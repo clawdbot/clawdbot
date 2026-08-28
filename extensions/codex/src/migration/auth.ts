@@ -430,7 +430,9 @@ export async function buildCodexAuthItems(params: {
       kind: "auth",
       action: skipped ? "skip" : "create",
       source: params.source.authPath,
-      target: `${params.targets.agentDir}/auth-profiles.json#${profileId}`,
+      // Credentials land in the agent's SQLite auth profile store; naming the
+      // retired JSON file here promised operators a file that is never created.
+      target: `${params.targets.agentDir}/openclaw-agent.sqlite#auth_profile_store:${profileId}`,
       status: skipped ? "skipped" : conflict ? "conflict" : "planned",
       sensitive: true,
       reason: skipped

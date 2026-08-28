@@ -1,6 +1,9 @@
+import {
+  parseControlUiFocusLocation,
+  type ControlUiFocusLocation,
+} from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
 import {
   createApplicationRouter,
   locationForRoute,
@@ -11,6 +14,10 @@ import {
   type RouteId,
 } from "../app-routes.ts";
 import { setSessionPathBuilder } from "../app-session-path-builder.ts";
+import {
+  SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
+  sessionRefFromPath,
+} from "../app-session-route-paths.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
@@ -25,11 +32,9 @@ import {
   startModelSetupFirstRunRedirectAfterLocation,
 } from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
-import { isBrowserPanelAvailable } from "./app-shell-chrome.ts";
-import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
-import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
+import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
+import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
-import { createApplicationCloudStartup } from "./cloud-session-startup.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type {
   ApplicationNavigationOptions,
@@ -39,14 +44,17 @@ import type {
   ApplicationTheme,
   ApplicationThemeServerSelection,
 } from "./context.ts";
+import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
-import { isDesktopDocumentPath, isDesktopOnlyView } from "./desktop-document-mode.ts";
+import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createNativeNotificationsCapability } from "./native-notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import { isBrowserPanelAvailable } from "./panel-availability.ts";
+import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
 import {
   loadSettings,
   patchSettings,
@@ -55,12 +63,20 @@ import {
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
-import { createSkillWorkshopRevisionHandoff } from "./skill-workshop-revision-handoff.ts";
+import { createSkillWorkshopRevisionAdmissions } from "./skill-workshop-revision-admissions.ts";
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
-import { resolveApplicationStartupSettings } from "./startup-settings.ts";
-import { isTerminalDocumentPath, isTerminalOnlyView } from "./terminal-document-mode.ts";
+import {
+  normalizeLegacyTerminalViewLocation,
+  resolveApplicationStartupSettings,
+} from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
-import { resolveTheme, type ThemeMode } from "./theme.ts";
+import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
+import {
+  applyChatFontSmoothing,
+  applyTypefaceOverrides,
+  resolveTypefaces,
+  syncTypefaceStylesheets,
+} from "./typography.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
 function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void {
@@ -78,14 +94,13 @@ function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void
   root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
+  const typefaces = resolveTypefaces(settings.theme, settings.fontUi, settings.fontChat);
+  syncTypefaceStylesheets(typefaces);
+  applyTypefaceOverrides(settings.fontUi, settings.fontChat);
+  applyChatFontSmoothing(typefaces.chat);
   syncCustomThemeStyleTag(settings.customTheme);
-  const background = getComputedStyle(root).getPropertyValue("--bg").trim();
-  if (background) {
-    for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
-      meta.content = background;
-      meta.removeAttribute("media");
-    }
-  }
+  applyControlUiAccent(settings.accent);
+  syncControlUiSystemChrome();
 }
 
 function createApplicationTheme(
@@ -94,13 +109,22 @@ function createApplicationTheme(
   let settings = initialSettings;
   let serverSelection: ApplicationThemeServerSelection | null = null;
   let systemThemeCleanup: (() => void) | undefined;
+  let chromeBreakpointCleanup: (() => void) | undefined;
   const listeners = new Set<() => void>();
 
+  let presentationGeneration = 0;
   const publish = () => {
-    applyThemePresentation(settings);
-    for (const listener of listeners) {
-      listener();
-    }
+    const generation = ++presentationGeneration;
+    syncThemePaletteStylesheet(settings.theme, () => {
+      // A slower palette cannot overwrite a newer selection or a disposed app.
+      if (generation !== presentationGeneration) {
+        return;
+      }
+      applyThemePresentation(settings);
+      for (const listener of listeners) {
+        listener();
+      }
+    });
   };
 
   const detachSystemThemeListener = () => {
@@ -128,11 +152,32 @@ function createApplicationTheme(
     }
   };
 
+  if (typeof globalThis.matchMedia === "function") {
+    const mediaQuery = globalThis.matchMedia(
+      "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
+    );
+    const onChange = () => syncControlUiSystemChrome();
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", onChange);
+      chromeBreakpointCleanup = () => mediaQuery.removeEventListener("change", onChange);
+    } else if (typeof mediaQuery.addListener === "function") {
+      mediaQuery.addListener(onChange);
+      chromeBreakpointCleanup = () => mediaQuery.removeListener(onChange);
+    }
+  }
+
   syncSystemThemeListener();
+  publish();
 
   return {
+    get settings() {
+      return settings;
+    },
     get mode() {
       return settings.themeMode;
+    },
+    get resolvedMode() {
+      return resolveTheme(settings.theme, settings.themeMode).endsWith("light") ? "light" : "dark";
     },
     get serverSelection() {
       return serverSelection;
@@ -167,7 +212,9 @@ function createApplicationTheme(
       return () => listeners.delete(listener);
     },
     dispose() {
+      presentationGeneration += 1;
       detachSystemThemeListener();
+      chromeBreakpointCleanup?.();
       listeners.clear();
     },
   };
@@ -175,13 +222,13 @@ function createApplicationTheme(
 
 function createApplicationNavigationPreferences(
   initialSettings: UiSettings,
+  navCollapsed: boolean,
 ): ApplicationNavigationPreferences {
-  let settings = initialSettings;
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
-    navCollapsed: settings.navCollapsed,
-    navWidth: settings.navWidth,
-    sidebarEntries: settings.sidebarEntries,
-    pinnedAgentIds: settings.pinnedAgentIds ?? [],
+    navCollapsed,
+    navWidth: initialSettings.navWidth,
+    sidebarEntries: initialSettings.sidebarEntries,
+    pinnedAgentIds: initialSettings.pinnedAgentIds ?? [],
   };
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
 
@@ -191,20 +238,20 @@ function createApplicationNavigationPreferences(
     },
     update(patch) {
       const nextSnapshot = { ...snapshot, ...patch };
-      if (
-        nextSnapshot.navCollapsed === snapshot.navCollapsed &&
-        nextSnapshot.navWidth === snapshot.navWidth &&
-        nextSnapshot.sidebarEntries === snapshot.sidebarEntries &&
-        nextSnapshot.pinnedAgentIds === snapshot.pinnedAgentIds
-      ) {
+      const persistedChanged =
+        nextSnapshot.navWidth !== snapshot.navWidth ||
+        nextSnapshot.sidebarEntries !== snapshot.sidebarEntries ||
+        nextSnapshot.pinnedAgentIds !== snapshot.pinnedAgentIds;
+      if (!persistedChanged && nextSnapshot.navCollapsed === snapshot.navCollapsed) {
         return;
       }
-      settings = patchSettings({
-        navCollapsed: nextSnapshot.navCollapsed,
-        navWidth: nextSnapshot.navWidth,
-        sidebarEntries: [...nextSnapshot.sidebarEntries],
-        pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
-      });
+      if (persistedChanged) {
+        patchSettings({
+          navWidth: nextSnapshot.navWidth,
+          sidebarEntries: [...nextSnapshot.sidebarEntries],
+          pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
+        });
+      }
       snapshot = nextSnapshot;
       for (const listener of listeners) {
         listener(snapshot);
@@ -220,7 +267,8 @@ function createApplicationNavigationPreferences(
 export type ApplicationRuntime = {
   readonly context: ApplicationContext<RouteId>;
   readonly router: ApplicationRouter;
-  readonly documentMode: ApprovalDocumentMode | null;
+  readonly documentMode: ControlUiDocumentMode | null;
+  readonly focusLocation: ControlUiFocusLocation | null;
   readonly pendingGatewayConnection: {
     readonly gatewayUrl: string;
     readonly token: string;
@@ -246,10 +294,10 @@ export function bootstrapApplication(
 ): ApplicationRuntime {
   const history = createBrowserHistory();
   const startupLocation = history.location();
-  const initialBasePath = resolveControlUiBasePath(
+  const [basePath, resourceBasePath] = resolveControlUiPaths(
     startupLocation.pathname || globalThis.location?.pathname || "/",
   );
-  const documentMode = resolveApprovalDocumentMode(startupLocation.pathname, initialBasePath);
+  const documentMode = resolveControlUiDocumentMode(startupLocation.pathname, basePath);
   const persistedSettings = loadSettings();
   const initialSettings = documentMode
     ? resolvePageGatewaySettings(persistedSettings)
@@ -270,24 +318,30 @@ export function bootstrapApplication(
       saveSettings(startup.settings);
     }
   }
-  const basePath = resolveControlUiBasePath(
-    startup.location.pathname || globalThis.location?.pathname || "/",
-  );
-  const standaloneDocument =
-    isTerminalDocumentPath(startup.location.pathname, basePath) ||
-    isDesktopDocumentPath(startup.location.pathname, basePath);
+  let applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
+  const startupSearchParams = new URLSearchParams(applicationLocation.search);
+  const hasSidebarCollapseIntent =
+    startupSearchParams.get(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name) ===
+    SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value;
+  if (hasSidebarCollapseIntent) {
+    // Sidebar-row hrefs mark new-tab intent once; strip it so copied URLs and reloads stay canonical.
+    startupSearchParams.delete(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name);
+    const search = startupSearchParams.toString();
+    applicationLocation = { ...applicationLocation, search: search ? `?${search}` : "" };
+  }
+  if (applicationLocation !== startup.location) {
+    history.replace(applicationLocation);
+  }
+  const focusLocation = parseControlUiFocusLocation(applicationLocation, basePath);
+  // Focus documents render before the shell; starting the application router
+  // would rewrite their reserved presentation route into an ordinary page.
+  const startsApplicationRouter = documentMode === null && focusLocation === null;
   const firstRunDefaultLanding =
-    documentMode === null && isDefaultChatLanding(startup.location, basePath, routeIdFromPath);
-  // A `?view=` document mode still lands on the chat path, so it counts as the default landing
-  // for routing, but it is an explicit destination that renders its own surface. Redirecting it
-  // into model setup strands native app webviews on a blank page, so only gate the redirect.
-  const firstRunRedirectEnabled =
-    firstRunDefaultLanding &&
-    !isTerminalOnlyView(startup.location, basePath) &&
-    !isDesktopOnlyView(startup.location, basePath);
+    startsApplicationRouter && isDefaultChatLanding(applicationLocation, basePath, routeIdFromPath);
   const sessionPathBuilderReady =
     dependencies.sessionPathBuilderReady ??
-    (documentMode
+    (documentMode ||
+    (focusLocation?.status === "valid" && focusLocation.target.kind !== "dashboard")
       ? Promise.resolve()
       : import("@openclaw/session-url-contract").then((contract) => {
           setSessionPathBuilder(contract.buildControlUiSessionPath);
@@ -301,7 +355,7 @@ export function bootstrapApplication(
     undefined,
     {
       persistDefaultConnectionSettings: documentMode === null,
-      basePath,
+      resourceBasePath,
       ...(startup.pendingBootstrapProfile
         ? { bootstrapProfile: startup.pendingBootstrapProfile }
         : {}),
@@ -309,23 +363,21 @@ export function bootstrapApplication(
   );
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
-  const startupRouteId = routeIdFromPath(startup.location.pathname, basePath);
-  const releasedSessionQuery =
-    (startupRouteId === "chat" || startupRouteId === "dashboard") &&
-    sessionRouteNamespaceFromPath(startup.location.pathname, basePath) === null &&
-    new URLSearchParams(startup.location.search).has("session");
   const deferInitialLocationUntilGateway =
-    documentMode === null &&
-    !releasedSessionQuery &&
-    firstRunDefaultLanding &&
-    !parseAgentSessionKey(settings.sessionKey);
+    firstRunDefaultLanding && !parseAgentSessionKey(settings.sessionKey);
+  let resolveInitialFirstRunDecision: (() => void) | null = null;
+  const initialFirstRunDecision = deferInitialLocationUntilGateway
+    ? new Promise<void>((resolve) => {
+        resolveInitialFirstRunDecision = resolve;
+      })
+    : null;
   const initialLocationReady = (
-    documentMode
-      ? Promise.resolve(startup.location)
+    documentMode || focusLocation
+      ? Promise.resolve(applicationLocation)
       : Promise.all([sessionPathBuilderReady, import("./bootstrap-location.ts")]).then(
           ([, location]) =>
             location.resolveInitialApplicationLocation({
-              location: startup.location,
+              location: applicationLocation,
               basePath,
               sessionKey: settings.sessionKey,
               gateway,
@@ -337,15 +389,16 @@ export function bootstrapApplication(
     // stop() aborts an eager unscoped-session lookup even when start() returns
     // at the lazy-chunk guard, so consume that teardown-only rejection here.
     if (startupLifecycle.signal.aborted) {
-      return startup.location;
+      return applicationLocation;
     }
     throw error;
   });
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(gateway, agents);
   const channels = createChannelCapability(gateway);
+  const scopeUpgrade = createScopeUpgradeCapability(gateway);
   const config = createApplicationConfigCapability({
-    basePath,
+    resourceBasePath,
     auth: {
       settings: { token: settings.token },
       password: startup.password ?? "",
@@ -366,7 +419,11 @@ export function bootstrapApplication(
   };
   const stopConfigWriteSuspension = overlays.subscribe(syncConfigWriteSuspension);
   syncConfigWriteSuspension();
-  const navigation = createApplicationNavigationPreferences(settings);
+  const navigation = createApplicationNavigationPreferences(
+    settings,
+    hasSidebarCollapseIntent &&
+      sessionRefFromPath(applicationLocation.pathname, basePath)?.namespace === "chat",
+  );
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting({
@@ -377,15 +434,15 @@ export function bootstrapApplication(
   });
   const nativeNotifications = createNativeNotificationsCapability();
   const webPush = createWebPushCapability(gateway);
-  const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
+  const skillWorkshopRevisionAdmissions = createSkillWorkshopRevisionAdmissions();
   const initialUserMessage = createInitialUserMessageHandoff();
-  const cloudStartup = createApplicationCloudStartup({ gateway, sessions, initialUserMessage });
+  const placementStartup = createApplicationPlacementStartup({
+    gateway,
+    sessions,
+    initialUserMessage,
+  });
   const chatAttachmentHandoff = createChatAttachmentHandoff();
-  applyThemePresentation(settings);
   const router = createApplicationRouter();
-  // Standalone terminal and desktop paths render before the shell; starting
-  // the page router would rewrite these special documents to /chat.
-  const startsApplicationRouter = documentMode === null && !standaloneDocument;
   let routerStarted = false;
   // Pre-start navigations are invisible to history; retain the latest request so
   // router.start() cannot resolve the stale browser URL over the user's route.
@@ -428,7 +485,7 @@ export function bootstrapApplication(
       return;
     }
     lastRecoveryClient = snapshot.client;
-    cloudStartup.resumeRecovery();
+    placementStartup.resumeRecovery();
   });
   const routeLocation = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
     const location = locationForRoute(routeId, basePath);
@@ -491,15 +548,17 @@ export function bootstrapApplication(
     navigateWithMode(routeId, options, "push");
   const context: ApplicationContext<RouteId> = {
     basePath,
+    resourceBasePath,
     gateway,
     agents,
     agentIdentity,
     agentSelection,
     channels,
     config,
+    scopeUpgrade,
     runtimeConfig,
     sessions,
-    cloudStartup,
+    placementStartup,
     workboard,
     overlays,
     navigation,
@@ -507,7 +566,7 @@ export function bootstrapApplication(
     nativeChatDrafts,
     nativeNotifications,
     webPush,
-    skillWorkshopRevision,
+    skillWorkshopRevisionAdmissions,
     initialUserMessage,
     chatAttachmentHandoff,
     navigate: (routeId, options) => {
@@ -524,6 +583,7 @@ export function bootstrapApplication(
     context,
     router,
     documentMode,
+    focusLocation,
     get pendingGatewayConnection() {
       return pendingGatewayConnection;
     },
@@ -541,20 +601,35 @@ export function bootstrapApplication(
         },
         () => sessionPathBuilderReady,
       ];
-      if (!deferInitialLocationUntilGateway) {
-        steps.push(() =>
-          startModelSetupFirstRunRedirectAfterLocation({
-            context,
-            enabled: firstRunRedirectEnabled,
-            history,
-            initialLocationReady,
-          }),
-        );
-      }
+      // Resolve first-run setup before routing: the default Chat route owns the
+      // workspace graph, which setup users would otherwise fetch and discard.
+      steps.push(() =>
+        startModelSetupFirstRunRedirectAfterLocation({
+          context,
+          enabled: firstRunDefaultLanding,
+          history,
+          initialLocationReady: deferInitialLocationUntilGateway
+            ? Promise.resolve(applicationLocation)
+            : initialLocationReady,
+          ...(deferInitialLocationUntilGateway
+            ? {
+                redirect: () =>
+                  history.replace({
+                    ...locationForRoute("model-setup", basePath),
+                    search: "?firstRun=1",
+                  }),
+                onInitialDecision: () => resolveInitialFirstRunDecision?.(),
+              }
+            : {}),
+        }),
+      );
       steps.push(() => {
         void config.refresh({ skipWithoutAuthCandidate: true });
       });
       if (startsApplicationRouter) {
+        if (initialFirstRunDecision) {
+          steps.push(() => initialFirstRunDecision);
+        }
         steps.push(async () => {
           const pendingNavigation = pendingRouterStartNavigation;
           pendingRouterStartNavigation = null;
@@ -568,12 +643,12 @@ export function bootstrapApplication(
       }
       if (deferInitialLocationUntilGateway) {
         steps.push(() => {
-          // The bare /chat route remains not-found while disconnected. Its shell
-          // fallback is gated on the same connected defaults, so both paths converge.
+          // The router claims the connected Gateway session before persisted
+          // location normalization can install a competing retained Chat pane.
           startupLifecycle.trackDisposer(
             startModelSetupFirstRunRedirectAfterLocation({
               context,
-              enabled: firstRunRedirectEnabled,
+              enabled: false,
               history,
               initialLocationReady,
               installLocation: async (location) => {
@@ -600,7 +675,8 @@ export function bootstrapApplication(
       stopPostConnect();
       agents.dispose();
       channels.dispose();
-      cloudStartup.dispose();
+      scopeUpgrade.dispose();
+      placementStartup.dispose();
       sessions.dispose();
       workboard.dispose();
       stopConfigWriteSuspension();
@@ -611,7 +687,7 @@ export function bootstrapApplication(
       nativeLinkRouting.dispose();
       nativeNotifications?.dispose();
       webPush.dispose();
-      skillWorkshopRevision.clear();
+      skillWorkshopRevisionAdmissions.dispose();
       initialUserMessage.clear();
       chatAttachmentHandoff.dispose();
     },

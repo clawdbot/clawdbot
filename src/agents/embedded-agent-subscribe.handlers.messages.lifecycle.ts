@@ -19,6 +19,7 @@ import { hasAssistantVisibleReply } from "./embedded-agent-subscribe.handlers.me
 import {
   buildAssistantStreamData,
   emitAssistantMessageStart,
+  emitReasoningEnd,
   extractStandaloneMessageToolText,
   hasMessageToolOnlySourceDelivery,
   isOpenAiCompletionsAssistantMessage,
@@ -152,6 +153,10 @@ export function handleMessageEnd(
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
+  // Provider completion can omit thinking_end; close the visible lane before final output.
+  if (!suppressMessageToolOnlySourceReplyOutput) {
+    emitReasoningEnd(ctx);
+  }
   ctx.noteLastAssistant(assistantMessage);
   ctx.noteCompletedAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
@@ -247,6 +252,8 @@ export function handleMessageEnd(
   const finalizeMessageEnd = () => {
     ctx.state.deltaBuffer = "";
     ctx.state.thinkingTagStream = createThinkingTagStreamState();
+    ctx.state.deltaBufferIsCommentary = false;
+    ctx.state.hasFlushedPartialText = false;
     ctx.state.blockBuffer = "";
     ctx.blockChunker?.reset();
     ctx.state.blockState.thinking = false;

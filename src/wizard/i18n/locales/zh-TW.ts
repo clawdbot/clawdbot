@@ -94,6 +94,14 @@ export const zh_TW = {
       tokenPlaceholder: "多機器或非 loopback 存取需要使用",
       tokenPrompt: "Gateway 權杖",
       tokenPromptGenerate: "Gateway 權杖（留空則產生）",
+      tokenStoreProvisioned:
+        "已產生 Gateway 權杖並以 {name} 存入 OpenClaw 祕密儲存。設定中只保留參照；可用 `openclaw secrets store list` 檢視。",
+      trustedProxyAllowLoopback: "允許回環可信代理驗證？",
+      trustedProxyLoopbackTitle: "回環代理安全警告",
+      trustedProxyLoopbackWarning:
+        "任何本機程序都可以向 Gateway 傳送身分標頭，冒充回環反向代理。\n僅當反向代理是接收使用者流量的唯一本機監聽服務、Gateway 的直接存取已受限且你信任本機程序時，才啟用此選項。\n代理必須驗證使用者身分，並移除或覆寫用戶端提供的身分標頭。",
+      trustedProxyLoopbackRefused:
+        "回環代理請求在執行時將被拒絕（trusted_proxy_loopback_source）。\n請使用非回環代理位址，或重新執行 Gateway 設定，在閱讀安全警告後明確允許回環。\n文件：https://docs.openclaw.ai/gateway/trusted-proxy-auth",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {
@@ -125,6 +133,7 @@ export const zh_TW = {
       complete: "遷移完成。下一步執行 `openclaw doctor`。",
       continuing: "遷移完成。繼續設定。",
       importFrom: "從 {source} 匯入",
+      importFromAnotherAgent: "從其他 agent 匯入",
       includeCredentials: "也匯入支援的認證憑證？",
       previewTitle: "遷移預覽",
       setupModelSeparately: "另外設定模型",
@@ -247,7 +256,7 @@ export const zh_TW = {
       directAccessTitle: "直接遠端存取",
       enterUrlManually: "手動輸入 URL",
       foundGateways: "找到 {count} 個 Gateway",
-      fingerprintMissing: "未公布（連線不會固定指紋）",
+      fingerprintMissing: "未公布",
       gatewayPasswordStoredMessage: "這個 Gateway 密碼存在哪裡？",
       gatewayTokenStoredMessage: "這個 Gateway 權杖存在哪裡？",
       insecureRemoteUrl:
@@ -446,6 +455,13 @@ export const zh_TW = {
         "如果多個使用者能向同一個啟用工具的 agent 傳訊息，他們都能影響它如何使用工具。",
       title: "安全免責聲明",
       toolAccess: "如果啟用了工具，這個 bot 可以讀取檔案並執行操作。",
+    },
+    telemetry: {
+      accept: "是，分享功能使用統計",
+      decline: "不用，謝謝",
+      description:
+        "在每日更新檢查中分享你使用的功能（頻道、提供者、插件數量）。絕不包含訊息或識別碼。查看實際傳送的內容：`openclaw telemetry show`。隨時變更：`openclaw telemetry on|off`。",
+      title: "幫助 OpenClaw 變得更好？",
     },
     skills: {
       configure: "現在設定技能？（建議）",
@@ -1074,7 +1090,9 @@ export const zh_TW = {
       dashboardWhenReady: "準備好後執行：{command}",
       daemonRuntime: "Gateway 服務執行環境",
       daemonRuntimeNode: "Node（建議）",
-      daemonRuntimeNodeHint: "OpenClaw 狀態使用 node:sqlite，因此必須使用 Node；Bun 無法執行閘道。",
+      daemonRuntimeNodeHint: "託管服務的主要與建議執行環境。",
+      daemonRuntimeBun: "Bun 1.4+",
+      daemonRuntimeBunHint: "需要 Bun 1.4 或更新版本，並使用符合 WAL 重設安全要求的 node:sqlite。",
       editBootstrap: "之後可編輯 BOOTSTRAP.md 來修改 agent 的自我介紹方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次終端機聊天會傳送："醒醒，我的朋友！"',
@@ -1092,8 +1110,6 @@ export const zh_TW = {
       gatewayServiceRestarted: "Gateway 服務已重新啟動。",
       gatewayServiceRestarting: "正在重新啟動 Gateway 服務...",
       gatewayServiceRestartScheduled: "Gateway 服務重新啟動已排程。",
-      gatewayServiceUninstalled: "Gateway 服務已解除安裝。",
-      gatewayServiceUninstalling: "正在解除安裝 Gateway 服務...",
       gatewayTokenGenerate: "產生權杖：{command}",
       gatewayTokenShared: "Gateway 權杖：Gateway 和 Control UI 的共享認證。",
       gatewayTokenStored:
@@ -1121,6 +1137,8 @@ export const zh_TW = {
       optionalApps: "可選應用",
       outroDashboardLink: "Onboarding 完成。使用上面的 dashboard 連結控制 OpenClaw。",
       outroDashboardOpened: "Onboarding 完成。Dashboard 已開啟；保留該分頁以控制 OpenClaw。",
+      outroHealthCheckFailed:
+        "Onboarding 完成，但閘道健康檢查失敗。請先解決上面的問題，再用 {command} 驗證。",
       outroSeeded: "Onboarding 完成。Web UI 已在背景初始化，可隨時用上面的 dashboard 連結開啟。",
       quickstartNodeRuntime: "QuickStart 使用 Node 執行 Gateway 服務（穩定且受支援）。",
       reinstall: "重新安裝",

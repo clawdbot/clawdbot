@@ -78,6 +78,10 @@ function renderStatusPreview(remainingTasks: readonly TaskSummary[]): TemplateRe
   const overflow = tasks.length - preview.length;
   return html`
     <div slot="content" class="chat-tasks-preview">
+      <div class="chat-tasks-preview__heading">
+        <span>${t("chat.backgroundTasks.title")}</span>
+        <span>${t("chat.backgroundTasks.running", { count: String(active.length) })}</span>
+      </div>
       ${preview.map((task) => renderStatusPreviewRow(task))}
       ${overflow > 0
         ? html`<div class="chat-tasks-preview__more">

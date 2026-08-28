@@ -7,8 +7,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { dispatchGatewayMethodInProcess, setFallbackGatewayContext } from "../server-plugins.js";
+import { dispatchGatewayMethodInProcess } from "../server-plugins.js";
 import {
+  createSessionListEntryFilter,
   resolveSessionMutationAuthorization,
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
@@ -85,6 +86,69 @@ async function invoke(params: {
   return { authorization, requestContext, responses };
 }
 
+describe("sessions.patch", () => {
+  it("keeps a newly created session visible to its identified non-admin creator", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const profileId = ensureProfileForEmail("patch-creator@example.test").id;
+      const sessionKey = "agent:main:patch-created";
+      const requestClient = client(profileId);
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "member",
+            definitions: {
+              member: {
+                sessions: { others: "none" },
+                agents: "*",
+                scopes: ["operator.write"],
+              },
+            },
+          },
+        },
+      };
+      const requestContext = context(cfg);
+      const patch = async (pinned: boolean) => {
+        const request = { key: sessionKey, pinned };
+        const authorization = resolveSessionMutationAuthorization({
+          client: requestClient,
+          method: "sessions.patch",
+          requestParams: request,
+          context: requestContext,
+        });
+        expect(authorization.error).toBeNull();
+        const respond = vi.fn();
+        await sessionMutationHandlers["sessions.patch"]?.({
+          params: request,
+          client: requestClient,
+          context: requestContext,
+          sessionMutationAuthorization: authorization.authorization,
+          respond,
+        } as never);
+        expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      };
+
+      await patch(true);
+      const entry = loadSessionEntry({ agentId: "main", env: state.env, sessionKey });
+      expect(entry).toMatchObject({
+        createdVia: "operator",
+        createdActor: { type: "human", id: profileId },
+        createdAt: expect.any(Number),
+      });
+      if (!entry) {
+        throw new Error("expected patch-created session entry");
+      }
+      expect(
+        createSessionListEntryFilter({ client: requestClient, cfg })?.(sessionKey, entry),
+      ).toBe(true);
+
+      await patch(false);
+      expect(
+        loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.pinnedAt,
+      ).toBeUndefined();
+    });
+  });
+});
+
 describe("sessions.assignOwner", () => {
   it("records the trusted in-process agent tool caller as the assigning agent", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -107,33 +171,28 @@ describe("sessions.assignOwner", () => {
         },
       } as OpenClawConfig;
       const requestContext = context(cfg);
-      const clearContext = setFallbackGatewayContext(requestContext);
-
-      try {
-        await expect(
-          dispatchGatewayMethodInProcess(
-            "sessions.assignOwner",
-            { key: sessionKey, owner: { type: "agent", id: "research" } },
-            {
-              forceSyntheticClient: true,
-              agentToolCaller: {
-                agentId: "main",
-                sessionKey: "agent:main:discord:direct:colin",
-              },
-              syntheticScopes: ["operator.write"],
+      await expect(
+        dispatchGatewayMethodInProcess(
+          "sessions.assignOwner",
+          { key: sessionKey, owner: { type: "agent", id: "research" } },
+          {
+            forceSyntheticClient: true,
+            agentToolCaller: {
+              agentId: "main",
+              sessionKey: "agent:main:discord:direct:colin",
             },
-          ),
-        ).resolves.toMatchObject({
-          ok: true,
-          key: sessionKey,
-          owner: {
-            actor: { type: "agent", id: "research", label: "Research" },
-            assignedBy: { type: "agent", id: "main" },
+            syntheticScopes: ["operator.write"],
+            resolveGatewayContext: () => requestContext,
           },
-        });
-      } finally {
-        clearContext();
-      }
+        ),
+      ).resolves.toMatchObject({
+        ok: true,
+        key: sessionKey,
+        owner: {
+          actor: { type: "agent", id: "research", label: "Research" },
+          assignedBy: { type: "agent", id: "main" },
+        },
+      });
 
       expect(
         loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,

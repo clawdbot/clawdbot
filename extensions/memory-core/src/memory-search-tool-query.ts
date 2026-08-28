@@ -60,12 +60,12 @@ export async function executeMemorySearchToolQuery(params: {
   refreshManager: () => Promise<ManagerState | null>;
   query: MemorySearchToolQuery;
   visibility: MemorySearchToolVisibility;
-  runWithDeadline: <T>(task: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+  signal: AbortSignal;
 }) {
   const startedAt = Date.now();
   const runtimeDebug: MemorySearchRuntimeDebug[] = [];
   let active = params.initialManager;
-  const { query, runWithDeadline, visibility } = params;
+  const { query, signal, visibility } = params;
   // Product recall may index transcripts without adding them to ordinary model search.
   // Explicit corpus selection is authorized by the tool owner before this point.
   const searchSources =
@@ -93,18 +93,15 @@ export async function executeMemorySearchToolQuery(params: {
     const searchWindow = searchesSessions
       ? Math.min(MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES, availableCandidates)
       : query.resultLimit;
-    const candidates = await runWithDeadline(
-      async (signal) =>
-        await active.manager.search(query.text, {
-          maxResults: searchWindow,
-          minScore: query.minScore,
-          sessionKey: query.sessionKey,
-          activeProjectKeys: query.activeProjectKeys ? [...query.activeProjectKeys] : undefined,
-          signal,
-          onDebug: (debug) => runtimeDebug.push(debug),
-          ...(searchSources ? { sources: searchSources } : {}),
-        }),
-    );
+    const candidates = await active.manager.search(query.text, {
+      maxResults: searchWindow,
+      minScore: query.minScore,
+      sessionKey: query.sessionKey,
+      activeProjectKeys: query.activeProjectKeys ? [...query.activeProjectKeys] : undefined,
+      signal,
+      onDebug: (debug) => runtimeDebug.push(debug),
+      ...(searchSources ? { sources: searchSources } : {}),
+    });
     return { candidates, searchWindow };
   };
 
@@ -141,17 +138,14 @@ export async function executeMemorySearchToolQuery(params: {
     };
   }
 
-  let filtered = await runWithDeadline(
-    async () =>
-      await filterMemorySearchHitsBySessionVisibility({
-        cfg: visibility.cfg,
-        agentId: visibility.agentId,
-        requesterSessionKey: query.sessionKey,
-        sandboxed: visibility.sandboxed,
-        hits: searched.candidates,
-        conversationRecall: query.conversationRecall,
-      }),
-  );
+  let filtered = await filterMemorySearchHitsBySessionVisibility({
+    cfg: visibility.cfg,
+    agentId: visibility.agentId,
+    requesterSessionKey: query.sessionKey,
+    sandboxed: visibility.sandboxed,
+    hits: searched.candidates,
+    conversationRecall: query.conversationRecall,
+  });
   if (searchSources) {
     const allowedSources = new Set(searchSources);
     filtered = filtered.filter((hit) => allowedSources.has(hit.source));

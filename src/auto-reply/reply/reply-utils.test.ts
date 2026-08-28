@@ -1444,6 +1444,18 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.replyToCurrent).toBe(true);
   });
 
+  it("strips a malformed leading reply prefix split across chunks", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+    expect(accumulator.consume("[[reply_to_")).toBeNull();
+    expect(accumulator.consume("current] Visible reply")).toBeNull();
+
+    expect(accumulator.consume("", { final: true })).toMatchObject({
+      text: "Visible reply",
+      replyToCurrent: false,
+      replyToTag: false,
+    });
+  });
+
   it("preserves padding when a buffered trailing reply tag stays incomplete", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
@@ -1467,16 +1479,32 @@ describe("createStreamingDirectiveAccumulator", () => {
     },
   );
 
-  it.each(["answer part A msg [[E1008]timeout] answer part B", "answer ending ["])(
-    "releases malformed directive-looking final text verbatim: %s",
-    (text) => {
-      const accumulator = createStreamingDirectiveAccumulator();
-      const first = accumulator.consume(text);
-      const final = accumulator.consume("", { final: true });
+  it.each([
+    "answer part A msg [[E1008]timeout] answer part B",
+    "Explain [[reply_to_current] literally.",
+    "answer ending [",
+  ])("releases malformed directive-looking final text verbatim: %s", (text) => {
+    const accumulator = createStreamingDirectiveAccumulator();
+    const first = accumulator.consume(text);
+    const final = accumulator.consume("", { final: true });
 
-      expect(`${first?.text ?? ""}${final?.text ?? ""}`).toBe(text);
-    },
-  );
+    expect(`${first?.text ?? ""}${final?.text ?? ""}`).toBe(text);
+  });
+
+  it.each<[string, string[]]>([
+    ["inline prose", ["Explain [[reply_to_", "current] literally."]],
+    ["later line", ["Visible reply\n", "[[reply_to_", "current] literally"]],
+    ["inline code", ["Use `[[reply_to_", "current]` literally."]],
+    ["fenced code", ["```text\n[[reply_to_", "current]\n```"]],
+    ["indented code", ["    [[reply_to_", "current]"]],
+    ["ambiguous explicit prefix", ["[[reply_to:message-7", " Visible reply"]],
+  ])("preserves split malformed %s", (_name, chunks) => {
+    const accumulator = createStreamingDirectiveAccumulator();
+    const streamed = chunks.map((chunk) => accumulator.consume(chunk)?.text ?? "").join("");
+    const final = accumulator.consume("", { final: true });
+
+    expect(`${streamed}${final?.text ?? ""}`).toBe(chunks.join(""));
+  });
 
   it.each([
     ["answer [[", "bogus]] tail", "answer [[bogus]] tail"],
@@ -1632,6 +1660,38 @@ describe("createStreamingDirectiveAccumulator", () => {
       text: "Here.",
       mediaUrls: ["/tmp/final.png"],
     });
+  });
+});
+
+describe("parseReplyDirectives malformed reply prefixes", () => {
+  it.each([
+    ["[[reply_to_current] Visible reply", "Visible reply"],
+    ["[[reply_to_current", ""],
+    ["[[reply_to:message-7] Visible reply", "Visible reply"],
+    ["[[reply_to:", ""],
+  ])("strips %s without treating it as reply intent", (input, text) => {
+    expect(parseReplyDirectives(input)).toMatchObject({
+      text,
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: false,
+    });
+  });
+
+  it.each([
+    "Use `[[reply_to_current]` literally.",
+    ["```text", "[[reply_to_current]", "```"].join("\n"),
+    "    [[reply_to_current]",
+  ])("preserves malformed reply examples in code: %s", (text) => {
+    expect(parseReplyDirectives(text).text).toBe(text);
+  });
+
+  it.each([
+    "answer part A msg [[E1008]timeout] answer part B",
+    "Visible reply\n[[reply_to_current] literally",
+    "answer ending [",
+  ])("preserves unrelated malformed bracket text: %s", (text) => {
+    expect(parseReplyDirectives(text).text).toBe(text);
   });
 });
 

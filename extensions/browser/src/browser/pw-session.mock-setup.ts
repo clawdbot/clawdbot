@@ -14,12 +14,12 @@ export const getChromeWebSocketEndpointMock: MockFn = vi.fn();
 
 vi.mock("./playwright-core.runtime.js", () => ({
   getPlaywrightUserAgent: () => "Playwright/test",
-  playwrightCore: {
+  getPlaywrightCore: () => ({
     chromium: {
       connectOverCDP: (...args: unknown[]) => connectOverCdpMock(...args),
     },
     devices: {},
-  },
+  }),
 }));
 
 vi.mock("./chrome.js", () => ({

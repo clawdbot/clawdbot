@@ -41,35 +41,3 @@ export function resolveCurrentSelfUser({
     ? snapshotUser
     : presenceUser;
 }
-
-export function userProfileAvatarUrl(
-  gatewayUrl: string,
-  profileId: string,
-  revision: string | number,
-  documentHref = globalThis.location?.href,
-): string | null {
-  if (!documentHref) {
-    return null;
-  }
-  try {
-    const url = new URL(gatewayUrl, documentHref);
-    if (url.protocol === "ws:") {
-      url.protocol = "http:";
-    } else if (url.protocol === "wss:") {
-      url.protocol = "https:";
-    }
-    // The shared avatar loader authenticates cross-origin Gateway requests and
-    // turns their response into a local blob accepted by the Control UI CSP.
-    if (!["http:", "https:"].includes(url.protocol)) {
-      return null;
-    }
-    url.username = "";
-    url.password = "";
-    url.pathname = `/api/users/${encodeURIComponent(profileId)}/avatar`;
-    url.search = `?v=${revision}`;
-    url.hash = "";
-    return url.href;
-  } catch {
-    return null;
-  }
-}

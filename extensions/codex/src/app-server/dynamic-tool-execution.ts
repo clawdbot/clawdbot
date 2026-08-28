@@ -141,8 +141,8 @@ function formatDynamicToolTimeoutDetails(params: {
 }
 
 /**
- * Runs a dynamic tool call with run-abort and per-call timeout handling,
- * returning a Codex protocol response instead of throwing.
+ * Runs a dynamic tool call with run-abort and the budget prepared by
+ * resolveDynamicToolCallTimeoutMs, preserving tool-specific completion grace.
  */
 export async function handleDynamicToolCallWithTimeout(params: {
   call: CodexDynamicToolCallParams;
@@ -255,7 +255,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
     resolveAbort = resolve;
   });
   const timeoutPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
-    const timeoutMs = clampDynamicToolTimeoutMs(params.timeoutMs);
+    const { timeoutMs } = params;
     timeout = setTimeout(() => {
       timedOut = true;
       const timeoutDetails = formatDynamicToolTimeoutDetails({ call: params.call, timeoutMs });

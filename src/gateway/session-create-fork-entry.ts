@@ -13,6 +13,7 @@ export function buildForkedGatewaySessionEntry(
     ...buildMainSessionRecoveryClearPatch(entry),
     sessionId: fork.sessionId,
     lifecycleRunId: undefined,
+    lastRunId: undefined,
     forkSource: previousEntry?.forkSource ?? forkSource,
     ...(previousEntry?.sessionId && previousEntry.sessionId !== fork.sessionId
       ? { previousSessionId: previousEntry.sessionId }

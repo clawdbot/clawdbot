@@ -25,7 +25,7 @@ import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
-import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
+import { resolveSessionAuthSelection } from "./auth-profiles/session-override.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
 import { executePreparedCliRun } from "./cli-runner/execute.runtime.js";
@@ -63,10 +63,7 @@ import {
   isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider,
 } from "./model-runtime-aliases.js";
-import {
-  isOpenAIProvider,
-  listOpenAIAuthProfileProvidersForAgentRuntime,
-} from "./openai-routing.js";
+import { isOpenAIProvider } from "./openai-routing.js";
 import {
   loadPreparedModelRuntimeSnapshot,
   preparedModelRuntimeConfigsMatch,
@@ -515,16 +512,11 @@ async function resolveRuntimeModel(params: {
   const runtimeProvider = model.provider;
   const runtimeModelId = model.id;
 
-  const acceptedProviderIds = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: runtimeProvider,
-    harnessRuntime: params.harnessId,
-    agentHarnessId: params.harnessId,
-    config: cfg,
-  });
-  const authProfileId = await resolveSessionAuthProfileOverride({
+  const authSelection = await resolveSessionAuthSelection({
     cfg,
     provider: runtimeProvider,
-    acceptedProviderIds,
+    modelId: runtimeModelId,
+    harnessRuntime: params.harnessId,
     agentDir,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
@@ -532,7 +524,8 @@ async function resolveRuntimeModel(params: {
     storePath: params.storePath,
     isNewSession: params.isNewSession,
   });
-  const authProfileIdSource = resolveReturnedAuthProfileSource(params.sessionEntry, authProfileId);
+  const authProfileId = authSelection?.profileId;
+  const authProfileIdSource = authSelection?.source;
   const authProfileStoreSelection = resolveBtwAuthProfileStore({
     cfg,
     provider: runtimeProvider,

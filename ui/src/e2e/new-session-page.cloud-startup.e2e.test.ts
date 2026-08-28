@@ -12,10 +12,9 @@ import {
   replaceGatewayClient,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
-
 const suite = createNewSessionPageE2eSuite();
-const CLOUD_STARTUP_RUNTIME_REQUEST =
-  /\/assets\/cloud-session-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
+const SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST =
+  /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
 
 suite.define(() => {
   it("clears cloud placement when the selected agent changes", async () => {
@@ -107,6 +106,7 @@ suite.define(() => {
   it("restores a cloud startup after a page reload without creating another session", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
+    const recoveryRuntimeLoad = createDeferred();
     const sessionKey = "agent:cloud:reload-recovery";
     const message = "resume this cloud task after reload";
     const gateway = await installMockGateway(page, {
@@ -180,7 +180,7 @@ suite.define(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
         Storage.prototype.setItem = function (key: string, value: string) {
           if (
-            key.startsWith("openclaw.new-session.cloud-recovery.v2:") ||
+            key.startsWith("openclaw.new-session.session-placement-recovery.v1:") ||
             key.startsWith("openclaw.control-ui-e2e.")
           ) {
             originalSetItem(key, value);
@@ -194,29 +194,66 @@ suite.define(() => {
       await pastePng(page.locator(".new-session-page__message"));
       await page.getByRole("button", { name: "Start session" }).click();
       const firstSend = await gateway.waitForRequest("sessions.send");
+      const messageId = (firstSend.params as { idempotencyKey: string }).idempotencyKey;
       expect(firstSend.params).toMatchObject({
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
+      await waitForCommittedChatRoute(page);
       await gateway.rejectDeferred("sessions.send", {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
       });
-      await pollLocatorText(page.locator(".chat-cloud-startup-error")).toContain(
-        "send outcome unknown",
+      const startupError = await page.evaluate(
+        (key) =>
+          new Promise<string>((resolve, reject) => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: {
+                context: {
+                  placementStartup: {
+                    get: (sessionKey: string) => { error?: string; phase: string } | null;
+                    subscribe: (listener: () => void) => () => void;
+                  };
+                };
+              };
+            };
+            const placementStartup = app.runtime?.context.placementStartup;
+            if (!placementStartup) {
+              reject(new Error("session placement startup unavailable"));
+              return;
+            }
+            let settled = false;
+            const subscription: { stop?: () => void } = {};
+            const resolveFailed = () => {
+              const status = placementStartup.get(key);
+              if (settled || status?.phase !== "failed") {
+                return;
+              }
+              settled = true;
+              subscription.stop?.();
+              resolve(status.error ?? "");
+            };
+            subscription.stop = placementStartup.subscribe(resolveFailed);
+            if (settled) {
+              subscription.stop();
+            } else {
+              resolveFailed();
+            }
+          }),
+        sessionKey,
       );
+      expect(startupError).toContain("send outcome unknown");
       await gateway.setMethodResponse("sessions.send", {
         runId: "run-reload-recovery",
         status: "started",
       });
 
-      const recoveryRuntimeLoad = createDeferred();
       let recoveryRuntimeRequested = false;
-      await page.route(CLOUD_STARTUP_RUNTIME_REQUEST, async (route) => {
+      await page.route(SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST, async (route) => {
         recoveryRuntimeRequested = true;
         await recoveryRuntimeLoad.promise;
         await route.continue();
       });
-      await page.reload();
+      const reload = page.reload();
       await expect.poll(() => recoveryRuntimeRequested).toBe(true);
       await expect
         .poll(() =>
@@ -230,10 +267,11 @@ suite.define(() => {
         .toBe("connected");
       expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       recoveryRuntimeLoad.resolve();
+      await reload;
       const resumedSend = await gateway.waitForRequest("sessions.send");
       expect(resumedSend.params).toMatchObject({
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
-        idempotencyKey: (firstSend.params as { idempotencyKey: string }).idempotencyKey,
+        idempotencyKey: messageId,
         key: sessionKey,
         message,
       });
@@ -241,6 +279,7 @@ suite.define(() => {
       await waitForCommittedChatRoute(page);
       expect(page.url()).toContain(controlUiSessionPath(sessionKey));
     } finally {
+      recoveryRuntimeLoad.resolve();
       await context.close();
     }
   });
@@ -308,7 +347,12 @@ suite.define(() => {
         const legacyScope = Array.from(new Uint8Array(digest), (byte) =>
           byte.toString(16).padStart(2, "0"),
         ).join("");
-        return { gatewayUrl, legacyScope };
+        const sessionKey = "agent:cloud:offline-recovery";
+        const frame = (value: string) => `${value.length}:${value}`;
+        const storageKey =
+          `openclaw.new-session.session-placement-recovery.v1:${frame(gatewayUrl)}:` +
+          `${frame(legacyScope)}:${frame(sessionKey)}`;
+        return { gatewayUrl, legacyScope, storageKey };
       });
 
       await gateway.setOnline(false);
@@ -322,14 +366,14 @@ suite.define(() => {
           }),
         )
         .toBe(false);
-      await page.evaluate(({ gatewayUrl, legacyScope }) => {
+      await page.evaluate(({ gatewayUrl, legacyScope, storageKey }) => {
         sessionStorage.setItem(
-          `openclaw.new-session.cloud-recovery.v1:${gatewayUrl}:${legacyScope}`,
+          storageKey,
           JSON.stringify({
             sessionKey: "agent:cloud:offline-recovery",
             messageId: "message-offline-recovery",
             message: "restore after reconnect",
-            profileId: "aws",
+            target: { kind: "profile", profileId: "aws" },
             agentId: "cloud",
             gatewayUrl,
             recoveryScope: legacyScope,
@@ -347,10 +391,7 @@ suite.define(() => {
       });
       expect(
         await page.evaluate(
-          ({ gatewayUrl, legacyScope }) =>
-            sessionStorage.getItem(
-              `openclaw.new-session.cloud-recovery.v1:${gatewayUrl}:${legacyScope}`,
-            ),
+          ({ storageKey }) => sessionStorage.getItem(storageKey),
           recoveryIdentity,
         ),
       ).toBeNull();

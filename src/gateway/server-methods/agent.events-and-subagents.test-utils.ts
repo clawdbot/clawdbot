@@ -21,8 +21,8 @@ import {
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
 import {
+  getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
-  waitForActiveGatewayRootWork,
 } from "../../process/gateway-work-admission.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId } from "../../tasks/task-registry.js";
@@ -117,7 +117,7 @@ describe("gateway agent handler", () => {
         phase: "continuing",
         ownerRunId: "cron-media-release-rotates",
       });
-      await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,
         "cron-media-release-rotation-complete",
@@ -214,7 +214,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "public-provenance-accounting",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -355,7 +355,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "admin-sender-owner",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -497,7 +497,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "model-run-raw",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 

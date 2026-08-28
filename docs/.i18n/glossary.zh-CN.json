@@ -668,6 +668,10 @@
     "target": "Doctor"
   },
   {
+    "source": "Triage",
+    "target": "Triage"
+  },
+  {
     "source": "Config",
     "target": "配置"
   },
@@ -1762,5 +1766,89 @@
   {
     "source": "Portals",
     "target": "门户"
+  },
+  {
+    "source": "Channels",
+    "target": "渠道"
+  },
+  {
+    "source": "Docker VM Runtime",
+    "target": "Docker VM 运行时"
+  },
+  {
+    "source": "Updating",
+    "target": "更新"
+  },
+  {
+    "source": "Onboarding (CLI)",
+    "target": "引导设置（CLI）"
+  },
+  {
+    "source": "CLI Automation",
+    "target": "CLI 自动化"
+  },
+  {
+    "source": "llama-server",
+    "target": "llama-server"
+  },
+  {
+    "source": "llama.cpp (managed or existing server)",
+    "target": "llama.cpp（托管或现有服务器）"
+  },
+  {
+    "source": "Local model services",
+    "target": "本地模型服务"
+  },
+  {
+    "source": "LM Studio",
+    "target": "LM Studio"
+  },
+  {
+    "source": "Widget panel",
+    "target": "小组件面板"
+  },
+  {
+    "source": "Show widget",
+    "target": "显示小组件"
+  },
+  {
+    "source": "Session dashboards",
+    "target": "会话仪表板"
+  },
+  {
+    "source": "macOS widget panel",
+    "target": "macOS 小组件面板"
+  },
+  {
+    "source": "Geolocation plugin",
+    "target": "地理位置插件"
+  },
+  {
+    "source": "Trusted proxy auth",
+    "target": "受信任代理认证"
+  },
+  {
+    "source": "geolocation",
+    "target": "geolocation"
+  },
+  {
+    "source": "Memory provenance and deletion",
+    "target": "记忆溯源与删除"
+  },
+  {
+    "source": "Provenance & deletion",
+    "target": "溯源与删除"
+  },
+  {
+    "source": "Memory admission policy configuration",
+    "target": "记忆准入策略配置"
+  },
+  {
+    "source": "Memory architecture",
+    "target": "记忆架构"
+  },
+  {
+    "source": "Built-in memory",
+    "target": "内置记忆"
   }
 ]

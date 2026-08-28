@@ -147,27 +147,7 @@ struct RootTabsSidebarRegressionTests {
         #expect(source.contains("@State private var sidebarNavigationPath: [SettingsRoute] = []"))
         #expect(navigationShell.contains("NavigationStack(path: self.$sidebarNavigationPath)"))
         #expect(sidebarDetail.contains("case .settings:"))
-        #expect(sidebarDetail.contains("ownsNavigationStack: false"))
         #expect(resetRange.lowerBound < destinationRange.lowerBound)
-    }
-
-    @Test func `embedded overview routes view more through owning navigation stack`() throws {
-        let rootTabsSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
-        let commandCenterSource = try String(contentsOf: Self.commandCenterSourceURL(), encoding: .utf8)
-        let sidebarDetail = try Self.extract(
-            rootTabsSource,
-            from: "private var sidebarDetail: some View",
-            to: "private var sidebarDetailNavigationShell: some View")
-        let iPadOverview = try Self.extract(sidebarDetail, from: "case .overview:", to: "case .activity:")
-        let recentSessions = try Self.extract(
-            commandCenterSource,
-            from: "private var recentSessions: some View",
-            to: "private func cardHeader(")
-        #expect(commandCenterSource.contains("var openSessions: (() -> Void)?"))
-        #expect(recentSessions.contains("if let openSessions"))
-        #expect(recentSessions.contains("Button(action: openSessions)"))
-        #expect(recentSessions.contains("NavigationLink"))
-        #expect(iPadOverview.contains("openSessions: { self.selectSidebarDestination(.sessions) }"))
     }
 
     private static func rootTabsSourceURL() -> URL {
@@ -189,13 +169,6 @@ struct RootTabsSidebarRegressionTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/RootSidebar.swift")
-    }
-
-    private static func commandCenterSourceURL() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/Design/CommandCenterTab.swift")
     }
 
     private static func openClawProComponentsSourceURL() -> URL {

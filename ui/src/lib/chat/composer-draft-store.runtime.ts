@@ -1,5 +1,6 @@
 // Keep IndexedDB outside the startup graph; composers and session deletion load it on demand.
-import type { BrowserAnnotationAttachment } from "./chat-types.ts";
+import type { BrowserAnnotationAttachment, ChatGoalDraftMode } from "./chat-types.ts";
+import { isChatGoalDraftMode } from "./goal-draft.ts";
 
 const DATABASE_NAME = "openclaw-control-ui";
 const DATABASE_VERSION = 1;
@@ -26,6 +27,7 @@ export type DurableComposerDraftAttachment = {
 type DurableComposerDraft = {
   revision: number;
   text: string;
+  goalMode?: ChatGoalDraftMode;
   attachments: DurableComposerDraftAttachment[];
 };
 
@@ -131,14 +133,11 @@ function openDatabase(): Promise<IDBDatabase> {
           database.close();
           databasePromise = null;
         });
-        void sweepExpiredRecords(database).then(
-          () => resolve(database),
-          (error: unknown) => {
-            database.close();
-            databasePromise = null;
-            reject(error instanceof Error ? error : new Error("IndexedDB maintenance failed"));
-          },
-        );
+        resolve(database);
+        // Expiry cleanup spans every owner and must not hold foreground draft reads
+        // behind a database-wide cursor scan. Start it in the next task so the
+        // operation that opened the database registers its transaction first.
+        globalThis.setTimeout(() => void sweepExpiredRecords(database).catch(() => undefined), 0);
       },
       { once: true },
     );
@@ -186,6 +185,7 @@ function parseStoredDraft(value: unknown): StoredDurableComposerDraft | null {
     typeof record.updatedAt !== "number" ||
     typeof record.writeId !== "string" ||
     typeof record.text !== "string" ||
+    (record.goalMode !== undefined && !isChatGoalDraftMode(record.goalMode)) ||
     typeof record.revision !== "number" ||
     !Number.isSafeInteger(record.revision) ||
     record.revision <= 0 ||
@@ -199,7 +199,7 @@ function parseStoredDraft(value: unknown): StoredDurableComposerDraft | null {
 }
 
 function isActiveDraft(record: StoredDurableComposerDraft): boolean {
-  return Boolean(record.text || record.attachments.length > 0);
+  return Boolean(record.text || record.goalMode || record.attachments.length > 0);
 }
 
 function tombstone(record: StoredDurableComposerDraft, now: number): StoredDurableComposerDraft {
@@ -208,6 +208,7 @@ function tombstone(record: StoredDurableComposerDraft, now: number): StoredDurab
     ...record,
     revision,
     text: "",
+    goalMode: undefined,
     attachments: [],
     updatedAt: now,
     writeId: `fence:${revision}`,
@@ -327,6 +328,7 @@ export async function readDurableComposerDraft(
         revision: record.revision,
         writeId: record.writeId,
         text: record.text,
+        ...(record.goalMode ? { goalMode: record.goalMode } : {}),
         attachments: record.attachments,
       },
     };
@@ -351,7 +353,7 @@ export async function writeDurableComposerDraft(
   if (payloadBytes > MAX_DURABLE_DRAFT_ATTACHMENT_BYTES) {
     const fallbackResult = await writeDurableComposerDraft(
       scope,
-      { revision: draft.revision, text: draft.text, attachments: [] },
+      { revision: draft.revision, text: draft.text, goalMode: draft.goalMode, attachments: [] },
       options,
     );
     return fallbackResult.status === "persisted"
@@ -392,6 +394,7 @@ export async function writeDurableComposerDraft(
       scopeKey: scope.scopeKey,
       revision: draft.revision,
       text: draft.text,
+      ...(draft.goalMode ? { goalMode: draft.goalMode } : {}),
       attachments: draft.attachments,
       updatedAt: now,
       writeId: options.writeId,

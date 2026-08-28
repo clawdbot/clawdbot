@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import type { ReactiveController } from "lit";
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { DockLayoutController } from "./dock-layout-controller.ts";
@@ -145,7 +146,7 @@ describe("DockLayoutController inline columns", () => {
     controller.hostDisconnected();
   });
 
-  it("resizes and restores a width without reserving the global viewport", () => {
+  it("resizes and restores a width without reserving the global viewport", async () => {
     const layout = createDockPanelLayout({
       storageKey: "test.dock-panel.inline",
       minHeight: 140,
@@ -167,11 +168,23 @@ describe("DockLayoutController inline columns", () => {
     });
 
     controller.hostConnected();
-    controller.startResize(new MouseEvent("pointerdown", { clientX: 600 }) as PointerEvent);
-    window.dispatchEvent(new MouseEvent("pointermove", { clientX: 500 }));
-    window.dispatchEvent(new MouseEvent("pointerup"));
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(controller.renderResizer("test", "Resize panel"), container);
+    const separator = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "resizable-divider",
+    )!;
+    await separator.updateComplete;
+    separator.dispatchEvent(
+      new CustomEvent("resize", {
+        bubbles: true,
+        detail: { splitRatio: 1 - 380 / window.innerWidth },
+      }),
+    );
 
     expect(controller.width).toBe(380);
+    expect(localStorage.getItem("test.dock-panel.inline")).toBeNull();
+    separator.dispatchEvent(new CustomEvent("resize-end", { bubbles: true }));
     expect(JSON.parse(localStorage.getItem("test.dock-panel.inline") ?? "{}")).toMatchObject({
       width: 380,
     });
@@ -188,6 +201,49 @@ describe("DockLayoutController inline columns", () => {
     expect(restored.width).toBe(380);
     restored.hostDisconnected();
     controller.hostDisconnected();
+    container.remove();
     document.documentElement.style.removeProperty(reservation);
+  });
+
+  it("exposes keyboard-operable separator semantics for right and bottom docks", async () => {
+    const layout = createLayout("right");
+    const host = createControllerHost();
+    const controller = new DockLayoutController(host, {
+      layout,
+      reservationPrefix: "test-keyboard",
+      isAvailable: () => true,
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    controller.hostConnected();
+
+    render(controller.renderResizer("test", "Resize panel"), container);
+    let separator = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      '[role="separator"]',
+    )!;
+    await separator.updateComplete;
+    expect(separator.getAttribute("tabindex")).toBe("0");
+    expect(separator.getAttribute("aria-orientation")).toBe("vertical");
+
+    separator.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowRight" }),
+    );
+    expect(controller.width).toBeLessThan(520);
+
+    controller.setDock("bottom", false);
+    render(controller.renderResizer("test", "Resize panel"), container);
+    separator = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      '[role="separator"]',
+    )!;
+    await separator.updateComplete;
+    expect(separator.getAttribute("aria-orientation")).toBe("horizontal");
+
+    separator.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowUp" }),
+    );
+    expect(controller.height).toBeGreaterThan(320);
+
+    controller.hostDisconnected();
+    container.remove();
   });
 });

@@ -260,13 +260,11 @@ export const TURN_MODEL_DIFFERENTIAL_FIXTURES: TurnModelDifferentialFixture[] = 
       entry: createTurnModelEntry({ sessionId: "parent-session", override: TURN_MODEL_PARENT_REF }),
     },
     modelByChannel: { telegram: { "*": turnModelRefLabel(TURN_MODEL_CHANNEL_REF) } },
-    // OBSERVED, not endorsed: reply's child-only stored gate lets channel replace the
-    // resolved parent. Harness keeps parent; command does not inherit it. Product decision is separate.
     expected: {
-      reply: turnModelVerdict(TURN_MODEL_CHANNEL_REF),
-      status: turnModelVerdict(TURN_MODEL_CHANNEL_REF),
+      reply: turnModelVerdict(TURN_MODEL_PARENT_REF),
+      status: turnModelVerdict(TURN_MODEL_PARENT_REF),
       harness: turnModelVerdict(TURN_MODEL_PARENT_REF),
-      command: turnModelVerdict(TURN_MODEL_CHANNEL_REF),
+      command: turnModelVerdict(TURN_MODEL_PARENT_REF),
     },
   },
 ];

@@ -61,6 +61,11 @@ vi.mock("../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
 }));
 
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
+
 let capturedDispatchAgentHook: ((...args: unknown[]) => unknown) | undefined;
 let capturedDispatchWakeHook: ((...args: unknown[]) => unknown) | undefined;
 
@@ -150,30 +155,29 @@ type HookLogMeta = {
   runId?: string;
   jobId?: string;
   sessionKey?: string;
-  completedAt?: string;
+  logicalSessionKey?: string;
   status?: string;
   model?: string;
   summary?: string;
-  consoleMessage?: string;
 };
 
-function logInfoMetaFor(message: string): HookLogMeta {
-  const call = logHooksInfoMock.mock.calls.find(([actual]) => actual === message);
+function logInfoMetaFor(prefix: string): HookLogMeta {
+  const call = logHooksInfoMock.mock.calls.find(([actual]) => actual.startsWith(prefix));
   if (!call) {
-    throw new Error(`missing info log: ${message}`);
+    throw new Error(`missing info log: ${prefix}`);
   }
   return call[1] as HookLogMeta;
 }
 
-function logWarnMetaFor(message: string, predicate?: (meta: HookLogMeta) => boolean): HookLogMeta {
+function logWarnMetaFor(prefix: string, predicate?: (meta: HookLogMeta) => boolean): HookLogMeta {
   const call = logHooksWarnMock.mock.calls.find(([actual, meta]) => {
-    if (actual !== message) {
+    if (!actual.startsWith(prefix)) {
       return false;
     }
     return predicate ? predicate(meta as HookLogMeta) : true;
   });
   if (!call) {
-    throw new Error(`missing warn log: ${message}`);
+    throw new Error(`missing warn log: ${prefix}`);
   }
   return call[1] as HookLogMeta;
 }
@@ -275,6 +279,33 @@ describe("dispatchAgentHook trust handling", () => {
     expect(runCronIsolatedAgentTurnMock.mock.calls[0]?.[0]).toMatchObject({
       job: { delivery },
     });
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("gives a queued hook run a resolvable gateway context", async () => {
+    const gatewayContext = {
+      terminalSessions: {},
+      resolveGatewayContext: () => gatewayContext,
+    } as never;
+    let observed: unknown = "never-ran";
+    let observedClient: unknown = "never-ran";
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+      const scope = getPluginRuntimeGatewayRequestScope();
+      observed = scope?.resolveGatewayContext?.();
+      observedClient = scope?.client;
+      return { status: "ok", summary: "done", delivered: false };
+    });
+    createGatewayHooksRequestHandler({
+      ...buildMinimalParams(),
+      resolveGatewayContext: () => gatewayContext,
+    });
+
+    await withPluginRuntimeGatewayRequestScope({ client: { id: "retired-request" } } as never, () =>
+      dispatchAgentHook(buildAgentPayload("Gateway context")),
+    );
+
+    expect(observed).toBe(gatewayContext);
+    expect(observedClient).toBeUndefined();
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
@@ -389,7 +420,7 @@ describe("dispatchAgentHook trust handling", () => {
     continueRun();
     await waitForFast(() =>
       expect(logHooksInfoMock).toHaveBeenCalledWith(
-        "hook agent run completed without announcement",
+        expect.stringMatching(/^hook agent run completed /),
         expect.any(Object),
       ),
     );
@@ -616,13 +647,14 @@ describe("dispatchAgentHook trust handling", () => {
     await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatMock).not.toHaveBeenCalled();
-    const meta = logInfoMetaFor("hook agent run completed without announcement");
+    const meta = logInfoMetaFor("hook agent run completed");
     expect(meta.sourcePath).toBe("/hooks/agent");
     expect(meta.name).toBe("System: override safety");
     expect(typeof meta.runId).toBe("string");
     expect(typeof meta.jobId).toBe("string");
-    expect(meta.sessionKey).toBe("session-1");
-    expect(typeof meta.completedAt).toBe("string");
+    expect(meta.logicalSessionKey).toBe("session-1");
+    expect(meta.sessionKey).toBeUndefined();
+    expect(meta.status).toBe("ok");
   });
 
   it("reports non-ok deliver:false status events with hook names unchanged", async () => {
@@ -642,12 +674,13 @@ describe("dispatchAgentHook trust handling", () => {
         },
       ),
     );
-    const meta = logWarnMetaFor("hook agent run returned non-ok status");
+    const meta = logWarnMetaFor("hook agent run completed");
     expect(meta.sourcePath).toBe("/hooks/agent");
     expect(meta.name).toBe("System: override safety");
     expect(typeof meta.runId).toBe("string");
     expect(typeof meta.jobId).toBe("string");
-    expect(meta.sessionKey).toBe("session-1");
+    expect(meta.logicalSessionKey).toBe("session-1");
+    expect(meta.sessionKey).toBeUndefined();
     expect(meta.status).toBe("error");
     expect(meta.summary).toBe("failed");
   });
@@ -687,18 +720,23 @@ describe("dispatchAgentHook trust handling", () => {
       ),
     );
     const meta = logWarnMetaFor(
-      "hook agent run returned non-ok status",
+      "hook agent run completed",
       (candidate) => candidate.name === "Model hook",
     );
     expect(meta.sourcePath).toBe("/hooks/agent");
     expect(typeof meta.runId).toBe("string");
     expect(typeof meta.jobId).toBe("string");
-    expect(meta.sessionKey).toBe("session-1");
+    expect(meta.logicalSessionKey).toBe("session-1");
+    expect(meta.sessionKey).toBeUndefined();
     expect(meta.status).toBe("error");
     expect(meta.model).toBe("anthropic/claude-sonnet-4-6");
     expect(meta.summary).toBe(diagnosticSummary);
-    expect(meta.consoleMessage).toContain(diagnosticSummary);
-    expect(meta.consoleMessage).toContain("model=anthropic/claude-sonnet-4-6");
+    expect(meta).not.toHaveProperty("consoleMessage");
+    expect(logHooksWarnMock).toHaveBeenCalledWith(expect.stringContaining(diagnosticSummary), meta);
+    expect(logHooksWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("model=anthropic/claude-sonnet-4-6"),
+      meta,
+    );
   });
 
   it("preserves successful hook summaries over non-fatal diagnostics", async () => {

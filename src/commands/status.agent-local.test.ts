@@ -18,7 +18,10 @@ vi.mock("../config/sessions/paths.js", () => ({
 vi.mock("../config/sessions/session-accessor.js", () => ({
   listSessionEntriesReadOnly: () => [],
 }));
-vi.mock("../infra/fs-safe.js", () => ({ pathExists: async () => false }));
+vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/fs-safe.js")>()),
+  pathExists: async () => false,
+}));
 
 describe("getAgentLocalStatuses", () => {
   beforeEach(() => {

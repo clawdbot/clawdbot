@@ -265,6 +265,19 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
       return hasToolAuthority(read(), claim, toolName);
     },
 
+    closeWorkerTurnToolAdmission(claim: WorkerSessionTurnClaim): void {
+      if (claim.owner.kind !== "worker") {
+        return;
+      }
+      write((db) => {
+        exactWorkerClaim(db, claim);
+        closeWorkerTurnToolAdmission(db, {
+          sessionId: claim.sessionId,
+          claimId: claim.claimId,
+        });
+      });
+    },
+
     async closeWorkerTurnToolState(claim: WorkerSessionTurnClaim): Promise<void> {
       if (claim.owner.kind !== "worker") {
         write((db) => {

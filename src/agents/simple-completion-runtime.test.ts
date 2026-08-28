@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
@@ -22,7 +23,10 @@ const hoisted = vi.hoisted(() => ({
   setRuntimeApiKeyMock: vi.fn(),
   prepareProviderRuntimeAuthMock: vi.fn(),
   ensureAuthProfileStoreMock: vi.fn(),
-  getCurrentPluginMetadataSnapshotMock: vi.fn(),
+  getCurrentPluginMetadataSnapshotMock:
+    vi.fn<
+      typeof import("../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
+    >(),
 }));
 
 vi.mock("./prepared-model-runtime.js", () => ({
@@ -79,6 +83,7 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
 import {
   prepareSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
+  resolveSimpleCompletionSelectionForAgent,
 } from "./simple-completion-runtime.js";
 
 beforeEach(() => {
@@ -97,7 +102,7 @@ beforeEach(() => {
       workspaceDir: "/tmp/runtime-workspace",
       config: {},
       authModes: {},
-      metadataSnapshot: { plugins: [], index: { plugins: [] } },
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       allowGatewaySubagentBinding: false,
       modelCatalog: { entries: [] },
       configuredRuntimeModels: [],
@@ -142,21 +147,23 @@ beforeEach(() => {
     },
   );
   hoisted.ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
-  hoisted.getCurrentPluginMetadataSnapshotMock.mockReturnValue({
-    plugins: [
-      {
-        id: "openai",
-        modelCatalog: {
-          providers: {
-            openai: {
-              defaultUtilityModel: "gpt-5.5",
-              models: [{ id: "gpt-5.5" }],
+  hoisted.getCurrentPluginMetadataSnapshotMock.mockReturnValue(
+    createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "openai",
+          modelCatalog: {
+            providers: {
+              openai: {
+                defaultUtilityModel: "gpt-5.5",
+                models: [{ id: "gpt-5.5" }],
+              },
             },
           },
         },
-      },
-    ],
-  });
+      ],
+    }),
+  );
 });
 
 function expectPreparedModelResult(
@@ -728,6 +735,41 @@ describe("prepareSimpleCompletionModel", () => {
 });
 
 describe("prepareSimpleCompletionModelForAgent", () => {
+  it("resolves explicit aliases in the selected agent scope", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/global-model",
+          models: {
+            "openai/global-model": { alias: "fast" },
+          },
+        },
+        entries: {
+          worker: {
+            models: {
+              "anthropic/worker-model": { alias: "fast" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveSimpleCompletionSelectionForAgent({
+        cfg,
+        agentId: "worker",
+        modelRef: "fast",
+      }),
+    ).toMatchObject({ provider: "anthropic", modelId: "worker-model" });
+    expect(
+      resolveSimpleCompletionSelectionForAgent({
+        cfg,
+        agentId: "main",
+        modelRef: "fast",
+      }),
+    ).toMatchObject({ provider: "openai", modelId: "global-model" });
+  });
+
   it("materializes a derived utility model on the Platform route for API-key auth", async () => {
     const cfg = {
       agents: {

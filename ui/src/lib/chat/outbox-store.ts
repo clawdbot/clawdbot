@@ -85,7 +85,9 @@ const storedMainAliasByStorage = new WeakMap<
   Storage,
   Map<string, StoredComposerMainAlias | null>
 >();
-
+// Projection reads share one normalized snapshot until a canonical write or
+// browser storage event invalidates it; mutation paths still reread for CAS.
+const projectedStoreByStorage = new WeakMap<Storage, Map<string, StoredComposerState>>();
 export function subscribeStoredChatOutboxChanges(listener: () => void): () => void {
   storedChatOutboxChangeListeners.add(listener);
   if (!storageChangeListenerInstalled && typeof window !== "undefined") {
@@ -116,10 +118,22 @@ export function notifyStoredChatOutboxChanges(): void {
 }
 
 function handleStoredChatOutboxStorageChange(event: StorageEvent): void {
+  if (event.key === null && event.storageArea) {
+    storedMainAliasByStorage.get(event.storageArea)?.clear();
+    projectedStoreByStorage.get(event.storageArea)?.clear();
+    notifyStoredChatOutboxChanges();
+    return;
+  }
   if (
     event.key?.startsWith(STORAGE_KEY_PREFIX) ||
     event.key?.startsWith(LEGACY_STORAGE_KEY_PREFIX)
   ) {
+    if (event.storageArea) {
+      const projectedKey = event.key.startsWith(LEGACY_STORAGE_KEY_PREFIX)
+        ? `${STORAGE_KEY_PREFIX}${event.key.slice(LEGACY_STORAGE_KEY_PREFIX.length)}`
+        : event.key;
+      projectedStoreByStorage.get(event.storageArea)?.delete(projectedKey);
+    }
     notifyStoredChatOutboxChanges();
   }
 }
@@ -286,6 +300,7 @@ function mergeStoredComposerSessions(
     .slice(0, MAX_RETAINED_QUEUE_ITEMS);
   return {
     ...(draftOwner.draft ? { draft: draftOwner.draft } : {}),
+    ...(draftOwner.goalMode ? { goalMode: draftOwner.goalMode } : {}),
     ...(draftOwner.draftRevision !== undefined ? { draftRevision: draftOwner.draftRevision } : {}),
     ...(queue.length ? { queue } : {}),
     updatedAt: Math.max(current.updatedAt, incoming.updatedAt),
@@ -527,11 +542,28 @@ export function readStoredOutboxStore(
   return { version: 2, gatewayOwner: target.gatewayOwner, sessions: {} };
 }
 
+export function readProjectedOutboxStore(
+  storage: Storage,
+  target: ComposerStorageTarget,
+): StoredComposerState {
+  const byKey = projectedStoreByStorage.get(storage);
+  const cached = byKey?.get(target.key);
+  if (cached) {
+    return cached;
+  }
+  const store = readStoredOutboxStore(storage, target);
+  const nextByKey = byKey ?? new Map();
+  nextByKey.set(target.key, store);
+  projectedStoreByStorage.set(storage, nextByKey);
+  return store;
+}
+
 export function writeStoredOutboxStore(
   storage: Storage,
   target: ComposerStorageTarget,
   store: StoredComposerState,
 ): void {
+  projectedStoreByStorage.get(storage)?.delete(target.key);
   const entries = Object.entries(store.sessions);
   const outboxes = entries.filter(([, session]) => session.queue?.length);
   if (outboxes.length > MAX_STORED_SESSIONS) {
@@ -588,11 +620,7 @@ export function writeStoredOutboxStore(
 export function retireStoredComposerDrafts(
   state: ChatComposerScope,
   targets: readonly StoredComposerRetirementTarget[],
-): {
-  gatewayOwner: string;
-  retirements: StoredComposerRetirement[];
-  storageFailed: boolean;
-} {
+) {
   const storageTarget = storageTargetForGateway(state.settings?.gatewayUrl);
   if (targets.length === 0) {
     return { gatewayOwner: storageTarget.gatewayOwner, retirements: [], storageFailed: false };

@@ -68,20 +68,24 @@ export class EventHub<T> {
       [Symbol.asyncIterator]: (): AsyncIterator<T> => {
         const queue: T[] = options.replay ? this.snapshot(filter) : [];
         let stopped = false;
-        let wake: (() => void) | null = null;
-        const wakePending = () => {
-          const pending = wake;
-          if (!pending) {
-            return;
-          }
-          wake = null;
-          this.waiters.delete(pending);
-          pending();
+        let streamError: unknown;
+        let hasStreamError = false;
+        type PendingRead = {
+          resolve: (result: IteratorResult<T>) => void;
+          reject: (error: unknown) => void;
+          wake: () => void;
         };
-        const listener = (event: T) => {
-          if (!filter || filter(event)) {
-            queue.push(event);
-            wakePending();
+        const pendingReads: PendingRead[] = [];
+        const finishPendingReads = () => {
+          for (const pending of pendingReads.splice(0)) {
+            this.waiters.delete(pending.wake);
+            if (hasStreamError) {
+              pending.reject(streamError);
+            } else if (this.hasCloseError) {
+              pending.reject(this.closeError);
+            } else {
+              pending.resolve({ done: true, value: undefined });
+            }
           }
         };
         const cleanup = () => {
@@ -90,44 +94,66 @@ export class EventHub<T> {
           }
           stopped = true;
           this.listeners.delete(listener);
-          wakePending();
+          finishPendingReads();
+        };
+        const listener = (event: T) => {
+          let matches: boolean;
+          try {
+            matches = !filter || filter(event);
+          } catch (error) {
+            streamError = error;
+            hasStreamError = true;
+            cleanup();
+            return;
+          }
+          if (!matches) {
+            return;
+          }
+          const pending = pendingReads.shift();
+          if (pending) {
+            this.waiters.delete(pending.wake);
+            pending.resolve({ done: false, value: event });
+            return;
+          }
+          queue.push(event);
         };
 
         this.listeners.add(listener);
 
         return {
           next: async (): Promise<IteratorResult<T>> => {
-            while (true) {
-              if (stopped) {
-                break;
+            if (stopped) {
+              if (hasStreamError) {
+                throw streamError;
               }
-              if (queue.length > 0) {
-                return { done: false, value: queue.shift() as T };
+              if (this.hasCloseError) {
+                throw this.closeError;
               }
-              if (this.closed) {
-                break;
-              }
-              await new Promise<void>((resolve) => {
-                const wakeCurrent = () => {
-                  if (wake === wakeCurrent) {
-                    wake = null;
-                  }
-                  this.waiters.delete(wakeCurrent);
-                  resolve();
+              return { done: true, value: undefined };
+            }
+            if (queue.length > 0) {
+              return { done: false, value: queue.shift() as T };
+            }
+            if (!this.closed) {
+              return await new Promise<IteratorResult<T>>((resolve, reject) => {
+                const pending: PendingRead = {
+                  resolve,
+                  reject,
+                  wake: () => cleanup(),
                 };
-                wake = wakeCurrent;
-                this.waiters.add(wakeCurrent);
+                pendingReads.push(pending);
+                this.waiters.add(pending.wake);
               });
             }
             cleanup();
             if (this.hasCloseError) {
               throw this.closeError;
             }
-            return { done: true, value: undefined as never };
+            return { done: true, value: undefined };
           },
           return: async (): Promise<IteratorResult<T>> => {
             cleanup();
-            return { done: true, value: undefined as never };
+            return { done: true, value: undefined };
           },
         };
       },

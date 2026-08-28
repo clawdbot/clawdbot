@@ -18,6 +18,7 @@ type SpawnCall = {
   command: string;
   args: string[];
   globalArgs: string[];
+  envFileContents?: string;
 };
 
 const spawnState = vi.hoisted(() => ({
@@ -86,7 +87,13 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
   }
   // The tests assert docker CLI arguments without requiring Docker; this mock
   // implements only the inspect/create/start/rm calls used by ensureSandboxContainer.
-  spawnState.calls.push({ command, args, globalArgs });
+  const envFileIndex = args.indexOf("--env-file");
+  const envFile = envFileIndex === -1 ? undefined : args[envFileIndex + 1];
+  const call: SpawnCall = { command, args, globalArgs };
+  if (args[0] === "create" && envFile) {
+    call.envFileContents = fs.readFileSync(envFile, "utf8");
+  }
+  spawnState.calls.push(call);
 
   let code = 0;
   let stdout = "";
@@ -323,6 +330,29 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     });
   });
 
+  it.each(["docker", "podman"] as const)(
+    "delivers configured %s create environment without exposing values in process arguments",
+    async (backend) => {
+      const sentinel = "synthetic-container-create-transport-value";
+      const cfg = createSandboxConfig([], undefined, "rw", { CONFIGURED_VALUE: sentinel });
+      cfg.backend = backend;
+      spawnState.containerExists = false;
+      registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+      const createCall = await ensureSandboxCreateCallForTest({
+        cfg,
+        ...(backend === "podman" ? { engine: PODMAN_SANDBOX_ENGINE } : {}),
+      });
+
+      expect(createCall.args.join(" ")).not.toContain(sentinel);
+      expect(createCall.envFileContents).toContain(`CONFIGURED_VALUE=${sentinel}\n`);
+      expect(createCall.envFileContents).toContain("OPENCLAW_CLI=1\n");
+      const envFile = collectDockerFlagValues(createCall.args, "--env-file")[0];
+      expect(envFile).toBeDefined();
+      expect(fs.existsSync(envFile!)).toBe(false);
+    },
+  );
+
   it("recreates shared container when array-order change alters hash", async () => {
     // Docker flag order is part of the runtime contract, so order-sensitive
     // config changes must invalidate a shared container.
@@ -532,9 +562,9 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
     const createCall = await ensureSandboxCreateCallForTest({ cfg, workspaceDir });
     expect(createCall.args).toContain(`openclaw.configHash=${newHash}`);
-    expect(collectDockerFlagValues(createCall.args, "--env")).toEqual(
-      expect.arrayContaining(["LANG=C.UTF-8", "GEMINI_API_KEY=dummy-gemini"]),
-    );
+    expect(createCall.args).not.toContain("--env");
+    expect(createCall.envFileContents).toContain("LANG=C.UTF-8\n");
+    expect(createCall.envFileContents).toContain("GEMINI_API_KEY=dummy-gemini\n");
 
     const registryUpdate = registryMocks.updateRegistry.mock.calls.at(-1)?.[0];
     expect(registryUpdate?.configHash).toBe(newHash);

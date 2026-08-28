@@ -19,6 +19,8 @@ import {
 } from "../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { replaceFileAtomic } from "../infra/replace-file.js";
+import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.doctor.js";
 import { shortenHomePath } from "../utils.js";
 import {
   repairCanonicalSessionKeys,
@@ -26,6 +28,7 @@ import {
 } from "./doctor-session-canonical-keys.js";
 import {
   repairCanonicalSessionDeliveryStates,
+  repairCanonicalSessionResolvedSkills,
   type SessionDeliveryStateRepairReport,
 } from "./doctor-session-delivery-state.js";
 import {
@@ -35,6 +38,7 @@ import {
 import {
   DoctorSqliteMaintenanceLockUnavailableError,
   withDoctorSqliteMaintenanceLock,
+  type DoctorSqliteMaintenanceAuthority,
 } from "./doctor-sqlite-maintenance-lock.js";
 import { isLegacyCodexProviderId } from "./doctor/shared/codex-route-model-ref.js";
 
@@ -250,19 +254,14 @@ function hasBrokenPromptRewriteBranch(entries: TranscriptEntry[], activePath: Tr
   return false;
 }
 
-async function writeActiveTranscript(params: {
-  filePath: string;
+function selectActiveTranscriptEntries(params: {
   entries: TranscriptEntry[];
   activePath: ActiveTranscriptPath;
-}): Promise<string> {
+}): TranscriptEntry[] {
   const header = params.entries.find((entry) => entry.type === "session");
   if (!header) {
     throw new Error("missing session header");
   }
-  const backupPath = `${params.filePath}.pre-doctor-branch-repair-${new Date()
-    .toISOString()
-    .replace(/[:.]/g, "-")}.bak`;
-  await fs.copyFile(params.filePath, backupPath);
   const lastPersistedId = getEntryId(params.activePath.entriesToPersist.at(-1) ?? {});
   const terminalLeafControl = params.activePath.terminalLeafControl
     ? {
@@ -271,28 +270,11 @@ async function writeActiveTranscript(params: {
         appendParentId: params.activePath.appendParentId,
       }
     : null;
-  const next = [
+  return [
     header,
     ...params.activePath.entriesToPersist,
     ...(terminalLeafControl ? [terminalLeafControl] : []),
-  ]
-    .map((entry) => JSON.stringify(entry))
-    .join("\n");
-  await fs.writeFile(params.filePath, `${next}\n`, "utf-8");
-  return backupPath;
-}
-
-async function writeTranscriptEntries(params: {
-  filePath: string;
-  entries: TranscriptEntry[];
-}): Promise<string> {
-  const backupPath = `${params.filePath}.pre-doctor-openai-codex-repair-${new Date()
-    .toISOString()
-    .replace(/[:.]/g, "-")}.bak`;
-  await fs.copyFile(params.filePath, backupPath);
-  const next = params.entries.map((entry) => JSON.stringify(entry)).join("\n");
-  await fs.writeFile(params.filePath, `${next}\n`, "utf-8");
-  return backupPath;
+  ];
 }
 
 /** Repairs one transcript file by keeping the active branch and backing up the original file. */
@@ -300,83 +282,57 @@ async function repairBrokenSessionTranscriptFile(params: {
   filePath: string;
   shouldRepair: boolean;
 }): Promise<TranscriptRepairResult> {
+  const result: TranscriptRepairResult = {
+    filePath: params.filePath,
+    broken: false,
+    repaired: false,
+    originalEntries: 0,
+    activeEntries: 0,
+    legacyOpenAICodexEntries: 0,
+  };
   try {
     const raw = await fs.readFile(params.filePath, "utf-8");
     const entries = parseTranscriptEntries(raw);
-    const legacyOpenAICodexEntries = normalizeLegacyOpenAICodexTranscriptMetadata(entries);
+    result.originalEntries = entries.length;
+    result.legacyOpenAICodexEntries = normalizeLegacyOpenAICodexTranscriptMetadata(entries);
     const activePath = selectActivePath(entries);
+    result.activeEntries = activePath?.entries.length ?? 0;
+    const brokenBranch = activePath
+      ? hasBrokenPromptRewriteBranch(entries, activePath.entries)
+      : false;
+    result.broken = brokenBranch || result.legacyOpenAICodexEntries > 0;
     if (!activePath) {
-      if (legacyOpenAICodexEntries > 0 && params.shouldRepair) {
-        const backupPath = await writeTranscriptEntries({ filePath: params.filePath, entries });
-        return {
-          filePath: params.filePath,
-          broken: true,
-          repaired: true,
-          originalEntries: entries.length,
-          activeEntries: 0,
-          legacyOpenAICodexEntries,
-          backupPath,
-          reason: "no active branch",
-        };
-      }
-      return {
-        filePath: params.filePath,
-        broken: legacyOpenAICodexEntries > 0,
-        repaired: false,
-        originalEntries: entries.length,
-        activeEntries: 0,
-        legacyOpenAICodexEntries,
-        reason: "no active branch",
-      };
+      result.reason = "no active branch";
     }
-    const broken = hasBrokenPromptRewriteBranch(entries, activePath.entries);
-    if (!broken && legacyOpenAICodexEntries === 0) {
-      return {
-        filePath: params.filePath,
-        broken: false,
-        repaired: false,
-        originalEntries: entries.length,
-        activeEntries: activePath.entries.length,
-        legacyOpenAICodexEntries,
-      };
+    if (!result.broken || !params.shouldRepair) {
+      return result;
     }
-    if (!params.shouldRepair) {
-      return {
-        filePath: params.filePath,
-        broken: true,
-        repaired: false,
-        originalEntries: entries.length,
-        activeEntries: activePath.entries.length,
-        legacyOpenAICodexEntries,
-      };
-    }
-    const backupPath = broken
-      ? await writeActiveTranscript({
-          filePath: params.filePath,
-          entries,
-          activePath,
-        })
-      : await writeTranscriptEntries({ filePath: params.filePath, entries });
-    return {
+    const nextEntries =
+      brokenBranch && activePath ? selectActiveTranscriptEntries({ entries, activePath }) : entries;
+    const content = `${nextEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+    const repairKind = brokenBranch ? "branch" : "openai-codex";
+    const backupPath = `${params.filePath}.pre-doctor-${repairKind}-repair-${new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")}.bak`;
+    await fs.copyFile(params.filePath, backupPath);
+    result.backupPath = backupPath;
+    const dirMode = (await fs.stat(path.dirname(params.filePath))).mode;
+    // A copy fallback can truncate the source on failure. Keep the completed backup
+    // and require rename without changing file or directory permissions.
+    await replaceFileAtomic({
       filePath: params.filePath,
-      broken: true,
-      repaired: true,
-      originalEntries: entries.length,
-      activeEntries: activePath.entries.length,
-      legacyOpenAICodexEntries,
-      backupPath,
-    };
+      content,
+      dirMode,
+      preserveExistingMode: true,
+      copyFallbackOnPermissionError: false,
+      syncTempFile: true,
+      syncParentDir: true,
+    });
+    result.repaired = true;
   } catch (err) {
-    return {
-      filePath: params.filePath,
-      broken: false,
-      repaired: false,
-      originalEntries: 0,
-      activeEntries: 0,
-      legacyOpenAICodexEntries: 0,
-      reason: String(err),
-    };
+    result.reason = String(err);
   }
+  return result;
 }
 
 async function listSessionTranscriptFiles(sessionDirs: string[]): Promise<string[]> {
@@ -481,12 +437,18 @@ export async function noteSessionTranscriptHealth(params?: {
       `- Found ${broken.length} transcript file${broken.length === 1 ? "" : "s"} with legacy state.`,
       ...broken.slice(0, 20).map((result) => {
         const backup = result.backupPath ? ` backup=${shortenHomePath(result.backupPath)}` : "";
-        const status = result.repaired ? "repaired" : "needs repair";
+        const status = result.repaired
+          ? "repaired"
+          : shouldRepair
+            ? "repair failed"
+            : "needs repair";
+        const error =
+          shouldRepair && !result.repaired && result.reason ? ` error=${result.reason}` : "";
         const metadata =
           result.legacyOpenAICodexEntries > 0
             ? ` openai-codex=${result.legacyOpenAICodexEntries}`
             : "";
-        return `- ${shortenHomePath(result.filePath)} ${status} entries=${result.originalEntries}->${result.activeEntries + 1}${metadata}${backup}`;
+        return `- ${shortenHomePath(result.filePath)} ${status} entries=${result.originalEntries}->${result.activeEntries + 1}${metadata}${backup}${error}`;
       }),
     ];
     if (broken.length > 20) {
@@ -523,6 +485,11 @@ async function noteSessionSqliteMigrationHealth(params: {
     repaired: 0,
     scannedStores: 0,
   };
+  let resolvedSkillsReport: SessionDeliveryStateRepairReport = {
+    found: 0,
+    repaired: 0,
+    scannedStores: 0,
+  };
   let canonicalKeyReport: CanonicalSessionKeyRepairReport = {
     archivedTranscriptDirectories: [],
     foundGroups: 0,
@@ -538,7 +505,7 @@ async function noteSessionSqliteMigrationHealth(params: {
         >
       >
     | undefined;
-  const runSessionSqlite = async () => {
+  const runSessionSqlite = async (maintenanceAuthority?: DoctorSqliteMaintenanceAuthority) => {
     const report = await runDoctorSessionSqlite({
       allAgents: true,
       ...(params.cfg ? { cfg: params.cfg } : {}),
@@ -557,6 +524,12 @@ async function noteSessionSqliteMigrationHealth(params: {
       cfg: params.cfg ?? {},
       env: params.env,
     });
+    // Canonical-key ties compare complete entry JSON, so select their winner before stripping it.
+    resolvedSkillsReport = repairCanonicalSessionResolvedSkills({
+      apply: params.shouldRepair,
+      cfg: params.cfg ?? {},
+      env: params.env,
+    });
     // Import may create the first durable SQLite row for a colliding legacy key.
     reservedKeyReport = repairReservedIncognitoSessionKeys({
       apply: params.shouldRepair,
@@ -568,6 +541,15 @@ async function noteSessionSqliteMigrationHealth(params: {
       cfg: params.cfg ?? {},
       env: params.env,
     });
+    const pluginRepair = await runPostSessionPluginDoctorStateRepairs({
+      config: params.cfg ?? {},
+      env: params.env,
+      maintenanceAuthority,
+    });
+    const pluginMessages = [...pluginRepair.changes, ...pluginRepair.warnings];
+    if (pluginMessages.length > 0) {
+      note(pluginMessages.join("\n"), "Plugin session repair");
+    }
     return report;
   };
   let report: Awaited<ReturnType<typeof runSessionSqlite>>;
@@ -610,6 +592,14 @@ async function noteSessionSqliteMigrationHealth(params: {
       params.shouldRepair
         ? `- Canonicalized delivery state for ${deliveryReport.repaired} durable session row(s).`
         : `- Found ${deliveryReport.found} durable session row(s) with legacy delivery fields. Run "openclaw doctor --fix" to canonicalize them.`,
+      "Session SQLite",
+    );
+  }
+  if (resolvedSkillsReport.found > 0) {
+    note(
+      params.shouldRepair
+        ? `- Stripped the runtime-only skills catalog from ${resolvedSkillsReport.repaired} durable session row(s). Logical SQLite pages are freed; shrinking the on-disk database requires "openclaw doctor --session-sqlite compact --session-sqlite-all-agents".`
+        : `- Found ${resolvedSkillsReport.found} durable session row(s) carrying a runtime-only skills catalog. Run "openclaw doctor --fix" to strip it.`,
       "Session SQLite",
     );
   }

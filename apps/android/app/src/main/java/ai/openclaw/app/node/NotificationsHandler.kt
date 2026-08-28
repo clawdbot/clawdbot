@@ -2,7 +2,6 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.GatewaySession
 import android.content.Context
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -68,7 +67,7 @@ class NotificationsHandler private constructor(
     readSnapshotWithRebind()
 
     val params =
-      parseParamsObject(paramsJson)
+      parseJsonParamsObject(paramsJson)
         ?: return GatewaySession.InvokeResult.error(
           code = "INVALID_REQUEST",
           message = "INVALID_REQUEST: expected JSON object",
@@ -152,15 +151,6 @@ class NotificationsHandler private constructor(
         ),
       )
     }.toString()
-
-  private fun parseParamsObject(paramsJson: String?): JsonObject? {
-    if (paramsJson.isNullOrBlank()) return null
-    return try {
-      Json.parseToJsonElement(paramsJson).asObjectOrNull()
-    } catch (_: Throwable) {
-      null
-    }
-  }
 
   private fun readString(
     params: JsonObject,

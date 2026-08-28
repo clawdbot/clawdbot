@@ -166,7 +166,7 @@ async function maybeResolveMatrixApprovalReaction(params: {
     params.logVerboseMessage(
       `matrix: approval reaction failed id=${params.target.approvalId} sender=${params.senderId}: ${String(err)}`,
     );
-    return true;
+    throw err;
   }
 }
 

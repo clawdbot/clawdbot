@@ -41,8 +41,8 @@ export type AgentProxyConsultState = {
   speaker: DiscordRealtimeSpeakerContext;
   providerEpoch: number;
   handledByForcedPlayback?: boolean;
-  providerDelivery?: Promise<boolean>;
-  settleProviderDelivery?: (accepted: boolean) => void;
+  providerDelivery?: Promise<void>;
+  settleProviderDelivery?: () => void;
   promise?: Promise<string>;
   result?: RecentAgentProxyConsultResult;
 };
@@ -213,8 +213,15 @@ export class DiscordRealtimeConsults {
     forcedSpeakerContext: DiscordRealtimeSpeakerContext | undefined,
     providerEpoch: number,
   ): Promise<void> {
+    const usesRealtimeAgentHandoff = this.params.usesRealtimeAgentHandoff();
+    const usesFallbackTalkback = this.params.isAgentProxy && !usesRealtimeAgentHandoff;
+    // Claim fallback talkback context before active-run control awaits. Concurrent
+    // final transcripts can otherwise resume out of order and swap owner flags.
+    const fallbackSpeakerContext = usesFallbackTalkback
+      ? (forcedSpeakerContext ?? this.params.turns.consumePendingSpeakerContext())
+      : undefined;
     const pendingForcedConsult =
-      this.params.isAgentProxy && this.params.usesRealtimeAgentHandoff()
+      this.params.isAgentProxy && usesRealtimeAgentHandoff
         ? this.prepareForcedAgentProxyConsult(acceptedText, forcedSpeakerContext)
         : undefined;
     let control: Awaited<ReturnType<typeof maybeControlDiscordVoiceAgentRun>> | undefined;
@@ -248,16 +255,13 @@ export class DiscordRealtimeConsults {
     if (!this.params.isAgentProxy) {
       return;
     }
-    if (this.params.usesRealtimeAgentHandoff()) {
+    if (usesRealtimeAgentHandoff) {
       if (pendingForcedConsult) {
         this.schedulePreparedForcedAgentProxyConsult(pendingForcedConsult);
       }
       return;
     }
-    this.talkback.enqueue(
-      acceptedText,
-      forcedSpeakerContext ?? this.params.turns.consumePendingSpeakerContext(),
-    );
+    this.talkback.enqueue(acceptedText, fallbackSpeakerContext);
   }
 
   private createTalkbackQueue(): RealtimeVoiceAgentTalkbackQueue {
@@ -521,11 +525,11 @@ export class DiscordRealtimeConsults {
       !state.result &&
       session.bridge.supportsToolResultSuppression === false,
     );
-    let resolveProviderDelivery: ((accepted: boolean) => void) | undefined;
+    let resolveProviderDelivery: (() => void) | undefined;
     if (providerOwnsDelivery) {
       // Forced playback waits for native acceptance so a failed delivery can restore
       // the local success/fallback path instead of losing the answer entirely.
-      state.providerDelivery = new Promise<boolean>((resolve) => {
+      state.providerDelivery = new Promise<void>((resolve) => {
         resolveProviderDelivery = resolve;
         state.settleProviderDelivery = resolve;
       });
@@ -588,11 +592,11 @@ export class DiscordRealtimeConsults {
       if (providerOwnsDelivery) {
         state.handledByForcedPlayback = false;
         state.settleProviderDelivery = undefined;
-        resolveProviderDelivery?.(true);
+        resolveProviderDelivery?.();
       }
     } catch (error) {
       state.settleProviderDelivery = undefined;
-      resolveProviderDelivery?.(false);
+      resolveProviderDelivery?.();
       throw error;
     }
     return true;
@@ -605,7 +609,7 @@ export class DiscordRealtimeConsults {
         continue;
       }
       state.handledByForcedPlayback = false;
-      state.settleProviderDelivery?.(false);
+      state.settleProviderDelivery?.();
       state.settleProviderDelivery = undefined;
       state.providerDelivery = undefined;
     }

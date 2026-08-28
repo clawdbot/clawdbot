@@ -177,6 +177,7 @@ describe("tsdown config", () => {
       "agents/compaction-planning.worker",
       "agents/model-provider-auth.worker",
       "config/sessions/session-accessor.sqlite-archive.worker",
+      "infra/sqlite-readonly-location.worker",
       "state/openclaw-database-verify.worker",
       "system-agent/setup-inference-detection.worker",
       "plugins/memory-state",

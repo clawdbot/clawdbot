@@ -78,9 +78,9 @@ describe("method scope resolution", () => {
     ["taskSuggestions.dismiss", ["operator.write"]],
     ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
-    ["sessions.dispatch", ["operator.admin"]],
-    ["sessions.reclaim", ["operator.admin"]],
-    ["sessions.move", ["operator.admin"]],
+    ["sessions.dispatch", ["operator.write"]],
+    ["sessions.reclaim", ["operator.write"]],
+    ["sessions.move", ["operator.write"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
     ["sessions.patchMany", ["operator.write"]],
@@ -99,8 +99,6 @@ describe("method scope resolution", () => {
     ["projects.list", ["operator.read"]],
     ["users.prefs.get", ["operator.read"]],
     ["users.prefs.set", ["operator.write"]],
-    ["users.setGitHubIdentity", ["operator.write"]],
-    ["users.clearGitHubIdentity", ["operator.write"]],
     ["projects.register", ["operator.admin"]],
     ["projects.remove", ["operator.admin"]],
     ["projects.add", ["operator.write"]],
@@ -148,7 +146,10 @@ describe("method scope resolution", () => {
     ["secrets.store.delete", ["operator.admin"]],
     ["tools.github.status", ["operator.read"]],
     ["tools.github.configure", ["operator.admin"]],
-    ["config.schema", ["operator.admin"]],
+    ["tools.github.authorize.start", ["operator.admin"]],
+    ["tools.github.authorize.poll", ["operator.admin"]],
+    ["tools.github.authorize.cancel", ["operator.admin"]],
+    ["config.schema", ["operator.read"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
@@ -428,6 +429,95 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 
+  it.each([
+    [
+      "device dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread", deviceId: "device-1" },
+      "operator.write",
+    ],
+    [
+      "profile dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread", profileId: "development" },
+      "operator.admin",
+    ],
+    [
+      "configured-default dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread" },
+      "operator.admin",
+    ],
+    [
+      "gateway move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+      },
+      "operator.write",
+    ],
+    [
+      "Gateway abandonment",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+        abandonSource: true,
+      },
+      "operator.write",
+    ],
+    [
+      "device move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "device", deviceId: "device-1" },
+      },
+      "operator.write",
+    ],
+    [
+      "profile move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "profile", profileId: "development" },
+      },
+      "operator.admin",
+    ],
+  ] as const)(
+    "derives %s authorization from its placement target",
+    (_name, method, params, scope) => {
+      expect(resolveLeastPrivilegeOperatorScopesForMethod(method, params)).toEqual([scope]);
+      expect(authorizeOperatorScopesForMethod(method, [scope], params)).toEqual({ allowed: true });
+      if (scope === "operator.admin") {
+        expect(authorizeOperatorScopesForMethod(method, ["operator.write"], params)).toEqual({
+          allowed: false,
+          missingScope: "operator.admin",
+        });
+      }
+    },
+  );
+
+  it.each([
+    [
+      "sessions.dispatch",
+      { key: "agent:main:thread", profileId: "development", deviceId: "device-1" },
+    ],
+    ["sessions.move", { key: "agent:main:thread", target: { kind: "profile" } }],
+  ] as const)("keeps malformed %s params write-scoped for handler validation", (method, params) => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod(method, params)).toEqual([
+      "operator.write",
+    ]);
+    expect(authorizeOperatorScopesForMethod(method, ["operator.write"], params)).toEqual({
+      allowed: true,
+    });
+  });
+
   it("keeps sessions.create project IDs at write scope", () => {
     const params = { projectId: "openclaw", worktree: true };
     expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
@@ -438,7 +528,7 @@ describe("method scope resolution", () => {
     );
   });
 
-  it("requires admin for incognito session creation and inheritance", () => {
+  it("requires admin for sensitive session creation parameters", () => {
     const incognitoKey = "agent:main:dashboard:incognito-parent";
     for (const params of [
       { agentId: "main", incognito: true },
@@ -447,10 +537,10 @@ describe("method scope resolution", () => {
       { parentSessionKey: incognitoKey, fork: true },
       { parentSessionKey: incognitoKey, spawnDepth: 1 },
       { parentSessionKey: incognitoKey, succeedsParent: false, emitCommandHooks: true },
+      { agentId: "main", toolOverrides: { skills: { release: false } } },
     ]) {
-      expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
-        "operator.admin",
-      ]);
+      const required = resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params);
+      expect(required).toEqual(["operator.admin"]);
       expect(
         authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], params),
       ).toEqual({ allowed: false, missingScope: "operator.admin" });
@@ -731,7 +821,7 @@ describe("operator scope authorization", () => {
     ["health", ["operator.read"], { allowed: true }],
     ["health", ["operator.write"], { allowed: true }],
     ["config.schema.lookup", ["operator.read"], { allowed: true }],
-    ["config.schema", ["operator.read"], { allowed: false, missingScope: "operator.admin" }],
+    ["config.schema", ["operator.read"], { allowed: true }],
     ["config.patch", ["operator.admin"], { allowed: true }],
   ])("authorizes %s for scopes %j", (method, scopes, expected) => {
     expect(authorizeOperatorScopesForMethod(method, scopes)).toEqual(expected);
@@ -838,11 +928,12 @@ describe("operator scope authorization", () => {
   });
 
   it.each([
+    "users.setRole",
     "exec.approvals.get",
     "exec.approvals.set",
     "exec.approvals.node.get",
     "exec.approvals.node.set",
-  ])("requires admin scope for exec approval policy method %s", (method) => {
+  ])("requires admin scope for sensitive policy method %s", (method) => {
     expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
       allowed: false,
       missingScope: "operator.admin",

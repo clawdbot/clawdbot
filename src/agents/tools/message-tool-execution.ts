@@ -19,7 +19,7 @@ import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
+import * as messageActionTurnCapability from "../../gateway/message-action-turn-capability.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { sha256Base64UrlPrefix } from "../../infra/crypto-digest.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -31,6 +31,7 @@ import type {
   MessageActionGateway,
   MessageActionResult,
 } from "../../infra/outbound/message-action-contracts.js";
+import { projectGatewayQueuedDeliveryResult } from "../../infra/outbound/message-action-execution.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
@@ -87,22 +88,15 @@ function resolveTrustedDecisionChannel(
 }
 
 function normalizeMessageToolIdempotencyKeyPart(value: unknown): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized.replace(/[^A-Za-z0-9._:-]+/gu, "_");
+  return normalizeOptionalString(value)?.replace(/[^A-Za-z0-9._:-]+/gu, "_");
 }
 
-const MESSAGE_TOOL_IDEMPOTENCY_ENVELOPE_PARAM_NAMES = [
+const MESSAGE_TOOL_IDEMPOTENCY_ENVELOPE_PARAM_KEYS = new Set<string>([
   "gatewayToken",
   "gatewayUrl",
   "idempotencyKey",
   "timeoutMs",
-] satisfies Array<keyof GatewayCallOptions | "idempotencyKey">;
-const MESSAGE_TOOL_IDEMPOTENCY_ENVELOPE_PARAM_KEYS = new Set<string>(
-  MESSAGE_TOOL_IDEMPOTENCY_ENVELOPE_PARAM_NAMES,
-);
+] satisfies Array<keyof GatewayCallOptions | "idempotencyKey">);
 
 function stripMessageToolIdempotencyEnvelope(
   params: Record<string, unknown>,
@@ -234,6 +228,7 @@ type MessageToolOptions = {
   hasRepliedRef?: { value: boolean };
   sameChannelThreadRequired?: boolean;
   sandboxRoot?: string;
+  sandboxContainerWorkdir?: string;
   requireExplicitTarget?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Process-local completion authority: send only to the current source route. */
@@ -242,6 +237,7 @@ type MessageToolOptions = {
   requesterSenderId?: string;
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  workspaceDir?: string;
 };
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
@@ -370,7 +366,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const deliveryRunId = options?.runId ?? executionIdentityToken?.runId;
       const trustedTurnContext =
         resolvedAgentId && options?.agentSessionKey
-          ? resolveMessageActionTurnCapability({
+          ? messageActionTurnCapability.resolveMessageActionTurnCapability({
               token: options.messageActionTurnCapability,
               agentId: resolvedAgentId,
               runId: options.runId,
@@ -652,8 +648,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           params: actionParams,
           actionOrigin: "message-tool",
           defaultAccountId: accountId ?? undefined,
-          requesterAccountId: trustedTurnContext?.requesterAccountId,
-          requesterSenderId: trustedTurnContext?.requesterSenderId,
+          ...messageActionTurnCapability.selectMessageActionRequesterIdentity(trustedTurnContext),
           messageActionAuthorization: {
             requesterAccountId: trustedTurnContext?.requesterAccountId,
             requesterSenderId: trustedTurnContext?.requesterSenderId,
@@ -661,6 +656,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           },
           senderIsOwner: options?.senderIsOwner,
           conversationReadOrigin: options?.conversationReadOrigin,
+          workspaceDir: options?.workspaceDir,
           broadcastAccountPlan,
           gateway,
           toolContext,
@@ -671,6 +667,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           executionIdentityToken,
           agentId: resolvedAgentId,
           sandboxRoot: options?.sandboxRoot,
+          sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
           sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
           // Only an admitted channel source can arm terminal restart reconciliation.
           // Source-less scheduled and ambient sends remain ordinary message actions.
@@ -692,6 +689,13 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             autogeneratedDeliveryFingerprint,
             actionIdempotencyKey,
           );
+        }
+        // Queue-owned retry: the gateway already holds the durable row and
+        // caches this outcome under the same idempotency key, so a model resend
+        // of the same content collapses instead of minting a second send.
+        const queuedDelivery = projectGatewayQueuedDeliveryResult(error);
+        if (queuedDelivery) {
+          return jsonResult(queuedDelivery);
         }
         decisions.recordTypedDenial(error);
         throw error;

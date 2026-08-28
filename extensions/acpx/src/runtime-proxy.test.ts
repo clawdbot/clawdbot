@@ -1,6 +1,7 @@
 // ACPX tests protect the lazy proxy contract: every hook forwards to the
 // resolved runtime, and an absent hook fails loudly instead of fabricating
 // success (regression for silently no-op doctor/status/prepareFreshSession).
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { AcpRuntimeEvent } from "../runtime-api.js";
 import { createLazyAcpRuntimeProxy, type CompleteAcpRuntime } from "./runtime-proxy.js";
@@ -11,9 +12,10 @@ const handle = {
   runtimeSessionName: "acp:test",
 };
 
-function createCompleteRuntime() {
+function createCompleteRuntime(promptStarted: Promise<void> = Promise.resolve()) {
   const startTurn = vi.fn((input: { requestId: string }) => ({
     requestId: input.requestId,
+    promptStarted,
     events: (async function* (): AsyncGenerator<AcpRuntimeEvent> {})(),
     result: Promise.resolve({ status: "completed" as const, stopReason: "end_turn" }),
     cancel: vi.fn(async () => {}),
@@ -38,7 +40,10 @@ function createCompleteRuntime() {
 
 describe("createLazyAcpRuntimeProxy", () => {
   it("forwards every hook to the resolved runtime without rewriting results", async () => {
-    const { runtime, startTurn, prepareFreshSession } = createCompleteRuntime();
+    const promptStarted = createDeferred<void>();
+    const { runtime, startTurn, prepareFreshSession } = createCompleteRuntime(
+      promptStarted.promise,
+    );
     const proxy = createLazyAcpRuntimeProxy(async () => runtime);
 
     await expect(proxy.doctor()).resolves.toEqual({
@@ -58,7 +63,16 @@ describe("createLazyAcpRuntimeProxy", () => {
       mode: "prompt",
       requestId: "turn-1",
     });
+    expect(turn.promptStarted).toBeDefined();
+    let submitted = false;
+    const observedPromptStarted = turn.promptStarted.then(() => {
+      submitted = true;
+    });
     await expect(turn.result).resolves.toEqual({ status: "completed", stopReason: "end_turn" });
+    expect(submitted).toBe(false);
+    promptStarted.resolve();
+    await observedPromptStarted;
+    expect(submitted).toBe(true);
     expect(startTurn).toHaveBeenCalledTimes(1);
   });
 

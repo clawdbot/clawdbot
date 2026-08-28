@@ -611,15 +611,14 @@ export async function applyMediaUnderstanding(params: {
             // placement, suppress — a wrong path is worse than the plain marker (#122411).
             selfServePathsEnabled: params.selfServeLocalPaths === true,
           });
-    const mediaMarkers =
-      params.processingMode === "audio-only"
-        ? []
-        : renderMediaAttachmentMarkers({
-            attachments,
-            decisions,
-            outputs,
-            deliveredImageIndexes: params.deliveredImageIndexes,
-          });
+    // Only processed capabilities have decisions, so audio-only runs cannot
+    // add markers for image/video inputs still owned by the native harness.
+    const mediaMarkers = renderMediaAttachmentMarkers({
+      attachments,
+      decisions,
+      outputs,
+      deliveredImageIndexes: params.deliveredImageIndexes,
+    });
     const contextBlocks = applyAttachmentMarkerBudget([...fileContext.blocks, ...mediaMarkers]);
     if (contextBlocks.length > 0) {
       ctx.Body = appendFileBlocks(ctx.Body, contextBlocks);

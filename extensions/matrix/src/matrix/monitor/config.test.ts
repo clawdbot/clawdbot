@@ -122,6 +122,35 @@ describe("resolveMatrixMonitorConfig", () => {
     });
   });
 
+  it("keeps a room version 12 room ID (no :server suffix) as already resolved", async () => {
+    // Room version 12 (MSC4291) dropped the trailing ":server" from room IDs — they're
+    // now a hash of the create event — so this must not be sent through name/alias
+    // resolution the way an unresolved query would be.
+    const runtime = createRuntime();
+    const resolveTargets = vi.fn(async ({ inputs }: { inputs: string[] }) =>
+      inputs.map((input) => ({ input, resolved: false })),
+    );
+
+    const roomsConfig: MatrixRoomsConfig = {
+      "!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70": { enabled: true },
+    };
+
+    const result = await resolveMatrixMonitorConfig({
+      cfg: createConfig(),
+      accountId: "ops",
+      allowFrom: [],
+      groupAllowFrom: [],
+      roomsConfig,
+      runtime,
+      resolveTargets,
+    });
+
+    expect(result.roomsConfig).toEqual({
+      "!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70": { enabled: true },
+    });
+    expect(resolveTargets).not.toHaveBeenCalled();
+  });
+
   it("strips config prefixes before lookups and logs unresolved guidance once per section", async () => {
     const runtime = createRuntime();
     const resolveTargets = vi.fn(
@@ -139,6 +168,7 @@ describe("resolveMatrixMonitorConfig", () => {
       allowFrom: ["user:Ghost"],
       groupAllowFrom: ["matrix:@known:example.org"],
       roomsConfig: {
+        "!": { enabled: true },
         "channel:Project X": {
           enabled: true,
           users: ["matrix:Ghost"],
@@ -159,16 +189,16 @@ describe("resolveMatrixMonitorConfig", () => {
     expectResolveTargetCall(resolveTargets, 1, {
       accountId: "ops",
       kind: "group",
-      inputs: ["Project X"],
+      inputs: ["!", "Project X"],
     });
     expect(resolveTargets).toHaveBeenCalledTimes(2);
     expect(runtime.log).toHaveBeenCalledWith("matrix dm allowlist unresolved: user:Ghost");
     expect(runtime.log).toHaveBeenCalledWith(
       "matrix dm allowlist entries must be full Matrix IDs (example: @user:server). Unresolved entries will not match any sender.",
     );
-    expect(runtime.log).toHaveBeenCalledWith("matrix rooms unresolved: channel:Project X");
+    expect(runtime.log).toHaveBeenCalledWith("matrix rooms unresolved: !, channel:Project X");
     expect(runtime.log).toHaveBeenCalledWith(
-      "matrix rooms must be room IDs or aliases (example: !room:server or #alias:server). Unresolved entries are ignored.",
+      "matrix rooms must be room IDs or aliases (example: !room:server, the suffixless !room form on room version 12+, or #alias:server). Unresolved entries are ignored.",
     );
   });
 

@@ -4,9 +4,9 @@ import { isLikelyContextOverflowError } from "../../agents/failover/classify.js"
 import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveProfileParticipantIdFromSessionCreation } from "../../config/sessions/session-entry-provenance.js";
 import { logVerbose } from "../../globals.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -17,7 +17,7 @@ import {
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
-import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -222,7 +222,7 @@ export async function executePreparedReplyAgentRun(
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   try {
     activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
-      runPreflightCompactionIfNeeded({
+      runSessionCompactionIfNeeded({
         cfg,
         followupRun,
         promptForEstimate: followupRun.prompt,
@@ -233,7 +233,9 @@ export async function executePreparedReplyAgentRun(
         runtimePolicySessionKey,
         storePath,
         isHeartbeat,
-        replyOperation,
+        abortSignal: replyOperation.abortSignal,
+        onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
+        onSessionIdChanged: (sessionId) => replyOperation.updateSessionId(sessionId),
         onCompactionNotice: sendDirectCompactionNotice,
       }),
     );
@@ -362,9 +364,7 @@ export async function executePreparedReplyAgentRun(
       const gitCoauthorAttribution = prepareGitCoauthorAttribution({
         agentId: followupRun.run.agentId,
         config: cfg,
-        currentProfileId: resolveProfileParticipantIdFromSessionCreation(
-          sessionCtx.SessionCreation,
-        ),
+        currentProfileId: readSessionInputProfileId(sessionCtx),
         sessionKey,
         storePath,
       });
@@ -407,9 +407,11 @@ export async function executePreparedReplyAgentRun(
     resolveReplyOperationRunState(opts),
     operationSuperseded
       ? "superseded"
-      : runOutcome.outcome.kind === "settled"
-        ? runOutcome.outcome.status
-        : "failed",
+      : runOutcome.outcome.kind === "rejected"
+        ? "failed"
+        : runOutcome.outcome.kind === "aborted" || runOutcome.outcome.abortReason
+          ? "cancelled"
+          : runOutcome.outcome.status,
     replyOperation,
   );
   activeSessionEntry = getActiveSessionEntry();

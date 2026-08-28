@@ -30,6 +30,11 @@ export type SessionDisplayRow = {
   lastInteractionAt?: number;
   label?: string;
   status?: SessionEntry["status"];
+  visibility?: SessionEntry["visibility"];
+  createdActor?: SessionEntry["createdActor"];
+  owner?: SessionEntry["owner"];
+  participants?: SessionEntry["participants"];
+  participantCount?: SessionEntry["participantCount"];
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
@@ -76,6 +81,11 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     lastInteractionAt: entry?.lastInteractionAt,
     label: entry?.label,
     status: entry?.status,
+    visibility: entry?.visibility ?? "shared",
+    createdActor: entry?.createdActor,
+    owner: entry?.owner,
+    participants: entry?.participants,
+    participantCount: entry?.participantCount,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
@@ -134,6 +144,10 @@ export function formatSessionModelCell(model: string | null | undefined, rich: b
   return rich ? theme.info(label) : label;
 }
 
+function formatSessionActor(actor: NonNullable<SessionEntry["createdActor"]>): string {
+  return actor.label?.trim() || actor.id?.trim() || actor.type;
+}
+
 /** Formats compact per-session flags for table output. */
 export function formatSessionFlagsCell(
   row: Pick<
@@ -149,9 +163,27 @@ export function formatSessionFlagsCell(
     | "abortedLastRun"
     | "sessionId"
     | "runtimePolicySessionKey"
+    | "visibility"
+    | "createdActor"
+    | "owner"
+    | "participants"
+    | "participantCount"
   >,
   rich: boolean,
 ): string {
+  const owner = row.owner?.actor ?? row.createdActor;
+  // Match the canonical session-row participant preview bound.
+  const participants = (row.participants ?? [])
+    .slice(0, 4)
+    .map(({ identity, label }) => label?.trim() || `${identity.type}:${identity.id}`);
+  const remainingParticipants = Math.max(
+    0,
+    (row.participantCount ?? participants.length) - participants.length,
+  );
+  const participantSummary =
+    participants.length > 0
+      ? `${participants.join(",")}${remainingParticipants > 0 ? `,+${remainingParticipants}` : ""}`
+      : undefined;
   const flags = [
     row.thinkingLevel ? `think:${row.thinkingLevel}` : null,
     row.verboseLevel ? `verbose:${row.verboseLevel}` : null,
@@ -162,6 +194,9 @@ export function formatSessionFlagsCell(
     row.groupActivation ? `activation:${row.groupActivation}` : null,
     row.systemSent ? "system" : null,
     row.abortedLastRun ? "aborted" : null,
+    row.visibility ? `visibility:${row.visibility}` : null,
+    owner ? `owner:${formatSessionActor(owner)}` : null,
+    participantSummary ? `participants:${participantSummary}` : null,
     row.runtimePolicySessionKey ? `policy:${row.runtimePolicySessionKey}` : null,
     row.sessionId ? `id:${row.sessionId}` : null,
   ].filter(Boolean);

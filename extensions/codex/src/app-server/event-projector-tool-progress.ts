@@ -21,7 +21,6 @@ import {
   itemToolArgs,
   itemToolError,
   isCommandBearingToolItem,
-  nativeToolActionFingerprint,
 } from "./event-projector-tool-items.js";
 import {
   collectDynamicToolContentText,
@@ -153,8 +152,6 @@ export class CodexToolProgressProjection {
       nativeMutation: {
         mutatingAction: error.mutatingAction === true,
         replaySafe: error.mutatingAction !== true,
-        ...(error.actionFingerprint ? { actionFingerprint: error.actionFingerprint } : {}),
-        ...(error.fileTarget ? { fileTarget: error.fileTarget } : {}),
       },
     });
     this.lastNativeToolError =
@@ -272,7 +269,6 @@ export class CodexToolProgressProjection {
   }): void {
     const executionStarted = params.status !== "blocked";
     const mutatingAction = executionStarted && isMutatingNativeToolItem(params.item);
-    const actionFingerprint = mutatingAction ? nativeToolActionFingerprint(params.item) : undefined;
     const isFailure = isNonSuccessItemStatus(params.status);
     const approvalTimeoutExplanation = this.approvalTimeoutExplanation(
       params.item.id,
@@ -300,7 +296,6 @@ export class CodexToolProgressProjection {
       nativeMutation: {
         mutatingAction,
         replaySafe: !mutatingAction,
-        ...(actionFingerprint ? { actionFingerprint } : {}),
       },
     });
     if (terminalResolution) {
@@ -313,7 +308,6 @@ export class CodexToolProgressProjection {
         ...(params.meta ? { meta: params.meta } : {}),
         ...failure,
         ...(mutatingAction ? { mutatingAction: true } : {}),
-        ...(actionFingerprint ? { actionFingerprint } : {}),
       };
     } else if (this.lastNativeToolError?.mutatingAction !== true) {
       this.lastNativeToolError = undefined;

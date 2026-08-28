@@ -85,6 +85,7 @@ vi.mock("../plugins/provider-runtime.js", () => {
   return {
     buildProviderMissingAuthMessageWithPlugin: () => undefined,
     resolveExternalAuthProfilesWithPlugins: () => [],
+    resolveProviderDeprecatedAuthProfileIds: () => [],
     shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
       context?: { resolvedApiKey?: string };
     }) => params.context?.resolvedApiKey === "synthetic-defer",
@@ -539,6 +540,49 @@ describe("resolveUsableCustomProviderApiKey", () => {
       source: "models.json",
     });
   });
+
+  it.each([
+    { name: "unresolved bare shorthand", authored: "$MISSING", env: {}, expected: null },
+    { name: "unresolved braced shorthand", authored: "${MISSING}", env: {}, expected: null },
+    {
+      name: "substituted template-looking literal",
+      authored: "${SOURCE}",
+      env: { SOURCE: "${OTHER}" },
+      expected: "${OTHER}",
+    },
+  ])(
+    "preserves authored custom-provider credentials: $name",
+    async ({ authored, env, expected }) => {
+      const [{ resolveConfigForRead }, { setConfigResolutionFacts }] = await Promise.all([
+        import("../config/io.read-helpers.js"),
+        import("../config/resolution-facts.js"),
+      ]);
+      const read = resolveConfigForRead(
+        {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                apiKey: authored,
+                models: [],
+              },
+            },
+          },
+        },
+        env,
+      );
+      const cfg = read.resolvedConfigRaw as NonNullable<
+        Parameters<typeof resolveUsableCustomProviderApiKey>[0]["cfg"]
+      >;
+      setConfigResolutionFacts(cfg, read.resolutionFacts);
+
+      const resolved = resolveUsableCustomProviderApiKey({ cfg, provider: "custom", env: {} });
+
+      expect(resolved).toEqual(
+        expected === null ? null : { apiKey: expected, source: "models.json" },
+      );
+    },
+  );
 
   it("does not treat non-env markers as usable credentials", () => {
     const resolved = resolveUsableCustomProviderApiKey({

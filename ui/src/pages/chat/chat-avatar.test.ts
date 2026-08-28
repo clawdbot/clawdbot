@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setAvatarGatewayOrigin } from "../../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { invalidateChatAvatarCache, refreshChatAvatar, renderChatAvatar } from "./chat-avatar.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 
@@ -154,7 +154,7 @@ describe("refreshChatAvatar", () => {
     );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const host = makeChatHost();
+    const host = makeChatHost({ basePath: "/focus", resourceBasePath: "" });
     const refresh = refreshChatAvatar(host);
     const signal = fetchMock.mock.calls[0]?.[1]?.signal;
     expect(signal?.aborted).toBe(false);

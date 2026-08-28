@@ -28,7 +28,7 @@ export function renderWorktreeFields(params: {
   worktreeName: string;
   worktreeNameLabel?: string;
   submitting: boolean;
-  pendingCloud: boolean;
+  pendingPlacement: boolean;
   onBaseRefInput: (baseRef: string) => void;
   onWorktreeNameInput: (name: string) => void;
 }) {
@@ -38,7 +38,7 @@ export function renderWorktreeFields(params: {
       <input
         type="text"
         list="new-session-branches"
-        ?disabled=${params.submitting || params.pendingCloud}
+        ?disabled=${params.submitting || params.pendingPlacement}
         placeholder=${params.branchesLoading
           ? t("common.loading")
           : (params.branches?.defaultBranch ?? t("newSession.baseBranch"))}
@@ -56,7 +56,7 @@ export function renderWorktreeFields(params: {
       <span>${params.worktreeNameLabel ?? t("newSession.worktreeName")}</span>
       <input
         type="text"
-        ?disabled=${params.submitting || params.pendingCloud}
+        ?disabled=${params.submitting || params.pendingPlacement}
         placeholder=${t("newSession.worktreeNamePlaceholder")}
         .value=${params.worktreeName}
         @input=${(event: Event) =>
@@ -76,7 +76,7 @@ export function renderDetailChip(params: {
   baseRef: string;
   worktreeName: string;
   submitting: boolean;
-  pendingCloud: boolean;
+  pendingPlacement: boolean;
   popoverOpen: boolean;
   popoverHiding: boolean;
   onGuardTransition: (event: MouseEvent) => void;
@@ -101,13 +101,20 @@ export function renderDetailChip(params: {
         data-worktree=${String(params.worktree)}
         aria-haspopup="dialog"
         aria-expanded=${String(params.popoverOpen)}
-        ?disabled=${params.submitting || params.pendingCloud}
+        ?disabled=${params.submitting || params.pendingPlacement}
         @click=${params.onGuardTransition}
       >
         <span class="new-session-page__target-icon" aria-hidden="true">${icons.gitBranch}</span>
         <span class="new-session-page__trigger-label">${params.state.label}</span>
-        <span class="new-session-page__trigger-chevron" aria-hidden="true"
+        <span
+          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
+          aria-hidden="true"
           >${icons.chevronDown}</span
+        >
+        <span
+          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--mobile"
+          aria-hidden="true"
+          >${icons.chevronsUpDown}</span
         >
       </button>
     </span>
@@ -121,6 +128,7 @@ export function renderDetailChip(params: {
       @wa-after-hide=${params.onPopoverAfterHide}
     >
       <div class="new-session-page__picker-root">
+        <div class="new-session-page__menu-title">${t("newSession.branches")}</div>
         ${renderSessionMenuItem(
           {
             value: "worktree",

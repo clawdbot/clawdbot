@@ -5,13 +5,16 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
 (() => {
   const output = [];
   const pending = new Map();
-  const catalog = Array.isArray(globalThis.__openclawCatalog) ? globalThis.__openclawCatalog : [];
+  const catalogBindings = Array.isArray(globalThis.__openclawCatalog) ? globalThis.__openclawCatalog : [];
   const apiFiles = Array.isArray(globalThis.__openclawApiFiles) ? globalThis.__openclawApiFiles : [];
   const namespaceDescriptors = Array.isArray(globalThis.__openclawNamespaces) ? globalThis.__openclawNamespaces : [];
   const hostRequest = globalThis.__openclawHostRequest;
   const hostCancelRequest = globalThis.__openclawHostCancelRequest;
   delete globalThis.__openclawHostRequest;
   delete globalThis.__openclawHostCancelRequest;
+  delete globalThis.__openclawCatalog;
+  delete globalThis.__openclawApiFiles;
+  delete globalThis.__openclawNamespaces;
   const bridgeSequences = new Map();
   const timers = new Map();
   let nextTimerId = 0;
@@ -153,13 +156,6 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     get: async (idOrName) => nodeHandle(await request("nodes", ["get", idOrName])),
   });
 
-  const baseTools = Object.create(null);
-  Object.defineProperties(baseTools, {
-    search: { value: (query, options) => request("search", [query, options]), enumerable: true },
-    describe: { value: (id) => request("describe", [id]), enumerable: true },
-    call: { value: (id, input) => request("call", [id, input]), enumerable: true },
-    callValue: { value: (id, input) => request("callValue", [id, input]), enumerable: true },
-  });
   const skills = Object.freeze({
     list: () => request("skillsList", []),
     read: (name) => request("skillsRead", [name]),
@@ -220,23 +216,65 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     },
   });
 
-  const safeNameCounts = new Map();
-  for (const tool of catalog) {
-    const name = typeof tool?.name === "string" ? tool.name : "";
-    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) continue;
-    safeNameCounts.set(name, (safeNameCounts.get(name) ?? 0) + 1);
-  }
-  for (const tool of catalog) {
-    const name = typeof tool?.name === "string" ? tool.name : "";
-    const id = typeof tool?.id === "string" ? tool.id : "";
-    if (!id || safeNameCounts.get(name) !== 1 || Object.prototype.hasOwnProperty.call(baseTools, name)) {
-      continue;
-    }
-    Object.defineProperty(baseTools, name, {
-      value: (input) => request("callValue", [id, input]),
-      enumerable: true,
+  const callableHandles = new Map();
+  const callableMetadata = new WeakMap();
+  function callableHandle(binding) {
+    const callableName = typeof binding?.callableName === "string" ? binding.callableName : "";
+    if (!callableName) return null;
+    const existing = callableHandles.get(callableName);
+    if (existing) return existing;
+    const handle = (input) => request("callValue", [callableName, input]);
+    const metadata = Object.freeze({
+      callableName,
+      toolName: typeof binding.name === "string" ? binding.name : callableName,
+      label: typeof binding.label === "string" ? binding.label : undefined,
+      description: typeof binding.description === "string" ? binding.description : "",
+      source: binding.source,
+      input: binding.input,
+      output: binding.output,
     });
+    for (const [key, value] of Object.entries(metadata)) {
+      Object.defineProperty(handle, key, { value, enumerable: true });
+    }
+    Object.defineProperties(handle, {
+      name: { value: callableName },
+      describe: { value: () => request("describe", [callableName]), enumerable: true },
+      toJSON: { value: () => metadata },
+    });
+    const frozen = Object.freeze(handle);
+    callableHandles.set(callableName, frozen);
+    callableMetadata.set(frozen, metadata);
+    return frozen;
   }
+  // Final values may nest handles (Promise.all of searches, keyed maps); an
+  // unserialized handle dumps as null and the model never learns the tool name.
+  function serializeCatalogHandles(value, seen = new Set()) {
+    const metadata = callableMetadata.get(value);
+    if (metadata) return metadata;
+    if (value === null || typeof value !== "object" || seen.has(value)) return value;
+    const proto = Object.getPrototypeOf(value);
+    if (!Array.isArray(value) && proto !== Object.prototype && proto !== null) return value;
+    seen.add(value);
+    try {
+      if (Array.isArray(value)) return value.map((entry) => serializeCatalogHandles(entry, seen));
+      const plain = {};
+      for (const [key, entry] of Object.entries(value)) {
+        plain[key] = serializeCatalogHandles(entry, seen);
+      }
+      return plain;
+    } finally {
+      seen.delete(value);
+    }
+  }
+  const catalog = Object.freeze({
+    search: async (query, options) => {
+      const matches = await request("search", [query, options]);
+      return Object.freeze(matches.map((name) =>
+        callableHandles.get(String(name))
+      ).filter(Boolean));
+    },
+    all: () => Object.freeze([...callableHandles.values()]),
+  });
 
   const namespaceGlobals = Object.create(null);
   for (const descriptor of namespaceDescriptors) {
@@ -257,19 +295,30 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     });
   }
 
+  for (const binding of catalogBindings) {
+    const handle = callableHandle(binding);
+    const callableName = typeof binding?.callableName === "string" ? binding.callableName : "";
+    if (!handle || !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(callableName)) continue;
+    Object.defineProperty(globalThis, callableName, {
+      value: handle,
+      enumerable: true,
+      configurable: true,
+    });
+  }
+
   Object.defineProperties(globalThis, {
-    ALL_TOOLS: { value: Object.freeze(catalog.slice()), enumerable: true },
     API: { value: api, enumerable: true },
+    catalog: { value: catalog, enumerable: true },
     nodes: { value: nodes, enumerable: true },
     namespaces: { value: Object.freeze(namespaceGlobals), enumerable: true },
     skills: { value: skills, enumerable: true },
     setTimeout: { value: (callback, delay, ...args) => scheduleTimer(callback, delay, args), enumerable: true },
     clearTimeout: { value: cancelTimer, enumerable: true },
-    tools: { value: Object.freeze(baseTools), enumerable: true },
     text: { value: (value) => output.push({ type: "text", text: asText(value) }), enumerable: true },
     json: { value: (value) => output.push({ type: "json", value: safe(value) }), enumerable: true },
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
     __openclawSettleBridge: { value: settle },
+    __openclawSerializeCatalogHandles: { value: serializeCatalogHandles },
     __openclawTakeOutput: { value: () => output.splice(0) },
   });
 })();

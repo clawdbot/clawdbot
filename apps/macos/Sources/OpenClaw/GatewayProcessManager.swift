@@ -1010,6 +1010,15 @@ extension GatewayProcessManager {
         let startGeneration = self.gatewayStartGeneration
         if await self.observeCurrentGatewayStart(generation: startGeneration) == true { return true }
         guard !Task.isCancelled, self.isCurrentGatewayStart(startGeneration) else { return false }
+        // Only a real launch candidate/install can recover after its owner reports failure.
+        if case .failed = self.status,
+           !launchAgentInstalled,
+           self.launchAgentReadinessCandidate == nil,
+           self.launchAgentReadinessFailure == nil,
+           self.launchAgentInstallGeneration != startGeneration
+        {
+            return false
+        }
         let readinessPort = self.launchAgentReadinessCandidate?.failure.port
             ?? GatewayEnvironment.gatewayPort()
         let context = self.gatewayReadinessContext(
@@ -1143,6 +1152,7 @@ extension GatewayProcessManager {
         let connection = self.connection
         // Startup owns recovery and its wall-clock deadline. A normal request can recursively
         // start the Gateway and spend several 30-second connect retries before its RPC timer begins.
+        // Disable the inner RPC timer so it cannot race the owner's typed probe timeout.
         return try await AsyncTimeout.withTimeout(
             seconds: max(0.001, timeoutMs / 1000),
             onTimeout: { GatewayHealthProbeTimeout(timeoutMs: timeoutMs) },
@@ -1150,7 +1160,7 @@ extension GatewayProcessManager {
                 try await connection.request(
                     method: GatewayConnection.Method.health.rawValue,
                     params: nil,
-                    timeoutMs: timeoutMs,
+                    timeoutMs: 0,
                     retryTransportFailures: false)
             })
     }

@@ -10,7 +10,7 @@ vi.mock("../../agents/auth-profiles/source-check.js", () => ({
 import {
   clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
-  resolveSessionAuthProfileOverrideMock,
+  resolveSessionAuthSelectionMock,
   resetRunCronIsolatedAgentTurnHarness,
   restoreFastTestEnv,
 } from "./run.test-harness.js";
@@ -58,6 +58,6 @@ describe("runCronIsolatedAgentTurn auth-profile cold path", () => {
 
     expect(result.status).toBe("ok");
     expect(hasAnyAuthProfileStoreSourceMock).toHaveBeenCalledTimes(1);
-    expect(resolveSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+    expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
   });
 });

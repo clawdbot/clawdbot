@@ -361,6 +361,15 @@ describe("agentCliCommand", () => {
     expect(zeroTimeoutGatewayRequestMs).toBe(2_147_000_000);
   });
 
+  it("rejects a blank agent before selecting a local or Gateway target", async () => {
+    await expect(agentCliCommand({ message: "hi", agent: "" }, runtime)).rejects.toThrow(
+      "--agent must not be blank",
+    );
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(agentCommand).not.toHaveBeenCalled();
+  });
+
   it("clamps oversized gateway timeout seconds at the command boundary", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();

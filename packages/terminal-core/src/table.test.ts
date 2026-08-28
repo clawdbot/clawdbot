@@ -2,8 +2,13 @@
 import path from "node:path";
 import { note as clackNote } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { visibleWidth } from "./ansi.js";
-import { resolveNoteColumns, resolveNoteOutputColumns, wrapNoteMessage } from "./note.js";
+import { stripAnsi, visibleWidth } from "./ansi.js";
+import {
+  noteToStream,
+  resolveNoteColumns,
+  resolveNoteOutputColumns,
+  wrapNoteMessage,
+} from "./note.js";
 import { renderTable } from "./table.js";
 
 function mockProcessPlatform(platform: NodeJS.Platform): void {
@@ -65,23 +70,20 @@ describe("renderTable", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["$&", "$`", "$'", "$$"])(
-    "displays a literal %s home path in terminal tables",
-    (pattern) => {
-      const home = path.resolve("test-home", `${pattern}user`);
-      vi.stubEnv("HOME", home);
-      vi.stubEnv("USERPROFILE", "");
-      vi.stubEnv("OPENCLAW_HOME", "~/state");
+  it("renders fitting ASCII cells without grapheme segmentation", () => {
+    const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
 
-      expect(
-        renderTable({
-          columns: [{ key: "location", header: "Location" }],
-          rows: [{ location: `${home}/state/project` }],
-          border: "none",
-        }),
-      ).toBe("Location\n$OPENCLAW_HOME/project\n");
-    },
-  );
+    const out = renderTable({
+      border: "ascii",
+      columns: [{ key: "Name", header: "Name" }],
+      rows: [{ Name: "alpha" }, { Name: "beta" }],
+    });
+
+    expect(out).toBe(
+      ["+-------+", "| Name  |", "+-------+", "| alpha |", "| beta  |", "+-------+", ""].join("\n"),
+    );
+    expect(segment).not.toHaveBeenCalled();
+  });
 
   it("prefers shrinking flex columns to avoid wrapping non-flex labels", () => {
     const out = renderTable({
@@ -808,6 +810,24 @@ describe("wrapNoteMessage", () => {
     expect(rendered).toContain(
       "- ~/.openclaw/agents/main/sessions/9c2acae5-841f-4aea-936b-fdb513b60202.jsonl.lock",
     );
+  });
+
+  it("routes notes and wrapping through the selected output", () => {
+    const writes: string[] = [];
+    const output = {
+      columns: 120,
+      write(chunk: string) {
+        writes.push(chunk);
+        return true;
+      },
+    } as unknown as NodeJS.WriteStream;
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    noteToStream("word ".repeat(18).trim(), "Wide note", output);
+
+    const rendered = stripAnsi(writes.join(""));
+    expect(rendered).toContain("word ".repeat(17).trim());
+    expect(stdoutWrite).not.toHaveBeenCalled();
   });
 
   it("coerces nullish and non-string note messages before wrapping", () => {

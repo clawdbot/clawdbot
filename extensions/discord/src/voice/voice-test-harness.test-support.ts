@@ -1,8 +1,8 @@
 import { PassThrough } from "node:stream";
 import { DAVESession } from "@discordjs/voice";
-import { expectDefined } from "@openclaw/normalization-core";
 import { VoiceOpcodes, type VoiceSendPayload } from "discord-api-types/voice/v8";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createVoiceCaptureState } from "./capture-state.js";
@@ -37,6 +37,7 @@ const {
   textToSpeechMock,
   logVerboseMock,
   loggerWarnMock,
+  loggerErrorMock,
   resolveConfiguredRealtimeVoiceProviderMock,
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
@@ -45,6 +46,9 @@ const {
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
   enqueueSystemEventMock,
+  assertSecretOwnerAvailableMock,
+  isSecretOwnerAvailableMock,
+  canonicalizeRealtimeVoiceProviderIdMock,
 } = voiceTestMocks;
 const [managerModule, realtimeModule, segmentModule] = await Promise.all([
   import("./voice-runtime.js"),
@@ -105,9 +109,17 @@ function buildVoiceTestHarness() {
     textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
     logVerboseMock.mockClear();
     loggerWarnMock.mockClear();
+    loggerErrorMock.mockClear();
     updateVoiceStateMock.mockClear();
     enqueueSystemEventMock.mockClear();
     enqueueSystemEventMock.mockReturnValue(true);
+    assertSecretOwnerAvailableMock.mockReset();
+    isSecretOwnerAvailableMock.mockReset();
+    isSecretOwnerAvailableMock.mockReturnValue(true);
+    canonicalizeRealtimeVoiceProviderIdMock.mockReset();
+    canonicalizeRealtimeVoiceProviderIdMock.mockImplementation((providerId: string | undefined) =>
+      providerId?.trim().toLowerCase(),
+    );
     createAudioResourceMock.mockClear();
     realtimeSessionMock.close.mockClear();
     realtimeSessionMock.connect.mockClear();
@@ -630,6 +642,7 @@ function buildVoiceTestHarness() {
     textToSpeechMock,
     logVerboseMock,
     loggerWarnMock,
+    loggerErrorMock,
     resolveConfiguredRealtimeVoiceProviderMock,
     createRealtimeVoiceBridgeSessionMock,
     controlRealtimeVoiceAgentRunMock,
@@ -638,6 +651,9 @@ function buildVoiceTestHarness() {
     decodeOpusStreamChunksMock,
     updateVoiceStateMock,
     enqueueSystemEventMock,
+    assertSecretOwnerAvailableMock,
+    isSecretOwnerAvailableMock,
+    canonicalizeRealtimeVoiceProviderIdMock,
     managerModule,
     realtimeModule,
     segmentModule,

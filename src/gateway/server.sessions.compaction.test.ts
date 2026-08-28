@@ -36,6 +36,7 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   embeddedRunMock,
@@ -444,6 +445,94 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
 
   ws.close();
 });
+
+test.each([false, true])(
+  "sessions.compaction.branch uses the branching creator's sandbox requirement (%s), not its source's",
+  async (required) => {
+    const { dir, storePath } = await createSessionStoreDir();
+    const fixture = await createCheckpointFixture(dir, { legacyPreCompactionSnapshot: false });
+    const sessionKey = "agent:main:main";
+    const checkpoint = compactionCheckpointEntry(fixture, {
+      checkpointId: "checkpoint-creator-policy",
+      sessionKey,
+      createdAt: Date.now(),
+      reason: "manual",
+      summary: "creator policy branch",
+    });
+    const sourceStamp = {
+      createdVia: "operator" as const,
+      createdActor: { type: "human" as const, id: "checkpoint-source-owner" },
+      createdAt: 123,
+      ...(!required ? { sandbox: "required" as const } : {}),
+    };
+    await seedSessionEntry({
+      entry: sessionStoreEntry(fixture.sessionId, {
+        ...sourceStamp,
+        compactionCheckpoints: [checkpoint],
+      }),
+      sessionKey,
+      storePath,
+    });
+    const sourceScope = { sessionId: fixture.sessionId, sessionKey, storePath };
+    await seedTranscriptRows({ ...sourceScope, totalLines: 2 });
+    await alignCheckpointBoundaryWithSqliteRows(sourceScope);
+    const profile = ensureProfileForEmail("checkpoint-requester@example.test");
+    setUserProfileRole(profile.id, "requester");
+    const runtimeConfig = (await getGatewayConfigModule()).getRuntimeConfig();
+    const cfg = {
+      ...runtimeConfig,
+      session: { ...runtimeConfig.session, store: storePath },
+      gateway: {
+        ...runtimeConfig.gateway,
+        roles: {
+          default: "requester",
+          definitions: {
+            requester: {
+              sessions: { others: "view" as const },
+              agents: ["main"],
+              scopes: ["operator.read" as const, "operator.write" as const],
+              ...(required ? { sandbox: "required" as const } : {}),
+            },
+          },
+        },
+      },
+    };
+    const branched = await directSessionReq<{ key: string }>(
+      "sessions.compaction.branch",
+      { key: "main", checkpointId: checkpoint.checkpointId },
+      {
+        client: {
+          connect: {
+            minProtocol: 3,
+            maxProtocol: 3,
+            client: { id: "test", mode: "test", platform: "test", version: "test" },
+            role: "operator",
+            scopes: ["operator.read", "operator.write"],
+          },
+          authenticatedUserProfile: {
+            profileId: profile.id,
+            displayName: profile.displayName,
+            hasAvatar: false,
+            updatedAt: profile.updatedAt,
+          },
+        },
+        context: { getRuntimeConfig: () => cfg },
+      },
+    );
+    expect(branched.ok, JSON.stringify(branched.error)).toBe(true);
+    const branch = loadSessionEntry({ sessionKey: branched.payload?.key ?? "", storePath });
+    expect(branch).toMatchObject({
+      createdVia: "operator",
+      createdActor: { type: "human", id: profile.id },
+      createdAt: expect.any(Number),
+    });
+    expect(branch?.createdAt).not.toBe(sourceStamp.createdAt);
+    expect(branch?.sandbox).toBe(required ? "required" : undefined);
+    const source = loadSessionEntry(sourceScope);
+    expect(source).toMatchObject(sourceStamp);
+    expect(source?.sandbox).toBe(required ? undefined : "required");
+  },
+);
 
 test("sessions.compaction.branch rejects model-selection-locked session identities", async () => {
   const { dir, storePath } = await createSessionStoreDir();
@@ -1147,7 +1236,6 @@ test("sessions.reset waits for terminal compaction before replacing the session"
   const reset = await resetResult;
   expect(reset.ok).toBe(true);
   const resetSessionId = reset.payload?.entry.sessionId;
-  expect(resetSessionId).toBeTruthy();
   expect(resetSessionId).toBe("sess-compact-reset");
   const resetEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(resetEntry?.sessionId).toBe(resetSessionId);

@@ -544,7 +544,7 @@ describe("SqliteBoardStore persistence", () => {
     expect(store.readWidgetMcpApp(sessionKey, "legacy-app")).toBeUndefined();
   });
 
-  it("migrates board tables into an existing v14 database", () => {
+  it("migrates board tables into an existing v14 database", async () => {
     const stateDir = tempDirs.make("openclaw-board-lazy-schema-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sessionKey = "agent:main:board";
@@ -559,12 +559,13 @@ describe("SqliteBoardStore persistence", () => {
     existingV14.exec(`
       DROP TABLE board_widgets;
       DROP TABLE board_tabs;
+      DROP TABLE session_participants;
       PRAGMA user_version = 14;
       UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
     `);
     existingV14.close();
 
-    expect(migrateLegacyMediaPersistence({ env }).warnings).toEqual([]);
+    expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
 
     const reopened = openOpenClawAgentDatabase({ agentId: "main", env });
     expect(
@@ -614,7 +615,7 @@ describe("SqliteBoardStore persistence", () => {
     ).toEqual({ name: "idx_agent_board_widgets_tab_position" });
   });
 
-  it("upgrades the v14 board constraint before storing plugin widgets", () => {
+  it("upgrades the v14 board constraint before storing plugin widgets", async () => {
     const stateDir = tempDirs.make("openclaw-board-plugin-kind-schema-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sessionKey = "agent:main:board";
@@ -657,12 +658,13 @@ describe("SqliteBoardStore persistence", () => {
         ON board_widgets(session_key, tab_id, position);
       COMMIT;
       PRAGMA foreign_keys = ON;
+      DROP TABLE session_participants;
       PRAGMA user_version = 14;
       UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
     `);
     closeOpenClawAgentDatabasesForTest();
 
-    expect(migrateLegacyMediaPersistence({ env }).warnings).toEqual([]);
+    expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
 
     const upgradedStore = new SqliteBoardStore({
       resolveSession: () => ({ agentId: "main", sessionKey }),
@@ -990,7 +992,7 @@ describe("SqliteBoardStore persistence", () => {
             .get(sessionKey) as { manifest: string }
         ).manifest,
       ),
-    ).toEqual({ tools: ["health"], grantSemanticsVersion: 2 });
+    ).toEqual({ contentOwner: "html", tools: ["health"], grantSemanticsVersion: 2 });
   });
 
   it("reopens durable boards and isolates owning agent databases", () => {

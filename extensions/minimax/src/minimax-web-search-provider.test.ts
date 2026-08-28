@@ -9,7 +9,6 @@ const {
   resolveMiniMaxApiKey,
   resolveMiniMaxEndpoint,
   resolveMiniMaxRegion,
-  readMiniMaxSearchJsonResponse,
 } = minimaxWebSearchTesting;
 
 function restoreEnvValue(key: string, value: string | undefined) {
@@ -240,11 +239,5 @@ describe("minimax web search provider", () => {
     it("uses correct CN endpoint", () => {
       expect(MINIMAX_SEARCH_ENDPOINT_CN).toBe("https://api.minimaxi.com/v1/coding_plan/search");
     });
-  });
-
-  it("reports malformed Search API JSON with a stable provider error", async () => {
-    await expect(
-      readMiniMaxSearchJsonResponse(new Response("{ nope"), "MiniMax Search API error"),
-    ).rejects.toThrow("MiniMax Search API error: malformed JSON response");
   });
 });

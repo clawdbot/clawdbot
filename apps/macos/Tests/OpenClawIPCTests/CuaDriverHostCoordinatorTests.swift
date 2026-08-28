@@ -423,6 +423,10 @@ struct CuaDriverHostCoordinatorTests {
         driver diagnostic
 
         """
+        // The relay's readability handler calls stop() on any empty read, which
+        // closes the pipe's read end; without suppression a racing stop turns
+        // this write into a harness-killing SIGPIPE.
+        try TestProcessSupport.suppressSIGPIPE(relay.pipe.fileHandleForWriting)
         try relay.pipe.fileHandleForWriting.write(contentsOf: Data(driverOutput.utf8))
         try relay.pipe.fileHandleForWriting.close()
         for _ in 0..<1000 where probe.events.count < 2 {

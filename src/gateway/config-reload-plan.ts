@@ -26,6 +26,7 @@ export type GatewayReloadPlan = {
   restartGmailWatcher: boolean;
   restartCron: boolean;
   restartHeartbeat: boolean;
+  reconcileSkillReviewJobs?: boolean;
   restartHealthMonitor: boolean;
   reloadPlugins: boolean;
   restartChannels: Set<ChannelKind>;
@@ -44,6 +45,7 @@ export function isNoopGatewayReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.restartGmailWatcher &&
     !plan.restartCron &&
     !plan.restartHeartbeat &&
+    !plan.reconcileSkillReviewJobs &&
     !plan.restartHealthMonitor &&
     !plan.reloadPlugins &&
     !plan.disposeMcpRuntimes &&
@@ -69,6 +71,7 @@ type ReloadAction =
   | "restart-gmail-watcher"
   | "restart-cron"
   | "restart-heartbeat"
+  | "reconcile-skill-review-jobs"
   | "restart-health-monitor"
   | "reload-plugins"
   | "dispose-mcp-runtimes"
@@ -132,6 +135,11 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   },
   { prefix: "agents.ownership", kind: "hot", actions: ["refresh-hooks-policy"] },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
+  {
+    prefix: "skills.workshop.autonomous.mode",
+    kind: "hot",
+    actions: ["reconcile-skill-review-jobs"],
+  },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
   // The dedicated Apps listener and origin are created once during Gateway
   // startup; disposing MCP runtimes cannot move or create that HTTP server.
@@ -141,6 +149,9 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "secrets.egressProxy", kind: "restart" },
   { prefix: "plugins.load", kind: "restart" },
   { prefix: "plugins.installs", kind: "restart" },
+  // Capability ownership changes must replace the plugin generation that owns its routes.
+  { prefix: "talk.provider", kind: "hot", actions: ["reload-plugins"] },
+  { prefix: "talk.realtime.provider", kind: "hot", actions: ["reload-plugins"] },
 ];
 
 const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
@@ -187,7 +198,8 @@ function listReloadRules(): ReloadRule[] {
     return cachedReloadRules;
   }
   // Channel docking: plugins contribute hot reload/no-op prefixes here.
-  const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => {
+  const channelPlugins = listChannelPlugins();
+  const channelReloadRules: ReloadRule[] = channelPlugins.flatMap((plugin) => {
     const restartAction = plugin.reload?.accountScopedRestart
       ? (`restart-channel-account:${plugin.id}` as ReloadAction)
       : (`restart-channel:${plugin.id}` as ReloadAction);
@@ -212,7 +224,7 @@ function listReloadRules(): ReloadRule[] {
         ),
       );
   });
-  const channelPluginStateRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => [
+  const channelPluginStateRules: ReloadRule[] = channelPlugins.flatMap((plugin) => [
     {
       prefix: `plugins.entries.${plugin.id}`,
       kind: "hot",
@@ -246,11 +258,18 @@ function listReloadRules(): ReloadRule[] {
         ),
       ),
   );
-  const rules = [
+  const rules: ReloadRule[] = [
     ...BASE_RELOAD_RULES,
     ...pluginReloadRules,
     ...channelReloadRules,
     ...channelPluginStateRules,
+    // Channel snapshots capture the shared fallback. Fan out by default while
+    // preserving explicit plugin/channel policies above on equal-prefix ties.
+    {
+      prefix: "agents.defaults.mediaMaxMb",
+      kind: "hot",
+      actions: channelPlugins.map(({ id }): ReloadAction => `restart-channel:${id}`),
+    },
     ...BASE_RELOAD_RULES_TAIL,
   ];
   // Narrow config contracts must override broad owner fallbacks. Sort once per
@@ -409,6 +428,7 @@ export function buildGatewayReloadPlan(
     restartGmailWatcher: false,
     restartCron: false,
     restartHeartbeat: false,
+    reconcileSkillReviewJobs: false,
     restartHealthMonitor: false,
     reloadPlugins: false,
     restartChannels: new Set(),
@@ -468,6 +488,9 @@ export function buildGatewayReloadPlan(
         break;
       case "restart-heartbeat":
         plan.restartHeartbeat = true;
+        break;
+      case "reconcile-skill-review-jobs":
+        plan.reconcileSkillReviewJobs = true;
         break;
       case "restart-health-monitor":
         plan.restartHealthMonitor = true;

@@ -1,7 +1,11 @@
 // Implements `openclaw channels status` with gateway status and config-only fallback.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { formatCliFailureLines, isExpectedCliError } from "../../cli/failure-output.js";
+import {
+  formatCliFailureLines,
+  isExpectedCliError,
+  isGatewayCredentialsCliError,
+} from "../../cli/failure-output.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { withProgress } from "../../cli/progress.js";
 import { callGateway } from "../../gateway/call.js";
@@ -77,7 +81,8 @@ export async function channelsStatusCommand(
   } catch (err) {
     const safeError = formatChannelsStatusError(err);
     const expectedError = isExpectedCliError(err);
-    const gatewayAuthUnavailable = expectedError || isGatewaySecretRefUnavailableError(err);
+    const gatewayAuthUnavailable =
+      isGatewayCredentialsCliError(err) || isGatewaySecretRefUnavailableError(err);
     const expectedErrorOutput = expectedError
       ? formatCliFailureLines({ title: "", error: err }).join("\n")
       : undefined;

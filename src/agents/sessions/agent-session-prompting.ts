@@ -418,11 +418,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * Internal: Queue a follow-up message (already expanded, no extension command check).
    */
   private async queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
-    const message = {
-      role: "user",
-      content: this.createUserContent(text, images),
-      timestamp: Date.now(),
-    } satisfies AgentMessage;
+    const message = this.createUserMessage(text, images);
     this.trackQueuedUserMessage(message, "followUp", text);
     this.agent.followUp(message);
   }

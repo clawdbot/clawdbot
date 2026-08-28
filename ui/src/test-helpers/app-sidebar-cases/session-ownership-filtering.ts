@@ -27,6 +27,8 @@ async function selectOwner(sidebar: SidebarLifecycleState, ownerId: string) {
     }),
   );
   await sidebar.updateComplete;
+  await waitForFast(() => expect(sidebar.sessionData.sessionsLoading).toBe(false));
+  await sidebar.updateComplete;
 }
 
 describe("AppSidebar session ownership filtering", () => {
@@ -147,7 +149,9 @@ describe("AppSidebar session ownership filtering", () => {
     expect(sidebar.querySelector('[data-session-key="agent:main:bob"]')).toBeNull();
     expect(sidebar.querySelector('[data-session-section="category:Research"]')).not.toBeNull();
     expect(sidebar.querySelector('[data-session-section="category:Operations"]')).toBeNull();
-    expect(sidebar.querySelector(".sidebar-session-sort--filtered")).not.toBeNull();
+    expect(
+      sidebar.querySelector(".sidebar-session-toolbar .sidebar-session-sort--filtered"),
+    ).not.toBeNull();
   });
 
   it("filters adopted catalog rows by authoritative live ownership", async () => {
@@ -230,6 +234,7 @@ describe("AppSidebar session ownership filtering", () => {
       result: { ...result, count: 1, sessions: [ada] },
       agentId: "main",
     });
+    await sidebar.sessionData.refreshSidebarSessions();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(`[data-session-key="${backingSessionKey}"]`)).toBeNull();
     expect(sidebar.textContent).not.toContain("External unowned session");

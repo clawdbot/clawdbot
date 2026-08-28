@@ -124,6 +124,7 @@ describe("local TUI PTY fixture support", () => {
     const run = {
       cols: 100,
       output: () => output,
+      pid: 123,
       rows: 30,
       visibleOutput: () => output.replace(/\s+/gu, " "),
       write: async (data: string) => {

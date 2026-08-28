@@ -21,6 +21,7 @@ import {
   appendTokenSourceBits,
   buildChannelAccountLine,
   type ChatChannel,
+  NO_CONFIGURED_CHAT_CHANNELS_LINE,
 } from "./shared.js";
 import { formatConfigChannelsStatusLines } from "./status-config-format.js";
 import type { ChannelsStatusOptions } from "./status.js";
@@ -193,11 +194,15 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       accountPayloads[channelId] = raw as Array<Record<string, unknown>>;
     }
   }
+  const accountLinesStart = lines.length;
   for (const channelId of Object.keys(accountPayloads).toSorted()) {
     const accounts = accountPayloads[channelId];
     if (accounts && accounts.length > 0) {
       lines.push(...accountLines(channelId, accounts));
     }
+  }
+  if (lines.length === accountLinesStart) {
+    lines.push(theme.muted(NO_CONFIGURED_CHAT_CHANNELS_LINE));
   }
 
   lines.push("");

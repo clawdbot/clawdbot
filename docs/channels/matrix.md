@@ -74,7 +74,7 @@ Password-based (token is cached after first login):
 <Warning>
 Set `autoJoin: "allowlist"` plus `autoJoinAllowlist` to restrict accepted invites, or `autoJoin: "always"` to accept every invite.
 
-`autoJoinAllowlist` accepts only `!roomId:server`, `#alias:server`, or `*`. Plain room names are rejected; aliases resolve against the homeserver, not against state the invited room claims.
+`autoJoinAllowlist` accepts only a literal room ID (`!roomId:server`, or the suffixless `!roomId` form used by [room version 12](https://spec.matrix.org/latest/rooms/v12/) and later), `#alias:server`, or `*`. Plain room names are rejected; aliases resolve against the homeserver, not against state the invited room claims.
 </Warning>
 
 ```json5
@@ -91,14 +91,32 @@ Set `autoJoin: "allowlist"` plus `autoJoinAllowlist` to restrict accepted invite
 }
 ```
 
+### Group join introductions
+
+When the bot joins an allowed group room, it posts one introduction grounded in
+the room name, topic, and up to 100 readable recent room messages. If reading
+history fails, the introduction uses only available metadata and does not invent
+room activity.
+
+Introductions are enabled by default. Set `channels.matrix.joinIntro: false` to
+disable them, or use `channels.matrix.accounts.<accountId>.joinIntro` to override
+one account. Direct rooms never receive introductions. Only an actual join
+transition triggers one: an unaccepted invite, a startup snapshot of an existing
+room, or a profile update while already joined does not. This does not change
+[`autoJoin`](#auto-join), which defaults to `"off"`.
+
+See [group join introductions](/channels#group-join-introductions) for room
+admission, once-per-room behavior, and the no-tools turn that treats room content
+as untrusted.
+
 ### Allowlist target formats
 
 Matrix user IDs are case-sensitive. Copy the exact `@user:server` value Matrix reports for every allowlist, approver, and approval-target field. If an existing config used different casing, update it manually; OpenClaw cannot safely infer or rewrite the intended account because case-distinct IDs can identify different users.
 
 - DMs (`dm.allowFrom`, `groupAllowFrom`, `groups.<room>.users`): use `@user:server`. Display names are ignored by default (mutable); set `dangerouslyAllowNameMatching: true` only for explicit display-name compatibility.
 - Approval forwarding (`approvals.exec.targets[].to` with `channel: "matrix"`): use `user:@user:server` with the exact Matrix casing.
-- Room allowlist keys (`groups`, legacy alias `rooms`): use `!room:server` or `#alias:server`. Plain names are ignored unless `dangerouslyAllowNameMatching: true`.
-- Invite allowlists (`autoJoinAllowlist`): use `!room:server`, `#alias:server`, or `*`. Plain names are always rejected.
+- Room allowlist keys (`groups`, legacy alias `rooms`): use `!room:server` (or the suffixless `!room` form on room version 12+) or `#alias:server`. Plain names are ignored unless `dangerouslyAllowNameMatching: true`.
+- Invite allowlists (`autoJoinAllowlist`): use `!room:server` (or suffixless `!room` on room version 12+), `#alias:server`, or `*`. Plain names are always rejected.
 
 ### Account ID normalization
 
@@ -341,6 +359,8 @@ openclaw matrix account add \
 openclaw matrix verify status
 openclaw matrix verify status --include-recovery-key --json
 ```
+
+With `--include-recovery-key`, text output confirms when a raw recovery key is available and directs you to add `--json`. Text output never prints the key itself; keep JSON output containing a recovery key private.
 
 `verify status` reports three independent trust signals (`--verbose` shows all of them):
 
@@ -587,8 +607,11 @@ Outbound reaction tooling is gated by `channels.matrix.actions.reactions`:
 
 - `react` adds a reaction to a Matrix event.
 - `reactions` lists the current reaction summary for a Matrix event.
+- `emoji-list` discovers custom emoji from the current conversation's room packs and your personal pack.
 - `emoji=""` removes the bot's own reactions on that event.
 - `remove: true` removes only the specified emoji reaction from the bot.
+
+`emoji-list` reads MSC2545 `im.ponies.room_emotes` packs from the authorized current room and `im.ponies.user_emotes` account data. It returns up to 100 sorted entries such as `{ "name": "party", "identifier": "party", "url": "mxc://example.org/party" }`; sticker-only entries are excluded. Pass `identifier` to `react`: it is the plain shortcode stored directly as the Matrix reaction's `m.relates_to.key`, not the `mxc://` media URL. Custom-reaction rendering depends on the Matrix client, so `url` is included separately for clients or agents that need the image.
 
 **Resolution order** (first defined value wins):
 
@@ -823,7 +846,7 @@ Named accounts can override the top-level default with `channels.matrix.accounts
 Matrix accepts these target forms anywhere OpenClaw asks for a room or user target:
 
 - Users: `@user:server`, `user:@user:server`, or `matrix:user:@user:server`
-- Rooms: `!room:server`, `room:!room:server`, or `matrix:room:!room:server`
+- Rooms: `!room:server`, `room:!room:server`, or `matrix:room:!room:server` (room version 12+ room IDs have no `:server` suffix — `!room`, `room:!room`, `matrix:room:!room` — and are accepted the same way)
 - Aliases: `#alias:server`, `channel:#alias:server`, or `matrix:channel:#alias:server`
 
 Matrix room IDs are case-sensitive. Use the exact room ID casing from Matrix when configuring explicit delivery targets, cron jobs, bindings, or allowlists. OpenClaw keeps internal session keys canonical for storage, so those lowercase keys are not a reliable source for Matrix delivery IDs.
@@ -882,6 +905,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 
 ### Reply behavior
 
+- `joinIntro`: introduce when the bot joins an allowed group room. Default: `true`. Per-account override: `accounts.<accountId>.joinIntro`.
 - `replyToMode`: `"off"` (default), `"first"`, `"all"`, or `"batched"`.
 - `threadReplies`: `"off"` (top-level default resolves to `"inbound"` unless explicitly set), `"inbound"`, or `"always"`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.

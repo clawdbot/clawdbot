@@ -66,9 +66,13 @@ describe("SessionManager persistence compatibility", () => {
     ].join("\n");
     const codeExample = buildAssistantMessage(codeExampleText);
     const indentedCode = buildAssistantMessage("    [[reply_to_current]]\n    [[audio_as_voice]]");
+    const malformed = buildAssistantMessage("[[reply_to_current]\nVisible reply");
+    const laterLiteral = buildAssistantMessage("Visible reply\n[[reply_to_current] literally");
     manager.appendMessage(tagged);
     manager.appendMessage(codeExample);
     manager.appendMessage(indentedCode);
+    manager.appendMessage(malformed);
+    manager.appendMessage(laterLiteral);
 
     expect(tagged.content).toEqual([{ type: "text", text: "Final answer" }]);
     expect(tagged).toMatchObject({
@@ -91,15 +95,23 @@ describe("SessionManager persistence compatibility", () => {
     expect(codeExample.content).toEqual([{ type: "text", text: codeExampleText }]);
     expect(codeExample).not.toHaveProperty("openclawDelivery");
     expect(indentedCode).not.toHaveProperty("openclawDelivery");
+    expect(malformed.content).toEqual([{ type: "text", text: "Visible reply" }]);
+    expect(malformed).not.toHaveProperty("openclawDelivery");
+    expect(laterLiteral.content).toEqual([
+      { type: "text", text: "Visible reply\n[[reply_to_current] literally" },
+    ]);
+    expect(laterLiteral).not.toHaveProperty("openclawDelivery");
 
     const persistedMessages = (await loadTranscriptEvents(scope))
       .filter((event) => (event as { type?: unknown }).type === "message")
       .map((event) => (event as { message: unknown }).message);
-    expect(persistedMessages).toEqual([tagged, codeExample, indentedCode]);
+    expect(persistedMessages).toEqual([tagged, codeExample, indentedCode, malformed, laterLiteral]);
     expect(SessionManager.open(scope, dir).buildSessionContext().messages).toEqual([
       tagged,
       codeExample,
       indentedCode,
+      malformed,
+      laterLiteral,
     ]);
   });
 

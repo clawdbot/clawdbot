@@ -152,6 +152,7 @@ type StatusMemorySearchManagerResolver = (params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose: "status";
+  inspectSources: true;
 }) => Promise<{
   manager: StatusMemorySearchManager | null;
 }>;
@@ -191,6 +192,7 @@ function shouldTryLocalStatusRpcFallback(params: {
 
 async function applyLocalStatusRpcFallback(params: {
   cfg: OpenClawConfig;
+  configPath: string;
   gatewayMode: "local" | "remote";
   gatewayUrl: string;
   gatewayProbe: GatewayProbeResult | null;
@@ -218,6 +220,7 @@ async function applyLocalStatusRpcFallback(params: {
     .then(({ callGateway }) =>
       callGateway({
         config: params.cfg,
+        configPath: params.configPath,
         method: "status",
         token: params.gatewayProbeAuth.token,
         password: params.gatewayProbeAuth.password,
@@ -277,6 +280,8 @@ export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStat
 /** Resolves gateway connection details, probe result, auth warnings, and call overrides. */
 export async function resolveGatewayProbeSnapshot(params: {
   cfg: OpenClawConfig;
+  configPath: string;
+  env: NodeJS.ProcessEnv;
   opts: {
     timeoutMs?: number;
     all?: boolean;
@@ -288,7 +293,10 @@ export async function resolveGatewayProbeSnapshot(params: {
     localStatusRpcFallback?: boolean;
   };
 }): Promise<GatewayProbeSnapshot> {
-  const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({ config: params.cfg });
+  const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({
+    config: params.cfg,
+    configPath: params.configPath,
+  });
   const { gatewayMode, remoteUrlMissing } = resolveGatewayProbeTarget(params.cfg);
   const shouldResolveAuth =
     params.opts.skipProbe !== true &&
@@ -298,7 +306,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     (!remoteUrlMissing || params.opts.probeWhenRemoteUrlMissing === true);
   const gatewayProbeAuthResolution = shouldResolveAuth
     ? await loadGatewayProbeModule().then(({ resolveGatewayProbeAuthResolution }) =>
-        resolveGatewayProbeAuthResolution(params.cfg),
+        resolveGatewayProbeAuthResolution(params.cfg, params.env),
       )
     : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
@@ -312,6 +320,7 @@ export async function resolveGatewayProbeSnapshot(params: {
             url: gatewayConnection.url,
             config: params.cfg,
             auth: gatewayProbeAuthResolution.auth,
+            env: params.env,
             timeoutMs: probeTimeoutMs,
             detailLevel: params.opts.detailLevel ?? "presence",
           }),
@@ -320,6 +329,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     : null;
   const gatewayProbe = await applyLocalStatusRpcFallback({
     cfg: params.cfg,
+    configPath: params.configPath,
     gatewayMode,
     gatewayUrl: gatewayConnection.url,
     gatewayProbe: initialGatewayProbe,
@@ -440,6 +450,7 @@ async function resolveMemoryManagerStatusSnapshot(
     cfg: params.cfg,
     agentId,
     purpose: "status",
+    inspectSources: true,
   });
   if (!manager) {
     return null;

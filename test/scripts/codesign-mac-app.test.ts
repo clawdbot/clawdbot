@@ -39,6 +39,10 @@ function installFakeCodesign(binDir: string) {
     `#!/usr/bin/env bash
 set -euo pipefail
 
+if [ -n "\${CODESIGN_ARGS_LOG:-}" ]; then
+  printf '%s\\n' "$*" >>"$CODESIGN_ARGS_LOG"
+fi
+
 entitlements=""
 target=""
 while [ "$#" -gt 0 ]; do
@@ -474,5 +478,83 @@ describe("codesign-mac-app temp file hygiene", () => {
     expect(result.stderr).not.toContain("Transient Apple timestamp failure");
     expect(readFileSync(countFile, "utf8")).toBe("1");
     expect(entitlementTemps(tempRoot)).toEqual([]);
+  });
+
+  it.each([
+    {
+      label: "Developer ID hash",
+      identity: "63A99BFF1D40E5A75C8A32B84BE99D1DDA6A44E1",
+      timestamp: true,
+    },
+    {
+      label: "lowercase Developer ID hash",
+      identity: "63a99bff1d40e5a75c8a32b84be99d1dda6a44e1",
+      timestamp: true,
+    },
+    {
+      label: "Developer ID name",
+      identity: "Developer ID Application: Example Corp (ABCDE12345)",
+      timestamp: true,
+    },
+    {
+      label: "development certificate hash",
+      identity: "11AA22BB33CC44DD55EE66FF77008899AABBCCDD",
+      timestamp: false,
+    },
+    {
+      label: "unknown certificate hash",
+      identity: "0123456789ABCDEF0123456789ABCDEF01234567",
+      timestamp: false,
+    },
+    { label: "ad-hoc identity", identity: "-", timestamp: false },
+    {
+      label: "explicitly disabled timestamp",
+      identity: "63A99BFF1D40E5A75C8A32B84BE99D1DDA6A44E1",
+      timestamp: false,
+      mode: "off",
+    },
+  ])("applies automatic timestamp policy to $label", ({ identity, timestamp, mode }) => {
+    const tempRoot = tempDirs.make("openclaw-codesign-timestamp-");
+    const app = path.join(tempRoot, "Fake.app");
+    const binDir = path.join(tempRoot, "bin");
+    const captureDir = path.join(tempRoot, "capture");
+    const argsLog = path.join(captureDir, "codesign-args.log");
+    mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
+    mkdirSync(binDir);
+    mkdirSync(captureDir);
+    writeFileSync(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
+    installFakeCodesign(binDir);
+    const fakeSecurity = path.join(binDir, "security");
+    writeFileSync(
+      fakeSecurity,
+      `#!/usr/bin/env bash
+printf '%s\\n' \\
+  '  1) 63A99BFF1D40E5A75C8A32B84BE99D1DDA6A44E1 "Developer ID Application: Example Corp (ABCDE12345)"' \\
+  '  2) 11AA22BB33CC44DD55EE66FF77008899AABBCCDD "Apple Development: Example Developer (ABCDE12345)"'
+`,
+    );
+    chmodSync(fakeSecurity, 0o755);
+
+    const result = spawnSync("bash", [scriptPath, app], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CODESIGN_ARGS_LOG: argsLog,
+        CODESIGN_CAPTURE_DIR: captureDir,
+        CODESIGN_LOG: path.join(captureDir, "codesign.log"),
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        SIGN_IDENTITY: identity,
+        SKIP_TEAM_ID_CHECK: "1",
+        TMPDIR: tempRoot,
+        ...(mode === undefined ? {} : { CODESIGN_TIMESTAMP: mode }),
+      },
+    });
+
+    expect(result.status).toBe(0);
+    const expectedFlag = timestamp ? "--timestamp" : "--timestamp=none";
+    for (const args of readFileSync(argsLog, "utf8").trim().split("\n")) {
+      expect(args.split(" ")).toContain(expectedFlag);
+    }
   });
 });

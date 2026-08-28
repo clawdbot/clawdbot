@@ -9,7 +9,10 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   resolveInlineProviderApiKeyUsageId,
 } from "./auth-profiles.js";
-import { clearCurrentProviderAuthState } from "./model-provider-auth.js";
+import {
+  clearCurrentProviderAuthState,
+  warmCurrentProviderAuthStateOffMainThread,
+} from "./model-provider-auth.js";
 import { runProviderAuthWarmWorkerInput } from "./model-provider-auth.worker.js";
 
 const tempDirs: string[] = [];
@@ -44,6 +47,12 @@ describe("provider auth warm worker", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("launches the default source worker without an injected URL", async () => {
+    await expect(
+      warmCurrentProviderAuthStateOffMainThread({ agents: { list: [] } }, { timeoutMs: 30_000 }),
+    ).resolves.toBeUndefined();
+  }, 30_000);
 
   it("preserves runtime-only auth profile snapshots in the worker warm input", async () => {
     // Runtime-only profiles are not persisted to disk, so the worker input must

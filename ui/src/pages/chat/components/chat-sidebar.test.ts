@@ -2,7 +2,15 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openEditor } from "../../../lib/editor-links.ts";
+import {
+  clearNativeGatewayTestState,
+  setNativeGatewayTestState,
+} from "../../../test-helpers/native-gateways.ts";
 import { hasUniformLineEndings } from "./chat-sidebar.ts";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("hasUniformLineEndings", () => {
   it("accepts uniform and no line endings", () => {
@@ -58,6 +66,80 @@ describe("openEditor", () => {
   });
 });
 
+describe("file sidebar editor locality", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.replaceChildren();
+    clearNativeGatewayTestState();
+  });
+
+  it.each([
+    { name: "plain browser", nativeGateway: null, offered: false },
+    { name: "native local gateway", nativeGateway: "local", offered: true },
+    // Covers the documented `ssh -N -L 18789:127.0.0.1:18789` tunnel: the URL
+    // is loopback, the workspace is not. Only the native kind catches this.
+    { name: "native remote gateway", nativeGateway: "remote", offered: false },
+    {
+      name: "remote execution node",
+      nativeGateway: "local",
+      execNode: "build-mac",
+      offered: false,
+    },
+  ] as const)("offers editors only for native-local files: $name", async (testCase) => {
+    setNativeGatewayTestState(testCase.nativeGateway);
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      execNode: string | null;
+      ensureFileEditor: () => Promise<void>;
+      updateComplete: Promise<unknown>;
+    };
+    panel.execNode = "execNode" in testCase ? (testCase.execNode ?? null) : null;
+    panel.content = {
+      kind: "file",
+      path: "src/example.ts",
+      name: "example.ts",
+      root: "/workspace",
+      content: "const answer = 42;",
+    };
+    vi.spyOn(panel, "ensureFileEditor").mockResolvedValue();
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    expect(panel.querySelector('[aria-label="Open in editor"]') !== null).toBe(testCase.offered);
+    expect(panel.querySelectorAll(".sidebar-file-view__editor-item")).toHaveLength(
+      testCase.offered ? 4 : 0,
+    );
+    // Absent, not merely disabled: a dead control cannot explain why it is dead.
+    expect(panel.querySelector(".sidebar-file-view__editor") !== null).toBe(testCase.offered);
+  });
+
+  it("removes editor controls when the native gateway switches to remote", async () => {
+    setNativeGatewayTestState("local");
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      ensureFileEditor: () => Promise<void>;
+      updateComplete: Promise<unknown>;
+    };
+    panel.content = {
+      kind: "file",
+      path: "src/example.ts",
+      name: "example.ts",
+      root: "/workspace",
+      content: "const answer = 42;",
+    };
+    vi.spyOn(panel, "ensureFileEditor").mockResolvedValue();
+    document.body.append(panel);
+    await panel.updateComplete;
+    expect(panel.querySelector('[aria-label="Open in editor"]')).not.toBeNull();
+
+    setNativeGatewayTestState("remote");
+    await panel.updateComplete;
+
+    expect(panel.querySelector('[aria-label="Open in editor"]')).toBeNull();
+    expect(panel.querySelector(".sidebar-file-view__editor")).toBeNull();
+  });
+});
+
 describe("markdown sidebar", () => {
   it("opens workspace files from markdown preview clicks", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
@@ -80,6 +162,26 @@ describe("markdown sidebar", () => {
       path: "ui/src/pages/chat/chat-view.ts",
       line: 362,
     });
+    panel.remove();
+  });
+
+  it.each([
+    ["a Hebrew document as rtl", "מסמך בעברית עם כמה שורות טקסט", "rtl"],
+    ["a Hebrew heading behind Markdown punctuation as rtl", "## כותרת ראשית", "rtl"],
+    ["an English document as ltr", "# Heading\n\nPlain English body.", "ltr"],
+    // The raw-text view hands the same panel one fenced block; direction still
+    // comes from the first strong character, not from the fence.
+    ["raw Hebrew text as rtl", "```\nשורה ראשונה\n```", "rtl"],
+  ] as const)("renders %s", async (_name, markdown, expected) => {
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      updateComplete?: Promise<unknown>;
+    };
+    panel.content = { kind: "markdown", content: markdown };
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    expect(panel.querySelector(".sidebar-markdown-reader")?.getAttribute("dir")).toBe(expected);
     panel.remove();
   });
 
@@ -272,6 +374,135 @@ describe("markdown sidebar", () => {
     openSpy.mockRestore();
     fallbackPanel.remove();
   });
+
+  it("preserves authenticated transcoded video playback in Files", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      updateComplete?: Promise<unknown>;
+    };
+    panel.content = {
+      kind: "attachment",
+      title: "clip.mov",
+      src: "/api/chat/media/outgoing/session/artifact/full?mediaTicket=ticket",
+      sourceIdentity: "artifact:clip",
+      mimeType: "video/quicktime",
+      playback: "transcode",
+      authToken: "session-token",
+      width: 9,
+      height: 16,
+    };
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url instanceof Request ? url.url : url?.toString()).toContain("playback=1");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
+    const player = panel.querySelector("openclaw-chat-video-player");
+    expect(player?.mediaWidth).toBe(9);
+    expect(player?.mediaHeight).toBe(16);
+    expect(panel.querySelector(":scope > video")).toBeNull();
+    panel.remove();
+  });
+
+  it("plays normalized base64 audio from Files", async () => {
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      updateComplete?: Promise<unknown>;
+    };
+    panel.content = {
+      kind: "attachment",
+      attachmentKind: "audio",
+      title: "inline.wav",
+      src: "data:audio/wav;base64,UklGRg==",
+      mimeType: "audio/wav",
+    };
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    const player = panel.querySelector("openclaw-chat-audio-player");
+    expect(player?.src).toBe("data:audio/wav;base64,UklGRg==");
+    panel.remove();
+  });
+
+  it.each([
+    ["external.html", "https://files.example/external.html", "text/html"],
+    ["preview.html", "/__openclaw__/media/preview.html", "text/html"],
+    ["wide.csv", "/__openclaw__/media/wide.csv", "text/csv"],
+    ["brief.pdf", "/__openclaw__/media/brief.pdf", "application/pdf"],
+  ] as const)(
+    "renders document %s as a Files card without previewing it",
+    async (title, src, mimeType) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+      const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+        content: unknown;
+        updateComplete?: Promise<unknown>;
+      };
+      panel.content = {
+        kind: "attachment",
+        attachmentKind: "document",
+        title,
+        src,
+        mimeType,
+      };
+      document.body.append(panel);
+      await panel.updateComplete;
+
+      expect(panel.querySelector("iframe, table, audio, video")).toBeNull();
+      expect(panel.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
+      const download = panel.querySelector<HTMLAnchorElement>(
+        ".chat-assistant-attachment-card__download",
+      );
+      expect(download?.getAttribute("href")).toBe(src);
+      expect(download?.target).toBe("_blank");
+      expect(download?.rel).toBe("noreferrer");
+      expect(fetchMock).not.toHaveBeenCalled();
+      panel.remove();
+    },
+  );
+
+  it.each([
+    { title: "vector.svg", mimeType: "image/svg+xml", src: "https://cdn.example/vector.svg" },
+    {
+      title: "vector.svg",
+      mimeType: "application/octet-stream",
+      src: "https://cdn.example/vector.svg",
+    },
+    { title: "diagram", mimeType: undefined, src: "https://cdn.example/vector.svg" },
+    {
+      title: "vector.svg",
+      mimeType: "application/octet-stream",
+      src: "https://cdn.example/download/opaque",
+    },
+  ])(
+    "keeps external SVG attachments as Files cards with title $title and MIME $mimeType",
+    async ({ title, mimeType, src }) => {
+      const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+        content: unknown;
+        updateComplete?: Promise<unknown>;
+      };
+      panel.content = {
+        kind: "attachment",
+        attachmentKind: "image",
+        title,
+        src,
+        mimeType,
+      };
+      document.body.append(panel);
+      await panel.updateComplete;
+
+      expect(panel.querySelector(".sidebar-attachment-preview__image")).toBeNull();
+      expect(
+        panel
+          .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+          ?.getAttribute("href"),
+      ).toBe(src);
+      panel.remove();
+    },
+  );
 
   it("keeps a canvas scripts ceiling under a trusted global sandbox", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {

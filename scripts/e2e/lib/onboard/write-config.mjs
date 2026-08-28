@@ -4,7 +4,9 @@ import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
 
 const [scenario, configPath, ...scenarioArgs] = process.argv.slice(2);
 if (!scenario || !configPath) {
-  throw new Error("usage: write-config.mjs <reset|skills|guided-skip-ui> <config-path> [...args]");
+  throw new Error(
+    "usage: write-config.mjs <reset|skills|guided-skip-ui|multi-agent> <config-path> [...args]",
+  );
 }
 
 let config;
@@ -25,6 +27,17 @@ if (scenario === "guided-skip-ui") {
   applyMockOpenAiModelConfig(config, { mockPort });
 } else {
   config = {
+    "multi-agent": {
+      meta: {},
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { workspace: "/tmp/openclaw-main-workspace" },
+          ops: { workspace: "/tmp/openclaw-ops-workspace" },
+        },
+      },
+    },
     reset: {
       meta: {},
       agents: { defaults: { workspace: "/root/old" } },

@@ -8,6 +8,8 @@ export type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceBridgeEvent,
+  RealtimeVoiceCloseDisposition,
+  RealtimeVoiceCloseOptions,
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceGatewayControl,

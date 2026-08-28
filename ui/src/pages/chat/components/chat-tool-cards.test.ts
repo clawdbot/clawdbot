@@ -184,8 +184,8 @@ describe("tool-cards", () => {
     expect(blocks[0]?.querySelector("code")?.textContent).toBe("Opened page");
   });
 
-  it("renders multi-file patch headers, changed rows, and raw output together", () => {
-    const container = document.createElement("div");
+  it("switches a completed patch between mutually exclusive diff and raw bodies", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
     render(
       renderToolCard(
         {
@@ -234,12 +234,86 @@ describe("tool-cards", () => {
       ),
     ).toEqual(["new a", "new b"]);
 
-    const rawToggle = container.querySelector<HTMLButtonElement>(".chat-tool-card__raw-toggle");
-    expect(rawToggle?.textContent?.trim()).toBe("Raw details");
-    rawToggle?.click();
-    expect(container.querySelector(".chat-tool-card__raw-body code")?.textContent).toBe(
-      "Applied patch",
+    const tabGroup = container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
+      "wa-tab-group",
     );
+    const tabs = Array.from(
+      container.querySelectorAll<HTMLElement & { updateComplete: Promise<unknown> }>("wa-tab"),
+    );
+    await tabGroup?.updateComplete;
+    await Promise.all(tabs.map((tab) => tab.updateComplete));
+    expect(
+      tabGroup?.shadowRoot?.querySelector('[role="tablist"]')?.getAttribute("aria-label"),
+    ).toBe("Tool detail view");
+    expect(tabs.map((tab) => [tab.textContent?.trim(), tab.getAttribute("aria-selected")])).toEqual(
+      [
+        ["Diff", "true"],
+        ["Raw", "false"],
+      ],
+    );
+    const diffBody = container.querySelector<HTMLElement>('wa-tab-panel[name="diff"]');
+    const rawBody = container.querySelector<HTMLElement>('wa-tab-panel[name="raw"]');
+    expect(diffBody?.hasAttribute("active")).toBe(true);
+    expect(rawBody?.hasAttribute("active")).toBe(false);
+
+    tabs[1]?.click();
+    await tabGroup?.updateComplete;
+    await Promise.all(tabs.map((tab) => tab.updateComplete));
+    expect(diffBody?.hasAttribute("active")).toBe(false);
+    expect(rawBody?.hasAttribute("active")).toBe(true);
+    expect(rawBody?.querySelector("code")?.textContent).toBe("Applied patch");
+    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]);
+
+    tabGroup?.setAttribute("aria-label", "Translated tool detail view");
+    render(
+      renderToolCard(
+        {
+          id: "msg:patch:multi",
+          name: "apply_patch",
+          args: {
+            changes: [{ path: "src/a.ts", kind: { type: "update" }, diff: "-old\n+new\n" }],
+          },
+          outputText: "Applied patch",
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+    await tabGroup?.updateComplete;
+    expect(
+      tabGroup?.shadowRoot?.querySelector('[role="tablist"]')?.getAttribute("aria-label"),
+    ).toBe("Tool detail view");
+    container.remove();
+  });
+
+  it("shows failed edit output before the attempted diff", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderToolCard(
+        {
+          id: "msg:edit:failed",
+          name: "edit",
+          args: { path: "src/a.ts", oldText: "before", newText: "after" },
+          outputText: "Patch context did not match",
+          completed: true,
+          isError: true,
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const tabGroup = container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
+      "wa-tab-group",
+    );
+    await tabGroup?.updateComplete;
+
+    expect(container.querySelector('wa-tab[panel="raw"]')?.hasAttribute("active")).toBe(true);
+    expect(container.querySelector('wa-tab-panel[name="raw"]')?.hasAttribute("active")).toBe(true);
+    expect(container.querySelector('wa-tab-panel[name="raw"] code')?.textContent).toBe(
+      "Patch context did not match",
+    );
+    container.remove();
   });
 
   it("labels a completed Codex file creation from its recorded operation", () => {
@@ -424,6 +498,90 @@ describe("tool-cards", () => {
         }
         expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
       }
+    }
+  });
+
+  it.each(
+    [
+      {
+        name: "edit",
+        args: { path: "src/edit.ts", oldText: "old edit", newText: "new edit" },
+        copiedText: "new edit",
+      },
+      {
+        name: "write",
+        args: { path: "src/write.ts", content: "new file\n" },
+        copiedText: "new file",
+      },
+      {
+        name: "apply_patch",
+        args: {
+          changes: [
+            {
+              path: "src/patch.ts",
+              kind: { type: "update" },
+              diff: "--- a/src/patch.ts\n+++ b/src/patch.ts\n@@ -1 +1 @@\n-old patch\n+new patch\n",
+            },
+          ],
+        },
+        copiedText: "new patch",
+      },
+    ].flatMap((tool) =>
+      [
+        { failed: false, feedback: "Copied!" },
+        { failed: true, feedback: "Copy failed" },
+      ].map((outcome) => ({
+        name: tool.name,
+        args: tool.args,
+        copiedText: tool.copiedText,
+        failed: outcome.failed,
+        feedback: outcome.feedback,
+      })),
+    ),
+  )("shows $feedback after copying a completed $name diff", async (tool) => {
+    const writeText = tool.failed
+      ? vi.fn().mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError"))
+      : vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenSidebar = vi.fn();
+
+    try {
+      render(
+        renderToolCard(
+          {
+            id: `msg:${tool.name}:copy`,
+            name: tool.name,
+            args: tool.args,
+            completed: true,
+          },
+          { expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar },
+        ),
+        container,
+      );
+
+      const copyButton = container.querySelector<HTMLButtonElement>(
+        '.chat-tool-card__actions button[aria-label="Copy"]',
+      );
+      expect(copyButton).toBeInstanceOf(HTMLButtonElement);
+      copyButton!.click();
+
+      await vi.waitFor(() => expect(copyButton!.getAttribute("aria-label")).toBe(tool.feedback));
+
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining(tool.copiedText));
+      const feedback = copyButton!.parentElement?.querySelector<HTMLElement>('[role="status"]');
+      expect(feedback?.textContent).toBe(tool.feedback);
+      expect(feedback?.hidden).toBe(false);
+
+      const sidebarButton = container.querySelector<HTMLButtonElement>(
+        `.chat-tool-card__actions button[aria-label="${t("chat.toolCards.openDetails")}"]`,
+      );
+      expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
+      sidebarButton!.click();
+      expect(onOpenSidebar).toHaveBeenCalledOnce();
+    } finally {
+      container.remove();
+      vi.unstubAllGlobals();
     }
   });
 
@@ -882,7 +1040,7 @@ describe("tool-cards", () => {
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
 
-  it("does not add a full-message request for ambiguous tool details", () => {
+  it("opens ambiguous tool details with the same sidebar output", () => {
     const container = document.createElement("div");
     const onOpenSidebar = vi.fn();
     render(
@@ -909,7 +1067,10 @@ describe("tool-cards", () => {
     sidebarButton!.click();
 
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
-    expect(sidebar.kind).toBe("markdown");
-    expect(sidebar.fullMessageRequest).toBeUndefined();
+    expect(sidebar).toEqual({
+      kind: "markdown",
+      content: "## Browser.open\n\n**Tool:** `browser.open`\n\n### Tool output\nOpened page",
+      rawText: "Opened page",
+    });
   });
 });

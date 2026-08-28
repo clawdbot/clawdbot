@@ -1,58 +1,55 @@
-import { safeParseJson } from "@openclaw/normalization-core";
+import path from "node:path";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import {
   inspectPluginInstallRecordMap,
   type PluginInstallRecordMapState,
 } from "../config/plugin-install-record-map.js";
-import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-row.js";
 import {
-  resolveInstalledPluginIndexStateDatabaseOptions,
+  resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
+import type { PersistedInstalledPluginIndexCacheEntry } from "./plugin-cache-management.js";
+import { getPluginCache } from "./plugin-cache.js";
 
-type InstalledPluginIndexRecordRow = {
-  install_records_json: string;
-};
+function readPersistedInstalledPluginIndexState(
+  options: InstalledPluginIndexStoreOptions,
+): PersistedInstalledPluginIndexCacheEntry["state"] {
+  // The row reader owns unreadable-state failures; never cache them as missing or invalid.
+  const row = readPersistedInstalledPluginIndexRowSync(options);
+  return row ? { status: "present", value: safeParseJson(row.value_json) } : { status: "missing" };
+}
+
+/** Share the SQLite row while validating install records independently from index metadata. */
+export function getPersistedInstalledPluginIndexCacheEntry(
+  options: InstalledPluginIndexStoreOptions,
+): PersistedInstalledPluginIndexCacheEntry {
+  const cache = getPluginCache().persistedInstalledIndex;
+  const key = path.resolve(resolveInstalledPluginIndexStorePath(options));
+  let entry = cache.get(key);
+  if (!entry) {
+    entry = { state: readPersistedInstalledPluginIndexState(options) };
+    cache.set(key, entry);
+  }
+  return entry;
+}
 
 export function inspectPersistedInstalledPluginIndexInstallRecordsSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): PluginInstallRecordMapState {
-  if (options.filePath?.endsWith(".json")) {
-    return { status: "missing" };
+  const entry = getPersistedInstalledPluginIndexCacheEntry(options);
+  if (!entry.records) {
+    const state = entry.state;
+    // The full index can be invalid while its canonical install ledger remains usable.
+    const value = state.status === "present" ? state.value : undefined;
+    const records = (value as { index?: { installRecords?: unknown } } | undefined)?.index
+      ?.installRecords;
+    entry.records =
+      state.status === "missing"
+        ? { status: "missing" }
+        : records === undefined
+          ? { status: "invalid" }
+          : inspectPluginInstallRecordMap(records);
   }
-  try {
-    return (
-      withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-        const hasTable = db
-          .prepare(
-            `SELECT 1
-             FROM sqlite_master
-            WHERE type = 'table' AND name = 'installed_plugin_index'`,
-          )
-          .get();
-        if (!hasTable) {
-          return { status: "missing" };
-        }
-        const row = db
-          .prepare(
-            `
-            SELECT install_records_json
-              FROM installed_plugin_index
-             WHERE index_key = ?
-          `,
-          )
-          .get("installed-plugin-index") as InstalledPluginIndexRecordRow | undefined;
-        if (!row) {
-          return { status: "missing" };
-        }
-        const parsed = safeParseJson(row.install_records_json);
-        return parsed === undefined ? { status: "invalid" } : inspectPluginInstallRecordMap(parsed);
-      }, resolveInstalledPluginIndexStateDatabaseOptions(options)) ?? { status: "missing" }
-    );
-  } catch (error) {
-    if (isSqliteSchemaVersionError(error)) {
-      throw error;
-    }
-    return { status: "invalid" };
-  }
+  return entry.records;
 }

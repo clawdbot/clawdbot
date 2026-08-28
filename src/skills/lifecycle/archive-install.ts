@@ -145,6 +145,7 @@ export async function installExtractedSkillRoot(params: {
   logger?: ArchiveLogger;
   policy?: SkillArchiveInstallPolicy;
   rootMarkers?: readonly string[];
+  onAfterBackup?: (backupDir: string) => Promise<string | undefined>;
 }): Promise<SkillArchiveInstallResult> {
   try {
     if (
@@ -208,6 +209,8 @@ export async function installExtractedSkillRoot(params: {
       }
     }
 
+    const onAfterBackup = params.onAfterBackup;
+    let backupBlocked = false;
     const install = await installPackageDir({
       sourceDir: params.extractedRoot,
       targetDir,
@@ -217,9 +220,18 @@ export async function installExtractedSkillRoot(params: {
       copyErrorPrefix: "failed to install skill",
       hasDeps: false,
       depsLogMessage: "",
+      ...(onAfterBackup
+        ? {
+            afterBackup: async (backupDir: string) => {
+              const blocked = await onAfterBackup(backupDir);
+              backupBlocked = Boolean(blocked);
+              return blocked ? { ok: false as const, error: blocked } : { ok: true as const };
+            },
+          }
+        : {}),
     });
     if (!install.ok) {
-      return installFailure(install.error, "unavailable");
+      return installFailure(install.error, backupBlocked ? "invalid-request" : "unavailable");
     }
     if (shouldDispatchChange) {
       const after = await snapshotCommittedSkillArtifactBestEffort({

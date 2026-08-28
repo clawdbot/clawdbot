@@ -458,10 +458,19 @@ export function hasMessagingRichContent(record: Record<string, unknown>): boolea
 
 function queuePendingToolMedia(
   ctx: ToolHandlerContext,
-  mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
+  mediaReply: NonNullable<ReturnType<typeof extractToolResultMediaArtifact>>,
+  allowedMediaUrls: string[],
 ) {
-  const seen = new Set(ctx.state.pendingToolMediaUrls.map((url) => url.trim()));
-  for (const mediaUrl of mediaReply.mediaUrls) {
+  const indexByUrl = new Map(
+    ctx.state.pendingToolMediaUrls.map((url, index) => [url.trim(), index]),
+  );
+  const attachments = (ctx.state.pendingToolMediaAttachments ??= ctx.state.pendingToolMediaUrls.map(
+    () => ({}),
+  ));
+  const attachmentsByUrl = new Map(
+    mediaReply.mediaUrls.map((url, index) => [url.trim(), mediaReply.attachments?.[index]]),
+  );
+  for (const mediaUrl of allowedMediaUrls) {
     const normalized = mediaUrl.trim();
     if (!normalized) {
       continue;
@@ -471,11 +480,17 @@ function queuePendingToolMedia(
     } else if (!ctx.state.pendingToolMediaTrustByUrl.has(normalized)) {
       ctx.state.pendingToolMediaTrustByUrl.set(normalized, false);
     }
-    if (seen.has(normalized)) {
+    const attachment = attachmentsByUrl.get(normalized);
+    const existingIndex = indexByUrl.get(normalized);
+    if (existingIndex !== undefined) {
+      if (attachment && Object.keys(attachments[existingIndex] ?? {}).length === 0) {
+        attachments[existingIndex] = attachment;
+      }
       continue;
     }
-    seen.add(normalized);
+    indexByUrl.set(normalized, ctx.state.pendingToolMediaUrls.length);
     ctx.state.pendingToolMediaUrls.push(normalized);
+    attachments.push(attachment ?? {});
   }
   if (mediaReply.audioAsVoice) {
     ctx.state.pendingToolAudioAsVoice = true;
@@ -593,8 +608,7 @@ export async function emitToolResultOutput(params: {
       failure: { error: `Approval prompt delivery failed: ${message}` },
     });
     ctx.state.lastToolError = terminal.lastToolError;
-    ctx.state.lastToolRecovery = terminal.lastToolRecovery;
-    ctx.state.deterministicApprovalPromptSent = false;
+    // A later delivery failure does not undo an already delivered pending prompt.
   };
   const hasStructuredMedia = Boolean(
     result &&
@@ -641,7 +655,7 @@ export async function emitToolResultOutput(params: {
     if (!ctx.params.onToolResult) {
       return;
     }
-    ctx.state.deterministicApprovalPromptPending = true;
+    // Setup notices are progress, not pending prompts that replace the final answer.
     try {
       const { buildExecApprovalUnavailableReplyPayload } = await loadExecApprovalReply();
       await ctx.params.onToolResult?.(
@@ -656,11 +670,8 @@ export async function emitToolResultOutput(params: {
           nodeId: approvalUnavailable.nodeId,
         }),
       );
-      ctx.state.deterministicApprovalPromptSent = true;
     } catch (error) {
       recordApprovalPromptDeliveryFailure(error);
-    } finally {
-      ctx.state.deterministicApprovalPromptPending = false;
     }
     return;
   }
@@ -702,9 +713,5 @@ export async function emitToolResultOutput(params: {
   if (mediaUrls.length === 0) {
     return;
   }
-  queuePendingToolMedia(ctx, {
-    mediaUrls,
-    ...(mediaReply.audioAsVoice ? { audioAsVoice: true } : {}),
-    ...(mediaReply.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
-  });
+  queuePendingToolMedia(ctx, mediaReply, mediaUrls);
 }

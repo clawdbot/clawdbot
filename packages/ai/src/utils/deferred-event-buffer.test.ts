@@ -32,11 +32,6 @@ describe("createDeferredEventBuffer", () => {
     expect(onEvent).toHaveBeenCalledTimes(2);
   });
 
-  it("does not throw when onBufferedEvent is not provided", () => {
-    const buffer = createDeferredEventBuffer({ push() {} });
-    expect(() => buffer.push("a")).not.toThrow();
-  });
-
   it("allows push after flush to start a new buffer", () => {
     const sink = { push: vi.fn() };
     const buffer = createDeferredEventBuffer(sink);
