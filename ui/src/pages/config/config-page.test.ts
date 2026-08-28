@@ -3,7 +3,7 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelCatalogEntry } from "../../api/types.ts";
+import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -568,9 +568,9 @@ describe("ConfigPage camera selection", () => {
 
 describe("ConfigPage session observer models", () => {
   it("lets a replacement Gateway load while the stale client is still pending", async () => {
-    const first = deferred<ModelCatalogEntry[]>();
-    const second = deferred<ModelCatalogEntry[]>();
-    vi.spyOn(modelCatalogStore, "loadModels")
+    const first = deferred<ModelCatalogResult>();
+    const second = deferred<ModelCatalogResult>();
+    vi.spyOn(modelCatalogStore, "loadModelCatalog")
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
     const firstClient = {} as GatewayBrowserClient;
@@ -604,20 +604,20 @@ describe("ConfigPage session observer models", () => {
     } as ApplicationGatewaySnapshot;
     const secondLoad = state.ensureSessionObserverModels(secondClient, "main");
     const currentModels = [{ id: "small", name: "Small", provider: "openai" }];
-    second.resolve(currentModels);
+    second.resolve({ models: currentModels });
     await secondLoad;
     expect(state.sessionObserverModels).toEqual(currentModels);
     expect(state.sessionObserverModelsClient).toBe(secondClient);
 
-    first.resolve([{ id: "stale", name: "Stale", provider: "old" }]);
+    first.resolve({ models: [{ id: "stale", name: "Stale", provider: "old" }] });
     await firstLoad;
     expect(state.sessionObserverModels).toEqual(currentModels);
-    expect(modelCatalogStore.loadModels).toHaveBeenCalledTimes(2);
-    expect(modelCatalogStore.loadModels).toHaveBeenNthCalledWith(1, firstClient, {
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(2);
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(1, firstClient, {
       agentId: "main",
       preparedOnly: true,
     });
-    expect(modelCatalogStore.loadModels).toHaveBeenNthCalledWith(2, secondClient, {
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(2, secondClient, {
       agentId: "main",
       preparedOnly: true,
     });
@@ -625,9 +625,9 @@ describe("ConfigPage session observer models", () => {
 
   it("retries a transient catalog failure on the next status refresh", async () => {
     const recoveredModels = [{ id: "small", name: "Small", provider: "openai" }];
-    vi.spyOn(modelCatalogStore, "loadModels")
+    vi.spyOn(modelCatalogStore, "loadModelCatalog")
       .mockRejectedValueOnce(new Error("catalog unavailable"))
-      .mockResolvedValueOnce(recoveredModels);
+      .mockResolvedValueOnce({ models: recoveredModels });
     const client = {} as GatewayBrowserClient;
     const gateway = {
       snapshot: { client, phase: "connected" },
@@ -658,17 +658,17 @@ describe("ConfigPage session observer models", () => {
 
     expect(state.sessionObserverModels).toEqual(recoveredModels);
     expect(state.sessionObserverModelsUnavailable).toBe(false);
-    expect(modelCatalogStore.loadModels).toHaveBeenCalledTimes(2);
-    expect(modelCatalogStore.loadModels).toHaveBeenLastCalledWith(client, {
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(2);
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenLastCalledWith(client, {
       agentId: "main",
       preparedOnly: true,
     });
   });
 
   it("keeps a same-client agent switch from restoring stale observer models", async () => {
-    const main = deferred<ModelCatalogEntry[]>();
-    const writer = deferred<ModelCatalogEntry[]>();
-    vi.spyOn(modelCatalogStore, "loadModels").mockImplementation((_client, options) =>
+    const main = deferred<ModelCatalogResult>();
+    const writer = deferred<ModelCatalogResult>();
+    vi.spyOn(modelCatalogStore, "loadModelCatalog").mockImplementation((_client, options) =>
       options.agentId === "writer" ? writer.promise : main.promise,
     );
     const client = {} as GatewayBrowserClient;
@@ -698,17 +698,17 @@ describe("ConfigPage session observer models", () => {
     selectionState.selectedId = "writer";
     const writerLoad = state.ensureSessionObserverModels(client, "writer");
     const writerModels = [{ id: "writer-model", name: "Writer Model", provider: "openai" }];
-    writer.resolve(writerModels);
+    writer.resolve({ models: writerModels });
     await writerLoad;
-    main.resolve([{ id: "main-model", name: "Main Model", provider: "openai" }]);
+    main.resolve({ models: [{ id: "main-model", name: "Main Model", provider: "openai" }] });
     await mainLoad;
 
     expect(state.sessionObserverModels).toEqual(writerModels);
-    expect(modelCatalogStore.loadModels).toHaveBeenNthCalledWith(1, client, {
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(1, client, {
       agentId: "main",
       preparedOnly: true,
     });
-    expect(modelCatalogStore.loadModels).toHaveBeenNthCalledWith(2, client, {
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(2, client, {
       agentId: "writer",
       preparedOnly: true,
     });
@@ -717,7 +717,7 @@ describe("ConfigPage session observer models", () => {
     await state.ensureSessionObserverModels(client, null);
     expect(state.sessionObserverModels).toEqual([]);
     expect(state.sessionObserverModelsUnavailable).toBe(true);
-    expect(modelCatalogStore.loadModels).toHaveBeenCalledTimes(2);
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(2);
   });
 });
 

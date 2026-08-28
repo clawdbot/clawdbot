@@ -7,7 +7,7 @@ import {
 } from "../../lib/chat/chat-metadata-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
-import { loadModels } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
@@ -189,7 +189,7 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
   host.chatModelCatalogError = null;
   host.requestUpdate?.();
   try {
-    const models = await loadModels(client, {
+    const { models } = await loadModelCatalog(client, {
       agentId,
       refreshIfDue: true,
       rejectOnFailure: true,

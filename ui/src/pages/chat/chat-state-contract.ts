@@ -40,6 +40,8 @@ export type ChatState = StreamCausalBoundaryState & {
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
+  /** Monotonic count of locally owned runs cleared by terminal reconciliation. */
+  chatRunLifecycleGeneration?: number;
   /** True when the active run was recovered from the embedded-run registry and
    * Stop must use the session-owned abort path (sessions.abort), not chat.abort. */
   chatRunSessionAbortable?: boolean;

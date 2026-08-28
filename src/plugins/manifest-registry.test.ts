@@ -1903,10 +1903,10 @@ describe("loadPluginManifestRegistry", () => {
         description: "Slack channel, DM, command, and app event integration.",
       },
     );
-    expectRecordFields(slackConfig.schema, "slack schema", {
-      type: "object",
-      additionalProperties: true,
-    });
+    // The catalog carries no schema copy: channel schemas are single-sourced
+    // from the zod-derived generated bundled channel metadata (see #131292),
+    // which validation seeds by channelId regardless of install origin.
+    expect(slackConfig.schema).toBeUndefined();
     expectNoRegistryDiagnosticContains(registry, "without channelConfigs metadata");
   });
 

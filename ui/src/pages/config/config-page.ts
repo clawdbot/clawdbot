@@ -47,7 +47,7 @@ import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.t
 import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { loadModels } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
@@ -808,8 +808,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.systemInfoGatewaySource === gatewaySource &&
       this.context.gateway.snapshot.client === client &&
       this.context.agentSelection.state.selectedId === agentId;
-    const promise = loadModels(client, { agentId, preparedOnly: true })
-      .then((models) => {
+    const promise = loadModelCatalog(client, { agentId, preparedOnly: true })
+      .then(({ models }) => {
         if (isCurrent()) {
           this.sessionObserverModels = models;
           this.sessionObserverModelsClient = client;

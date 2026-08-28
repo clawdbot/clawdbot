@@ -6212,6 +6212,7 @@ export const en: TranslationMap = {
     },
     selectors: {
       loadMoreSessions: "Show more",
+      loadMoreRosterSessions: "Load more sessions",
       model: "Chat model",
       modelSection: "Model",
       modelLocked: "Locked",
