@@ -116,8 +116,8 @@ To force code mode on for every tool-capable run, regardless of model:
 
 Object form works too: `tools.codeMode.enabled` accepts the same `false`,
 `true`, and `"auto"` values. Code mode stays off when `tools.codeMode` is
-omitted, `false`, or an empty object. An object that configures other Code Mode
-options but omits `enabled` preserves the earlier `"auto"` behavior.
+omitted, `false`, or an object without an explicit `enabled` value. Configuring
+limits or other Code Mode options does not enable it.
 
 See [Automatic per-model activation](#automatic-per-model-activation) for the
 exact semantics and the shipped model list.
@@ -284,10 +284,9 @@ Provider-owned tools such as remote Python sandboxes are separate tools. See
 
 ## Configuration
 
-`tools.codeMode.enabled` is the activation gate. With no Code Mode
-configuration, it defaults to `false`. If an object configures another Code
-Mode field but omits `enabled`, it preserves the `"auto"` tier and may engage
-for catalog-preferred models.
+`tools.codeMode.enabled` is the activation gate. It defaults to `false`,
+including when the Code Mode object configures other fields. Set `true` or
+`"auto"` explicitly to enable it.
 
 | Field                 | Default                        | Clamp                                           |
 | --------------------- | ------------------------------ | ----------------------------------------------- |
@@ -313,8 +312,7 @@ an engaged run never silently falls back to broad direct tool exposure.
 
 `tools.codeMode.enabled` accepts three values:
 
-- `false` (default when Code Mode is otherwise unconfigured): code mode is off
-  for every run.
+- `false` (default): code mode is off for every run.
 - `true`: code mode engages for every tool-capable run, regardless of model.
 - `"auto"`: code mode engages only when the run's model is flagged as a
   preferred code-mode performer in its provider catalog.
@@ -1218,8 +1216,8 @@ does not use a `node:vm` child as the sandbox.
 Code mode coverage should prove:
 
 - disabled config leaves existing tool exposure unchanged
-- omitted `enabled`, including object config that sets other fields, inherits
-  `"auto"` and engages only for catalog-preferred models
+- omitted `enabled`, including object config that sets other fields, stays
+  disabled
 - enabled config exposes `exec`, `wait`, and only required direct-only tools to
   the model when tools are active for the run
 - raw no-tool runs, `disableTools`, and empty allowlists do not trigger
