@@ -121,15 +121,12 @@ function addTimestampToSummary(summary: TimestampSummary, timestamp: number | un
   }
 }
 
-function summaryMatchesTimestamp(
+function summaryHasTimestampMatch(
   summary: TimestampSummary | undefined,
   timestamp: number | undefined,
 ): boolean {
-  if (!summary) {
+  if (!summary || timestamp === undefined) {
     return false;
-  }
-  if (timestamp === undefined || summary.hasMissingTimestamp) {
-    return true;
   }
   const bucketKey = Math.floor(timestamp / DEDUPE_TIMESTAMP_WINDOW_MS);
   if (summary.buckets.has(bucketKey)) {
@@ -141,6 +138,16 @@ function summaryMatchesTimestamp(
   }
   const next = summary.buckets.get(bucketKey + 1);
   return next !== undefined && next.min <= timestamp + DEDUPE_TIMESTAMP_WINDOW_MS;
+}
+
+function summaryMatchesTimestamp(
+  summary: TimestampSummary | undefined,
+  timestamp: number | undefined,
+): boolean {
+  return (
+    Boolean(summary && (timestamp === undefined || summary.hasMissingTimestamp)) ||
+    summaryHasTimestampMatch(summary, timestamp)
+  );
 }
 
 function addRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMessage): void {
@@ -237,7 +244,7 @@ export function mergeImportedChatHistoryMessages(params: {
     }
     if (
       isCliImageMentionOnlyImport(message) &&
-      summaryMatchesTimestamp(localImageMediaTimestamps, imported.timestamp)
+      summaryHasTimestampMatch(localImageMediaTimestamps, imported.timestamp)
     ) {
       continue;
     }

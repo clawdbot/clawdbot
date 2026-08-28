@@ -615,41 +615,54 @@ describe("cli session history", () => {
     });
   });
 
-  it("suppresses mention-only imported rows when a local media-bearing turn exists", async () => {
-    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
-      const mention = "@/Users/demo/workspace/.openclaw-cli-images/cafe05.png";
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          type: "user",
-          uuid: "image-only-user",
-          timestamp: "2026-03-26T16:29:54.800Z",
-          message: { role: "user", content: mention },
-        }),
-        "utf-8",
-      );
-      const localMessages = [
-        {
-          role: "user",
-          content: "",
-          timestamp: Date.parse("2026-03-26T16:29:54.500Z"),
-          __openclaw: {
-            media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/cafe05.png" }],
+  it.each([
+    ["timestamps correlate", Date.parse("2026-03-26T16:29:54.500Z"), "2026-03-26T16:29:54.800Z", 1],
+    ["local media timestamp is missing", undefined, "2026-03-26T16:29:54.800Z", 2],
+    ["imported timestamp is missing", Date.parse("2026-03-26T16:29:54.500Z"), undefined, 2],
+  ])(
+    "handles mention-only imported rows when %s",
+    async (_label, localTimestamp, importedTimestamp, expectedLength) => {
+      await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+        const mention = "@/Users/demo/workspace/.openclaw-cli-images/cafe05.png";
+        await fs.writeFile(
+          filePath,
+          JSON.stringify({
+            type: "user",
+            uuid: "image-only-user",
+            ...(importedTimestamp === undefined ? {} : { timestamp: importedTimestamp }),
+            message: { role: "user", content: mention },
+          }),
+          "utf-8",
+        );
+        const localMessages = [
+          {
+            role: "user",
+            content: "",
+            ...(localTimestamp === undefined ? {} : { timestamp: localTimestamp }),
+            __openclaw: {
+              media: [
+                { kind: "image", contentType: "image/png", path: "/media/inbound/cafe05.png" },
+              ],
+            },
           },
-        },
-      ];
+        ];
 
-      const merged = augmentBoundClaudeHistory({
-        homeDir,
-        sessionId,
-        provider: "claude-cli",
-        localMessages,
+        const merged = augmentBoundClaudeHistory({
+          homeDir,
+          sessionId,
+          provider: "claude-cli",
+          localMessages,
+        });
+
+        expect(merged).toHaveLength(expectedLength);
+        if (expectedLength === 1) {
+          expect(readRecord(merged[0])["__openclaw"]).not.toHaveProperty("cliImageMentionOnly");
+        } else {
+          expectFields(readRecord(merged[1])["__openclaw"], { cliImageMentionOnly: true });
+        }
       });
-
-      expect(merged).toHaveLength(1);
-      expect(readRecord(merged[0])["__openclaw"]).not.toHaveProperty("cliImageMentionOnly");
-    });
-  });
+    },
+  );
 
   it("retains mention-only imported rows when no local media-bearing turn survives", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
