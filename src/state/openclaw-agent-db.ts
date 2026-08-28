@@ -325,17 +325,15 @@ export function openOpenClawAgentDatabase(
     const db = openNodeSqliteDatabase(pathname);
     enableNodeSqliteKyselyStatementCache(db);
     openedDb = db;
-    // Eviction churn must avoid schema/registry busy waits on the event loop while
-    // reconcile workers hold write transactions on these same agent databases.
+    // Eviction churn must avoid migration/convergence and registry busy waits.
+    // Version and owner can change while evicted, so their read-only gates run on every open.
     const isValidatedReopen = validatedAgentDatabasePaths.get(pathname) === agentId;
     const walMaintenance = (() => {
       let maintenance: OpenClawAgentDatabase["walMaintenance"] | undefined;
       try {
         db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-        if (!isValidatedReopen) {
-          assertSupportedAgentSchemaVersion(db, pathname);
-          assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
-        }
+        assertSupportedAgentSchemaVersion(db, pathname);
+        assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
         // Integrity is not process-stable: the file can be damaged while evicted.
         // This guard is read-only (no busy waits), so every physical open pays it.
         assertAgentDatabaseIntegrityBeforeMutation(db, agentId, pathname);
@@ -358,6 +356,7 @@ export function openOpenClawAgentDatabase(
       } catch (err) {
         maintenance?.close();
         db.close();
+        validatedAgentDatabasePaths.delete(pathname);
         if (
           err instanceof Error &&
           (isSqliteSchemaVersionError(err) || isTerminalSqliteIntegrityError(err))
