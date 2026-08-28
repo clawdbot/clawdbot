@@ -27,11 +27,17 @@ export function createRemoteEmbeddingProvider(params: {
   maxInputTokens?: number;
   /** Keep query arrays in one request when the provider has no query/document wire distinction. */
   batchQueryInputs?: boolean;
+  /** Provider-owned payload fields; request grouping and transport stay shared. */
+  buildRequestBody?: (input: string[], kind: "query" | "document") => unknown;
 }): EmbeddingProvider {
   const { client } = params;
   const url = resolveEmbeddingEndpointUrl(client.baseUrl, "embeddings");
 
-  const embedMany = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
+  const embedMany = async (
+    input: string[],
+    signal?: AbortSignal,
+    kind: "query" | "document" = "document",
+  ): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
@@ -41,7 +47,9 @@ export function createRemoteEmbeddingProvider(params: {
       ssrfPolicy: client.ssrfPolicy,
       fetchImpl: client.fetchImpl,
       signal,
-      body: { model: client.model, input },
+      body: params.buildRequestBody
+        ? params.buildRequestBody(input, kind)
+        : { model: client.model, input },
       errorPrefix: params.errorPrefix,
     });
   };
@@ -52,17 +60,25 @@ export function createRemoteEmbeddingProvider(params: {
     ...(typeof params.maxInputTokens === "number" ? { maxInputTokens: params.maxInputTokens } : {}),
     embed: async (input, options) => {
       const text = typeof input === "string" ? input : input.text;
-      const [vec] = await embedMany([text], options?.signal);
+      const [vec] = await embedMany(
+        [text],
+        options?.signal,
+        options?.inputType === "query" ? "query" : "document",
+      );
       return vec ?? [];
     },
     embedBatch: async (inputs, options) => {
       const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
       if (options?.inputType === "query" && params.batchQueryInputs !== true) {
         return await Promise.all(
-          texts.map(async (text) => (await embedMany([text], options.signal))[0] ?? []),
+          texts.map(async (text) => (await embedMany([text], options.signal, "query"))[0] ?? []),
         );
       }
-      return await embedMany(texts, options?.signal);
+      return await embedMany(
+        texts,
+        options?.signal,
+        options?.inputType === "query" ? "query" : "document",
+      );
     },
   };
 }
