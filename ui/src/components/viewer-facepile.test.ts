@@ -160,26 +160,35 @@ type ViewerFacepileElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-it("keeps session facepiles as plain non-interactive avatar clusters", async () => {
-  const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
-  facepile.presencePayload = {
-    presence: [
-      {
-        instanceId: "alice-1",
-        user: { id: "alice", name: "Alice" },
-        watchedSessions: [],
-      },
-    ],
-  };
-  document.body.append(facepile);
+it.each(["first", "second"])(
+  "merges device presence into one non-interactive face watching %s",
+  async (session) => {
+    const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
+    facepile.sessionKey = `agent:main:${session}`;
+    facepile.presencePayload = {
+      presence: [
+        {
+          instanceId: "alice-1",
+          user: { id: "alice", name: "Alice" },
+          watchedSessions: ["agent:main:first"],
+        },
+        {
+          instanceId: "alice-2",
+          user: { id: "alice", name: "Alice" },
+          watchedSessions: ["agent:main:second"],
+        },
+      ],
+    };
+    document.body.append(facepile);
 
-  await vi.waitFor(async () => {
-    await facepile.updateComplete;
-    expect(facepile.querySelector(".viewer-facepile")).not.toBeNull();
-  });
-  expect(facepile.querySelector("button")).toBeNull();
-  expect(facepile.querySelectorAll("openclaw-tooltip")).toHaveLength(1);
-});
+    await vi.waitFor(async () => {
+      await facepile.updateComplete;
+      expect(facepile.querySelector(".viewer-facepile")).not.toBeNull();
+    });
+    expect(facepile.querySelector("button")).toBeNull();
+    expect(facepile.querySelectorAll("openclaw-tooltip")).toHaveLength(1);
+  },
+);
 
 it("renders ordered static participant actors without presence filtering", async () => {
   // SAFETY: the registered custom element exposes the tested reactive properties.

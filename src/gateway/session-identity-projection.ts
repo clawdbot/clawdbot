@@ -154,19 +154,14 @@ export function projectSessionParticipants(
   entry: SessionEntry | undefined,
   userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> | undefined,
   cfg: OpenClawConfig,
-): NonNullable<SessionEntry["participants"]> {
+): Map<string, SessionParticipant> {
   const identities = userProfileIdentityById ?? new Map();
-  const participants = entry?.participants?.map(({ identity }) =>
-    projectParticipant(identity, identities, cfg),
-  );
-  return [
-    ...new Map(
-      (participants ?? []).map((participant) => [
-        JSON.stringify(participant.identity),
-        participant,
-      ]),
-    ).values(),
-  ];
+  const participants = new Map<string, SessionParticipant>();
+  for (const { identity } of entry?.participants ?? []) {
+    const participant = projectParticipant(identity, identities, cfg);
+    participants.set(JSON.stringify(participant.identity), participant);
+  }
+  return participants;
 }
 
 /** Participation, creation, and responsibility are associations, never access grants. */
@@ -187,7 +182,7 @@ export function projectSessionPeople(
     ),
   ];
   const people = new Map<string, SessionPerson>();
-  for (const participant of [...participants, ...actors]) {
+  for (const participant of [...participants.values(), ...actors]) {
     const identity = participant?.identity;
     if (identity?.type === "profile") {
       people.set(identity.id, {
