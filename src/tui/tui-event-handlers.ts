@@ -729,11 +729,6 @@ export function createEventHandlers(context: EventHandlerContext) {
     tui.requestRender();
   };
 
-  // True once any event for this runId has been seen, even before sendChat
-  // resolves. Lets the optimistic-submit path know an accepted run already
-  // registered so it does not re-arm a draft the abort path would then drop.
-  const isRunObserved = (runId: string) => sessionRuns.has(runId);
-
   const reconcileHistoryAfterGap = () => {
     reduceTuiSessionProjection(state, {
       type: "transportGap",
@@ -758,7 +753,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend: (runId: string) => completedRuns.delete(runId),
-    isRunObserved,
+    // Events can register before sendChat resolves; do not re-arm their draft.
+    isRunObserved: (runId: string) => sessionRuns.has(runId),
+    captureHistoryRunMembership: () => runCoordinator.captureHistoryRunMembership(),
     reconcileHistoryAfterGap,
     flushPendingHistoryRefreshIfIdle,
     dispose,

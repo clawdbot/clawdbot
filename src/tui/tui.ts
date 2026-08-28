@@ -1463,8 +1463,10 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   } = sessionActions;
   const loadHistory = async (reconcileReconnect = false) => {
     const activeRunAtStart = state.activeChatRunId;
+    const reconcileMembership = captureHistoryRunMembership();
     const result = await loadHistorySnapshot();
     if (result.loaded) {
+      reconcileMembership(result.activeRunIds);
       // History can adopt a newer run before returning; terminal outcomes
       // still belong only to the unchanged run captured before the request.
       const recoveredRunId =
@@ -1502,6 +1504,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
     isRunObserved,
+    captureHistoryRunMembership,
     reconcileHistoryAfterGap,
     flushPendingHistoryRefreshIfIdle,
     dispose: disposeEventHandlers,

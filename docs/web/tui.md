@@ -226,6 +226,7 @@ Tips:
 ## History + streaming
 
 - On connect, the TUI loads the latest history (default 200 messages).
+- Reconnect and event-gap recovery reconcile active runs with history, retaining concurrent and newly observed runs without reviving runs that exact history has excluded.
 - Streaming responses update in place until finalized.
 - Messages sent to the same session from another client appear automatically.
 - The TUI also listens to agent tool events for richer tool cards.

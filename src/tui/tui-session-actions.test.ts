@@ -1472,87 +1472,159 @@ describe("tui session actions", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("streaming");
   });
 
-  it("retires the previous session run before adopting and finalizing a restored run", async () => {
-    vi.useFakeTimers();
-    try {
-      const previousSessionKey = "agent:main:previous";
-      const nextSessionKey = "agent:main:next";
-      const previousRunId = "run-previous";
-      const nextRunId = "run-next";
-      const state = createBaseState({
-        currentSessionKey: previousSessionKey,
-        currentSessionId: "session-previous",
-        historyLoaded: true,
-      });
-      const chatLog = new ChatLog();
-      const addPendingSystem = vi.spyOn(chatLog, "addPendingSystem");
-      const tui = makeTui();
-      const setActivityStatus = vi.fn((status: string) => {
-        state.activityStatus = status;
-      });
-      let loadSelectedHistory: () => Promise<TuiHistoryLoadResult> = async () => ({
-        loaded: false,
-      });
-      const handlers = createEventHandlers({
-        chatLog,
-        btw: createBtwPresenter(),
-        tui,
-        state,
-        setActivityStatus,
-        loadHistory: () => loadSelectedHistory(),
-        streamingWatchdogMs: 100,
-      });
-      handlers.handleChatEvent({
-        runId: previousRunId,
-        sessionKey: previousSessionKey,
-        seq: 1,
-        state: "delta",
-        message: { role: "assistant", content: [{ type: "text", text: "old partial" }] },
-      });
-      expect(state.activeChatRunId).toBe(previousRunId);
+  it.each([
+    {
+      description: "a different session",
+      sameSession: false,
+      activeRunIds: undefined,
+      preservesOld: false,
+    },
+    {
+      description: "a same-session replacement with exact active runs",
+      sameSession: true,
+      activeRunIds: ["run-next"],
+      preservesOld: false,
+    },
+    {
+      description: "a same-session concurrent run",
+      sameSession: true,
+      activeRunIds: ["run-previous", "run-next"],
+      preservesOld: true,
+    },
+    {
+      description: "a same-session run with unknown active membership",
+      sameSession: true,
+      activeRunIds: undefined,
+      preservesOld: true,
+    },
+    {
+      description: "a same-session run with null active membership",
+      sameSession: true,
+      activeRunIds: null,
+      preservesOld: true,
+    },
+    {
+      description: "a same-session run with malformed active membership",
+      sameSession: true,
+      activeRunIds: ["run-next", 42],
+      preservesOld: true,
+    },
+  ])(
+    "reconciles previous run ownership when restoring $description",
+    async ({ sameSession, activeRunIds, preservesOld }) => {
+      vi.useFakeTimers();
+      try {
+        const previousSessionKey = "agent:main:previous";
+        const nextSessionKey = sameSession ? previousSessionKey : "agent:main:next";
+        const previousRunId = "run-previous";
+        const nextRunId = "run-next";
+        const state = createBaseState({
+          currentSessionKey: previousSessionKey,
+          currentSessionId: "session-previous",
+          historyLoaded: true,
+        });
+        const chatLog = new ChatLog();
+        const addPendingSystem = vi.spyOn(chatLog, "addPendingSystem");
+        const tui = makeTui();
+        const setActivityStatus = vi.fn((status: string) => {
+          state.activityStatus = status;
+        });
+        let loadSelectedHistory: () => Promise<TuiHistoryLoadResult> = async () => ({
+          loaded: false,
+        });
+        const handlers = createEventHandlers({
+          chatLog,
+          btw: createBtwPresenter(),
+          tui,
+          state,
+          setActivityStatus,
+          loadHistory: () => loadSelectedHistory(),
+          streamingWatchdogMs: 100,
+        });
+        handlers.handleChatEvent({
+          runId: previousRunId,
+          sessionKey: previousSessionKey,
+          seq: 1,
+          state: "delta",
+          message: { role: "assistant", content: [{ type: "text", text: "old partial" }] },
+        });
+        expect(state.activeChatRunId).toBe(previousRunId);
 
-      const actions = createTestSessionActions({
-        client: makeTuiBackend({
-          listSessions: vi.fn(),
-          loadHistory: vi.fn().mockResolvedValue({
-            sessionId: "session-next",
-            sessionInfo: {
-              key: nextSessionKey,
-              sessionId: "session-next",
-              updatedAt: 1,
-            },
-            messages: [],
-            inFlightRun: { runId: nextRunId, text: "new partial" },
+        const actions = createTestSessionActions({
+          client: makeTuiBackend({
+            listSessions: vi.fn(),
+            loadHistory: vi.fn().mockResolvedValue({
+              sessionId: sameSession ? "session-previous" : "session-next",
+              sessionInfo: {
+                key: nextSessionKey,
+                sessionId: sameSession ? "session-previous" : "session-next",
+                activeRunIds,
+                updatedAt: 1,
+              },
+              messages: [],
+              inFlightRun: { runId: nextRunId, text: "new partial" },
+            }),
           }),
-        }),
-        chatLog,
-        state,
-        tui,
-        setActivityStatus,
-        invalidateRunOwnership: handlers.dispose,
-      });
-      loadSelectedHistory = actions.loadHistory;
+          chatLog,
+          state,
+          tui,
+          setActivityStatus,
+          invalidateRunOwnership: handlers.dispose,
+        });
+        loadSelectedHistory = async () => {
+          const reconcileMembership = handlers.captureHistoryRunMembership();
+          const result = await actions.loadHistory();
+          if (result.loaded) {
+            reconcileMembership(result.activeRunIds);
+          }
+          return result;
+        };
 
-      await actions.setSession(nextSessionKey);
-      expect(state.activeChatRunId).toBe(nextRunId);
+        if (sameSession) {
+          handlers.pauseStreamingWatchdog();
+          handlers.reconnectStreamingWatchdog();
+          const recovered = await loadSelectedHistory();
+          expect(recovered.loaded).toBe(true);
+          if (recovered.loaded) {
+            handlers.reconnectStreamingWatchdog(recovered.runOutcome);
+          }
+        } else {
+          await actions.setSession(nextSessionKey);
+        }
+        expect(state.activeChatRunId).toBe(nextRunId);
 
-      handlers.handleChatEvent({
-        runId: nextRunId,
-        sessionKey: nextSessionKey,
-        seq: 2,
-        state: "final",
-        message: { role: "assistant", content: [{ type: "text", text: "new final" }] },
-      });
+        handlers.handleChatEvent({
+          runId: nextRunId,
+          sessionKey: nextSessionKey,
+          seq: 2,
+          state: "final",
+          message: { role: "assistant", content: [{ type: "text", text: "new final" }] },
+        });
 
-      expect(state.activeChatRunId).toBeNull();
-      expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
-      vi.advanceTimersByTime(101);
-      expect(addPendingSystem).not.toHaveBeenCalled();
-      handlers.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(state.activeChatRunId).toBe(preservesOld ? previousRunId : null);
+        expect(setActivityStatus).toHaveBeenLastCalledWith(preservesOld ? "running" : "idle");
+        vi.advanceTimersByTime(101);
+        expect(addPendingSystem).toHaveBeenCalledTimes(preservesOld ? 1 : 0);
+        if (sameSession && !preservesOld) {
+          handlers.handleChatEvent({
+            runId: previousRunId,
+            sessionKey: previousSessionKey,
+            seq: 3,
+            state: "final",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "late complete reply" }],
+            },
+          });
+          expect(chatLog.render(120).join("\n")).toContain("late complete reply");
+          expect(state.activeChatRunId).toBeNull();
+        }
+        handlers.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each(["agent:main:main", "main"])(
     "preserves run ownership when reselecting the same session as %s",
