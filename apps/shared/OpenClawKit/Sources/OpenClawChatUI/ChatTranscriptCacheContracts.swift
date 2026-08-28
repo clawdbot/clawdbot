@@ -26,11 +26,15 @@ public protocol OpenClawChatTranscriptCache: Sendable {
 }
 
 extension OpenClawChatTranscriptCache {
-    public func loadSessions(agentID _: String?) async -> [OpenClawChatSessionEntry] {
-        await self.loadSessions()
+    public func loadSessions(agentID: String?) async -> [OpenClawChatSessionEntry] {
+        // Legacy conformers have no agent partition. Scoped access must fail
+        // closed or an ownerless roster can cross an agent switch.
+        guard agentID == nil else { return [] }
+        return await self.loadSessions()
     }
 
-    public func storeSessions(_ sessions: [OpenClawChatSessionEntry], agentID _: String?) async {
+    public func storeSessions(_ sessions: [OpenClawChatSessionEntry], agentID: String?) async {
+        guard agentID == nil else { return }
         await self.storeSessions(sessions)
     }
 
