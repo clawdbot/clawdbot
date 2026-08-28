@@ -504,12 +504,26 @@ export function createTelegramMessagePipeline({
         channel: "telegram",
         accountId,
       });
+      // Match supplemental reply-context policy: the authenticated bot's own
+      // immediate reply target stays visible under allowlist hydration.
+      // Deeper thread ancestors keep the normal allowlist gate (including
+      // allowlist_quote, which only overrides kind "quote").
+      const botSenderId = params.ctx.me?.id != null ? String(params.ctx.me.id) : undefined;
       const shouldHydrateReplyMedia = async (
         node: TelegramCachedMessageNode,
         index: number,
       ): Promise<boolean> => {
         if (!isGroupConversation) {
           return true;
+        }
+        const isImmediateBotSelfQuote =
+          index === 0 && botSenderId != null && node.senderId === botSenderId;
+        if (isImmediateBotSelfQuote) {
+          return evaluateSupplementalContextVisibility({
+            mode: contextVisibilityMode,
+            kind: "quote",
+            senderAllowed: true,
+          }).include;
         }
         const expandedAllowFrom = await expandTelegramAllowFromWithAccessGroups({
           cfg: runtimeCfg,

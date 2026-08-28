@@ -5352,6 +5352,162 @@ describe("createTelegramBot", () => {
     expect(payload.Body).not.toContain("[Forwarded from Bob Smith (@bobsmith)");
   });
 
+  it("preserves bot-self reply target context under allowlist visibility", async () => {
+    mockTelegramConfig({
+      groupPolicy: "allowlist",
+      contextVisibility: "allowlist",
+      groups: {
+        "-1008": {
+          requireMention: false,
+          allowFrom: ["1"],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        message_id: 9100,
+        chat: { id: -1008, type: "group", title: "Ops" },
+        text: "what happened?",
+        date: 1736380800,
+        from: { id: 1, first_name: "Ada", username: "ada", is_bot: false },
+        reply_to_message: {
+          message_id: 9099,
+          text: "cron notification body",
+          from: { id: 999, first_name: "OpenClaw", is_bot: true },
+        },
+      },
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: getEmptyTelegramFile,
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
+    expect(payload.ReplyToId).toBe("9099");
+    expect(payload.ReplyToBody).toBe("cron notification body");
+    expect(payload.Body).toContain("[Reply chain - nearest first]");
+    expect(payload.Body).toContain("cron notification body");
+  });
+
+  it("still drops unlisted human reply targets under allowlist visibility", async () => {
+    mockTelegramConfig({
+      groupPolicy: "allowlist",
+      contextVisibility: "allowlist",
+      groups: {
+        "-1008": {
+          requireMention: false,
+          allowFrom: ["1"],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        message_id: 9102,
+        chat: { id: -1008, type: "group", title: "Ops" },
+        text: "what happened?",
+        date: 1736380800,
+        from: { id: 1, first_name: "Ada", username: "ada", is_bot: false },
+        reply_to_message: {
+          message_id: 9101,
+          text: "unlisted human parent",
+          from: { id: 777, first_name: "Eve", username: "eve", is_bot: false },
+        },
+      },
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: getEmptyTelegramFile,
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
+    expect(payload.ReplyToId).toBeUndefined();
+    expect(payload.ReplyToBody).toBeUndefined();
+    expect(payload.Body).not.toContain("unlisted human parent");
+    expect(payload.Body).not.toContain("[Reply chain - nearest first]");
+  });
+
+  it("hydrates bot-self reply media under allowlist visibility", async () => {
+    mockTelegramConfig({
+      groupPolicy: "allowlist",
+      contextVisibility: "allowlist",
+      groups: {
+        "-1011": {
+          requireMention: false,
+          allowFrom: ["1"],
+        },
+      },
+    });
+
+    const mediaFetch = vi.fn(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const ssrfMock = mockPinnedHostnameResolution();
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        telegramTransport: makeTelegramTransport(mediaFetch as typeof fetch),
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const chat = { id: -1011, type: "group", title: "Ops" };
+
+      await handler({
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: getEmptyTelegramFile,
+        message: {
+          chat,
+          message_id: 9200,
+          text: "what is this?",
+          date: 1736380800,
+          from: { id: 1, is_bot: false, first_name: "Ada" },
+          reply_to_message: {
+            chat,
+            message_id: 9199,
+            caption: "bot chart",
+            date: 1736380750,
+            from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+            photo: [{ file_id: "bot-self-photo-1" }],
+          },
+        },
+      });
+    } finally {
+      ssrfMock.mockRestore();
+    }
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call") as {
+      ReplyToId?: string;
+      ReplyToBody?: string;
+      ChannelStructuredContext?: unknown[];
+    };
+    expect(payload.ReplyToId).toBe("9199");
+    expect(payload.ReplyToBody).toBe("bot chart");
+    const [conversationContext] = requireArray(
+      payload.ChannelStructuredContext,
+      "structured context",
+    );
+    const contextRecord = requireRecord(conversationContext, "conversation context");
+    const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+    );
+    const replyMessage = messages.find((message) => message.message_id === "9199");
+    expect(replyMessage?.media_path).toMatch(/^media:\/\/inbound\//);
+    expect(replyMessage?.media_ref).toBeUndefined();
+    expect(getFileSpy).toHaveBeenCalledWith("bot-self-photo-1", expect.any(AbortSignal));
+    expect(mediaFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("accepts group replies to the bot without explicit mention when requireMention is enabled", async () => {
     mockTelegramConfig({ groups: { "*": { requireMention: true } } });
 

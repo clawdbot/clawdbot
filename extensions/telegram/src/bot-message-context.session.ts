@@ -321,6 +321,11 @@ export async function buildTelegramInboundContextPayload(params: {
     channel: "telegram",
     accountId: route.accountId,
   });
+  // Bot/self messages already count as implicit mentions in groups; treat them
+  // as allowed supplemental quote/reply context so a user replying to a bot-sent
+  // notification keeps the quoted bot text under allowlist visibility.
+  // Forwarded origins still use the normal allowlist gate.
+  const botSenderId = primaryCtx.me?.id != null ? String(primaryCtx.me.id) : undefined;
   const shouldIncludeGroupSupplementalContext = (paramsLocal: {
     kind: "quote" | "forwarded";
     senderId?: string;
@@ -329,13 +334,17 @@ export async function buildTelegramInboundContextPayload(params: {
     if (!isGroup) {
       return true;
     }
-    const senderAllowed = effectiveGroupAllow?.hasEntries
-      ? isSenderAllowed({
-          allow: effectiveGroupAllow,
-          senderId: paramsLocal.senderId,
-          senderUsername: paramsLocal.senderUsername,
-        })
-      : true;
+    const isBotSelfQuote =
+      paramsLocal.kind === "quote" && botSenderId != null && paramsLocal.senderId === botSenderId;
+    const senderAllowed = isBotSelfQuote
+      ? true
+      : effectiveGroupAllow?.hasEntries
+        ? isSenderAllowed({
+            allow: effectiveGroupAllow,
+            senderId: paramsLocal.senderId,
+            senderUsername: paramsLocal.senderUsername,
+          })
+        : true;
     return evaluateSupplementalContextVisibility({
       mode: contextVisibilityMode,
       kind: paramsLocal.kind,
