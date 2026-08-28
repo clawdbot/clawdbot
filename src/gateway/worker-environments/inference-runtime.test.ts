@@ -190,6 +190,7 @@ function providerStream(message = finalMessage(), options: { omitToolEnd?: boole
 function setup(
   entry: SessionEntry = sessionEntry,
   options: {
+    catalogOnlyModel?: boolean;
     pluginRegistry?: PluginRegistry;
     afterModelPreparation?: () => void;
     observeStage?: (
@@ -231,6 +232,9 @@ function setup(
     return {} as Awaited<ReturnType<Deps["resolveModel"]>>;
   });
   const prepareModel = vi.fn<Deps["prepareModel"]>(async (modelParams) => {
+    if (options.catalogOnlyModel && !modelParams.allowBundledStaticCatalogFallback) {
+      return { error: `Unknown model: ${modelParams.provider}/${modelParams.modelId}` };
+    }
     scope.agentRuntime = modelParams.agentRuntimeId;
     scope.preparedModelRuntime = modelParams.preparedModelRuntime === leasedPreparedModelRuntime;
     scope.prepareWorkspace = modelParams.workspaceDir;
@@ -343,6 +347,38 @@ const MODEL_ERROR = {
 };
 
 describe("worker inference provider runtime", () => {
+  it("prepares an approved model available only from the bundled static catalog", async () => {
+    const runtime = setup(sessionEntry, { catalogOnlyModel: true });
+
+    await expect(runtime.executor(params(request(MODEL), vi.fn()))).resolves.toMatchObject({
+      type: "done",
+      message: { provider: PROVIDER, model: MODEL },
+    });
+    expect(runtime.stream).toHaveBeenCalledOnce();
+    expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("returns bounded, redacted model preparation guidance", async () => {
+    const runtime = setup();
+    const secret = `worker-preparation-secret-${"a".repeat(48)}`;
+    runtime.prepareModel.mockResolvedValueOnce({
+      error: `Auth lookup failed for provider "anthropic": configure the selected auth profile. Authorization: Bearer ${secret}. ${"diagnostic ".repeat(40)}`,
+    });
+
+    const outcome = await runtime.executor(params(request(), vi.fn()));
+
+    expect(outcome).toMatchObject({ type: "error", reason: "provider-error" });
+    if (outcome.type !== "error") {
+      throw new Error("expected model preparation to fail");
+    }
+    expect(outcome.message).toContain("configure the selected auth profile");
+    expect(outcome.message).not.toContain(secret);
+    expect(outcome.message.length).toBeLessThanOrEqual(256);
+    expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
+    expect(runtime.stream).not.toHaveBeenCalled();
+    expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
+  });
+
   it("keeps provider construction and execution on the leased generation", async () => {
     const generationA = createEmptyPluginRegistry();
     const generationB = createEmptyPluginRegistry();

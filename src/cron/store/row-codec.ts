@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -31,7 +32,7 @@ import {
   tryParseJsonObject,
 } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
-import { ensureCronStoreEpochSchema, getCronStoreKysely } from "./schema.js";
+import { getCronStoreKysely } from "./schema.js";
 import { bindStateColumns, stateFromRow } from "./state-codec.js";
 import { bindTriggerColumns, triggerFromRow } from "./trigger-codec.js";
 import type { LoadedCronStore } from "./types.js";
@@ -289,6 +290,22 @@ function pacingFromJobJson(jobJson: Record<string, unknown>): CronPacing | undef
   };
 }
 
+function createdActorFromJobJson(value: unknown): SessionCreatedActor | undefined {
+  if (
+    !isRecord(value) ||
+    (value.type !== "human" && value.type !== "agent" && value.type !== "system")
+  ) {
+    return undefined;
+  }
+  const id = normalizeOptionalString(typeof value.id === "string" ? value.id : undefined);
+  const label = normalizeOptionalString(typeof value.label === "string" ? value.label : undefined);
+  return {
+    type: value.type,
+    ...(id ? { id } : {}),
+    ...(label ? { label } : {}),
+  };
+}
+
 function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronStoredJob | null {
   const jsonOwner = isRecord(jobJson.owner) ? jobJson.owner : undefined;
   const ownerAccountId = normalizeOptionalAccountId(
@@ -300,6 +317,7 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
   const failureAlert = failureAlertFromRow(row);
   const trigger = triggerFromRow(row);
   const pacing = pacingFromJobJson(jobJson);
+  const createdActor = createdActorFromJobJson(jobJson.createdActor);
   const scheduledToolPolicy = normalizeCronScheduledToolPolicy(jobJson.scheduledToolPolicy);
   const toolsAllowProvenance =
     isRecord(jobJson.toolsAllowProvenance) &&
@@ -319,6 +337,7 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
   const createdAtMs = normalizeNumber(row.created_at_ms) ?? Date.now();
   return {
     id: row.job_id,
+    ...(createdActor ? { createdActor } : {}),
     ...(row.declaration_key ? { declarationKey: row.declaration_key } : {}),
     ...(row.display_name ? { displayName: row.display_name } : {}),
     ...(row.owner_agent_id || row.owner_session_key || ownerAccountId
@@ -383,25 +402,7 @@ export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
   ).rows;
 }
 
-function incrementCronStoreEpoch(db: DatabaseSync, storeKey: string): void {
-  ensureCronStoreEpochSchema(db);
-  executeSqliteQuerySync(
-    db,
-    getCronStoreKysely(db)
-      .insertInto("cron_store_epochs")
-      .values({ store_key: storeKey, store_epoch: 0 })
-      .onConflict((conflict) => conflict.column("store_key").doNothing()),
-  );
-  executeSqliteQuerySync(
-    db,
-    getCronStoreKysely(db)
-      .updateTable("cron_store_epochs")
-      .set((eb) => ({ store_epoch: eb("store_epoch", "+", 1) }))
-      .where("store_key", "=", storeKey),
-  );
-}
-
-/** Materializes retired ownership; the caller's transaction commits row and epoch updates together. */
+/** Materializes retired ownership within the caller's write transaction. */
 export function materializeCronRowAgentOwners(
   db: DatabaseSync,
   storeKey: string,
@@ -437,9 +438,6 @@ export function materializeCronRowAgentOwners(
         .where("job_id", "=", row.job_id),
     );
     rewritten += 1;
-  }
-  if (rewritten > 0) {
-    incrementCronStoreEpoch(db, storeKey);
   }
   return rewritten;
 }

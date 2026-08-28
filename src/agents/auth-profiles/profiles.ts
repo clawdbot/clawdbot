@@ -3,12 +3,20 @@
  * Updates profile order, last-good state, usage stats, and provider profile
  * records through locked or immediate store writes.
  */
+import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
+import {
+  getRuntimeExternalCliProfileIds,
+  getRuntimeLocalProfileIds,
+  removeRuntimeExternalProfileReferences,
+  setRuntimeExternalCliProfileIds,
+  setRuntimeLocalProfileIds,
+} from "./runtime-external-profile-references.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
   resolvePersistedAuthProfileOwnerAgentDir,
@@ -256,45 +264,22 @@ export async function removeAuthProfilesWithLock(params: {
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     updater: (store) => {
-      let changed = false;
-      for (const profileId of profileIds) {
-        if (store.profiles[profileId]) {
-          delete store.profiles[profileId];
-          changed = true;
-        }
-        if (store.usageStats?.[profileId]) {
-          delete store.usageStats[profileId];
-          changed = true;
-        }
+      const next = removeRuntimeExternalProfileReferences({ store, profileIds });
+      if (isDeepStrictEqual(store, next)) {
+        return false;
       }
-      for (const [provider, order] of Object.entries(store.order ?? {})) {
-        const next = order.filter((profileId) => !profileIds.has(profileId));
-        if (next.length === order.length) {
-          continue;
-        }
-        changed = true;
-        if (next.length > 0) {
-          store.order![provider] = next;
-        } else {
-          delete store.order![provider];
-        }
-      }
-      for (const [provider, profileId] of Object.entries(store.lastGood ?? {})) {
-        if (profileIds.has(profileId)) {
-          delete store.lastGood![provider];
-          changed = true;
-        }
-      }
-      if (store.order && Object.keys(store.order).length === 0) {
-        store.order = undefined;
-      }
-      if (store.lastGood && Object.keys(store.lastGood).length === 0) {
-        store.lastGood = undefined;
-      }
-      if (store.usageStats && Object.keys(store.usageStats).length === 0) {
-        store.usageStats = undefined;
-      }
-      return changed;
+      Object.assign(store, {
+        profiles: next.profiles,
+        order: next.order,
+        lastGood: next.lastGood,
+        usageStats: next.usageStats,
+        runtimePersistedProfileIds: next.runtimePersistedProfileIds,
+        runtimeExternalProfileIds: next.runtimeExternalProfileIds,
+        runtimeExternalProfileIdsAuthoritative: next.runtimeExternalProfileIdsAuthoritative,
+      });
+      setRuntimeLocalProfileIds(store, getRuntimeLocalProfileIds(next));
+      setRuntimeExternalCliProfileIds(store, getRuntimeExternalCliProfileIds(next));
+      return true;
     },
   });
 }
@@ -305,7 +290,7 @@ export async function removeAuthProfilesWithLock(params: {
  * store lets the profile reappear on the next status read and auth warmup.
  */
 export async function removeAuthProfilesAcrossOwnerStores(params: {
-  agentDir: string;
+  agentDir?: string;
   profileIds: readonly string[];
 }): Promise<boolean> {
   const profilesByOwner = new Map<string | undefined, Set<string>>([

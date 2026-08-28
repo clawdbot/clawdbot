@@ -24,6 +24,7 @@ vi.mock("openai", () => ({
   },
 }));
 
+import { createOpenAIResponsesClient } from "../transports/openai-responses-client.js";
 import { streamOpenAIResponses } from "./openai-responses.js";
 
 const context = {
@@ -65,6 +66,39 @@ describe("OpenAI Responses provider", () => {
     expect(result.stopReason).toBe("error");
     expect(openAiMockState.configs).toHaveLength(1);
     expect((openAiMockState.configs[0] as { fetch?: unknown }).fetch).toBe(hostFetch);
+  });
+
+  it("fails closed before constructing an OpenAI client for another provider without an endpoint", async () => {
+    const missingEndpointModel = {
+      ...model(),
+      provider: "openrouter",
+      baseUrl: undefined,
+    } as unknown as Model<"openai-responses">;
+
+    const result = await streamOpenAIResponses(missingEndpointModel, context, {
+      apiKey: "sentinel-openrouter-key",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain('Provider "openrouter" requires an explicit base URL');
+    expect(() =>
+      createOpenAIResponsesClient(missingEndpointModel, context, "sentinel-openrouter-key"),
+    ).toThrow('Provider "openrouter" requires an explicit base URL');
+    expect(openAiMockState.configs).toEqual([]);
+
+    const configuredModel = {
+      ...missingEndpointModel,
+      baseUrl: "https://openrouter.ai/api/v1",
+    };
+    await streamOpenAIResponses(configuredModel, context, {
+      apiKey: "sentinel-openrouter-key",
+    }).result();
+    expect(() =>
+      createOpenAIResponsesClient(configuredModel, context, "sentinel-openrouter-key"),
+    ).not.toThrow();
+    expect(
+      openAiMockState.configs.map((config) => (config as { baseURL?: string }).baseURL),
+    ).toEqual(["https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1"]);
   });
 
   it("keeps Cloudflare composed upstream auth opaque in SDK headers", async () => {

@@ -13,6 +13,7 @@ import {
 } from "../../../infra/diagnostic-events.js";
 import { resolveCoreModelRequestLifecycleDiagnosticMetadata } from "../../../infra/diagnostic-model-request.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-global-dispatcher.js";
 import {
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
@@ -228,6 +229,84 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     );
 
     expect(requestTimeouts).toEqual([60_000, undefined, 90_000, MAX_TIMER_TIMEOUT_MS, undefined]);
+  });
+
+  it("propagates the resolved local transport deadline to diagnostic recovery", async () => {
+    let callSequence = 0;
+    const requestTimeouts: Array<number | undefined> = [];
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() =>
+        (async function* () {
+          yield { type: "text", text: "ok" };
+        })()) as unknown as StreamFn,
+      {
+        runId: "run-local-no-gap",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        provider: "ollama",
+        model: "qwen3.5:9b-q8_0",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => `call-${++callSequence}`,
+        ownerGeneration: Object.freeze({}),
+        requestTimeoutMs: DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+      },
+    );
+
+    await collectModelCallEvents(
+      async () => {
+        await drain(await wrapped({} as never, {} as never, {} as never));
+      },
+      (event, metadata) => {
+        if (event.type === "model.call.started") {
+          const lifecycle = resolveCoreModelRequestLifecycleDiagnosticMetadata(metadata);
+          requestTimeouts.push(
+            lifecycle?.phase === "started" ? lifecycle.requestTimeoutMs : undefined,
+          );
+        }
+      },
+    );
+
+    expect(requestTimeouts).toEqual([DEFAULT_UNDICI_STREAM_TIMEOUT_MS]);
+  });
+
+  it("preserves an explicit provider deadline over the caller transport allowance", async () => {
+    let callSequence = 0;
+    const requestTimeouts: Array<number | undefined> = [];
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() =>
+        (async function* () {
+          yield { type: "text", text: "ok" };
+        })()) as unknown as StreamFn,
+      {
+        runId: "run-resolved-policy",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => `call-${++callSequence}`,
+        ownerGeneration: Object.freeze({}),
+        requestTimeoutMs: 45_000,
+      },
+    );
+
+    await collectModelCallEvents(
+      async () => {
+        await drain(
+          await wrapped({ requestTimeoutMs: 300_000 } as never, {} as never, {} as never),
+        );
+      },
+      (event, metadata) => {
+        if (event.type === "model.call.started") {
+          const lifecycle = resolveCoreModelRequestLifecycleDiagnosticMetadata(metadata);
+          requestTimeouts.push(
+            lifecycle?.phase === "started" ? lifecycle.requestTimeoutMs : undefined,
+          );
+        }
+      },
+    );
+
+    expect(requestTimeouts).toEqual([300_000]);
   });
 
   it("captures output and completes when callers only await stream.result()", async () => {

@@ -17,7 +17,11 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
-import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
+import {
+  getDeliveryAttemptCount,
+  getDeliveryLastError,
+  hasRetainedRequiredCompletionDelivery,
+} from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
   shouldDeferTerminalCleanupForUnconfirmedChild,
@@ -287,6 +291,9 @@ export function reconcileOrphanedRun(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
 }) {
+  if (hasRetainedRequiredCompletionDelivery(params.entry)) {
+    return false;
+  }
   // The third copy of this condition; now the one owner. The sync remover is
   // reached only from here, so the guard rides the shared decision rather than
   // being duplicated inside it.

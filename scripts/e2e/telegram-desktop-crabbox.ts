@@ -586,6 +586,7 @@ export async function createCroppedMotionPreview(params: {
   croppedVideoPath: string;
   cwd: string;
   fps: number;
+  startSeconds?: number;
   run?: RunCommand;
   videoPath: string;
 }): Promise<{ crop: string; fps: number; outputWidth: number }> {
@@ -600,6 +601,9 @@ export async function createCroppedMotionPreview(params: {
         "-hide_banner",
         "-loglevel",
         "warning",
+        ...(params.startSeconds && params.startSeconds > 0
+          ? ["-ss", params.startSeconds.toFixed(3)]
+          : []),
         "-i",
         params.videoPath,
         "-vf",

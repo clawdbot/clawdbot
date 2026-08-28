@@ -51,6 +51,7 @@ import {
   resolvePluginSubagentRequestedModelRef,
 } from "./server-plugin-subagent-runtime.js";
 import {
+  createGatewayHooksRuntime,
   hasInProcessGatewayContext,
   openGatewayNodeDuplex,
   projectGatewayRuntimeNodes,
@@ -221,6 +222,7 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
     forceSyntheticClient: true,
     pluginRuntimeOwnerId: pluginId,
     resolveGatewayContext,
+    ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
     ...(syntheticScopes ? { syntheticScopes } : {}),
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
   });
@@ -233,6 +235,7 @@ export function createGatewaySubagentRuntime(
   overridePolicies: PluginSubagentOverridePolicies = {},
 ): PluginRuntime["subagent"] {
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
+    const scope = getPluginRuntimeGatewayRequestScope();
     const limit =
       params.limit == null || !Number.isFinite(params.limit)
         ? undefined
@@ -246,7 +249,12 @@ export function createGatewaySubagentRuntime(
         key: params.sessionKey,
         ...(limit != null && { limit }),
       },
-      { resolveGatewayContext },
+      {
+        resolveGatewayContext,
+        ...(!scope?.client && canTrustedOfficialPluginRequestScopes(scope ?? {})
+          ? { operatorRoleActor: { kind: "system" as const } }
+          : {}),
+      },
     );
     return { messages: Array.isArray(payload?.messages) ? payload.messages : [] };
   };
@@ -313,6 +321,7 @@ export function createGatewaySubagentRuntime(
         {
           allowSyntheticModelOverride,
           agentRunTracking: "plugin_subagent",
+          ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
           ...(pluginSubagentRequester ? { pluginSubagentRequester } : {}),
           ...(runtimePluginToolGrant ? { runtimePluginToolGrant } : {}),
@@ -379,7 +388,13 @@ export function createGatewaySubagentRuntime(
           key: params.sessionKey,
           deleteTranscript: params.deleteTranscript ?? true,
         },
-        { ...pluginOwnedCleanupOptions, resolveGatewayContext },
+        {
+          ...pluginOwnedCleanupOptions,
+          resolveGatewayContext,
+          ...(!scope?.client && canTrustedOfficialPluginRequestScopes(scope ?? {})
+            ? { operatorRoleActor: { kind: "system" as const } }
+            : {}),
+        },
       );
     },
   };
@@ -463,9 +478,7 @@ export function createGatewayNodesRuntime(
                 (node as { connected?: unknown } | null)?.connected === true,
             )
           : nodes;
-      return {
-        nodes: projectGatewayRuntimeNodes(filteredNodes, context) as GatewayRuntimeNodes,
-      };
+      return { nodes: projectGatewayRuntimeNodes(filteredNodes, context) as GatewayRuntimeNodes };
     },
     invoke: invokeNode,
     openDuplex: (params) =>
@@ -474,16 +487,18 @@ export function createGatewayNodesRuntime(
 }
 
 function createGatewayPluginRuntimeBindings(
-  resolveGatewayContext: GatewayContextResolver,
+  resolveGatewayContext: GatewayContextResolver | undefined,
   overridePolicies: PluginSubagentOverridePolicies,
 ): {
-  runtime: Pick<PluginRuntime, "gateway" | "nodes" | "subagent"> &
+  runtime: Pick<PluginRuntime, "gateway" | "hooks" | "nodes" | "subagent"> &
     Pick<CreatePluginRuntimeOptions, "dispatchReplyFromConfig">;
   retire: () => void;
 } {
   let active = true;
   const lifetime = new AbortController();
-  const resolveBoundGatewayContext = () => (active ? resolveGatewayContext() : undefined);
+  const resolveBoundGatewayContext = resolveGatewayContext
+    ? () => (active ? resolveGatewayContext() : undefined)
+    : undefined;
   return {
     retire: () => {
       lifetime.abort(new Error("Plugin Gateway runtime retired; duplex invocation cancelled."));
@@ -496,20 +511,21 @@ function createGatewayPluginRuntimeBindings(
         const sessionWorkerPlacementContext = getInProcessGatewayRequestContext(
           resolveBoundGatewayContext,
         );
-        return await withPluginRuntimeGatewayContextResolver(
-          resolveBoundGatewayContext,
-          async () =>
-            await dispatchReplyFromConfig({
-              ...params,
-              ...(sessionWorkerPlacementContext ? { sessionWorkerPlacementContext } : {}),
-            }),
-        );
+        const run = async () =>
+          await dispatchReplyFromConfig({
+            ...params,
+            ...(sessionWorkerPlacementContext ? { sessionWorkerPlacementContext } : {}),
+          });
+        return resolveBoundGatewayContext
+          ? await withPluginRuntimeGatewayContextResolver(resolveBoundGatewayContext, run)
+          : await run();
       },
       gateway: {
         isAvailable: async () => hasInProcessGatewayContext(resolveBoundGatewayContext),
         request: (method, params, options) =>
           dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
       },
+      hooks: createGatewayHooksRuntime(resolveBoundGatewayContext),
       nodes: createGatewayNodesRuntime(resolveBoundGatewayContext, lifetime.signal),
       subagent: createGatewaySubagentRuntime(resolveBoundGatewayContext, overridePolicies),
     },
@@ -630,7 +646,7 @@ export function loadGatewayPlugins(params: {
   const beforeLoad = performance.now();
   const loaderStatsBefore = getPluginModuleLoaderStats();
   const gatewayRuntimeBindings = createGatewayPluginRuntimeBindings(
-    params.resolveGatewayContext ?? (() => undefined),
+    params.resolveGatewayContext,
     resolvePluginSubagentOverridePolicies(resolvedConfig),
   );
   const pluginRegistry = loadAndActivateRootPluginRegistry({

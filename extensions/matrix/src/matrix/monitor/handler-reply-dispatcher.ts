@@ -7,6 +7,7 @@ import {
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
+  resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
@@ -153,7 +154,7 @@ export function createMatrixReplyDispatcher(config: {
         return replacement;
       };
       if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
-        const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+        const { hasMedia } = resolveSendableOutboundReplyParts(payload);
         const ttsSupplement = getReplyPayloadTtsSupplement(payload);
         const fallbackPayload =
           ttsSupplement &&
@@ -183,11 +184,10 @@ export function createMatrixReplyDispatcher(config: {
           );
         }
 
-        const payloadReplyToId = normalizeOptionalString(payload.replyToId);
         const payloadReplyMismatch =
-          replyToMode !== "off" &&
           !threadTarget &&
-          payloadReplyToId !== draftController.currentReplyToId();
+          (replyToMode !== "off" || payload.replyToTag || payload.replyToCurrent) &&
+          normalizeOptionalString(payload.replyToId) !== draftController.currentReplyToId();
         let mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
         const canPotentiallyFinalizeDraft =
           Boolean(payload.text?.trim()) &&

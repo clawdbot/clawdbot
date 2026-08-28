@@ -130,6 +130,7 @@ export function applyJobResult(
     resolveDeliveryState({
       job,
       runStatus: result.status,
+      delivery: result.delivery,
       delivered: result.delivered,
       deliveryAttempted: result.deliveryAttempted,
       error: result.deliveryError ?? result.error,

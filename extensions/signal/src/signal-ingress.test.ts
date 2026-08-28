@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SignalSseEvent } from "./client-adapter.js";
 import { startSignalIngressMonitor } from "./signal-ingress.js";

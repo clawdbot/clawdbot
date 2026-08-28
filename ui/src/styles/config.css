@@ -249,7 +249,9 @@
 .settings-theme-card {
   position: relative;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  /* minmax(0, 1fr): a plain 1fr floors at the label's min-content width, so a
+     long theme name (imported tweakcn labels) overflowed the card's border. */
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   min-height: 64px;
@@ -269,14 +271,15 @@
   background: var(--bg-hover);
 }
 
+/* Selection is carried by this skin alone (aria-pressed owns the semantics),
+   so it stays stronger than the hover state at every accent. */
 .settings-theme-card--active {
-  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg-elevated));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
-.settings-theme-card__icon,
-.settings-theme-card__check {
+.settings-theme-card__icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -285,8 +288,7 @@
   color: var(--accent);
 }
 
-.settings-theme-card__icon svg,
-.settings-theme-card__check svg {
+.settings-theme-card__icon svg {
   width: 18px;
   height: 18px;
   stroke: currentColor;
@@ -297,6 +299,9 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-theme-card--active .settings-theme-card__label {
@@ -334,47 +339,161 @@
 
 /* Preview swatches are theme-invariant and must not inherit the active theme. */
 /* stylelint-disable color-no-hex */
-.settings-theme-card--claw {
+.settings-theme-card--claw,
+.settings-accent-theme--claw {
   --theme-chip-bg: #0e1015;
   --theme-chip-accent: #ff5c5c;
   --theme-chip-accent-2: #14b8a6;
 }
 
-.settings-theme-card--knot {
+.settings-theme-card--knot,
+.settings-accent-theme--knot {
   --theme-chip-bg: #080808;
   --theme-chip-accent: #e5243b;
   --theme-chip-accent-2: #8b1a2b;
 }
 
-.settings-theme-card--dash {
+.settings-theme-card--dash,
+.settings-accent-theme--dash {
   --theme-chip-bg: #1a1210;
   --theme-chip-accent: #b47840;
   --theme-chip-accent-2: #a88050;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--claw {
+.settings-theme-card--absolutely,
+.settings-accent-theme--absolutely {
+  --theme-chip-bg: #1c1c1a;
+  --theme-chip-accent: #d97757;
+  --theme-chip-accent-2: #b8926a;
+}
+
+.settings-theme-card--tide,
+.settings-accent-theme--tide {
+  --theme-chip-bg: #10151b;
+  --theme-chip-accent: #5ab6d8;
+  --theme-chip-accent-2: #7f9bb5;
+}
+
+.settings-theme-card--beacon,
+.settings-accent-theme--beacon {
+  --theme-chip-bg: #000000;
+  --theme-chip-accent: #ffc233;
+  --theme-chip-accent-2: #8ecdff;
+}
+
+.settings-theme-card--phosphor,
+.settings-accent-theme--phosphor {
+  --theme-chip-bg: #0a0f0a;
+  --theme-chip-accent: #4ade80;
+  --theme-chip-accent-2: #8fd6a5;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--claw, .settings-accent-theme--claw) {
   --theme-chip-bg: #faf9f7;
   --theme-chip-accent: #bd4531;
   --theme-chip-accent-2: #0d9488;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--knot {
+:root[data-theme-mode="light"] :is(.settings-theme-card--knot, .settings-accent-theme--knot) {
   --theme-chip-bg: #f9f9fb;
   --theme-chip-accent: #c41e30;
   --theme-chip-accent-2: #7a1420;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--dash {
+:root[data-theme-mode="light"] :is(.settings-theme-card--dash, .settings-accent-theme--dash) {
   --theme-chip-bg: #f7f2ec;
   --theme-chip-accent: #6e4828;
   --theme-chip-accent-2: #6a4e30;
 }
+
+:root[data-theme-mode="light"]
+  :is(.settings-theme-card--absolutely, .settings-accent-theme--absolutely) {
+  --theme-chip-bg: #faf9f5;
+  --theme-chip-accent: #a8452a;
+  --theme-chip-accent-2: #8a6a44;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--tide, .settings-accent-theme--tide) {
+  --theme-chip-bg: #f7f9fb;
+  --theme-chip-accent: #1f6f8f;
+  --theme-chip-accent-2: #3d6d88;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--beacon, .settings-accent-theme--beacon) {
+  --theme-chip-bg: #ffffff;
+  --theme-chip-accent: #6e4a00;
+  --theme-chip-accent-2: #09428d;
+}
+
+:root[data-theme-mode="light"]
+  :is(.settings-theme-card--phosphor, .settings-accent-theme--phosphor) {
+  --theme-chip-bg: #f4f7f4;
+  --theme-chip-accent: #10693a;
+  --theme-chip-accent-2: #2f6b47;
+}
 /* stylelint-enable color-no-hex */
 
-.settings-theme-card--custom {
+.settings-theme-card--custom,
+.settings-accent-theme--custom {
   --theme-chip-bg: var(--bg);
   --theme-chip-accent: var(--accent);
   --theme-chip-accent-2: var(--accent-2);
+}
+
+.settings-accent-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-accent-swatch {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  border-radius: 50%;
+  background: var(--settings-accent-swatch, var(--accent));
+  transition: box-shadow var(--duration-fast) ease;
+}
+
+.settings-accent-swatch--active {
+  box-shadow:
+    0 0 0 2px var(--bg-elevated),
+    0 0 0 4px var(--accent);
+}
+
+.settings-accent-swatch__check {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  color: var(--accent-foreground);
+}
+
+.settings-accent-swatch__check svg {
+  width: 18px;
+  height: 18px;
+}
+
+.settings-accent-swatch--custom {
+  overflow: hidden;
+}
+
+.settings-accent-swatch--custom::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.settings-accent-swatch--custom::-webkit-color-swatch {
+  border: 0;
+  border-radius: 50%;
+}
+
+.settings-accent-swatch--custom::-moz-color-swatch {
+  border: 0;
+  border-radius: 50%;
 }
 
 .settings-theme-import {

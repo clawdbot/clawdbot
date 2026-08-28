@@ -464,7 +464,43 @@ describe("refreshChat", () => {
     expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
   });
 
-  it("renders cached models while startup metadata refreshes", async () => {
+  it("commits startup history before immediately hydrating missing metadata", async () => {
+    const metadata = createDeferred<unknown>();
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "Transcript paints before metadata" }],
+    };
+    const host = makeChatHost({
+      hello: gatewayHelloForMethods(["chat.metadata", "chat.startup"], []),
+      requestHandlers: {
+        "chat.startup": async () => ({ messages: [message] }),
+        "chat.metadata": () => metadata.promise,
+      },
+    });
+
+    await expect(
+      refreshPageChat(asChatPageHost(host), {
+        awaitHistory: true,
+        deferBranches: true,
+        startup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(host.chatMessages).toEqual([message]);
+    expect(host.request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
+    expect(asChatPageHost(host).chatModelsLoading).toBe(true);
+
+    const model = {
+      available: true,
+      id: "hydrated-model",
+      name: "Hydrated Model",
+      provider: "openai",
+    };
+    metadata.resolve({ commands: [], models: [model] });
+    await waitForFast(() => expect(host.chatModelCatalog).toEqual([model]));
+  });
+
+  it("keeps cached models interactive while startup metadata revalidates silently", async () => {
     const startup = createDeferred<unknown>();
     const host = makeChatHost({
       chatModelSwitchPromises: {},
@@ -491,7 +527,7 @@ describe("refreshChat", () => {
     });
 
     expect(host.chatModelCatalog).toEqual([cachedModel]);
-    expect(asChatPageHost(host).chatModelsLoading).toBe(true);
+    expect(asChatPageHost(host).chatModelsLoading).toBe(false);
     const container = document.createElement("div");
     const controls = renderChatPaneComposerControls({
       state: asChatPageHost(host),
@@ -505,8 +541,8 @@ describe("refreshChat", () => {
       onModelSetup: vi.fn(),
     });
     render(controls.composerControls, container);
-    expect(container.querySelector('[data-chat-model-catalog-state="refreshing"]')).not.toBeNull();
-    expect(container.textContent).toContain("Refreshing models…");
+    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
+    expect(container.textContent).toContain("Cached Model");
     expect(container.textContent).not.toContain("Loading models…");
 
     startup.resolve({
@@ -1726,7 +1762,7 @@ describe("handleSendChat", () => {
     expect(host.sessionsResult).toBe(archivedSessions);
   });
 
-  it("marks terminal error ACK sends failed instead of accepting the queued message", async () => {
+  it("keeps terminal error ACK sends retryable without restoring a duplicate draft", async () => {
     const host = makeChatHost({
       requestHandlers: {
         "chat.send": (params: unknown) => {
@@ -1741,14 +1777,15 @@ describe("handleSendChat", () => {
     await handleSendChat(host);
 
     expect(host.chatMessages).toStrictEqual([]);
-    expect(host.chatMessage).toBe("send before failing");
+    expect(host.chatMessage).toBe("");
     expect(host.chatQueue).toHaveLength(1);
     expect(host.chatQueue[0]).toMatchObject({
       text: "send before failing",
       sendState: "failed",
       sendError: "Chat failed before the run started; try again.",
     });
-    expect(host.lastError).toBe("Chat failed before the run started; try again.");
+    expect(host.lastError).toBeNull();
+    expect(host.chatError).toBeNull();
     expect(host.chatRunId).toBeNull();
   });
 
@@ -1793,7 +1830,7 @@ describe("handleSendChat", () => {
       await handleSendChat(host);
 
       expect(host.chatMessages).toStrictEqual([persistedPeer]);
-      expect(host.chatMessage).toBe("same visible message");
+      expect(host.chatMessage).toBe("");
       expect(host.chatQueue).toHaveLength(1);
       expect(host.chatQueue[0]).toMatchObject({
         text: "same visible message",
@@ -2087,11 +2124,18 @@ describe("handleSendChat", () => {
     expect(patchCount).toBe(2);
   });
 
-  it("rolls a failed queued picker back to the preceding slash model value", async () => {
+  it("retires a failed queued picker back to the preceding confirmed session row", async () => {
     const firstPatch = createDeferred<unknown>();
     let patchCount = 0;
     const host = makeChatHost({
       requestHandlers: {
+        "sessions.list": createSessionsResult([
+          row("agent:main", {
+            model: "gpt-5-mini",
+            modelProvider: "openai",
+            modelOverrideSource: "user",
+          }),
+        ]),
         "sessions.patch": () => {
           patchCount += 1;
           if (patchCount === 1) {
@@ -2101,29 +2145,23 @@ describe("handleSendChat", () => {
         },
       },
     });
-    host.sessions.setModelOverride(host.sessionKey, "openai/gpt-old");
 
-    const slash = patchChatSessionSettings(
-      host,
-      host.sessionKey,
-      { model: "openai/gpt-5-mini" },
-      {
-        deferModelOverride: true,
-        reconcile: () => {
-          host.sessions.setModelOverride(host.sessionKey, "openai/gpt-5-mini");
-        },
-      },
-    );
+    const slash = patchChatSessionSettings(host, host.sessionKey, { model: "openai/gpt-5-mini" });
     await waitForFast(() => expect(patchCount).toBe(1));
     const picker = patchChatSessionSettings(host, host.sessionKey, {
       model: "openai/gpt-5",
     });
 
-    expect(host.sessions.state.modelOverrides[host.sessionKey]).toBe("openai/gpt-old");
+    expect(host.sessions.state.modelOverrides[host.sessionKey]).toBe("openai/gpt-5-mini");
     firstPatch.resolve(createResolvedModelPatch("gpt-5-mini", "openai"));
     await expect(slash).resolves.toBeTruthy();
     await expect(picker).rejects.toThrow("picker rejected");
-    expect(host.sessions.state.modelOverrides[host.sessionKey]).toBe("openai/gpt-5-mini");
+    expect(host.sessions.state.modelOverrides[host.sessionKey]).toBeUndefined();
+    expect(host.sessions.state.result?.sessions[0]).toMatchObject({
+      model: "gpt-5-mini",
+      modelProvider: "openai",
+      modelOverrideSource: "user",
+    });
   });
 
   it("keeps waiting when a late picker barrier cannot be persisted", async () => {
@@ -3090,10 +3128,7 @@ describe("handleSendChat", () => {
     const retry = retryQueuedChatMessage(host, "retry-send");
 
     expect(await raceWithMacrotask(retry)).toBe("pending");
-    expect(host.request).toHaveBeenCalledWith(
-      "chat.history",
-      expect.objectContaining({ sessionKey: "agent:main" }),
-    );
+    expect(host.request).not.toHaveBeenCalledWith("chat.history", expect.anything());
     expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
     expect(host.chatQueue[0]).toMatchObject({
       sendState: "waiting-model",
@@ -3350,7 +3385,7 @@ describe("handleSendChat", () => {
     await foreground;
   });
 
-  it("keeps slash-command model changes in sync with the chat header cache", async () => {
+  it("keeps slash-command model changes in the canonical row and refreshes tools", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>().mockResolvedValue(createJsonResponse({}, { ok: false })),
@@ -3371,9 +3406,15 @@ describe("handleSendChat", () => {
         "sessions.list": {
           ts: 0,
           path: "",
-          count: 0,
+          count: 1,
           defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-          sessions: [],
+          sessions: [
+            row("main", {
+              model: "gpt-5-mini",
+              modelProvider: "openai",
+              modelOverrideSource: "user",
+            }),
+          ],
         },
         "models.list": {
           models: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
@@ -3390,9 +3431,36 @@ describe("handleSendChat", () => {
       key: "main",
       model: "gpt-5-mini",
     });
-    expect(host.sessions.state.modelOverrides.main).toBe("openai/gpt-5-mini");
+    expect(host.sessions.state.modelOverrides.main).toBeUndefined();
+    expect(host.sessions.state.result?.sessions[0]).toMatchObject({
+      model: "gpt-5-mini",
+      modelProvider: "openai",
+      modelOverrideSource: "user",
+    });
     expect(refreshCurrentSessionTools).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["/model default", "/model DEFAULT"])(
+    "forwards semantic model reset commands through chat.send: %s",
+    async (command) => {
+      const host = makeChatHost({
+        requestHandlers: {
+          "chat.send": { status: "started" },
+          "sessions.patch": createResolvedModelPatch("default", "openai"),
+        },
+        sessionKey: "main",
+        chatMessage: command,
+      });
+
+      await handleSendChat(host);
+
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({ message: command, sessionKey: "main" }),
+      );
+      expect(host.request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+    },
+  );
 
   it("queues local slash commands while the gateway client is unavailable", async () => {
     const host = makeChatHost({
@@ -5004,9 +5072,7 @@ describe("handleSendChat", () => {
       action: "refresh",
       content: "Model set to `gpt-5-mini`.",
       pendingCurrentRun: true,
-      sessionPatch: {
-        modelOverride: { kind: "qualified", value: "openai/gpt-5-mini" },
-      },
+      modelChanged: true,
       trackRunId: "stale-command-run",
     });
     await draining;
@@ -5028,6 +5094,7 @@ describe("handleSendChat", () => {
     const item = createQueuedLocalCommand("reconnected-model-command", "/model gpt-5-mini", {
       sessionKey: "agent:main:first",
     });
+    const refreshTools = vi.fn(async () => undefined);
     const host = makeChatHost({
       requestHandlers: {
         "chat.history": () => idleChatHistory(item.sessionKey),
@@ -5035,8 +5102,8 @@ describe("handleSendChat", () => {
       connectionEpoch: 1,
       chatQueue: [item],
       sessionKey: item.sessionKey,
+      refreshCurrentSessionTools: refreshTools,
     });
-    const setModelOverride = vi.spyOn(host.sessions, "setModelOverride");
     expect(admitQueuedMessageForSession(host, item.sessionKey, item)).toBe(true);
 
     const draining = retryReconnectableQueuedChatSends(host);
@@ -5047,13 +5114,11 @@ describe("handleSendChat", () => {
     command.resolve({
       action: "refresh",
       content: "Model set to `gpt-5-mini`.",
-      sessionPatch: {
-        modelOverride: { kind: "qualified", value: "openai/gpt-5-mini" },
-      },
+      modelChanged: true,
     });
     await draining;
 
-    expect(setModelOverride).not.toHaveBeenCalled();
+    expect(refreshTools).not.toHaveBeenCalled();
     expect(host.sessions.state.modelOverrides[item.sessionKey]).toBeUndefined();
   });
 
@@ -5062,7 +5127,7 @@ describe("handleSendChat", () => {
     { sessionKey: "agent:work:main", mainKey: "main" },
     { sessionKey: "agent:work:home", mainKey: "home" },
   ])(
-    "does not apply a late selected-global model result after the selected agent changes for $sessionKey",
+    "refreshes model tools only for the still-visible target after an agent selection change ($sessionKey)",
     async ({ sessionKey, mainKey }) => {
       const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
       executeSlashCommandMock.mockImplementationOnce(() => command.promise);
@@ -5070,6 +5135,7 @@ describe("handleSendChat", () => {
       const item = createQueuedLocalCommand("switched-global-model-command", "/model gpt-5-mini", {
         sessionKey,
       });
+      const refreshTools = vi.fn(async () => undefined);
       const host = makeChatHost({
         requestHandlers: {
           "chat.history": () => idleChatHistory(item.sessionKey),
@@ -5078,8 +5144,8 @@ describe("handleSendChat", () => {
         agentsList: { defaultId: "main", mainKey },
         chatQueue: [item],
         sessionKey: item.sessionKey,
+        refreshCurrentSessionTools: refreshTools,
       });
-      const setModelOverride = vi.spyOn(host.sessions, "setModelOverride");
       expect(admitQueuedMessageForSession(host, item.sessionKey, item)).toBe(true);
 
       const draining = retryReconnectableQueuedChatSends(host);
@@ -5089,13 +5155,11 @@ describe("handleSendChat", () => {
       command.resolve({
         action: "refresh",
         content: "Model set to `gpt-5-mini`.",
-        sessionPatch: {
-          modelOverride: { kind: "qualified", value: "openai/gpt-5-mini" },
-        },
+        modelChanged: true,
       });
       await draining;
 
-      expect(setModelOverride).not.toHaveBeenCalled();
+      expect(refreshTools).toHaveBeenCalledTimes(sessionKey === "global" ? 0 : 1);
       expect(host.sessions.state.modelOverrides[item.sessionKey]).toBeUndefined();
     },
   );
@@ -5153,9 +5217,13 @@ describe("handleSendChat", () => {
     const host = makeChatHost({ chatQueue: [item] });
     expect(admitQueuedMessageForSession(host, host.sessionKey, item)).toBe(true);
 
-    expect(removeDeliveredQueuedChatSendForRun(host, item.sendRunId)).toMatchObject({
-      id: item.id,
-    });
+    expect(
+      removeDeliveredQueuedChatSendForRun(
+        host,
+        item.sendRunId,
+        resolveStoredChatOutboxScope(host, item.sessionKey),
+      ),
+    ).toMatchObject({ id: item.id });
 
     expect(host.chatQueue).toStrictEqual([]);
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
@@ -5175,12 +5243,126 @@ describe("handleSendChat", () => {
     const replacement = makeChatHost({ chatQueue: [], sessionKey: "agent:main:replacement" });
     expect(admitQueuedMessageForSession(sender, item.sessionKey, item)).toBe(true);
 
-    expect(removeDeliveredQueuedChatSendForRun(replacement, item.sendRunId)).toMatchObject({
-      id: item.id,
-    });
+    expect(
+      removeDeliveredQueuedChatSendForRun(
+        replacement,
+        item.sendRunId,
+        resolveStoredChatOutboxScope(replacement, item.sessionKey),
+      ),
+    ).toMatchObject({ id: item.id });
 
     expect(replacement.chatQueue).toStrictEqual([]);
     expect(listStoredChatOutboxes(replacement)).toStrictEqual([]);
+  });
+
+  it("keeps a selected queued send when a foreign terminal reuses its run id", () => {
+    const selected = {
+      id: "selected-terminal-collision",
+      text: "keep this selected-session prompt",
+      createdAt: 1,
+      sendAttempts: 1,
+      sendRunId: "shared-terminal-run",
+      sendState: "sending" as const,
+      sessionKey: "agent:main:selected",
+    };
+    const foreign = {
+      ...selected,
+      id: "foreign-terminal-collision",
+      text: "retire this foreign-session prompt",
+      sessionKey: "agent:main:foreign",
+    };
+    const host = makeChatHost({
+      chatQueue: [selected],
+      chatRunId: selected.sendRunId,
+      sessionKey: selected.sessionKey,
+    });
+    Object.assign(host, {
+      chatMessagesBySession: new Map(),
+      connectionEpoch: 1,
+      pendingSessionMessageReloadSessionKey: null,
+      requestUpdate: vi.fn(),
+    });
+    expect(admitQueuedMessageForSession(host, selected.sessionKey, selected)).toBe(true);
+    expect(admitQueuedMessageForSession(host, foreign.sessionKey, foreign)).toBe(true);
+
+    handlePageGatewayEvent(asChatPageHost(host), {
+      event: "chat",
+      payload: {
+        state: "final",
+        runId: foreign.sendRunId,
+        sessionKey: foreign.sessionKey,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "foreign reply" }],
+        },
+      },
+    } as Parameters<typeof handlePageGatewayEvent>[1]);
+
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatQueue).toEqual([expect.objectContaining({ id: selected.id })]);
+    expect(listStoredChatOutboxes(host)).toEqual([
+      expect.objectContaining({
+        sessionKey: selected.sessionKey,
+        queue: [expect.objectContaining({ id: selected.id })],
+      }),
+    ]);
+  });
+
+  it("routes an unscoped global terminal to the default agent outbox", () => {
+    const runId = "shared-global-terminal-run";
+    const selected = {
+      id: "selected-global-terminal",
+      text: "keep the selected agent prompt",
+      createdAt: 1,
+      sendAttempts: 1,
+      sendRunId: runId,
+      sendState: "sending" as const,
+      sessionKey: "global",
+      agentId: "work",
+    };
+    const defaultAgent = {
+      ...selected,
+      id: "default-global-terminal",
+      text: "retire the default agent prompt",
+      agentId: "main",
+    };
+    const host = makeChatHost({
+      assistantAgentId: selected.agentId,
+      chatMessagesBySession: new Map(),
+      chatQueue: [selected],
+      chatRunId: runId,
+      sessionKey: "global",
+    });
+    Object.assign(host, {
+      connectionEpoch: 1,
+      pendingSessionMessageReloadSessionKey: null,
+      requestUpdate: vi.fn(),
+    });
+    expect(admitQueuedMessageForSession(host, selected.sessionKey, selected)).toBe(true);
+    expect(admitQueuedMessageForSession(host, defaultAgent.sessionKey, defaultAgent)).toBe(true);
+
+    handlePageGatewayEvent(asChatPageHost(host), {
+      event: "chat",
+      payload: {
+        state: "final",
+        runId,
+        sessionKey: "global",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "default agent reply" }],
+        },
+      },
+    } as Parameters<typeof handlePageGatewayEvent>[1]);
+
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatQueue).toEqual([expect.objectContaining({ id: selected.id })]);
+    expect(listStoredChatOutboxes(host)).toEqual([
+      expect.objectContaining({
+        agentId: selected.agentId,
+        queue: [expect.objectContaining({ id: selected.id })],
+        sessionKey: selected.sessionKey,
+      }),
+    ]);
   });
 
   it("preserves terminal user-turn ordering when an inactive split pane handles the event first", () => {
@@ -6083,7 +6265,13 @@ describe("handleSendChat", () => {
       await send;
       expect(latePeer.chatQueue[0]?.sendState).toBe("sending");
 
-      expect(removeDeliveredQueuedChatSendForRun(host, runId)).toMatchObject({ id: item.id });
+      expect(
+        removeDeliveredQueuedChatSendForRun(
+          host,
+          runId,
+          resolveStoredChatOutboxScope(host, item.sessionKey),
+        ),
+      ).toMatchObject({ id: item.id });
       expect(latePeer.chatQueue).toStrictEqual([]);
     } finally {
       stopLatePeer();
@@ -6147,7 +6335,7 @@ describe("handleSendChat", () => {
     expect(host.chatReplyTarget).toBeNull();
   });
 
-  it("keeps reply state when chat.send fails before acceptance", async () => {
+  it("keeps failed reply metadata on the retry row instead of the composer", async () => {
     const host = makeChatHost({
       requestHandlers: {
         "chat.send": () => Promise.resolve({ runId: "run-failed", status: "error" }),
@@ -6162,8 +6350,12 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(host.chatReplyTarget?.messageId).toBe("reply-source-2");
-    expect(host.chatMessage).toBe("retry this");
+    expect(host.chatReplyTarget).toBeNull();
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue[0]).toMatchObject({
+      sendState: "failed",
+      text: "> **User:** quoted body\n\nretry this",
+    });
   });
 
   it("keeps delayed chat.send ACK effects scoped to the submitted session", async () => {
@@ -7783,7 +7975,7 @@ describe("handleSendChat", () => {
     expect(sends[1]).toMatchObject({ expectedLeafEntryId: "leaf-before-queue" });
   });
 
-  it("parks an active-leaf rejection, restores the draft, and refreshes branch state", async () => {
+  it("parks an active-leaf rejection inline and refreshes branch state", async () => {
     const host = makeChatHost({
       requestHandlers: {
         "chat.send": () => {
@@ -7815,7 +8007,7 @@ describe("handleSendChat", () => {
       });
     });
 
-    expect(host.chatMessage).toBe("stale branch prompt");
+    expect(host.chatMessage).toBe("");
     expect(host.chatQueue).toEqual([
       expect.objectContaining({
         sendError: "The session switched branches — review and resend.",
@@ -7825,7 +8017,7 @@ describe("handleSendChat", () => {
     expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   });
 
-  it("marks validation failures visible and restores the composer", async () => {
+  it("marks validation failures retryable without restoring a duplicate draft", async () => {
     const host = makeChatHost({
       requestHandlers: {
         "chat.send": () => {
@@ -7837,7 +8029,7 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(host.chatMessage).toBe("blocked prompt");
+    expect(host.chatMessage).toBe("");
     expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatQueue).toHaveLength(1);
     expect(host.chatQueue[0]).toMatchObject({

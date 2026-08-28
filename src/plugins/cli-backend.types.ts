@@ -62,6 +62,13 @@ export type CliBackendConfig = {
   serialize?: boolean;
   /** Opt in to bounded raw transcript reseed before compaction for safe session resets. */
   reseedFromRawTranscriptWhenUncompacted?: boolean;
+  /**
+   * Controls fresh recovery after a recoverable resumed-session failure.
+   *
+   * Undefined and `replace-binding` preserve the legacy clear-and-reseed behavior.
+   * `invalidated-only` retries fresh only when the failure proves the binding expired.
+   */
+  freshSessionRecovery?: "replace-binding" | "invalidated-only";
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
     /** No-output watchdog tuning (fresh vs resumed runs). */
@@ -136,6 +143,8 @@ export type CliBackendPreparedExecution = {
   cleanup?: () => Promise<void>;
   /** Positive acknowledgement for `prepare-execution` tool enforcement. */
   toolAvailabilityEnforced?: true;
+  /** Optional plugin-owned execution transport for this prepared local run. */
+  execute?: CliBackendExecute;
 };
 
 export type CliBackendThinkingLevel =
@@ -155,12 +164,103 @@ export type CliBackendToolAvailability = {
   native: readonly string[];
   /** Canonical OpenClaw tool names served through the host-isolated transport. */
   openClaw: readonly string[];
-  /**
-   * @deprecated Compatibility projection for CLI backend plugins built against
-   * v2026.7.2-beta.1 through v2026.7.2-beta.3. Use `openClaw` for canonical names.
-   */
-  mcp: readonly string[];
 };
+
+/** Native action a plugin-owned runtime asks the admitted host run to authorize. */
+export type CliBackendToolPermissionRequest = {
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  toolCallId?: string;
+  abortSignal?: AbortSignal;
+};
+
+/** Host-owned native action decision; plugins never acquire approval authority. */
+export type CliBackendToolPermissionResult =
+  | { behavior: "allow"; updatedInput: Record<string, unknown> }
+  | { behavior: "deny"; message: string };
+
+export type CliBackendUserInputOption = {
+  label: string;
+  description?: string;
+};
+
+export type CliBackendUserInputQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  multiSelect?: boolean;
+  isOther?: boolean;
+  options?: readonly CliBackendUserInputOption[] | null;
+};
+
+/** Structured operator input requested by a plugin-owned native runtime. */
+export type CliBackendUserInputRequest = {
+  toolName: string;
+  questions: readonly CliBackendUserInputQuestion[];
+  intro?: string;
+  toolCallId?: string;
+  abortSignal?: AbortSignal;
+};
+
+export type CliBackendUserInputResult =
+  | { status: "answered"; answers: Record<string, string[]> }
+  | { status: "cancelled"; message: string };
+
+/** Lifecycle reasons accepted by a plugin-owned reusable execution process. */
+export type CliBackendLiveSessionCloseReason =
+  | "idle"
+  | "restart"
+  | "abort"
+  | "mcp-capture-rotation";
+
+/** Plugin-owned process lifecycle registered with the generic host owner. */
+export type CliBackendLiveSessionHandle = {
+  generation: string;
+  fingerprint: string;
+  isIdle(): boolean;
+  close(reason: CliBackendLiveSessionCloseReason, error?: unknown): void;
+  waitForExit(): Promise<void>;
+};
+
+/** Closure-bound host capability for one admitted reusable-runtime turn. */
+export type CliBackendLiveSessionCapability = {
+  fingerprint: string;
+  current(): CliBackendLiveSessionHandle | undefined;
+  register(handle: CliBackendLiveSessionHandle): void;
+  /** Rebinds this exact admitted turn to the registered process's stable capture. */
+  activate(handle: CliBackendLiveSessionHandle): void;
+  remove(handle: CliBackendLiveSessionHandle): void;
+};
+
+/** Exact prepared local process facts consumed by a plugin-owned execution transport. */
+export type CliBackendExecuteContext = {
+  command: string;
+  args: readonly string[];
+  cwd: string;
+  env: Record<string, string>;
+  prompt: string;
+  modelId: string;
+  systemPrompt: string;
+  sessionId?: string;
+  useResume: boolean;
+  abortSignal?: AbortSignal;
+  timeoutMs: number;
+  executionMode?: CliBackendExecutionMode;
+  toolAvailability?: CliBackendToolAvailability;
+  /** Exact host-owned reusable process lifecycle and current-turn admission. */
+  liveSession?: CliBackendLiveSessionCapability;
+  /** Closure-bound approval capability; retained copies fail after the run closes. */
+  requestToolPermission: (
+    request: CliBackendToolPermissionRequest,
+  ) => Promise<CliBackendToolPermissionResult>;
+  /** Closure-bound structured-input capability; retained copies fail after the run closes. */
+  requestUserInput: (request: CliBackendUserInputRequest) => Promise<CliBackendUserInputResult>;
+};
+
+/** Plugin-owned runtime yielding the backend's existing structured stream records. */
+export type CliBackendExecute = (
+  context: CliBackendExecuteContext,
+) => AsyncIterable<Record<string, unknown>>;
 
 export type CliBackendResolveExecutionArgsContext = {
   config?: OpenClawConfig;
@@ -262,18 +362,6 @@ export type CliBackendRuntimeArtifactPolicy = Readonly<{
   nativeExecutableNames?: readonly string[];
 }>;
 
-/** Provider-owned protocol requirement for a long-lived CLI session. */
-export type CliBackendLiveSessionRequirement = Readonly<{
-  /** Exact capability the CLI must advertise before streamed output is trusted. */
-  capability: string;
-  /** First published version known to advertise the capability; runtime still feature-detects. */
-  minimumVersion: string;
-  /** Arguments used by setup and Doctor to obtain the installed CLI version. */
-  versionArgs: readonly string[];
-  /** Operator command that installs a compatible CLI version. */
-  updateCommand: string;
-}>;
-
 /** Complete backend-owned contract for in-place native session compaction. */
 type CliBackendManualCompaction = Readonly<{
   /** Builds the exact backend command for the resumed native session. */
@@ -324,8 +412,6 @@ type CliBackendPluginBase = {
   };
   /** Required whenever this backend can become a verified inference owner. */
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
-  /** Negotiated protocol capability required by this backend's live-session transport. */
-  liveSessionRequirement?: CliBackendLiveSessionRequirement;
   /**
    * Whether OpenClaw should inject bundle MCP config for this backend.
    *

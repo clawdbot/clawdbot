@@ -3,13 +3,12 @@ import fs from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type { SnapshotDatabaseIdentity } from "../../src/snapshot/snapshot-provider.js";
-import type { ReliabilityReport, ReliabilityStateProof } from "./sqlite-reliability-contract.js";
-
-type CompactionPayloadProof = {
-  bytes: number;
-  idSum: number;
-  rows: number;
-};
+import {
+  assertSameCompactionPayload,
+  type CompactionPayloadProof,
+  type ReliabilityReport,
+  type ReliabilityStateProof,
+} from "./sqlite-reliability-contract.js";
 
 type CompactionTarget = {
   identity: SnapshotDatabaseIdentity;
@@ -47,22 +46,6 @@ function assertSameState(
   ) {
     throw new Error(
       `${label} changed reliability state: expected batches=${expected.batches} rows=${expected.rows} sha256=${expected.sha256}, got batches=${actual.batches} rows=${actual.rows} sha256=${actual.sha256}`,
-    );
-  }
-}
-
-function assertSamePayload(
-  actual: CompactionPayloadProof,
-  expected: CompactionPayloadProof,
-  label: string,
-): void {
-  if (
-    actual.bytes !== expected.bytes ||
-    actual.idSum !== expected.idSum ||
-    actual.rows !== expected.rows
-  ) {
-    throw new Error(
-      `${label} changed compaction payload: expected rows=${expected.rows} bytes=${expected.bytes} idSum=${expected.idSum}, got rows=${actual.rows} bytes=${actual.bytes} idSum=${actual.idSum}`,
     );
   }
 }
@@ -241,7 +224,11 @@ export async function runVacuumInterruptionProof(params: {
       );
     }
     const payloadAfterRecovery = params.readPayload();
-    assertSamePayload(payloadAfterRecovery, params.expectedPayload, "vacuum crash recovery");
+    assertSameCompactionPayload(
+      payloadAfterRecovery,
+      params.expectedPayload,
+      "vacuum crash recovery",
+    );
     const journalBytesAfterRecovery = fileSize(`${params.target.path}-journal`);
     const walBytesAfterRecovery = fileSize(`${params.target.path}-wal`);
     if (journalBytesAfterRecovery !== 0 || walBytesAfterRecovery !== 0) {

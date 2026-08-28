@@ -1,12 +1,9 @@
 /** Strict dotted-path get/set/delete helpers for secrets migration targets. */
 import { isDeepStrictEqual } from "node:util";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import type { ConcreteConfigPathSegment } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "./shared.js";
-
-function looksLikeArrayIndexSegment(segment: string): boolean {
-  return /^\d+$/.test(segment);
-}
 
 function parseArrayIndexSegment(segment: string): number | undefined {
   return parseConfigPathArrayIndex(segment);
@@ -20,15 +17,13 @@ function requireArrayIndexSegment(segment: string, pathLabel: string): number {
   return index;
 }
 
-function expectedContainer(nextSegment: string): "array" | "object" {
-  return looksLikeArrayIndexSegment(nextSegment) ? "array" : "object";
-}
-
-function assertSafeMutationPath(segments: string[]): void {
+function assertSafeMutationPath(segments: readonly ConcreteConfigPathSegment[]): void {
   if (segments.length === 0) {
     throw new Error("Target path is empty.");
   }
-  const blockedSegment = segments.find(isBlockedObjectKey);
+  const blockedSegment = segments.find(
+    (segment) => typeof segment === "string" && isBlockedObjectKey(segment),
+  );
   if (blockedSegment) {
     throw new Error(`Refusing to mutate prototype-polluting path segment "${blockedSegment}".`);
   }
@@ -36,13 +31,13 @@ function assertSafeMutationPath(segments: string[]): void {
 
 function parseArrayLeafTarget(
   cursor: unknown,
-  leaf: string,
-  segments: string[],
+  leaf: ConcreteConfigPathSegment,
+  segments: readonly ConcreteConfigPathSegment[],
 ): { array: unknown[]; index: number } | null {
   if (!Array.isArray(cursor)) {
     return null;
   }
-  return { array: cursor, index: requireArrayIndexSegment(leaf, segments.join(".")) };
+  return { array: cursor, index: requireArrayIndexSegment(String(leaf), segments.join(".")) };
 }
 
 function traverseToLeafParent(params: {
@@ -109,12 +104,11 @@ export function getPath(root: unknown, segments: string[]): unknown {
 }
 
 /**
- * Sets a config path, creating missing object or array containers from the next path segment.
- * Existing non-container parents fail so callers cannot silently change config shape.
+ * Sets a config path using token types as the sole authority for object-versus-array shape.
  */
 export function setPathCreateStrict(
   root: Record<string, unknown>,
-  segments: string[],
+  segments: readonly ConcreteConfigPathSegment[],
   value: unknown,
 ): boolean {
   assertSafeMutationPath(segments);
@@ -123,38 +117,41 @@ export function setPathCreateStrict(
 
   for (let index = 0; index < segments.length - 1; index += 1) {
     const segment = segments[index] ?? "";
-    const nextSegment = segments[index + 1] ?? "";
-    const needs = expectedContainer(nextSegment);
+    const needsArray = typeof segments[index + 1] === "number";
 
-    // Numeric next segments create arrays; named next segments create objects.
-    // This keeps registry wildcard paths and config array paths materialized consistently.
     if (Array.isArray(cursor)) {
-      const arrayIndex = requireArrayIndexSegment(segment, segments.join("."));
+      if (typeof segment !== "number") {
+        throw new Error(`Invalid path shape at ${segments.slice(0, index).join(".") || "<root>"}.`);
+      }
+      const arrayIndex = requireArrayIndexSegment(String(segment), segments.join("."));
       const existing = cursor[arrayIndex];
       if (existing === undefined || existing === null) {
-        cursor[arrayIndex] = needs === "array" ? [] : {};
+        cursor[arrayIndex] = needsArray ? [] : {};
         changed = true;
-      } else if (needs === "array" ? !Array.isArray(existing) : !isRecord(existing)) {
+      } else if (needsArray ? !Array.isArray(existing) : !isRecord(existing)) {
         throw new Error(`Invalid path shape at ${segments.slice(0, index + 1).join(".")}.`);
       }
       cursor = cursor[arrayIndex];
       continue;
     }
 
-    if (!isRecord(cursor)) {
+    if (!isRecord(cursor) || typeof segment !== "string") {
       throw new Error(`Invalid path shape at ${segments.slice(0, index).join(".") || "<root>"}.`);
     }
     const existing = cursor[segment];
     if (existing === undefined || existing === null) {
-      cursor[segment] = needs === "array" ? [] : {};
+      cursor[segment] = needsArray ? [] : {};
       changed = true;
-    } else if (needs === "array" ? !Array.isArray(existing) : !isRecord(existing)) {
+    } else if (needsArray ? !Array.isArray(existing) : !isRecord(existing)) {
       throw new Error(`Invalid path shape at ${segments.slice(0, index + 1).join(".")}.`);
     }
     cursor = cursor[segment];
   }
 
   const leaf = segments[segments.length - 1] ?? "";
+  if (Array.isArray(cursor) !== (typeof leaf === "number")) {
+    throw new Error(`Invalid path shape at ${segments.slice(0, -1).join(".") || "<root>"}.`);
+  }
   const arrayTarget = parseArrayLeafTarget(cursor, leaf, segments);
   if (arrayTarget) {
     if (!isDeepStrictEqual(arrayTarget.array[arrayTarget.index], value)) {
@@ -163,7 +160,7 @@ export function setPathCreateStrict(
     }
     return changed;
   }
-  if (!isRecord(cursor)) {
+  if (!isRecord(cursor) || typeof leaf !== "string") {
     throw new Error(`Invalid path shape at ${segments.slice(0, -1).join(".") || "<root>"}.`);
   }
   if (!isDeepStrictEqual(cursor[leaf], value)) {

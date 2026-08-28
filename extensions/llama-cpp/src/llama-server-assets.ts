@@ -1,9 +1,9 @@
 import path from "node:path";
 import { resolveLlamaCppDataDir } from "./defaults.js";
 
-export const LLAMA_SERVER_RELEASE = "b10357";
-export const LLAMA_SERVER_BUILD = 10_357;
-export const LLAMA_SERVER_COMMIT = "689e227db485c6b33d061555e74034c93a867649";
+export const LLAMA_SERVER_RELEASE = "b10488";
+export const LLAMA_SERVER_BUILD = 10_488;
+export const LLAMA_SERVER_COMMIT = "9d77fa17254e1dee4b9e92504c91611a60b1359f";
 
 export type LlamaServerAsset = {
   platform: NodeJS.Platform;
@@ -22,7 +22,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     backend: "metal",
     archive: "tar.gz",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-macos-arm64.tar.gz`,
-    sha256: "7f464a2d473d53ebb9c1d7d16db1258ec98c371569816491850686e6a4334c52",
+    sha256: "ada90bbc4787caac49fbb95ed2487a03fb4bbb456057a31e316878e1a895827a",
     executable: "llama-server",
   },
   {
@@ -31,7 +31,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     backend: "cpu",
     archive: "tar.gz",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-macos-x64.tar.gz`,
-    sha256: "8282cf6b30bfab87080044e98b7b78f2896bfc60414926fae6039a89c0fb6ec2",
+    sha256: "80567f47511d5e11872835614b99cd678fa276b05553563e8aab3f2cb6b90abd",
     executable: "llama-server",
   },
   {
@@ -40,7 +40,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     backend: "cpu",
     archive: "tar.gz",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-ubuntu-arm64.tar.gz`,
-    sha256: "0653b6aa14de35920824045bca7e48f98f629f41943d0fefab1e317bbe8e22a8",
+    sha256: "e977e13e9d72b8ee0068336bb9196f4f8158e8b53b8d502dc8bdb55eaea1222f",
     executable: "llama-server",
   },
   {
@@ -49,7 +49,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     backend: "cpu",
     archive: "tar.gz",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-ubuntu-x64.tar.gz`,
-    sha256: "6b0ba012036e6d727521100158bfcaa73b460fbb31acab2931c9485f347bd16b",
+    sha256: "5a7073371d5a9b8e39978b35f49b2ff244f7a064edb92f0326d94e12b52261dd",
     executable: "llama-server",
   },
   {
@@ -58,7 +58,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     backend: "cpu",
     archive: "zip",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-win-cpu-arm64.zip`,
-    sha256: "a0d73be8d3151d9401fa193f1b83c6d7401191b41786e75f0a60184058333e86",
+    sha256: "97a883831728862568a0e7e38380e7a179b6bcb292167f648a5598586dd65635",
     executable: "llama-server.exe",
   },
   {
@@ -67,7 +67,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     backend: "cpu",
     archive: "zip",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-win-cpu-x64.zip`,
-    sha256: "6c64cc7db679980fcb34bbbe96b2b1df6127e90ccdad2bd6fbe39532fee2fc4e",
+    sha256: "6c938f6d79aac96cb90fda673aade20cff9b1b6c1e97de04f4d5d60bca107082",
     executable: "llama-server.exe",
   },
 ];

@@ -1,5 +1,6 @@
 import { sanitizeForPromptLiteral } from "../agents/sanitize-for-prompt.js";
 import { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
+import { summarizeApprovalScope } from "../infra/approval-scope.js";
 import { normalizeApprovalRequest, type ChannelApprovalKind } from "../infra/approval-types.js";
 import { buildPendingApprovalView } from "../infra/approval-view-model.js";
 import type { ApprovalRequest, PendingApprovalView } from "../infra/approval-view-model.types.js";
@@ -308,6 +309,7 @@ function buildApprovalReactionPromptText(params: {
   reactionHint: string | null;
 }): string {
   const { view } = params;
+  const scopeSummary = view.scope ? summarizeApprovalScope(view.scope) : undefined;
   const allowedDecisions = listDecisionActions(view.actions);
   const sections: string[] = [];
   if (view.approvalKind === "exec") {
@@ -347,6 +349,9 @@ function buildApprovalReactionPromptText(params: {
     if (view.nodeId) {
       info.push(`**Node:** ${view.nodeId}`);
     }
+    if (scopeSummary) {
+      info.push(`**Scope:** ${scopeSummary}`);
+    }
     if (view.agentId) {
       info.push(`**Agent:** ${view.agentId}`);
     }
@@ -362,6 +367,9 @@ function buildApprovalReactionPromptText(params: {
     const details = [`**Title:** ${view.title}`];
     if (view.description) {
       details.push(`**Description:** ${view.description}`);
+    }
+    if (scopeSummary) {
+      details.push(`**Scope:** ${scopeSummary}`);
     }
     details.push(`**Severity:** ${formatSeverity(view.severity)}`);
     if (view.toolName) {
@@ -504,6 +512,7 @@ export function buildApprovalReactionPendingContent(params: {
         cwd: params.view.cwd ?? undefined,
         host: params.view.host === "node" ? "node" : "gateway",
         nodeId: params.view.nodeId ?? undefined,
+        scope: params.view.scope ?? undefined,
         sessionKey: params.view.sessionKey ?? null,
         expiresAtMs: request.expiresAtMs,
         nowMs: params.nowMs,

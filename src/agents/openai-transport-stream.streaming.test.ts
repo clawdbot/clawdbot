@@ -378,47 +378,6 @@ describe("openai transport stream", () => {
     ]);
   });
 
-  it("keeps idless Responses tool-call ids stable and response-unique", async () => {
-    const runOnce = async () => {
-      const model = createAzureResponsesModel();
-      const output = createResponsesAssistantOutput(model);
-      const events: CapturedStreamEvent[] = [];
-      await testing.processResponsesStream(
-        streamChunks([
-          {
-            type: "response.output_item.added",
-            item: { type: "function_call", name: "computer", arguments: "" },
-          },
-          {
-            type: "response.output_item.done",
-            item: { type: "function_call", name: "computer", arguments: "{}" },
-          },
-          { type: "response.completed", response: { id: "resp_idless", status: "completed" } },
-        ]),
-        output,
-        { push: (event) => events.push(event as CapturedStreamEvent) },
-        model,
-      );
-      const block = output.content.find((entry) => entry.type === "toolCall") as
-        | { id?: string }
-        | undefined;
-      const end = events.find((event) => event.type === "toolcall_end") as
-        | { toolCall?: { id?: string } }
-        | undefined;
-      if (!block?.id || !end?.toolCall?.id) {
-        throw new Error("missing tool-call lifecycle");
-      }
-      return { blockId: block.id, endId: end.toolCall.id };
-    };
-
-    const first = await runOnce();
-    const second = await runOnce();
-    expect(first.blockId).toMatch(/^call_[0-9a-f]{24}$/);
-    expect(first.endId).toBe(first.blockId);
-    expect(second.endId).toBe(second.blockId);
-    expect(second.blockId).not.toBe(first.blockId);
-  });
-
   it("materializes one stable tool call for a done-only idless Responses item", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);

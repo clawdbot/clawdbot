@@ -27,6 +27,7 @@ export type ClickClackGroupConfig = {
 export type ClickClackAccountConfig = {
   name?: string;
   enabled?: boolean;
+  responsePrefix?: string;
   baseUrl?: string;
   apiBaseUrl?: string;
   token?: unknown;

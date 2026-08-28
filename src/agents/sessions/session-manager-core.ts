@@ -3,6 +3,7 @@ import {
   replaceTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
@@ -23,6 +24,7 @@ import type {
 } from "./session-manager-types.js";
 
 export type SessionManagerPersistenceTarget = SessionTranscriptRuntimeTarget;
+export type SessionManagerBoundedContextLimits = { maxBytes: number; maxEvents: number };
 
 export class SessionManagerCore {
   migrated = false;
@@ -42,14 +44,24 @@ export class SessionManagerCore {
   protected pendingDeliberateAppend = false;
   protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
   protected persistenceHeaderPending = false;
+  protected boundedContextLimits: SessionManagerBoundedContextLimits | undefined;
+  protected boundedContextIncomplete = false;
+  protected persistedBoundaryCount: number | undefined;
 
   constructor(
     cwd: string,
     persistenceTarget?: SessionManagerPersistenceTarget,
     loadedEntries?: FileEntry[],
+    boundedContext?: {
+      boundaryCount: number;
+      limits: SessionManagerBoundedContextLimits;
+    },
   ) {
     this.cwd = cwd;
     this.persistenceTarget = persistenceTarget;
+    this.boundedContextLimits = boundedContext?.limits;
+    this.boundedContextIncomplete = boundedContext !== undefined;
+    this.persistedBoundaryCount = boundedContext?.boundaryCount;
     if (persistenceTarget || loadedEntries) {
       this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? []);
     } else {
@@ -58,7 +70,12 @@ export class SessionManagerCore {
   }
 
   setSessionTarget(target: SessionManagerPersistenceTarget): void {
-    const entries = loadTranscriptEventsSync(target) as FileEntry[];
+    const bounded = this.boundedContextLimits
+      ? readSessionTranscriptBoundedActiveContextCore(target, this.boundedContextLimits)
+      : undefined;
+    const entries = (bounded?.events ?? loadTranscriptEventsSync(target)) as FileEntry[];
+    this.boundedContextIncomplete = bounded !== undefined;
+    this.persistedBoundaryCount = bounded?.boundaryCount;
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
@@ -66,6 +83,17 @@ export class SessionManagerCore {
     if (header?.cwd) {
       this.cwd = header.cwd;
     }
+  }
+
+  /** Active-only loads can omit sibling rows even when they fit the context limits. */
+  protected ensureCompletePersistedHistory(): void {
+    if (!this.persistenceTarget || !this.boundedContextIncomplete) {
+      return;
+    }
+    const limits = this.boundedContextLimits;
+    this.boundedContextLimits = undefined;
+    this.setSessionTarget(this.persistenceTarget);
+    this.boundedContextLimits = limits;
   }
 
   protected setLoadedSessionTarget(

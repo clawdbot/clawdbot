@@ -15,6 +15,7 @@ import { resolveSelectedAgentHarnessRuntime } from "./harness/runtime-plugin-loa
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
+import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
 import {
   startSerializedSnapshotBuild,
   startSerializedSnapshotBuildBatch,
@@ -209,6 +210,30 @@ export function preparedModelRuntimeConfigsMatch(
     return hashRuntimeConfigValue(left) === hashRuntimeConfigValue(right);
   } catch {
     return false;
+  }
+}
+
+function stampPreparedModelRuntimeSnapshotConfig(
+  snapshot: PreparedModelRuntimeSnapshot,
+  config: OpenClawConfig,
+): PreparedModelRuntimeSnapshot {
+  if (snapshot.config === config) {
+    return snapshot;
+  }
+  const stamped = Object.freeze({ ...snapshot, config });
+  copyPreparedModelRuntimeAuthBindings(snapshot, stamped);
+  return stamped;
+}
+
+export function advancePreparedModelRuntimeOwnerConfig(
+  owner: PreparedModelRuntimeOwner,
+  config: OpenClawConfig,
+): void {
+  owner.input = { ...owner.input, config };
+  if (owner.snapshot) {
+    // Existing leases retain their immutable snapshot. New readers receive the same prepared
+    // generation with only its planner-approved, model-neutral config stamp advanced.
+    owner.snapshot = stampPreparedModelRuntimeSnapshotConfig(owner.snapshot, config);
   }
 }
 
@@ -549,7 +574,12 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
             `prepared model runtime snapshot missing after auth refresh for ${candidate.input.agentDir}`,
           );
         }
-        candidate.owner.snapshot = result.snapshot;
+        const snapshot = stampPreparedModelRuntimeSnapshotConfig(
+          result.snapshot,
+          candidate.owner.input.config,
+        );
+        candidate.owner.snapshot = snapshot;
+        results.set(candidate.owner, { ...result, snapshot });
         candidate.owner.pluginGeneration = result.pluginGeneration;
         candidate.owner.pending = undefined;
         candidate.owner.needsRefresh = false;
@@ -635,12 +665,13 @@ export async function publishModelRuntimeSnapshot(
           `prepared model runtime publication was superseded for ${input.agentDir}`,
         );
       }
-      owner.snapshot = result.snapshot;
+      const snapshot = stampPreparedModelRuntimeSnapshotConfig(result.snapshot, owner.input.config);
+      owner.snapshot = snapshot;
       owner.pluginGeneration = result.pluginGeneration;
       owner.pendingPluginGeneration = undefined;
       owner.pending = undefined;
       owner.needsRefresh = false;
-      return result.snapshot;
+      return snapshot;
     } catch (error) {
       const refreshError = toStringifiedError(error);
       if (owner.generation === generation) {

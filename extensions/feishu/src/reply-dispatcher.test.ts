@@ -5,6 +5,7 @@ import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -234,6 +235,51 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       },
     });
   }
+
+  it.each([
+    { root: "[root]", account: undefined, expected: "[root] reply" },
+    { root: "[root]", account: "[account]", expected: "[account] reply" },
+    { root: "[root]", account: "", expected: "reply" },
+    { root: "auto", account: undefined, expected: "[Test Bot] reply" },
+    { root: "[{model}]", account: undefined, expected: "[gpt-5.6-luna] reply" },
+  ])("delivers the resolved prefix $expected", async ({ root, account, expected }) => {
+    useNonStreamingAutoAccount();
+    const { result } = createDispatcherHarness({
+      accountId: "main",
+      cfg: {
+        messages: { responsePrefix: "[global]" },
+        agents: { list: [{ id: "agent", identity: { name: "Test Bot" } }] },
+        channels: {
+          feishu: { responsePrefix: root, accounts: { main: { responsePrefix: account } } },
+        },
+      },
+    });
+    result.replyOptions.onModelSelected?.({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      thinkLevel: "off",
+    });
+    const dispatcher = createReplyDispatcher(toTypingDispatcherOptions(result));
+    dispatcher.sendFinalReply({ text: "reply" });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text: expected }));
+  });
+
+  it("keeps card attribution on the selected-model prefix context", async () => {
+    const { result, options } = createDispatcherHarness();
+    result.replyOptions.onModelSelected?.({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      thinkLevel: "off",
+    });
+    const delivery = await options.deliver({ text: "reply" }, { kind: "final" });
+    await options.onIdle?.();
+    await delivery?.finalization;
+    expect(requireStreamingInstance(0).close).toHaveBeenCalledWith("reply", {
+      note: "Agent: agent | Model: gpt-5.6-luna | Provider: openai",
+    });
+  });
 
   it.each(["reply_payload_sending", "message_sending"])(
     "suppresses all pre-hook CardKit previews when %s is registered",

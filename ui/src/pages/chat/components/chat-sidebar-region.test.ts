@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../components/resizable-divider.ts";
 import {
   openSlot,
+  setSidebarOpen,
   setSidebarDock,
   setSidebarExpanded,
   type SidebarLayout,
@@ -182,7 +183,7 @@ describe("chat sidebar region", () => {
       Array.from(root(region).querySelectorAll(".side-panel-type-option__shortcut"), (node) =>
         node.textContent?.trim(),
       ),
-    ).toEqual(["Ctrl+`", "⇧⌘B"]);
+    ).toEqual(["Ctrl+`", "Ctrl+Shift+B"]);
     const reviewItem = Array.from(
       root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
     ).find((item) => Reflect.get(item, "value") === "detail");
@@ -219,7 +220,7 @@ describe("chat sidebar region", () => {
   });
 
   it("opens into a type selector instead of restoring a previous tab", async () => {
-    const region = await createRegion({ columns: [], open: true, expanded: false });
+    const region = await createRegion(setSidebarOpen({ columns: [], expanded: false }, true));
     const selector = root(region).querySelector(".side-panel-empty--selector");
 
     expect(selector?.querySelector(".side-panel-empty__title")?.textContent).toBe("Open a tab");
@@ -229,7 +230,7 @@ describe("chat sidebar region", () => {
       Array.from(selector?.querySelectorAll(".side-panel-empty__type") ?? [], (item) =>
         item.textContent?.replace(/\s+/gu, " ").trim(),
       ),
-    ).toEqual(["Review", "Terminal Ctrl+`", "Files ⇧⌘B", "Side chat"]);
+    ).toEqual(["Review", "Terminal Ctrl+`", "Files Ctrl+Shift+B", "Side chat"]);
     root(region).querySelector<HTMLButtonElement>(".side-panel-empty__type")?.click();
     expect(region.callbacks?.openSlot).toHaveBeenCalledWith("detail");
   });
@@ -282,7 +283,7 @@ describe("chat sidebar region", () => {
     ).toEqual([
       "Terminal Ctrl+`",
       "Browser",
-      "Files ⇧⌘B",
+      "Files Ctrl+Shift+B",
       "Side chat",
       "Tasks",
       "Desktop",
@@ -321,8 +322,9 @@ describe("chat sidebar region", () => {
   });
 
   it("offers expand and minimize controls in the no-tabs selector", async () => {
-    const region = await createRegion({ columns: [], open: true });
+    const region = await createRegion(setSidebarOpen({ columns: [] }, true));
     expect(root(region).querySelector<HTMLElement>(".side-panel")?.style.width).toBe("480px");
+    expect(root(region).querySelector("resizable-divider")).not.toBeNull();
     root(region).querySelector<HTMLButtonElement>(".side-panel__expand")?.click();
     root(region).querySelector<HTMLButtonElement>(".side-panel__minimize")?.click();
     expect(region.callbacks?.setExpanded).toHaveBeenCalledWith(true);
