@@ -10,6 +10,9 @@ const ssrfRuntimeMock = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
 
+const PROXY_MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
+const SUPPORTED_IMAGE_BYTES = 6 * 1024 * 1024;
+
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: ssrfRuntimeMock.fetchWithSsrFGuard,
@@ -330,7 +333,7 @@ describe("createCopilotByokProxy", () => {
             path: endpoint.pathname,
             method: "POST",
             headers: {
-              "content-length": String(16 * 1024 * 1024 + 1),
+              "content-length": String(PROXY_MAX_REQUEST_BODY_BYTES + 1),
             },
           },
           (incoming) => {
@@ -390,7 +393,7 @@ describe("createCopilotByokProxy", () => {
         body: new ReadableStream({
           start(controller) {
             const chunkSize = 1024 * 1024;
-            const totalBytes = 16 * 1024 * 1024 + 1;
+            const totalBytes = PROXY_MAX_REQUEST_BODY_BYTES + 1;
             let sent = 0;
             while (sent < totalBytes) {
               const size = Math.min(chunkSize, totalBytes - sent);
@@ -406,6 +409,73 @@ describe("createCopilotByokProxy", () => {
       expect(response.status).toBe(413);
       expect(await response.text()).toBe("Payload too large");
       expect(ssrfRuntimeMock.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    } finally {
+      await proxy?.close();
+    }
+  });
+
+  it("forwards a BYOK request containing two supported-size images", async () => {
+    let forwardedBody: Buffer | undefined;
+    ssrfRuntimeMock.fetchWithSsrFGuard.mockImplementation(
+      async ({ init }: Parameters<typeof fetchWithSsrFGuard>[0]) => {
+        forwardedBody = Buffer.from(
+          await new Response(init?.body as BodyInit | null | undefined).arrayBuffer(),
+        );
+        return {
+          response: new Response(null, { status: 204 }),
+          release: vi.fn(async () => undefined),
+        };
+      },
+    );
+    const image = Buffer.alloc(SUPPORTED_IMAGE_BYTES).toString("base64");
+    const body = Buffer.from(
+      JSON.stringify({
+        model: "proxy-model",
+        input: [
+          { type: "input_image", image_url: `data:image/png;base64,${image}` },
+          { type: "input_image", image_url: `data:image/png;base64,${image}` },
+        ],
+      }),
+    );
+    expect(body.byteLength).toBeGreaterThan(16 * 1024 * 1024);
+    expect(body.byteLength).toBeLessThanOrEqual(PROXY_MAX_REQUEST_BODY_BYTES);
+    const proxy = await createCopilotByokProxy(
+      resolveCopilotProvider({
+        model: {
+          provider: "custom-proxy",
+          api: "openai-responses",
+          id: "proxy-model",
+          baseUrl: "https://proxy.example/v1",
+        },
+      }),
+    );
+
+    try {
+      const endpoint = new URL(`${proxy?.provider.provider?.baseUrl}/responses`);
+      const response = await new Promise<{ status: number }>((resolve, reject) => {
+        const request = http.request(
+          {
+            hostname: endpoint.hostname,
+            port: Number(endpoint.port),
+            path: endpoint.pathname,
+            method: "POST",
+            headers: {
+              "content-length": String(body.byteLength),
+              "content-type": "application/json",
+            },
+          },
+          (incoming) => {
+            incoming.resume();
+            incoming.once("end", () => resolve({ status: incoming.statusCode ?? 0 }));
+          },
+        );
+        request.once("error", reject);
+        request.end(body);
+      });
+
+      expect(response.status).toBe(204);
+      expect(forwardedBody).toHaveLength(body.byteLength);
+      expect(forwardedBody?.equals(body)).toBe(true);
     } finally {
       await proxy?.close();
     }

@@ -9,7 +9,9 @@ import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-reques
 import type { ResolvedCopilotProvider } from "./provider-bridge.js";
 
 const LOOPBACK_HOST = "127.0.0.1";
-const PROXY_MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
+// Two supported 6 MiB images are about 16 MiB after base64 encoding; keep
+// room for the JSON request envelope while retaining a bounded proxy body.
+const PROXY_MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
 const PROXY_REQUEST_BODY_TIMEOUT_MS = 30_000;
 
 type CopilotByokProxyHandle = {
@@ -133,7 +135,7 @@ async function handleProxyRequest(
             : undefined,
         }),
         signal: upstreamAbort.signal,
-        ...(body ? { body } : {}),
+        ...(body ? { body: toFetchBody(body) } : {}),
       },
       auditContext: "copilot-byok-provider",
       requireHttps: true,
