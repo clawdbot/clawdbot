@@ -283,7 +283,7 @@ async function runRecallSubagent(params: {
         prompt,
         provider: modelRef.provider,
         model: modelRef.model,
-        lane: ACTIVE_MEMORY_RECALL_LANE,
+        lane: `${ACTIVE_MEMORY_RECALL_LANE}:${params.agentId}`,
         timeoutMs: embeddedTimeoutMs,
         runId: subagentSessionId,
         trigger: "manual",
