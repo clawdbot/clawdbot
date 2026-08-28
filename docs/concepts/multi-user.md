@@ -21,9 +21,9 @@ Every session carries up to three layers of attribution:
 
 - **Creator** (immutable): new sessions record a write-once `createdActor` when the creation path can prove who caused it. Authenticated people use their durable Gateway profile id; sessions spawned by an agent record that agent's id. Sessions created without a proven actor remain unattributed. Sharing and visibility authority stays anchored on the creator, even after the owner changes.
 - **Owner** (assignable): the person or agent currently responsible for the session, in the style of a GitHub issue assignee. It defaults to the creator and can be reassigned at any time; the assignment records who reassigned it and when. The sidebar avatar, the owner filter, and People sorting all follow the current owner.
-- **Participants** (history): everyone who has actually prompted the session — authenticated people, channel senders, and requesting agents — recorded automatically at each turn. The session's own agent and passive viewers are never recorded. Participant history is bounded (up to 32 distinct actors per session) and recorded best-effort in the background, so it never delays a turn.
+- **Participants** (history): authenticated people, channel senders, and requesting agents whose accepted input targets the session. The session's own agent and passive viewers are never recorded. New-identity admission is bounded at 32 records per session; repair can preserve larger existing histories. Participation is recorded best-effort in the background, so it never delays a turn.
 
-Human display names and avatars are resolved from the current Gateway profile when session rows are returned; agent actors resolve from the configured agent identity. OpenClaw does not store display labels on session entries, so renaming a profile or agent updates the ownership UI without rewriting session history.
+Gateway profile display names and avatars are resolved from the current profile when session rows are returned; agent actors resolve from the configured agent identity. Participant aggregates do not store display labels, so renaming a profile or agent updates the ownership UI without rewriting participant history.
 
 ## Assigning an owner
 
@@ -91,6 +91,16 @@ Start a session as a draft to keep work in progress out of teammates' sidebars u
 ## Turn attribution
 
 Turn sender attribution is best-effort. Steering can merge input into an active turn, so the transcript cannot always represent each person's contribution as a separate turn. Participant history records that an actor prompted the session, not which words were theirs.
+
+Participant identity is separate from a display name and from authorization. An authenticated Gateway profile, an OpenClaw agent, and a remote sender remain distinct even when their IDs match. Channel plugins supply the remote identity domain and identifier kind when they can prove them. Otherwise, OpenClaw retains an unresolved observation; it does not guess a profile from a sender ID, local account label, or UUID shape. Profile merges resolve through the existing profile aliases. An accepted input updates an already retained current profile row, or a retained alias when no current row exists, even at the 32-record admission bound. Historical rows keep their raw IDs; this does not rewrite transcripts or other agent databases.
+
+Profile participation records accepted externally authored input, including accepted steering into an active turn and session-targeted interactive input. Synthetic runs, internal messages, and bot or ambient work do not establish personal profile activity. A participant record is an aggregate, not an exact replay-safe lifetime input count. Reset preserves the logical session's participants; deleting the session removes them even when transcript archives are retained.
+
+The normal admission limit is 32 identities per logical session. Existing identities can continue to contribute at that limit. Repair preserves already-retained larger histories instead of discarding them. The four-avatar header is only a preview: the Gateway evaluates person filters before pagination and preview truncation. Activity reports associated sessions, including verified creation or assigned responsibility, rather than claiming that session recency is a person's last input. Limited history and truncated results are identified as incomplete.
+
+The schema-18 migration preserves historical membership and recorded contribution aggregates. Earlier writers could merge profile and channel timestamps, so ambiguous first and last input times become unknown. A later accepted input establishes a new recorded last time, but cannot recover a first-ever input time. No transcript, display-name, or UUID-based backfill runs. See [Database schemas](/reference/database-schemas#participant-identity-migration).
+
+This participant-history contract does not establish the provenance of old per-message transcript sender metadata or change creator-based access decisions. Those are separate contracts; participant membership never grants session access.
 
 GitHub-backed sign-in through Cloudflare Access or Tailscale Serve automatically verifies the person's GitHub account under **Settings → Profile → Identity**. Public `Co-authored-by` credit remains a separate, default-off **Git co-author credit** toggle. Attribution uses that explicit preference plus the durable profile participant records described above, not display names or the four-person facepile projection. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for privacy, eligibility, bounds, account changes, and disabling future credit.
 

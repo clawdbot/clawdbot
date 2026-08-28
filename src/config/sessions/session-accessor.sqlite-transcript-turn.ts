@@ -34,6 +34,7 @@ import {
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { rememberCommittedTranscriptMessageSequencesInTransaction } from "./session-accessor.sqlite-transcript-sequences.js";
 import type {
+  SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
@@ -58,7 +59,7 @@ export async function appendExpectedSessionTranscriptTurn(
     atomicGroup?: boolean;
     config?: import("../types.openclaw.js").OpenClawConfig;
     cwd?: string;
-    expectedLifecycleRevision?: string;
+    expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
     expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
     expectedSessionState?: SessionTranscriptTurnExpectedState;
     expectedSessionId: string;

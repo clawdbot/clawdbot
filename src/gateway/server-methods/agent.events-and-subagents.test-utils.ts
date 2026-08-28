@@ -214,7 +214,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "public-provenance-accounting",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -355,7 +355,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "admin-sender-owner",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -497,7 +497,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "model-run-raw",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 

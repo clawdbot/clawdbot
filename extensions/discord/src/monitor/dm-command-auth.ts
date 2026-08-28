@@ -18,17 +18,23 @@ const DISCORD_CHANNEL_ID = "discord";
 
 export type DiscordDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
 
-function createDiscordDmIngressSubject(sender: {
+type DiscordIngressSender = {
   id: string;
   name?: string;
   tag?: string;
   isPluralKit?: boolean;
-}): ChannelIngressIdentitySubjectInput {
+  authorKind?: "user" | "bot";
+};
+
+function createDiscordDmIngressSubject(
+  sender: DiscordIngressSender,
+): ChannelIngressIdentitySubjectInput {
   return {
     stableId: sender.id,
     aliases: {
       discordUserName: sender.name,
       discordUserTag: sender.tag,
+      participantKind: sender.isPluralKit ? "pluralkit-member" : sender.authorKind,
     },
     // PluralKit replaces Discord's Gateway author id with a member id returned by
     // its API. The lookup is trusted input, but Discord did not bind that exact id.
@@ -118,7 +124,7 @@ export async function resolveDiscordDmCommandAccess(params: {
   accountId: string;
   dmPolicy: DiscordDmPolicy;
   configuredAllowFrom: string[];
-  sender: { id: string; name?: string; tag?: string; isPluralKit?: boolean };
+  sender: DiscordIngressSender;
   allowNameMatching: boolean;
   cfg?: OpenClawConfig;
   token?: string;
@@ -170,7 +176,7 @@ export async function resolveDiscordDmCommandAccess(params: {
 
 export async function resolveDiscordTextCommandAccess(params: {
   accountId: string;
-  sender: { id: string; name?: string; tag?: string; isPluralKit?: boolean };
+  sender: DiscordIngressSender;
   ownerAllowFrom?: string[];
   memberAccessConfigured: boolean;
   memberAllowed: boolean;

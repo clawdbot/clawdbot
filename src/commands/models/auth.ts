@@ -25,6 +25,7 @@ import {
 } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
+import { isCliProvider } from "../../agents/model-selection-cli.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -950,23 +951,43 @@ function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: str
 export async function runModelsAuthLoginFlowCore(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
-  const { config, agentId, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
-    requestedProvider: opts.provider,
+  const requestedProviderId = opts.provider
+    ? normalizeManualAuthProvider(opts.provider)
+    : undefined;
+  let context = await resolveModelsAuthContext({
+    requestedProvider: requestedProviderId,
     rawAgentId: opts.agent,
     config: opts.config,
   });
   const prompter = opts.prompter;
-  const authProviders = listProvidersWithAuthMethods(providers);
+  let authProviders = listProvidersWithAuthMethods(context.providers);
+  let requestedProvider = requestedProviderId
+    ? resolveProviderMatch(authProviders, requestedProviderId)
+    : null;
+  const useProviderPicker =
+    requestedProviderId !== undefined &&
+    requestedProvider === null &&
+    isCliProvider(requestedProviderId, context.config);
+  if (useProviderPicker) {
+    context = await resolveModelsAuthContext({
+      rawAgentId: opts.agent,
+      config: context.config,
+    });
+    authProviders = listProvidersWithAuthMethods(context.providers);
+  }
   if (authProviders.length === 0) {
     throw new Error(
       `No provider plugins found. Install one via \`${formatCliCommand("openclaw plugins install")}\`.`,
     );
   }
-
-  const requestedProvider = resolveRequestedLoginProviderOrThrow(
-    authProviders,
-    opts.provider ? normalizeManualAuthProvider(opts.provider) : undefined,
-  );
+  if (useProviderPicker) {
+    await prompter.note(
+      `Provider "${requestedProviderId}" uses its own CLI login. Select a provider with an OpenClaw auth flow.`,
+      "Provider auth",
+    );
+  } else if (requestedProviderId && !requestedProvider) {
+    requestedProvider = resolveRequestedLoginProviderOrThrow(authProviders, requestedProviderId);
+  }
   const selectedProvider =
     requestedProvider ??
     (await prompter
@@ -1010,7 +1031,7 @@ export async function runModelsAuthLoginFlowCore(
     try {
       const clearedStore = await removeProviderAuthProfilesWithLock({
         provider: selectedProvider.id,
-        agentDir,
+        agentDir: context.agentDir,
       });
       if (!clearedStore) {
         throw new Error("profile store update failed");
@@ -1028,10 +1049,10 @@ export async function runModelsAuthLoginFlowCore(
   }
 
   const { result, profiles } = await runProviderAuthMethod({
-    config,
-    agentId,
-    agentDir,
-    workspaceDir,
+    config: context.config,
+    agentId: context.agentId,
+    agentDir: context.agentDir,
+    workspaceDir: context.workspaceDir,
     provider: selectedProvider,
     method: chosenMethod,
     runtime: opts.runtime,

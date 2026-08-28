@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,8 +8,10 @@ import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { getUserPreferences, setUserPreferences } from "./user-preferences.js";
+import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
 import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
 import {
   adoptTailscaleProfileAvatar,
@@ -30,6 +32,33 @@ import {
 } from "./user-profiles.js";
 
 const statePaths: string[] = [];
+
+it("publishes profile changes only after the owning transaction commits", () => {
+  const options = stateOptions();
+  const profile = ensureProfileForEmail("publication@example.test", options);
+  const changed = vi.fn();
+  const stop = onUserProfilesChanged(changed);
+  const before = readUserProfileVersion();
+  try {
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        setDisplayName(profile.id, "Rolled back", options);
+        expect(changed).not.toHaveBeenCalled();
+        throw new Error("rollback");
+      }, options),
+    ).toThrow("rollback");
+    expect(readUserProfileVersion()).toBe(before);
+    expect(getUserProfileDisplay(profile.id, options).displayName).not.toBe("Rolled back");
+    runOpenClawStateWriteTransaction(() => {
+      setDisplayName(profile.id, "Committed", options);
+      expect(changed).not.toHaveBeenCalled();
+    }, options);
+    expect(changed).toHaveBeenCalledOnce();
+    expect(readUserProfileVersion()).toBe(before + 1);
+  } finally {
+    stop();
+  }
+});
 
 function stateOptions() {
   const directory = mkdtempSync(join(tmpdir(), "openclaw-user-profiles-"));
@@ -101,6 +130,22 @@ afterEach(() => {
 });
 
 describe("user profiles", () => {
+  it.each([false, true])(
+    "display lookup leaves absent profile storage absent (database exists: %s)",
+    (databaseExists) => {
+      const options = stateOptions();
+      const database = databaseExists ? openOpenClawStateDatabase(options).db : undefined;
+      expect(() => getUserProfileDisplay("missing-profile", options)).toThrow(
+        "user profile not found",
+      );
+      if (database) {
+        expect(tableExists(database, "user_profiles")).toBe(false);
+      } else {
+        expect(existsSync(options.path)).toBe(false);
+      }
+    },
+  );
+
   it("lazily ensures and resolves lowercased email aliases idempotently", () => {
     const options = stateOptions();
     const database = openOpenClawStateDatabase(options).db;

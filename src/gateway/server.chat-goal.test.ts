@@ -9,6 +9,7 @@ import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
 import {
   appendTranscriptMessage,
   deleteSessionEntryLifecycle,
+  listSessionParticipantsReadOnly,
   loadSessionEntry,
   loadTranscriptEventsSync,
   patchSessionEntryCore,
@@ -592,10 +593,41 @@ describe("Goal chat admission and continuation", () => {
 
   it("resumes through the real reply pipeline without a visible synthetic user row", async () => {
     const objective = "Finish the release checklist";
-    const started = await rpc("chat.send", goalStart(objective));
+    const profile = ensureProfileForEmail("goal-participant@example.test");
+    const requestClient: GatewayClient = {
+      ...client,
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: null,
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+    };
+    const participants = () => listSessionParticipantsReadOnly(scope()).get(sessionKey) ?? [];
+    expect(participants()).toEqual([]);
+    const startRequest = goalStart(objective);
+    const started = await rpc("chat.send", startRequest, undefined, requestClient);
     expect(started.mock.calls[0]?.[0]).toBe(true);
     await waitForModelRun();
     await waitForDispatchEnd();
+    const startMessage = userMessages()[0];
+    const startTimestamp =
+      startMessage && "timestamp" in startMessage ? startMessage.timestamp : undefined;
+    expect(startTimestamp).toEqual(expect.any(Number));
+    const startParticipants = [
+      {
+        identity: { type: "profile", id: profile.id },
+        contributionCount: 1,
+        firstPromptedAt: startTimestamp,
+        lastPromptedAt: startTimestamp,
+      },
+    ];
+    // Participant persistence is a post-admission microtask, not part of the Goal ACK.
+    await vi.waitFor(() => expect(participants()).toEqual(startParticipants));
+    const startReplay = await rpc("chat.send", startRequest, undefined, requestClient);
+    expect(startReplay.mock.calls[0]?.[1]).toMatchObject({ replayed: true });
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(participants()).toEqual(startParticipants);
     const goal = loadSessionEntry(scope())?.goal;
     expect(goal).toBeDefined();
     await patchSessionEntryCore(scope(), (entry) => ({
@@ -614,7 +646,7 @@ describe("Goal chat admission and continuation", () => {
       issuedAtMs: Date.now(),
     };
     modelStarted = createDeferred();
-    const resumed = await rpc("sessions.goal.update", request);
+    const resumed = await rpc("sessions.goal.update", request, undefined, requestClient);
     expect(resumed).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ status: "started", runId: "goal-resume", goalId: goal?.id }),
@@ -623,6 +655,7 @@ describe("Goal chat admission and continuation", () => {
     );
     await waitForModelRun(2);
     await waitForDispatchEnd();
+    expect(participants()).toEqual(startParticipants);
     expect(loadSessionEntry(scope())?.goal?.status).toBe("active");
     expect(userMessages()).toEqual([
       expect.objectContaining({ content: objective }),
@@ -641,9 +674,35 @@ describe("Goal chat admission and continuation", () => {
     expect(result.messages?.filter((message) => message.role === "user")).toEqual([
       expect.objectContaining({ content: objective }),
     ]);
-    const replay = await rpc("sessions.goal.update", request);
+    const replay = await rpc("sessions.goal.update", request, undefined, requestClient);
     expect(replay.mock.calls[0]?.[1]).toMatchObject({ replayed: true, runId: "goal-resume" });
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
     expect(userMessages()).toHaveLength(2);
+    expect(participants()).toEqual(startParticipants);
+
+    modelStarted = createDeferred();
+    const next = await rpc(
+      "chat.send",
+      {
+        sessionKey,
+        sessionId,
+        message: "Also review the changelog.",
+        idempotencyKey: randomUUID(),
+      },
+      undefined,
+      requestClient,
+    );
+    expect(next.mock.calls[0]?.[0]).toBe(true);
+    await waitForModelRun(3);
+    await waitForDispatchEnd();
+    const nextMessage = userMessages().at(-1);
+    const nextTimestamp =
+      nextMessage && "timestamp" in nextMessage ? nextMessage.timestamp : undefined;
+    expect(nextTimestamp).toEqual(expect.any(Number));
+    await vi.waitFor(() =>
+      expect(participants()).toEqual([
+        { ...startParticipants[0], contributionCount: 2, lastPromptedAt: nextTimestamp },
+      ]),
+    );
   });
 });

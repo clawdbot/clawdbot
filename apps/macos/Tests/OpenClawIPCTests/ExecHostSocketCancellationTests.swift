@@ -39,13 +39,15 @@ struct ExecHostSocketCancellationTests {
             let parentFile = root.appendingPathComponent("parent.pid")
             let childFile = root.appendingPathComponent("child.pid")
             let sentinel = root.appendingPathComponent("sentinel")
+            // Publish the PID atomically: file creation alone can race the printf payload.
             let command = [
                 "/bin/sh", "-c",
                 """
                 printf '%s' "$$" > '\(parentFile.path)'
                 /bin/sh -c '
                   trap "" TERM
-                  printf "%s" "$$" > "\(childFile.path)"
+                  printf "%s" "$$" > "\(childFile.path).tmp"
+                  /bin/mv "\(childFile.path).tmp" "\(childFile.path)"
                   /bin/sleep 2
                   /usr/bin/touch "\(sentinel.path)"
                 ' &

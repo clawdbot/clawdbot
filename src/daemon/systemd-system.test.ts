@@ -1,4 +1,5 @@
 // System systemd ownership tests cover loaded, installed, and unverifiable states.
+import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecResult } from "./exec-file.js";
 
@@ -41,12 +42,17 @@ vi.mock("node:fs/promises", () => {
 });
 
 const execFileUtf8 = vi.hoisted(() =>
-  vi.fn(async (_command: string, args: string[]) =>
-    args.includes("--property=UnitPath") ? state.managerUnitPath : state.systemctl,
+  vi.fn(
+    async (
+      _command: string,
+      args: string[],
+      _options?: { timeout?: number; killSignal?: string; env?: NodeJS.ProcessEnv },
+    ) => (args.includes("--property=UnitPath") ? state.managerUnitPath : state.systemctl),
   ),
 );
 vi.mock("./exec-file.js", () => ({ execFileUtf8 }));
 
+import { readSystemdDefinitionMutationCapability } from "./systemd-definition-mutation.js";
 import { assertNoSystemSystemdOwnership } from "./systemd-system.js";
 
 describe("system systemd ownership", () => {
@@ -91,6 +97,55 @@ describe("system systemd ownership", () => {
   });
 
   it.each([
+    { ownership: "loaded", kind: "sealed" },
+    { ownership: "installed", kind: "sealed" },
+    { ownership: "unverifiable", kind: "unknown" },
+    { ownership: "manager absent", kind: "unknown" },
+    { ownership: "unexpected error", kind: "unknown" },
+  ])(
+    "fails closed for $ownership system ownership before user inspection",
+    async ({ ownership, kind }) => {
+      const unitName = "openclaw-owned.service";
+      const systemUnitPath = `/etc/systemd/system/${unitName}`;
+      state.systemctl = {
+        code: ownership === "unverifiable" || ownership === "manager absent" ? 1 : 0,
+        termination: "exit",
+        stdout: ownership === "loaded" ? "loaded" : "not-found",
+        stderr:
+          ownership === "manager absent" ? "systemctl not available" : "manager-secret-canary",
+      };
+      if (ownership === "installed") {
+        state.paths.add(systemUnitPath);
+      } else if (ownership === "unexpected error") {
+        execFileUtf8.mockRejectedValue(new Error("already owns manager-secret-canary"));
+      }
+
+      const capability = await readSystemdDefinitionMutationCapability({
+        HOME: "/home/openclaw-test",
+        OPENCLAW_STATE_DIR: "/state/openclaw-test",
+        OPENCLAW_SYSTEMD_UNIT: unitName,
+        OPENCLAW_SERVICE_KIND: "node",
+      });
+
+      expect(capability).toEqual({
+        kind,
+        detail: `System service ${unitName} requires its privileged deployment owner.`,
+      });
+      expect(JSON.stringify(capability)).not.toContain("manager-secret-canary");
+      // Denial permits only system ownership probes, never user-manager or artifact reads.
+      expect(execFileUtf8.mock.calls.map(([command, args]) => [command, args])).toEqual([
+        ["systemctl", ["show", "--property=LoadState", "--value", unitName]],
+        ...(ownership === "installed"
+          ? [["systemctl", ["show", "--property=UnitPath", "--value"]]]
+          : []),
+      ]);
+      expect(vi.mocked(fs.lstat).mock.calls).toEqual(
+        ownership === "installed" ? [[systemUnitPath]] : [],
+      );
+    },
+  );
+
+  it.each([
     "/etc/systemd/system/openclaw-gateway.service",
     "/run/systemd/system/openclaw-gateway.service",
     "/usr/local/lib/systemd/system/openclaw-gateway.service",
@@ -116,6 +171,38 @@ describe("system systemd ownership", () => {
     expect(execFileUtf8).toHaveBeenCalledTimes(3);
   });
 
+  it("shares one timeout budget across system-manager ownership probes", async () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    execFileUtf8.mockImplementation(async (_command, args) => {
+      now += 20;
+      return args.includes("--property=UnitPath") ? state.managerUnitPath : state.systemctl;
+    });
+    try {
+      await expect(
+        assertNoSystemSystemdOwnership("openclaw-gateway.service", 50),
+      ).resolves.toBeUndefined();
+      expect(
+        execFileUtf8.mock.calls.map((call) => ({
+          timeout: call[2]?.timeout,
+          killSignal: call[2]?.killSignal,
+        })),
+      ).toEqual([
+        { timeout: 50, killSignal: "SIGKILL" },
+        { timeout: 30, killSignal: "SIGKILL" },
+        { timeout: 10, killSignal: "SIGKILL" },
+      ]);
+      expect(execFileUtf8.mock.calls.every((call) => call[2]?.env === process.env)).toBe(true);
+      expect(execFileUtf8.mock.calls.map(([command, args]) => [command, args])).toEqual([
+        ["systemctl", ["show", "--property=LoadState", "--value", "openclaw-gateway.service"]],
+        ["systemctl", ["show", "--property=UnitPath", "--value"]],
+        ["systemctl", ["show", "--property=LoadState", "--value", "openclaw-gateway.service"]],
+      ]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("fails closed when the system manager cannot be queried", async () => {
     state.systemctl = {
       stdout: "",
@@ -132,6 +219,24 @@ describe("system systemd ownership", () => {
         detail: "Failed to connect to bus: Permission denied",
       },
     });
+  });
+
+  it.each([
+    "spawn systemctl ENOENT",
+    "systemctl not available",
+    "System has not been booted with systemd as init system",
+  ])("fails closed when manager absence cannot be proven: %s", async (detail) => {
+    state.systemctl = { stdout: "", stderr: detail, code: 1, termination: "exit" };
+
+    await expect(assertNoSystemSystemdOwnership("openclaw-gateway.service")).rejects.toMatchObject({
+      ownership: {
+        status: "unverifiable",
+        unitName: "openclaw-gateway.service",
+        operation: "systemctl",
+        detail,
+      },
+    });
+    expect(fs.lstat).not.toHaveBeenCalled();
   });
 
   it("does not mistake a missing system bus for a missing unit", async () => {

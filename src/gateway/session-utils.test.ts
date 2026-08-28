@@ -29,6 +29,7 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 import { registerSessionAutomationSource } from "./session-automation-index.js";
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
+import { projectSessionActor } from "./session-identity-projection.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils-list.js";
@@ -41,10 +42,7 @@ import {
   buildSessionListRowContext,
   buildSingleRowStoreChildSessionsByKey,
 } from "./session-utils-projection.js";
-import {
-  buildGatewaySessionRow as buildGatewaySessionRowOwner,
-  projectSessionActor,
-} from "./session-utils-row.js";
+import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
 import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
@@ -297,6 +295,7 @@ describe("gateway session utils", () => {
     expect(projectSessionActor({ type: "agent", id: "roboclaw" }, new Map(), cfg)).toEqual({
       type: "agent",
       id: "roboclaw",
+      identity: { type: "agent", id: "roboclaw" },
       label: "Roboclaw",
       avatarUrl: "/control/avatar/roboclaw",
     });
@@ -306,7 +305,11 @@ describe("gateway session utils", () => {
         new Map(),
         cfg,
       ),
-    ).toEqual({ type: "agent", id: "agent:roboclaw:discord:channel:123" });
+    ).toEqual({
+      type: "agent",
+      id: "agent:roboclaw:discord:channel:123",
+      identity: { type: "agent", id: "agent:roboclaw:discord:channel:123" },
+    });
   });
 
   beforeEach(() => {

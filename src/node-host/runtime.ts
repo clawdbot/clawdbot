@@ -397,6 +397,7 @@ export async function prepareNodeHostRuntime(params?: {
     }) {
       const mcpAbort = new AbortController();
       let closing = false;
+      let connectionGeneration = 0;
       let closePromise: Promise<void> | undefined;
       let initializationRetry: ReturnType<typeof setTimeout> | undefined;
       const workerWorkspace =
@@ -510,7 +511,11 @@ export async function prepareNodeHostRuntime(params?: {
       }
       return {
         async invoke(frame) {
+          const generation = connectionGeneration;
           await pluginDisconnectCleanup;
+          if (closing || generation !== connectionGeneration) {
+            return;
+          }
           const duplexCommand = duplexEnabled && isRegisteredNodeHostCommandDuplex(frame.command);
           const progressEnabled = duplexCommand || frame.command === NODE_DESKTOP_STREAM_COMMAND;
           const controller = new AbortController();
@@ -639,6 +644,7 @@ export async function prepareNodeHostRuntime(params?: {
           activeInvokes.get(invokeId)?.controller.abort();
         },
         cancelAll() {
+          connectionGeneration += 1;
           for (const active of activeInvokes.values()) {
             active.controller.abort();
           }

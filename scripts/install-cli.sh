@@ -1713,7 +1713,7 @@ try {
 }
 
 refresh_gateway_service_if_loaded() {
-  local claw="${PREFIX}/bin/openclaw"
+  local claw="${PREFIX}/bin/openclaw" refresh_output
   if [[ ! -x "$claw" ]]; then
     return 0
   fi
@@ -1726,7 +1726,13 @@ refresh_gateway_service_if_loaded() {
   emit_json step name gateway-service status start
   log "Refreshing loaded gateway service..."
 
-  if ! "$claw" gateway install --force >/dev/null 2>&1; then
+  if ! refresh_output="$({ set +x; "$claw" gateway install --force; } 2>&1 | sed -n -e 's/.*SERVICE_DEFINITION_SEALED:.*/ask the privileged deployment owner to manually repair it/p' -e 's/.*SERVICE_DEFINITION_UNKNOWN:.*/inspect service-definition access and manually repair it/p')"; then
+    if [[ -n "$refresh_output" ]]; then
+      emit_json step name gateway-service status warn reason definition-mutation-denied
+      printf '%s\n' "Code installed; gateway service definition left unchanged; ${refresh_output}." >&2
+      printf '%s\n' "Run openclaw gateway status --deep, verify the installation owner, and restart it manually if needed." >&2
+      return 0
+    fi
     emit_json step name gateway-service status warn reason install-failed
     log "Warning: gateway service refresh failed; continuing."
     return 0

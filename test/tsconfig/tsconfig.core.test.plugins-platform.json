@@ -15,8 +15,6 @@
     "../../src/system-agent/**/*.test.ts",
     "../../src/system-agent/**/*.test.tsx",
     "../../src/hooks/**/*.test.ts",
-    "../../src/hooks/**/*.test.tsx",
-    "../../src/daemon/**/*.test.ts",
-    "../../src/daemon/**/*.test.tsx"
+    "../../src/hooks/**/*.test.tsx"
   ]
 }

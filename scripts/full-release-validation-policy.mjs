@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import {
+  validateFullReleaseCandidateBinding,
+  validateFullReleaseCandidateRequest,
+} from "./full-release-candidate-contract.mjs";
 
 const SUCCESSFUL_JOB_CONCLUSIONS = new Set(["neutral", "skipped", "success"]);
 const MAX_REPORTED_ISSUES = 25;
@@ -102,10 +106,14 @@ const HISTORICAL_EXECUTION_PLAN_KEYS = Object.freeze(
     "workflowSha",
   ].toSorted(),
 );
-const ATTEMPT_AWARE_EXECUTION_PLAN_KEYS = Object.freeze(
-  [...HISTORICAL_EXECUTION_PLAN_KEYS, "attemptEvidenceVersion"].toSorted((left, right) =>
-    left.localeCompare(right),
-  ),
+const ATTEMPT_AWARE_V2_EXECUTION_PLAN_KEYS = Object.freeze(
+  [
+    ...HISTORICAL_EXECUTION_PLAN_KEYS,
+    "attemptEvidenceVersion",
+    "candidate",
+    "candidateRequest",
+    "repository",
+  ].toSorted((left, right) => left.localeCompare(right)),
 );
 const HISTORICAL_EXECUTION_PLAN_CHILD_KEYS = Object.freeze(
   [
@@ -487,7 +495,7 @@ export function buildReleaseExecutionPlan(input) {
     {
       name: "Prepare shared release candidate",
       required: candidatePreparationRequired(input),
-      result: stringValue(input.prepareCandidateResult, "skipped"),
+      result: stringValue(input.candidateBindingResult, "skipped"),
     },
   ];
   return { children, gates };
@@ -570,21 +578,22 @@ function hasExactKeys(value, expectedKeys) {
 
 function releaseExecutionPlanShape(payload) {
   const hasAttemptEvidence = Object.hasOwn(payload, "attemptEvidenceVersion");
+  const attemptEvidenceVersion = hasAttemptEvidence ? payload.attemptEvidenceVersion : undefined;
   const expectedPlanKeys = hasAttemptEvidence
-    ? ATTEMPT_AWARE_EXECUTION_PLAN_KEYS
+    ? ATTEMPT_AWARE_V2_EXECUTION_PLAN_KEYS
     : HISTORICAL_EXECUTION_PLAN_KEYS;
   const expectedChildKeys = hasAttemptEvidence
     ? ATTEMPT_AWARE_EXECUTION_PLAN_CHILD_KEYS
     : HISTORICAL_EXECUTION_PLAN_CHILD_KEYS;
   if (
-    (hasAttemptEvidence && payload.attemptEvidenceVersion !== 1) ||
+    (hasAttemptEvidence && attemptEvidenceVersion !== 2) ||
     !hasExactKeys(payload, expectedPlanKeys) ||
     !Array.isArray(payload.children) ||
     payload.children.some((child) => !hasExactKeys(child, expectedChildKeys))
   ) {
     throw new Error("release execution plan artifact schema is invalid");
   }
-  return hasAttemptEvidence ? "attempt-aware" : "historical";
+  return hasAttemptEvidence ? "attempt-aware-v2" : "historical";
 }
 
 function executionPlanDigestPayload(plan) {
@@ -610,6 +619,8 @@ function executionPlanDigestPayload(plan) {
   return {
     attemptEvidenceVersion: plan.attemptEvidenceVersion,
     blockers: plan.blockers,
+    candidate: plan.candidate,
+    candidateRequest: plan.candidateRequest,
     children: plan.children,
     errors: plan.errors,
     evidenceReuse: plan.evidenceReuse,
@@ -618,6 +629,7 @@ function executionPlanDigestPayload(plan) {
     parentRunAttempt: plan.parentRunAttempt,
     parentRunId: plan.parentRunId,
     releaseProfile: plan.releaseProfile,
+    repository: plan.repository,
     rerunGroup: plan.rerunGroup,
     targetSha: plan.targetSha,
     trustedWorkflow: plan.trustedWorkflow,
@@ -636,6 +648,7 @@ export function releaseExecutionPlanSha256(plan) {
 export function buildReleaseExecutionPlanArtifact({
   attemptEvidenceVersion,
   blockers = [],
+  candidate = null,
   children,
   errors = [],
   evidenceReuse,
@@ -646,6 +659,12 @@ export function buildReleaseExecutionPlanArtifact({
   trustedWorkflow,
 }) {
   const attemptAware = attemptEvidenceVersion !== undefined;
+  const normalizedAttemptEvidenceVersion = attemptAware
+    ? Number(attemptEvidenceVersion)
+    : undefined;
+  if (attemptAware && normalizedAttemptEvidenceVersion !== 2) {
+    throw new Error("release execution plan attempt evidence version is invalid");
+  }
   const normalizedReuse = normalizedEvidenceReuse(evidenceReuse);
   if (!validEvidenceReuseIdentity(normalizedReuse)) {
     throw new Error("release execution plan evidence reuse binding is invalid");
@@ -673,7 +692,7 @@ export function buildReleaseExecutionPlanArtifact({
       );
     }
   }
-  const plan = {
+  const basePlan = {
     version: 1,
     kind: "openclaw.full-release-execution-plan",
     parentRunId: String(expected.parentRunId),
@@ -689,16 +708,47 @@ export function buildReleaseExecutionPlanArtifact({
     children: normalizedChildren,
     blockers: normalizeIssues(blockers, "release_blocker"),
     errors: normalizeIssues(errors, "orchestration_error"),
-    ...(attemptAware
-      ? {
-          attemptEvidenceVersion: Number(attemptEvidenceVersion),
-        }
-      : {}),
   };
-  if (attemptAware && plan.attemptEvidenceVersion !== 1) {
-    throw new Error("release execution plan attempt evidence version is invalid");
+  if (!attemptAware) {
+    return { ...basePlan, sha256: releaseExecutionPlanSha256(basePlan) };
   }
+  const repository = boundedString(expected.repository, MAX_LABEL_LENGTH);
+  const normalizedCandidateRequest = validateFullReleaseCandidateRequest(expected.candidateRequest);
+  const plan = {
+    ...basePlan,
+    attemptEvidenceVersion: 2,
+    repository,
+    candidateRequest: normalizedCandidateRequest,
+    candidate: candidate === null ? null : validateFullReleaseCandidateBinding(candidate),
+  };
+  validateCandidatePlanBinding(plan, expected.candidateRequest);
   return { ...plan, sha256: releaseExecutionPlanSha256(plan) };
+}
+
+function validateCandidatePlanBinding(plan, expectedCandidateRequest) {
+  const request = validateFullReleaseCandidateRequest(plan.candidateRequest);
+  if (
+    request.repository !== plan.repository ||
+    request.targetSha !== plan.targetSha ||
+    request.toolingSha !== plan.workflowSha ||
+    request.toolingSha !== plan.trustedWorkflow.sha ||
+    request.releaseProfile !== plan.releaseProfile
+  ) {
+    throw new Error("release candidate request differs from the execution plan identity");
+  }
+  if (
+    expectedCandidateRequest !== undefined &&
+    JSON.stringify(request) !==
+      JSON.stringify(validateFullReleaseCandidateRequest(expectedCandidateRequest))
+  ) {
+    throw new Error("release candidate request differs from the expected plan inputs");
+  }
+  if (plan.candidate !== null) {
+    const candidate = validateFullReleaseCandidateBinding(plan.candidate);
+    if (JSON.stringify(candidate.request) !== JSON.stringify(request)) {
+      throw new Error("release candidate binding request differs from the execution plan");
+    }
+  }
 }
 
 export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
@@ -727,7 +777,10 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
     (expected.workflowSha !== undefined && payload.workflowSha !== expected.workflowSha) ||
     (expected.releaseProfile !== undefined && payload.releaseProfile !== expected.releaseProfile) ||
     (expected.rerunGroup !== undefined && payload.rerunGroup !== expected.rerunGroup) ||
-    (expected.targetSha !== undefined && payload.targetSha !== expected.targetSha)
+    (expected.targetSha !== undefined && payload.targetSha !== expected.targetSha) ||
+    (shape === "attempt-aware-v2" &&
+      expected.repository !== undefined &&
+      payload.repository !== expected.repository)
   ) {
     throw new Error("release execution plan artifact binding is invalid");
   }
@@ -737,7 +790,7 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
   }
   const trustedWorkflow = normalizedTrustedWorkflow(payload.trustedWorkflow);
   const children = validatePlan(payload.children, {
-    sourceParentAttempt: shape === "attempt-aware",
+    sourceParentAttempt: shape !== "historical",
   });
   validateExecutionPlanChildBindings(children, payload);
   const plan = {
@@ -750,12 +803,21 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
     evidenceReuse,
     gates: Array.isArray(payload.gates) ? payload.gates.map(normalizedGate) : [],
     trustedWorkflow,
-    ...(shape === "attempt-aware"
+    ...(shape === "attempt-aware-v2"
       ? {
-          attemptEvidenceVersion: Number(payload.attemptEvidenceVersion),
+          attemptEvidenceVersion: 2,
+          repository: String(payload.repository),
+          candidateRequest: validateFullReleaseCandidateRequest(payload.candidateRequest),
+          candidate:
+            payload.candidate === null
+              ? null
+              : validateFullReleaseCandidateBinding(payload.candidate),
         }
       : {}),
   };
+  if (shape === "attempt-aware-v2") {
+    validateCandidatePlanBinding(plan, expected.candidateRequest);
+  }
   return { ...plan, sha256 };
 }
 
@@ -1359,7 +1421,7 @@ function verifyStateStructure(state, executionPlan, label) {
     ) {
       throw new Error(`${label} child provenance differs from the immutable plan: ${child.key}`);
     }
-    if (executionPlan.attemptEvidenceVersion === 1) {
+    if (executionPlan.attemptEvidenceVersion !== undefined) {
       if (
         snapshot.dispatchActor !== "github-actions[bot]" ||
         !snapshot.triggeringActor ||

@@ -797,19 +797,37 @@ describe("Twilio SMS helpers", () => {
     });
   });
 
-  it("includes non-JSON Twilio error text in send failures", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () => new Response("upstream unavailable", { status: 503 }),
+  it("redacts credentials reflected in Twilio error text", async () => {
+    const account = createAccount();
+    const encodedCredential = Buffer.from(`${account.accountSid}:${account.authToken}`).toString(
+      "base64",
     );
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      const authorization = new Headers(init?.headers).get("authorization");
+      expect(authorization).toBe(`Basic ${encodedCredential}`);
+      return new Response(`upstream unavailable; Authorization: ${authorization}`, {
+        status: 503,
+      });
+    });
 
-    await expect(
-      sendSmsViaTwilio({
-        account: createAccount(),
+    let caught: (Error & { responseText: string }) | undefined;
+    try {
+      await sendSmsViaTwilio({
+        account,
         to: "+15551234567",
         text: "hello",
         fetchImpl,
-      }),
-    ).rejects.toThrow("Twilio SMS send failed (503): upstream unavailable");
+      });
+    } catch (error) {
+      caught = error as Error & { responseText: string };
+    }
+
+    expect(caught).toMatchObject({
+      message: "Twilio SMS send failed (503): upstream unavailable; Authorization: Basic ***",
+      responseText: "upstream unavailable; Authorization: Basic ***",
+    });
+    expect(caught?.message).not.toContain(encodedCredential);
+    expect(caught?.responseText).not.toContain(encodedCredential);
   });
 
   it("releases guarded Twilio egress on failed send responses", async () => {

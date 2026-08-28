@@ -5,7 +5,10 @@ import {
   recordSessionParticipant,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -77,29 +80,31 @@ describe("Git co-author attribution", () => {
         legacy,
       ].entries()) {
         recordSessionParticipant(scope, {
-          actor: { type: "human", id: participant.id },
+          identity: { type: "profile", id: participant.id },
           promptedAt: participant === grace || participant === sameTime ? 100 : 200 + index,
-          source: "profile",
           sessionAgentId: "main",
         });
       }
       for (const participant of [ada, ada, grace, sameTime, later]) {
         recordSessionParticipant(scope, {
-          actor: { type: "human", id: participant.id },
+          identity: { type: "profile", id: participant.id },
           promptedAt: 400,
-          source: "profile",
           sessionAgentId: "main",
         });
       }
       recordSessionParticipant(scope, {
-        actor: { type: "human", id: current.id },
+        identity: {
+          type: "observation",
+          pluginId: "discord",
+          accountId: null,
+          senderKind: "unknown",
+          id: current.id,
+        },
         promptedAt: 1,
-        source: "channel",
         sessionAgentId: "main",
       });
       recordSessionParticipant(scope, {
-        actor: { type: "agent", id: "helper" },
-        source: "agent",
+        identity: { type: "agent", id: "helper" },
         sessionAgentId: "main",
       });
 
@@ -200,12 +205,21 @@ describe("Git co-author attribution", () => {
         [otherProfile, 70],
       ] as const) {
         recordSessionParticipant(scope, {
-          actor: { type: "human", id: profile.id },
+          identity: { type: "profile", id: profile.id },
           promptedAt,
           sessionAgentId: "main",
-          source: "profile",
         });
       }
+      recordSessionParticipant(scope, {
+        identity: { type: "profile", id: otherProfile.id },
+        promptedAt: 80,
+      });
+      // A contaminated historical time stays unknown even after profile aliases merge.
+      openOpenClawAgentDatabase({ agentId: "main", env: state.env })
+        .db.prepare(
+          "UPDATE session_participants SET first_prompted_at = NULL, last_prompted_at = NULL WHERE actor_id = ?",
+        )
+        .run(oldProfile.id);
       linkEmail("old@example.test", mergedProfile.id, { env: state.env });
 
       expect(
@@ -217,12 +231,51 @@ describe("Git co-author attribution", () => {
           storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
         }),
       ).toMatchObject({
-        logins: ["merged", "other"],
+        logins: ["other", "merged"],
         trailers: [
-          "Co-authored-by: merged <20+merged@users.noreply.github.com>",
           "Co-authored-by: other <10+other@users.noreply.github.com>",
+          "Co-authored-by: merged <20+merged@users.noreply.github.com>",
         ],
       });
+    });
+  });
+
+  it("discloses unresolved legacy membership without dropping the authenticated current profile", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionKey = "agent:main:legacy-coauthors";
+      const scope = { agentId: "main", env: state.env, sessionKey };
+      await upsertSessionEntryCore(scope, { sessionId: "legacy-coauthors", updatedAt: 1 });
+      recordSessionParticipant(scope, {
+        identity: { type: "legacy", actorType: "human", source: null, id: "unknown" },
+      });
+      expect(
+        prepareGitCoauthorAttribution({
+          agentId: "main",
+          config: {},
+          env: state.env,
+          sessionKey,
+          storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+        }),
+      ).toContain("participant history may be incomplete");
+      const current = ensureProfileForEmail("current@example.test", { env: state.env });
+      syncGitHubIdentity(
+        {
+          identity: { accountId: 99, login: "current" },
+          authenticationAlias: { kind: "email", email: "current@example.test" },
+        },
+        { env: state.env },
+      );
+      setUserPreferences(current.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true }, { env: state.env });
+      const attribution = prepareGitCoauthorAttribution({
+        agentId: "main",
+        config: {},
+        currentProfileId: current.id,
+        env: state.env,
+        sessionKey,
+        storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+      });
+      expect(attribution).toContain("Co-authored-by: current");
+      expect(attribution).toContain("participant history may be incomplete");
     });
   });
 
@@ -233,8 +286,7 @@ describe("Git co-author attribution", () => {
       await upsertSessionEntryCore(scope, { sessionId: "coauthor-cap", updatedAt: 1 });
       for (let index = 0; index < MAX_SESSION_PARTICIPANTS; index += 1) {
         recordSessionParticipant(scope, {
-          actor: { type: "human", id: `missing-${index}` },
-          source: "profile",
+          identity: { type: "profile", id: `missing-${index}` },
           sessionAgentId: "main",
         });
       }

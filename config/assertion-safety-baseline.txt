@@ -2809,7 +2809,7 @@ src/daemon/schtasks-process.ts	2
 src/daemon/schtasks-runtime.ts	4
 src/daemon/service.ts	1
 src/daemon/systemd-exec.ts	2
-src/daemon/systemd-install.ts	5
+src/daemon/systemd-install.ts	2
 src/daemon/systemd-lifecycle.ts	2
 src/daemon/systemd-runtime.ts	1
 src/entry.compile-cache.ts	3
@@ -3268,8 +3268,7 @@ src/infra/state-migrations.fs.ts	1
 src/infra/state-migrations.legacy-session-store.ts	3
 src/infra/state-migrations.legacy-sessions.ts	2
 src/infra/state-migrations.mcp-oauth.ts	2
-src/infra/state-migrations.media-persistence-targets.ts	3
-src/infra/state-migrations.media-persistence.ts	2
+src/infra/state-migrations.media-persistence.ts	1
 src/infra/state-migrations.meeting-transcripts-detection.ts	4
 src/infra/state-migrations.meeting-transcripts-files.ts	5
 src/infra/state-migrations.meeting-transcripts-verify.ts	2
@@ -3938,7 +3937,6 @@ ui/src/components/board/board-widget-cell.ts	1
 ui/src/components/board/board-widget-frame.ts	1
 ui/src/components/browser/browser-annotation.ts	1
 ui/src/components/browser/browser-client.ts	1
-ui/src/components/browser/browser-panel-controller-input.ts	1
 ui/src/components/browser/browser-panel-render.ts	4
 ui/src/components/browser/browser-panel.ts	1
 ui/src/components/command-palette.ts	2

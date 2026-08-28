@@ -173,6 +173,29 @@ Package-manager updates additionally verify the restarted Gateway reports the
 expected package version; git-checkout updates verify gateway health and
 service readiness after the rebuild.
 
+Code updates do not require permission to rewrite the native service definition.
+On Linux, sealed or unverified definition-write authority skips metadata refresh,
+even when metadata is stale. An inspectable service owned by the updated install
+still uses its native manager for restart and health/version verification.
+Activation runs the updated CLI with `gateway restart --preserve-definition` so
+its own version guards apply and automatic repair stays disabled. If the target
+CLI does not support that option, it rejects activation before repair. The code
+update stays installed, but the command exits nonzero with the activation error
+(on stderr in JSON mode). A service stopped for the update may remain stopped.
+Run `openclaw gateway status --deep` and ask the deployment owner to restart it
+through its native manager or repair stale metadata; do not retry without the
+preservation option unless definition repair is intended.
+
+Shell installers do not establish the same service ownership proof. If their
+service refresh is denied, they report code installation success, leave the
+service untouched, and print guidance to inspect ownership and restart manually.
+
+If service inspection is unavailable, the code update continues with a warning
+and leaves service control and definition files untouched; it does not assume
+that no service exists. Run `openclaw gateway status --deep`, then restart manually
+when access is restored. Services owned by another install remain untouched.
+`--no-restart` still skips service restart.
+
 Package-manager updates normally keep using the Node binary recorded in the
 managed service. If that Node cannot run the target release, but the current
 CLI Node can and the service is proven to belong to the package being updated,
@@ -185,13 +208,15 @@ loaded/running for the active profile and the configured loopback port is
 healthy. If the plist is installed but launchd is not supervising it, OpenClaw
 re-bootstraps the LaunchAgent automatically and reruns the health/version/
 channel readiness checks (a fresh bootstrap loads the `RunAtLoad` job directly,
-so recovery does not immediately `kickstart -k` the newly spawned Gateway). If
+so recovery does not immediately `kickstart -k` the newly spawned Gateway).
+When preserving a definition, native restart/bootstrap runs without file repair;
+a failed native activation or health check does not trigger a later plist rewrite. If
 the Gateway still does not become healthy, the command exits non-zero and
 prints the restart log path plus restart, reinstall, and package rollback
 instructions.
 
 If restart cannot run, the command prints `Gateway: restart skipped (...)` or
-`Gateway: restart failed: ...` with a manual `openclaw gateway restart` hint.
+`Gateway: restart failed: ...` with guidance to inspect the service and restart manually.
 With `--no-restart`, package replacement or git rebuild still runs, but the
 managed service is not stopped or restarted, so the running Gateway keeps old
 code until you restart it manually.

@@ -24,7 +24,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { projectPresencePayload, type PresenceViewer } from "../../lib/presence-users.ts";
+import { projectPresencePayload } from "../../lib/presence-users.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -40,6 +40,7 @@ import {
   type RunInspectorState,
 } from "./run-inspector-model.ts";
 import { renderRunInspector } from "./run-inspector-view.ts";
+import { SessionActivityController } from "./session-activity-controller.ts";
 import { renderSessionActivityView } from "./session-activity-view.ts";
 import {
   resolveActivityIdentity,
@@ -101,37 +102,32 @@ class ActivityPage extends OpenClawLightDomElement {
   @state() private presencePayload: PresencePayload | undefined;
 
   private sessionKey = "";
+  private readonly sessionActivity = new SessionActivityController(this);
   private inspectorAbort: AbortController | null = null;
   private inspectorClient: GatewayBrowserClient | null = null;
   private inspectorEpoch = 0;
   private inspectorSelectorKey: string | null = null;
   private presenceClient: GatewayBrowserClient | null = null;
-  private readonly retainedIdentities = new Map<string, PresenceViewer>();
   private readonly streamFollow = new StreamAutoFollowController(this, {
     selector: ".activity-stream",
     isEnabled: () => this.autoFollow,
   });
-  private readonly subscriptions = new SubscriptionsController(this)
-    .effect(
-      () => this.context?.gateway,
-      (gateway) => {
-        this.applyGatewaySnapshot(gateway, gateway.snapshot, true);
-        const stopEvents = gateway.subscribeEvents((event) => {
-          this.applyGatewayEvent(gateway, event, Date.now());
-        });
-        const stopGateway = gateway.subscribe((snapshot) =>
-          this.applyGatewaySnapshot(gateway, snapshot, false),
-        );
-        return () => {
-          stopGateway();
-          stopEvents();
-        };
-      },
-    )
-    .watch(
-      () => this.context?.sessions,
-      (sessions, notify) => sessions.subscribe(notify),
-    );
+  private readonly subscriptions = new SubscriptionsController(this).effect(
+    () => this.context?.gateway,
+    (gateway) => {
+      this.applyGatewaySnapshot(gateway, gateway.snapshot, true);
+      const stopEvents = gateway.subscribeEvents((event) => {
+        this.applyGatewayEvent(gateway, event, Date.now());
+      });
+      const stopGateway = gateway.subscribe((snapshot) =>
+        this.applyGatewaySnapshot(gateway, snapshot, false),
+      );
+      return () => {
+        stopGateway();
+        stopEvents();
+      };
+    },
+  );
 
   override willUpdate(changed: PropertyValues) {
     if (changed.has("routeSearch")) {
@@ -142,6 +138,7 @@ class ActivityPage extends OpenClawLightDomElement {
   override updated(changed: PropertyValues) {
     if (changed.has("routeSearch")) {
       this.bindInspectorRoute();
+      this.syncSessionActivity();
     }
     if (
       this.autoFollow &&
@@ -177,6 +174,16 @@ class ActivityPage extends OpenClawLightDomElement {
       this.presencePayload = undefined;
     }
     this.syncRunInspector(gateway, snapshot, sourceChanged);
+    this.syncSessionActivity();
+  }
+
+  private syncSessionActivity(force = false) {
+    const snapshot = this.context?.gateway.snapshot;
+    this.sessionActivity.load(
+      snapshot?.phase === "connected" ? snapshot.client : null,
+      this.routeData.mode === "sessions" ? this.routeData.filters : null,
+      force,
+    );
   }
 
   private bindInspectorRoute() {
@@ -493,6 +500,9 @@ class ActivityPage extends OpenClawLightDomElement {
     if (this.context.gateway !== gateway) {
       return;
     }
+    if (event.event === "sessions.changed") {
+      this.syncSessionActivity(true);
+    }
     if (event.event === "presence") {
       const presence = readPresenceEntries(event.payload);
       this.presencePayload = presence ? { presence } : undefined;
@@ -586,31 +596,20 @@ class ActivityPage extends OpenClawLightDomElement {
       onScroll: (event) => this.streamFollow.handleScroll(event),
     });
     const mode = this.routeData?.mode ?? "live";
-    const sessionRows = this.context.sessions.state.result?.sessions ?? [];
+    const sessionRows = this.sessionActivity.result?.sessions ?? [];
     const filters =
       this.routeData.mode === "sessions"
         ? this.routeData.filters
         : ({ personId: null, query: "", time: "7d" } satisfies SessionActivityFilters);
     const presenceViewers = projectPresencePayload(this.presencePayload).users;
-    const currentIdentity = filters.personId
-      ? resolveActivityIdentity(filters.personId, this.presencePayload, sessionRows)
+    const selectedProfileId = this.sessionActivity.result?.involvingProfileId ?? filters.personId;
+    const currentIdentity = selectedProfileId
+      ? resolveActivityIdentity(
+          selectedProfileId,
+          this.presencePayload,
+          this.sessionActivity.result?.people,
+        )
       : null;
-    const previousIdentity = filters.personId
-      ? this.retainedIdentities.get(filters.personId)
-      : undefined;
-    const retainedIdentity = currentIdentity
-      ? {
-          ...previousIdentity,
-          ...currentIdentity,
-          email: currentIdentity.email ?? previousIdentity?.email,
-          entries: currentIdentity.entries,
-        }
-      : previousIdentity
-        ? { ...previousIdentity, entries: undefined, watchedSessions: [] }
-        : null;
-    if (retainedIdentity) {
-      this.retainedIdentities.set(retainedIdentity.id, retainedIdentity);
-    }
     const body = html`
       ${mode === "run"
         ? nothing
@@ -636,10 +635,14 @@ class ActivityPage extends OpenClawLightDomElement {
           ? renderSessionActivityView({
               context: this.context,
               expandedAutomationDays: this.expandedAutomationDays,
-              filters,
+              filters: { ...filters, personId: selectedProfileId },
               presenceViewers,
-              retainedIdentity,
+              retainedIdentity: currentIdentity,
               rows: sessionRows,
+              result: this.sessionActivity.result,
+              loading: this.sessionActivity.loading,
+              error: this.sessionActivity.error,
+              onRetry: () => this.syncSessionActivity(true),
               onAutomationDayToggle: (dayKey) => {
                 const next = new Set(this.expandedAutomationDays);
                 if (next.has(dayKey)) {
