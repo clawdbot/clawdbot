@@ -58,10 +58,6 @@
           "baseUrlHosts": [
             "coding.dashscope.aliyuncs.com",
             "coding-intl.dashscope.aliyuncs.com"
-          ],
-          "providerConfigApiIn": [
-            "qwen",
-            "modelstudio"
           ]
         }
       },
@@ -73,10 +69,6 @@
           "baseUrlHosts": [
             "coding.dashscope.aliyuncs.com",
             "coding-intl.dashscope.aliyuncs.com"
-          ],
-          "providerConfigApiIn": [
-            "qwen",
-            "modelstudio"
           ]
         }
       },
@@ -88,10 +80,6 @@
           "baseUrlHosts": [
             "coding.dashscope.aliyuncs.com",
             "coding-intl.dashscope.aliyuncs.com"
-          ],
-          "providerConfigApiIn": [
-            "qwen",
-            "modelstudio"
           ]
         }
       },
@@ -103,10 +91,6 @@
           "baseUrlHosts": [
             "coding.dashscope.aliyuncs.com",
             "coding-intl.dashscope.aliyuncs.com"
-          ],
-          "providerConfigApiIn": [
-            "qwen",
-            "modelstudio"
           ]
         }
       },
@@ -115,8 +99,7 @@
         "model": "qwen3.6-flash",
         "reason": "qwen3.6-flash is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"]
         }
       },
       {
@@ -124,8 +107,7 @@
         "model": "qwen3.7-max",
         "reason": "qwen3.7-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"]
         }
       },
       {
@@ -133,8 +115,7 @@
         "model": "qwen3.6-flash",
         "reason": "qwen3.6-flash is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"]
         }
       },
       {
@@ -142,14 +123,12 @@
         "model": "qwen3.7-max",
         "reason": "qwen3.7-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"]
         }
       }
     ],
     "providers": {
       "qwen": {
-        "baseUrl": "https://coding-intl.dashscope.aliyuncs.com/v1",
         "api": "openai-completions",
         "models": [
           {
@@ -199,6 +178,7 @@
               "max": "xhigh"
             },
             "compat": {
+              "codeMode": "capable",
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": [
                 "low",
@@ -323,6 +303,7 @@
               "max": "xhigh"
             },
             "compat": {
+              "codeMode": "capable",
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": [
                 "low",

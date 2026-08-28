@@ -85,7 +85,8 @@ export const QWEN_TOKEN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig>
 export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> =
   buildManifestModelProviderConfig({
     providerId: "qwen",
-    catalog: manifest.modelCatalog.providers.qwen,
+    // Shared seeds span plans; only runtime config selects the Coding Plan default.
+    catalog: { ...manifest.modelCatalog.providers.qwen, baseUrl: QWEN_BASE_URL },
   }).models;
 
 export function isQwenCodingPlanBaseUrl(baseUrl: string | undefined): boolean {
