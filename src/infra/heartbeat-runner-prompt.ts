@@ -9,12 +9,12 @@ import { readHeartbeatMonitorScratch } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { formatErrorMessage } from "./errors.js";
 import {
-  buildCronEventPrompt,
-  buildExecEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
   isHeartbeatDeliveryAwarenessEvent,
+  isHeartbeatNoiseEvent,
   isRelayableExecCompletionEvent,
+  resolveHeartbeatEventPrompt,
 } from "./heartbeat-events-filter.js";
 import {
   heartbeatLog,
@@ -109,8 +109,10 @@ export async function resolveHeartbeatPreflight(params: {
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
-  // The selected queue follows isolated execution into reply admission; the base queue does not.
-  const shouldInspectWakePendingEvents = wakeFlags.isWakePayload && session.inspectsRunQueue;
+  // Wake-triggered runs inspect the queue they will drain. Restart and hook
+  // producers enqueue on the configured/base session even when the model turn
+  // runs in a fresh isolated `:heartbeat` session.
+  const shouldInspectWakePendingEvents = wakeFlags.isWakePayload;
   const shouldInspectPendingEvents =
     wakeFlags.isExecEventWake ||
     wakeFlags.isCronWake ||
@@ -140,8 +142,8 @@ export async function resolveHeartbeatPreflight(params: {
     shouldInspectPendingEvents,
     authoritativeScheduledTick:
       typeof params.scheduledEveryMs === "number" &&
-      Number.isSafeInteger(params.scheduledEveryMs) &&
-      params.scheduledEveryMs > 0,
+      Number.isSafeInteger(scheduledEveryMs) &&
+      scheduledEveryMs > 0,
     ...(monitorScratch?.jobId
       ? {
           scratchJobId: monitorScratch.jobId,
@@ -197,9 +199,15 @@ type HeartbeatPromptResolution = {
   hasExecCompletion: boolean;
   hasRelayableExecCompletion: boolean;
   hasCronEvents: boolean;
+  hasGenericEvents: boolean;
+  handledSystemEvents: SystemEvent[];
   usesHeartbeatResponseTool: boolean;
+  /**
+   * Generic entries the composed prompt did not embed. Reply admission renders
+   * and consumes exactly this selection; embedded entries are consumed by the
+   * heartbeat delivery path after a successful run.
+   */
   genericEvents: SystemEvent[];
-  inspectedSystemEventsToConsume: SystemEvent[];
 };
 
 /** Appends monitor scratch prose to the generated heartbeat prompt. */
@@ -225,27 +233,48 @@ export function resolveHeartbeatRunPrompt(params: {
   useHeartbeatResponseTool: boolean;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
-  const genericEvents: SystemEvent[] = [];
-  const cronEvents: SystemEvent[] = [];
-  const execEvents: SystemEvent[] = [];
-  const cronNoise: SystemEvent[] = [];
-  // Select once: admission owns generic text; completed delivery owns dedicated
-  // prompts and filtered cron noise. Late arrivals retain their queue identities.
-  for (const event of pendingEventEntries) {
-    if (isExecCompletionEvent(event.text)) {
-      if (params.preflight.shouldInspectPendingEvents) {
-        execEvents.push(event);
-      }
-    } else if (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) {
-      (isCronSystemEvent(event.text) ? cronEvents : cronNoise).push(event);
-    } else {
-      genericEvents.push(event);
-    }
-  }
-  const hasExecCompletion = execEvents.length > 0;
+  const cronEventEntries = pendingEventEntries.filter(
+    (event) =>
+      (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
+      isCronSystemEvent(event.text),
+  );
+  const shouldInspectExecEvents =
+    params.preflight.shouldInspectPendingEvents &&
+    !(
+      params.heartbeat?.isolatedSession === true &&
+      params.preflight.isWakePayload &&
+      !params.preflight.isCronWake &&
+      !params.preflight.session.entry?.heartbeatIsolatedBaseSessionKey
+    );
+  const execEventEntries = shouldInspectExecEvents
+    ? pendingEventEntries.filter((event) => isExecCompletionEvent(event.text))
+    : [];
+  const hasExecCompletion = execEventEntries.length > 0;
   const hasRelayableExecCompletion =
-    params.canRelayToUser && execEvents.some((event) => isRelayableExecCompletionEvent(event.text));
-  const hasCronEvents = cronEvents.length > 0;
+    params.canRelayToUser &&
+    execEventEntries.some((event) => isRelayableExecCompletionEvent(event.text));
+  const hasCronEvents = cronEventEntries.length > 0;
+  const genericEventEntries = params.preflight.shouldInspectPendingEvents
+    ? pendingEventEntries.filter(
+        (event) =>
+          !isExecCompletionEvent(event.text) &&
+          !(
+            (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
+            isCronSystemEvent(event.text)
+          ) &&
+          !isHeartbeatNoiseEvent(event.text),
+      )
+    : [];
+  const hasGenericEvents = genericEventEntries.length > 0;
+  // When the composed prompt embeds generic events it is their only rendering
+  // owner; otherwise the generic selection stays with reply admission.
+  const deferredGenericEvents = params.preflight.shouldInspectPendingEvents
+    ? []
+    : pendingEventEntries.filter(
+        (event) =>
+          !isExecCompletionEvent(event.text) &&
+          !(params.preflight.isCronWake || event.contextKey?.startsWith("cron:")),
+      );
   if (params.scheduledTasks.length > 0) {
     const taskList = params.scheduledTasks
       .map((task) => `- ${task.name}: ${task.prompt}`)
@@ -264,32 +293,42 @@ ${completionInstruction}`;
       hasExecCompletion: false,
       hasRelayableExecCompletion: false,
       hasCronEvents: false,
+      hasGenericEvents: false,
+      handledSystemEvents: [],
       usesHeartbeatResponseTool: params.useHeartbeatResponseTool,
-      genericEvents,
-      inspectedSystemEventsToConsume: cronNoise,
+      genericEvents: deferredGenericEvents,
     };
   }
 
   const baseUsesHeartbeatResponseTool = params.useHeartbeatResponseTool;
-  const basePrompt = hasExecCompletion
-    ? buildExecEventPrompt(
-        execEvents.map((event) => event.text),
-        {
+  const eventPromptResolution =
+    hasExecCompletion || hasCronEvents || hasGenericEvents
+      ? resolveHeartbeatEventPrompt({
+          execEvents: execEventEntries.map((event) => event.text),
+          cronEvents: cronEventEntries.map((event) => event.text),
+          genericEvents: genericEventEntries.map((event) => event.text),
           deliverToUser: params.canRelayToUser,
           useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
-        },
-      )
-    : hasCronEvents
-      ? buildCronEventPrompt(
-          cronEvents.map((event) => event.text),
-          {
-            deliverToUser: params.canRelayToUser,
-            useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
-          },
-        )
-      : baseUsesHeartbeatResponseTool
-        ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
-        : resolveConfiguredHeartbeatPrompt(params.cfg, params.heartbeat);
+        })
+      : undefined;
+  const basePrompt =
+    eventPromptResolution?.prompt ??
+    (baseUsesHeartbeatResponseTool
+      ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
+      : resolveConfiguredHeartbeatPrompt(params.cfg, params.heartbeat));
+  const handledEventEntries = eventPromptResolution
+    ? [
+        ...eventPromptResolution.handledEventIndexes.exec.map((index) => execEventEntries[index]),
+        ...eventPromptResolution.handledEventIndexes.cron.map((index) => cronEventEntries[index]),
+        ...eventPromptResolution.handledEventIndexes.generic.map(
+          (index) => genericEventEntries[index],
+        ),
+      ].filter((event): event is SystemEvent => event !== undefined)
+    : [];
+  const handledEventEntrySet = new Set(handledEventEntries);
+  const handledSystemEvents = pendingEventEntries.filter((event) =>
+    handledEventEntrySet.has(event),
+  );
   const basePromptWithDirectives = appendHeartbeatScratch(
     basePrompt,
     params.heartbeatScratchContent,
@@ -299,11 +338,43 @@ ${completionInstruction}`;
     hasExecCompletion,
     hasRelayableExecCompletion,
     hasCronEvents,
+    hasGenericEvents,
+    handledSystemEvents,
     usesHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
-    genericEvents,
-    inspectedSystemEventsToConsume: [
-      ...cronNoise,
-      ...(hasExecCompletion ? execEvents : cronEvents),
-    ],
+    genericEvents: deferredGenericEvents,
   };
+}
+
+export function selectSystemEventsConsumedByHeartbeat(params: {
+  preflight: HeartbeatPreflight;
+  hasExecCompletion: boolean;
+  hasCronEvents: boolean;
+  hasGenericEvents: boolean;
+  handledSystemEvents: readonly SystemEvent[];
+}): SystemEvent[] {
+  const { preflight } = params;
+  if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
+    return [];
+  }
+  if (
+    preflight.isExecEventWake &&
+    !params.hasExecCompletion &&
+    !params.hasCronEvents &&
+    (!params.hasGenericEvents || !preflight.isWakePayload)
+  ) {
+    return [];
+  }
+  if (
+    preflight.isWakePayload &&
+    !params.hasExecCompletion &&
+    !params.hasCronEvents &&
+    !params.hasGenericEvents &&
+    preflight.pendingEventEntries.some((event) => isExecCompletionEvent(event.text))
+  ) {
+    return [];
+  }
+  if (params.hasExecCompletion || params.hasCronEvents || params.hasGenericEvents) {
+    return [...params.handledSystemEvents];
+  }
+  return preflight.pendingEventEntries;
 }

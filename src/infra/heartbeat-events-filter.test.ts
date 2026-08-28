@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
+  buildSystemEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
   isRelayableExecCompletionEvent,
@@ -126,6 +127,33 @@ describe("heartbeat event prompts", () => {
     expect(prompt).toContain("heartbeat_respond");
     expect(prompt).toContain("notify=false");
     expect(prompt).not.toContain("HEARTBEAT_OK");
+  });
+
+  it("embeds generic system events in the heartbeat prompt", () => {
+    const prompt = buildSystemEventPrompt(["Gateway restart ok"]);
+
+    expect(prompt).toContain("Gateway restart ok");
+    expect(prompt).toContain("user-facing follow-up");
+  });
+
+  it("keeps generic system prompt output bounded", () => {
+    const prompt = buildSystemEventPrompt(["x".repeat(8_100)]);
+
+    expect(prompt).toContain("[truncated]");
+    expect(prompt.length).toBeLessThan(8_500);
+  });
+
+  it("compacts legacy heartbeat metadata in generic system prompts", () => {
+    const prompt = buildSystemEventPrompt([
+      "Node: connected · last input 2026-08-29T00:00:00Z",
+      "heartbeat poll: noop",
+      "Gateway restart ok",
+    ]);
+
+    expect(prompt).toContain("Node: connected");
+    expect(prompt).not.toContain("last input");
+    expect(prompt).not.toContain("heartbeat poll");
+    expect(prompt).toContain("Gateway restart ok");
   });
 });
 

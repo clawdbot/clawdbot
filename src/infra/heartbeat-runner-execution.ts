@@ -68,6 +68,7 @@ import {
 import {
   resolveHeartbeatPreflight,
   resolveHeartbeatRunPrompt,
+  selectSystemEventsConsumedByHeartbeat,
   shouldPreflightWakeBeforeBusy,
 } from "./heartbeat-runner-prompt.js";
 import {
@@ -555,6 +556,8 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       });
     }
   }
+  const { hasExecCompletion, hasCronEvents, hasGenericEvents, handledSystemEvents } =
+    heartbeatRunPrompt;
   return {
     kind: "ready",
     ...preflight.session,
@@ -566,6 +569,13 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     runSessionKey,
     outboundPolicySessionKey,
     ...heartbeatRunPrompt,
+    inspectedSystemEventsToConsume: selectSystemEventsConsumedByHeartbeat({
+      preflight,
+      hasExecCompletion,
+      hasCronEvents,
+      hasGenericEvents,
+      handledSystemEvents,
+    }),
   } as const;
 }
 

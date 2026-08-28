@@ -6,11 +6,14 @@ import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import {
+  compactSystemEvent,
+  isExecCompletionEvent,
+} from "../../infra/heartbeat-events-filter.js";
+import {
   formatUtcTimestamp,
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
 // Records system-level session events for restarts, forks, and resets.
 import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
 import {
@@ -20,28 +23,6 @@ import {
 } from "../../infra/system-events.js";
 import { acknowledgeSessionStateNotices } from "../../sessions/session-state-events.js";
 import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
-
-function compactSystemEvent(line: string): string | null {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lower.includes("reason periodic")) {
-    return null;
-  }
-  // Keep retired heartbeat prompts out of replayed legacy system events.
-  if (lower.startsWith("read heartbeat.md")) {
-    return null;
-  }
-  if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) {
-    return null;
-  }
-  if (trimmed.startsWith("Node:")) {
-    return trimmed.replace(/ · last input [^·]+/i, "").trim();
-  }
-  return trimmed;
-}
 
 function resolveSystemEventTimezone(cfg: OpenClawConfig) {
   const raw = normalizeOptionalString(cfg.agents?.defaults?.userTimezone);
@@ -78,7 +59,7 @@ function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
     return formatZonedTimestamp(date, { displaySeconds: true }) ?? "unknown-time";
   }
   return (
-    formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true }) ?? "unknown-time"
+    formatZonedTimestamp(date, { timeZone: zone.timezone, displaySeconds: true }) ?? "unknown-time"
   );
 }
 

@@ -8,6 +8,7 @@ import {
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
 const MAX_EXEC_EVENT_PROMPT_CHARS = 8_000;
+const MAX_SYSTEM_EVENT_PROMPT_CHARS = 8_000;
 export const HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX = "heartbeat-delivery:";
 const STRUCTURED_EXEC_COMPLETION_EVENT_RE =
   /^exec (completed|failed) \(([a-z0-9_-]{1,64}), (code -?\d+|signal [^)]+)\)(?: :: ([\s\S]*))?$/i;
@@ -158,9 +159,51 @@ export function buildExecEventPrompt(
   );
 }
 
+/** Build a heartbeat prompt for system events that are not owned by exec or cron. */
+export function buildSystemEventPrompt(
+  pendingEvents: string[],
+  opts?: { deliverToUser?: boolean; useHeartbeatResponseTool?: boolean },
+): string {
+  const deliverToUser = opts?.deliverToUser ?? true;
+  const useHeartbeatResponseTool = opts?.useHeartbeatResponseTool ?? false;
+  const rawEventText = pendingEvents
+    .map(compactSystemEvent)
+    .filter((event): event is string => event !== null)
+    .join("\n");
+  const eventText =
+    rawEventText.length > MAX_SYSTEM_EVENT_PROMPT_CHARS
+      ? `${truncateUtf16Safe(rawEventText, MAX_SYSTEM_EVENT_PROMPT_CHARS)}\n\n[truncated]`
+      : rawEventText;
+  if (!eventText) {
+    const completionInstruction = useHeartbeatResponseTool
+      ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
+      : `Reply ${SILENT_REPLY_TOKEN} only.`;
+    return `A system event was triggered, but no event content was found. ${completionInstruction}`;
+  }
+  const completionInstruction = useHeartbeatResponseTool
+    ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
+    : `reply ${SILENT_REPLY_TOKEN} when nothing needs user-facing follow-up`;
+  if (!deliverToUser) {
+    return (
+      "A system event was triggered. The event details are:\n\n" +
+      eventText +
+      "\n\nHandle this event internally. Do not relay it to the user unless explicitly requested. " +
+      completionInstruction +
+      "."
+    );
+  }
+  return (
+    "A system event was triggered. The event details are:\n\n" +
+    eventText +
+    "\n\nAssess whether this event needs user-facing follow-up. If it does, explain it helpfully; otherwise " +
+    completionInstruction +
+    "."
+  );
+}
+
 const HEARTBEAT_OK_PREFIX = normalizeLowercaseStringOrEmpty(HEARTBEAT_TOKEN);
 
-function isHeartbeatNoiseEvent(evt: string): boolean {
+export function isHeartbeatNoiseEvent(evt: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(evt);
   if (!lower) {
     return false;
@@ -172,6 +215,27 @@ function isHeartbeatNoiseEvent(evt: string): boolean {
     lower.includes("heartbeat poll") ||
     lower.includes("heartbeat wake")
   );
+}
+
+export function compactSystemEvent(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  if (lower.includes("reason periodic")) {
+    return null;
+  }
+  if (lower.startsWith("read heartbeat.md")) {
+    return null;
+  }
+  if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) {
+    return null;
+  }
+  if (trimmed.startsWith("Node:")) {
+    return trimmed.replace(/ · last input [^·]+/i, "").trim();
+  }
+  return trimmed;
 }
 
 export function isExecCompletionEvent(evt: string): boolean {
