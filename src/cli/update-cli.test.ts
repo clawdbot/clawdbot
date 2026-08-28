@@ -8278,25 +8278,42 @@ describe("update-cli", () => {
   it.each(["before", "after"])(
     "update wizard forwards explicit consent %s the subcommand",
     async (position) => {
-      const root = tempDirs.make("openclaw-update-wizard-");
+      const root = await fs.realpath(tempDirs.make("openclaw-update-wizard-"));
       const tempDir = path.join(root, "openclaw");
+      const nodeModules = path.join(root, "prefix", "lib", "node_modules");
+      const packageRoot = path.join(nodeModules, "openclaw");
+      const sha = "a".repeat(40);
+      await writeOpenClawPackageFixture(packageRoot, "2026.4.10", { inventory: true });
+      mockPackageInstallStatus(packageRoot);
+      mockFileBackedPathExists();
+      mockNpmGlobalCommands(
+        nodeModules,
+        async (argv) => {
+          if (argv[0] === "git" && argv[1] === "clone") {
+            const stagingDir = requireValue(argv.at(-1), "clone destination");
+            await writeOpenClawPackageFixture(stagingDir, "2026.8.1", { git: true });
+            return commandResult();
+          }
+          return undefined;
+        },
+        tempDir,
+      );
+      vi.spyOn(updateCliShared, "tryWriteCompletionCache").mockResolvedValueOnce("completed");
       await withEnvAsync({ OPENCLAW_GIT_DIR: tempDir }, async () => {
         setTty(true);
-
-        vi.mocked(checkUpdateStatus).mockResolvedValue({
-          root: "/test/path",
-          installKind: "package",
-          packageManager: "npm",
-          deps: {
-            manager: "npm",
-            status: "ok",
-            lockfilePath: null,
-            markerPath: null,
-          },
-        });
         select.mockResolvedValue("dev");
         confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-        vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+        vi.mocked(runGatewayUpdate).mockImplementation(async () => {
+          await writeOpenClawPackageFixture(tempDir, "2026.8.1", { git: true, builtSha: sha });
+          return makeOkUpdateResult({
+            root: tempDir,
+            after: { sha, version: "2026.8.1" },
+          });
+        });
+        vi.mocked(runExec).mockResolvedValueOnce({
+          stdout: new Command("update").option("--accept-capabilities").helpInformation(),
+          stderr: "",
+        });
 
         const program = new Command();
         program.exitOverride();
@@ -8313,12 +8330,15 @@ describe("update-cli", () => {
         expect(readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
         const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
         expect(call?.channel).toBe("dev");
-        const handler = syncPluginCall()?.onCapabilityConsent as
-          | ((review: { reviewToken: string }) => Promise<{ reviewToken: string }>)
-          | undefined;
-        await expect(handler?.({ reviewToken: "wizard-reviewed-surface" })).resolves.toEqual({
-          reviewToken: "wizard-reviewed-surface",
-        });
+        await expect(fs.realpath(packageRoot)).resolves.toBe(tempDir);
+        expect(spawnCall()?.[1]).toEqual([
+          path.join(tempDir, "dist", "entry.js"),
+          "update",
+          "--no-restart",
+          "--accept-capabilities",
+        ]);
+        expectNoSideEffects(syncPluginsForUpdateChannel, updateNpmInstalledPlugins);
+        expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
       });
     },
   );
