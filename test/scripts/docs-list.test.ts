@@ -145,6 +145,27 @@ summary: "Page"
     expect(existsSync(path.join(tempRepoRoot, "docs", "docs_map.md"))).toBe(false);
   });
 
+  it("strips annotated front matter terminators from the docs map", () => {
+    const tempRepoRoot = makeTempRepoRoot("openclaw-docs-headings-frontmatter-");
+    const docsDir = path.join(tempRepoRoot, "docs");
+    mkdirSync(docsDir, { recursive: true });
+    writeFileSync(
+      path.join(docsDir, "page.md"),
+      `---
+summary: "Annotated page"
+# This metadata comment must not become a heading
+... # end
+# Visible title
+`,
+      "utf8",
+    );
+
+    const output = runDocsList(tempRepoRoot, ["--headings"]);
+
+    expect(output).toContain("  - H1: Visible title");
+    expect(output).not.toContain("metadata comment must not become a heading");
+  });
+
   it("normalizes injected Windows paths for nested page routes", () => {
     const tempRepoRoot = makeTempRepoRoot("openclaw-docs-headings-windows-");
     const docsDir = path.join(tempRepoRoot, "docs");
