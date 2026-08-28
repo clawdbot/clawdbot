@@ -61,15 +61,18 @@ See Perplexity's [OpenClaw integration guide](https://docs.perplexity.ai/docs/ge
   </Step>
   <Step title="Run onboarding">
     ```bash
+    export CUSTOM_API_KEY="$PERPLEXITY_API_KEY"
     openclaw onboard \
       --auth-choice custom-api-key \
+      --secret-input-mode ref \
       --custom-base-url "https://api.perplexity.ai/v1" \
-      --custom-api-key "$PERPLEXITY_API_KEY" \
       --custom-model-id "anthropic/claude-sonnet-4-6" \
       --custom-compatibility openai-responses \
       --custom-provider-id perplexity \
       --install-daemon
     ```
+
+    `--secret-input-mode ref` tells OpenClaw to write an environment reference to `openclaw.json` instead of the literal key. The custom-provider auth path reads the key from the `CUSTOM_API_KEY` environment variable, so the `export` above bridges Perplexity's `PERPLEXITY_API_KEY` naming to OpenClaw's expected variable name. The onboarding command then persists `apiKey: { source: "env", id: "CUSTOM_API_KEY" }` rather than the resolved secret. The daemon reads `CUSTOM_API_KEY` from its runtime environment on each request.
 
     `--custom-compatibility openai-responses` is required. Perplexity's Agent API primary endpoint is `POST /v1/agent`; it also accepts requests at `POST /v1/responses` as an OpenAI-Responses-compatible alias, which is what OpenClaw uses in this mode. It does not implement `/v1/chat/completions`, so `openai-completions` will not work.
   </Step>
