@@ -334,6 +334,41 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("loads workspace-relative PDFs from workspaceDir", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const workspaceDir = path.join(agentDir, "workspace");
+      const relativePdf = path.join("docs", "guide.pdf");
+      const workspaceBytes = Buffer.from("%PDF-1.4 workspace payload", "utf8");
+      await fs.mkdir(path.join(workspaceDir, "docs"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, relativePdf), workspaceBytes);
+      await stubPdfToolInfra(agentDir, {
+        mockLoad: false,
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      const nativeSpy = vi
+        .spyOn(pdfNativeProviders, "anthropicAnalyzePdf")
+        .mockResolvedValue("native summary");
+      const tool = requirePdfTool(
+        (await loadCreatePdfTool())({
+          config: withPdfModel(ANTHROPIC_PDF_MODEL),
+          agentDir,
+          workspaceDir,
+          fsPolicy: { workspaceOnly: true },
+        }),
+      );
+
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: relativePdf,
+      });
+
+      const analyzed = nativeSpy.mock.calls[0]?.[0];
+      expect(analyzed?.pdfs[0]?.base64).toBe(workspaceBytes.toString("base64"));
+      expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
+    });
+  });
+
   it("respects fsPolicy.workspaceOnly for non-sandbox pdf paths", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-ws-"));
