@@ -57,6 +57,12 @@ describe("test runtime prerequisites", () => {
       ["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts"],
       "runtime",
     ],
+    ["Active Memory Gateway", ["src/gateway/gateway-active-memory.test.ts"], "runtime"],
+    ["Gateway directory", ["src/gateway"], "runtime"],
+    ["Gateway core config", ["test/vitest/vitest.gateway-core.config.ts"], "runtime"],
+    ["Gateway umbrella config", ["test/vitest/vitest.gateway.config.ts"], "runtime"],
+    ["agentic config", ["test/vitest/vitest.full-agentic.config.ts"], "runtime"],
+    ["ordinary Gateway unit test", ["src/gateway/net.test.ts"], undefined],
     ["ordinary QA unit test", ["extensions/qa-lab/src/gateway-child-command.test.ts"], undefined],
     [
       "model reader",

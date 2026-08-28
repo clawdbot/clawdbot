@@ -14,7 +14,17 @@ import {
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFailed, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFailed,
+  vi,
+} from "vitest";
 import { applyCliRuntimeRecallTimeoutDefault } from "./config.js";
 import plugin, { testing } from "./index.js";
 import { resolveActiveRecallForRun } from "./recall-state.js";
@@ -3119,9 +3129,7 @@ describe("active-memory plugin", () => {
             payloads: [{ text: summary }],
             meta: {
               durationMs: 0,
-              ...(failed
-                ? { error: { kind: "incomplete_turn", message: "No final reply." } }
-                : {}),
+              ...(failed ? { error: { kind: "incomplete_turn", message: "No final reply." } } : {}),
             },
           };
         },
@@ -3444,11 +3452,20 @@ describe("active-memory plugin", () => {
     expectLinesNotToContain(lines, "LLM request timed out");
   });
 
-  it("returns partial transcript text when an aborted subagent rejects before the race timeout wins", async () => {
+  it.each([
+    { name: "partial abort", failed: false, cleanupFails: false },
+    { name: "failed agent", failed: true, cleanupFails: false },
+    { name: "failed cleanup", failed: false, cleanupFails: true },
+  ])("projects direct abort recovery for $name", async ({ failed, cleanupFails }) => {
     testing.setMinimumTimeoutMsForTests(1);
     registerPluginConfig({ timeoutMs: 5_000, persistTranscripts: true, logging: true });
     const sessionKey = "agent:main:abort-timeout-partial";
     seedSession(sessionKey, "s-abort-timeout-partial", 0);
+    if (cleanupFails) {
+      hoisted.cleanupSessionLifecycleArtifacts.mockRejectedValue(
+        new Error("session store remains busy"),
+      );
+    }
     runEmbeddedAgent.mockImplementationOnce(
       async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
         await writeTranscriptJsonl(params.sessionFile, [
@@ -3458,10 +3475,20 @@ describe("active-memory plugin", () => {
             message: { role: "assistant", content: "partial abort summary" },
           },
         ]);
+        // Select the direct rejection projection without firing the watchdog's abort listener.
         Object.defineProperty(params.abortSignal as AbortSignal, "aborted", {
           configurable: true,
           value: true,
         });
+        if (failed) {
+          return {
+            payloads: [{ text: "partial abort summary" }],
+            meta: {
+              durationMs: 0,
+              error: { kind: "incomplete_turn", message: "No final reply." },
+            },
+          };
+        }
         const abortErr = new Error("Operation aborted");
         abortErr.name = "AbortError";
         throw abortErr;
@@ -3473,13 +3500,25 @@ describe("active-memory plugin", () => {
       { sessionKey },
     );
 
-    expectPrependContextContains(result, "partial abort summary");
+    if (cleanupFails) {
+      expect(hoisted.cleanupSessionLifecycleArtifacts).toHaveBeenCalledTimes(3);
+      expect(api.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("failed to clean up recall session"),
+      );
+    }
     const lines = getActiveMemoryLines(sessionKey);
-    expectLinesToContain(lines, "🧩 Active Memory: status=timeout_partial");
-    expectLinesToContain(
-      lines,
-      "🔎 Active Memory Debug: timeout_partial: 21 chars recovered (not persisted)",
-    );
+    if (failed || cleanupFails) {
+      expect(result).toBeUndefined();
+      expectLinesToContain(lines, "🧩 Active Memory: status=timeout");
+      expectLinesNotToContain(lines, "status=timeout_partial");
+    } else {
+      expectPrependContextContains(result, "partial abort summary");
+      expectLinesToContain(lines, "🧩 Active Memory: status=timeout_partial");
+      expectLinesToContain(
+        lines,
+        "🔎 Active Memory Debug: timeout_partial: 21 chars recovered (not persisted)",
+      );
+    }
     expect(getActiveMemoryLines(sessionKey).join("\n")).not.toContain("partial abort summary");
   });
 

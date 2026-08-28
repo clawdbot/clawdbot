@@ -17,12 +17,17 @@ type TestSelection = {
 const runtimeConsumers = [
   {
     file: "extensions/qa-lab/src/suite-process-lifecycle.test.ts",
-    config: "test/vitest/vitest.extension-qa.config.ts",
+    configs: ["test/vitest/vitest.extension-qa.config.ts"],
     mode: "private-qa",
   },
   {
     file: "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
-    config: "test/vitest/vitest.tooling.config.ts",
+    configs: ["test/vitest/vitest.tooling.config.ts"],
+    mode: "runtime",
+  },
+  {
+    file: "src/gateway/gateway-active-memory.test.ts",
+    configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
     mode: "runtime",
   },
 ] as const;
@@ -30,17 +35,19 @@ const runtimeConsumers = [
 export function resolveVitestPretestBuildMode(
   selections: readonly TestSelection[],
 ): VitestPretestBuildMode | undefined {
-  return runtimeConsumers.find(({ file, config }) =>
+  return runtimeConsumers.find(({ file, configs: consumerConfigs }) =>
     selections.some(({ configs, includePatterns }) =>
       includePatterns
         ? includePatterns.some((pattern) => matchesGlob(file, pattern))
         : configs?.some(
             (selected) =>
-              selected === config ||
+              consumerConfigs.some((config) => selected === config) ||
               selected === "vitest.config.ts" ||
               selected === "test/vitest/vitest.config.ts" ||
               fullSuiteVitestShards.some(
-                (shard) => shard.config === selected && shard.projects.includes(config),
+                (shard) =>
+                  shard.config === selected &&
+                  consumerConfigs.some((config) => shard.projects.includes(config)),
               ),
           ),
     ),
