@@ -17,6 +17,9 @@ import {
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
+import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import type { GatewayRequestContext } from "../../../gateway/server-methods/shared-types.js";
+import { registerGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   beginSessionWorkAdmission,
@@ -40,7 +43,7 @@ import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
+import { activateSubagentRegistry, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import {
   testing as subagentRegistryTesting,
   addSubagentRunForTests,
@@ -2740,6 +2743,170 @@ describe("steerControlledSubagentRun", () => {
       );
     } finally {
       replaceSpy.mockRestore();
+    }
+  });
+
+  it("keeps steer dispatch on the registry owner when the global Gateway is replaced", async () => {
+    const childSessionKey = "agent:main:subagent:steer-owner-binding";
+    const entry = createSubagentRunRecord({
+      runId: "run-steer-owner-old",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old direction",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+
+    const calls = { owner: { agent: 0 }, replacement: { agent: 0 } };
+    const ownerRuntime = {
+      dispatchAgent: async <T = unknown>() => {
+        calls.owner.agent += 1;
+        return { runId: "run-steer-owner-new" } as T;
+      },
+      waitForAgent: async <T = unknown>() => ({}) as T,
+    } as unknown as GatewayRecoveryRuntime;
+    const replacementRuntime = {
+      dispatchAgent: async <T = unknown>() => {
+        calls.replacement.agent += 1;
+        return { runId: "run-steer-replacement-new" } as T;
+      },
+      waitForAgent: async <T = unknown>() => ({}) as T,
+    } as unknown as GatewayRecoveryRuntime;
+
+    const releaseOwner = registerGatewayRecoveryRuntime(ownerRuntime);
+    activateSubagentRegistry(
+      () => ({ recoveryRuntime: ownerRuntime }) as unknown as GatewayRequestContext,
+    );
+    addSubagentRunForTests(entry);
+    // Gateway replacement window: a new instance registers as the process-global
+    // recovery runtime while the registry still belongs to the owner.
+    const releaseReplacement = registerGatewayRecoveryRuntime(replacementRuntime);
+
+    try {
+      const result = await steerControlledSubagentRun({
+        cfg: cfgWithSessionStore(),
+        controller: {
+          controllerSessionKey: "agent:main:main",
+          callerSessionKey: "agent:main:main",
+          callerIsSubagent: false,
+          controlScope: "children",
+        },
+        entry,
+        message: "new direction",
+      });
+
+      expect(result.status).toBe("accepted");
+      expect(calls.owner.agent).toBe(1);
+      expect(calls.replacement.agent).toBe(0);
+    } finally {
+      releaseReplacement();
+      releaseOwner();
+    }
+  });
+
+  it("fails closed when the registry owner Gateway is stale", async () => {
+    const childSessionKey = "agent:main:subagent:steer-stale-owner";
+    const entry = createSubagentRunRecord({
+      runId: "run-steer-stale-old",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old direction",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+
+    const calls = {
+      owner: { agent: 0, wait: 0 },
+      replacement: { agent: 0, wait: 0 },
+    };
+    const ownerRuntime = {
+      dispatchAgent: async <T = unknown>() => {
+        calls.owner.agent += 1;
+        return { runId: "run-steer-stale-new" } as T;
+      },
+      waitForAgent: async <T = unknown>() => {
+        calls.owner.wait += 1;
+        return {} as T;
+      },
+    } as unknown as GatewayRecoveryRuntime;
+    const replacementRuntime = {
+      dispatchAgent: async <T = unknown>() => {
+        calls.replacement.agent += 1;
+        return { runId: "run-steer-stale-replacement" } as T;
+      },
+      waitForAgent: async <T = unknown>() => {
+        calls.replacement.wait += 1;
+        return {} as T;
+      },
+    } as unknown as GatewayRecoveryRuntime;
+
+    // Mirror the production kernel fence (`isAvailable() ? context : undefined`):
+    // once the owner instance closes, its resolver intentionally returns
+    // undefined while the registry still belongs to it.
+    let ownerAvailable = true;
+    const ownerContext = { recoveryRuntime: ownerRuntime };
+    const releaseOwner = registerGatewayRecoveryRuntime(ownerRuntime);
+    activateSubagentRegistry(() =>
+      ownerAvailable ? (ownerContext as unknown as GatewayRequestContext) : undefined,
+    );
+    addSubagentRunForTests(entry);
+    // Gateway replacement window: a new instance registers as the process-global
+    // recovery runtime, then the owner instance closes.
+    const releaseReplacement = registerGatewayRecoveryRuntime(replacementRuntime);
+    ownerAvailable = false;
+
+    const { callGateway: genericGatewayTransport } = await import("../../../gateway/call.js");
+    vi.mocked(genericGatewayTransport).mockClear();
+
+    try {
+      const steerResult = await steerControlledSubagentRun({
+        cfg: cfgWithSessionStore(),
+        controller: {
+          controllerSessionKey: "agent:main:main",
+          callerSessionKey: "agent:main:main",
+          callerIsSubagent: false,
+          controlScope: "children",
+        },
+        entry,
+        message: "new direction",
+      });
+
+      expect(steerResult).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("registry owner Gateway is stale"),
+      });
+      expect(calls.owner).toEqual({ agent: 0, wait: 0 });
+      expect(calls.replacement).toEqual({ agent: 0, wait: 0 });
+      expect(genericGatewayTransport).not.toHaveBeenCalled();
+
+      const followUpResult = await sendControlledSubagentMessage({
+        cfg: cfgWithSessionStore(),
+        controller: {
+          controllerSessionKey: "agent:main:main",
+          callerSessionKey: "agent:main:main",
+          callerIsSubagent: false,
+          controlScope: "children",
+        },
+        entry,
+        message: "follow-up direction",
+      });
+
+      expect(followUpResult).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("registry owner Gateway is stale"),
+      });
+      expect(calls.owner).toEqual({ agent: 0, wait: 0 });
+      expect(calls.replacement).toEqual({ agent: 0, wait: 0 });
+      expect(genericGatewayTransport).not.toHaveBeenCalled();
+    } finally {
+      releaseReplacement();
+      releaseOwner();
     }
   });
 

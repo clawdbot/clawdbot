@@ -37,6 +37,7 @@ import {
 } from "./subagent-registry-read.js";
 import {
   clearSubagentRunSteerRestart,
+  getSubagentRegistryGatewayRecoveryRuntime,
   markSubagentRunForSteerRestart,
   replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
@@ -76,7 +77,21 @@ type IsEmbeddedAgentRunActive = (sessionId: string) => boolean;
 type ClearSessionQueues = (keys: Array<string | undefined>) => ClearSessionQueueResult;
 
 const callSubagentControlGateway: GatewayCaller = async (request) => {
-  const gatewayRuntime = getGatewayRecoveryRuntime();
+  // Steer/follow-up dispatch is Gateway-owned lifecycle work. Keep it on the
+  // instance that activated the registry — a replacement Gateway does not know
+  // the old runIds. A stale owner binding fails closed, matching
+  // dispatchGatewayLifecycleMethod: control for runs owned by a closed Gateway
+  // must never fall through to the replacement Gateway or the generic
+  // transport. The process-global runtime is only used when no registry owner
+  // exists (standalone processes).
+  const ownerBinding = getSubagentRegistryGatewayRecoveryRuntime();
+  if (ownerBinding.owner === "stale") {
+    throw new Error(
+      `Subagent registry owner Gateway is stale; refusing to dispatch ${request.method} to a replacement Gateway`,
+    );
+  }
+  const gatewayRuntime =
+    ownerBinding.owner === "active" ? ownerBinding.runtime : getGatewayRecoveryRuntime();
   if (gatewayRuntime && request.method === "agent") {
     return await gatewayRuntime.dispatchAgent(
       request.params as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
