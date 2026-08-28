@@ -1014,6 +1014,7 @@ describe("install-cli.sh", () => {
       set -euo pipefail
       source "${SCRIPT_PATH}"
       tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
       remote="$tmp/remote.git"
       seed="$tmp/seed"
       repo="$tmp/repo"
@@ -1052,6 +1053,7 @@ describe("install-cli.sh", () => {
       set -euo pipefail
       source "${SCRIPT_PATH}"
       tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
       remote="$tmp/remote.git"
       seed="$tmp/seed"
       repo="$tmp/repo"
@@ -1087,6 +1089,7 @@ describe("install-cli.sh", () => {
       set -euo pipefail
       source "${SCRIPT_PATH}"
       tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
       remote="$tmp/remote.git"
       source_repo="$tmp/source"
       repo="$tmp/repo"
@@ -1129,6 +1132,7 @@ describe("install-cli.sh", () => {
       set -euo pipefail
       source "${SCRIPT_PATH}"
       tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
       remote="$tmp/remote.git"
       seed="$tmp/seed"
       repo="$tmp/repo"
