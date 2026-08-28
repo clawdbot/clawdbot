@@ -488,8 +488,15 @@ cloud worker is a separate, placement-owned execution path and does not require
 app-server and provider auth local, while the authorized node runs the managed,
 pinned Codex exec-server over its existing duplex connection. It requires
 explicit `gateway.nodes.commands.allow` authorization for
-`codex.exec-server.stdio.v1`, the approved pairing surface, and separate
-allow-once node invocation approval for each attempt. The node receives a
+`codex.exec-server.stdio.v1`, the approved pairing surface, and launch
+authorization for each attempt. A deliberately selected session **Full access**
+permission can replace the critical allow-once prompt only while the exact
+admitted turn and placement remain current and both node-local `tools.exec`
+and exec-approvals floors allow full/off execution. Ordinary and raw callers
+still require human approval. Local deny blocks either launch; local ask and
+allowlist policies cannot be bypassed with Full access. Changed local policy
+during setup refuses the launch. Gateway and node must both support this
+authorization path; missing node policy support fails closed. The node receives a
 fresh private home and sanitized environments, never Gateway provider, cloud,
 or GitHub credentials. A lost node connection terminates the attempt and
 process instead of resuming it. Each node-backed attempt uses its own Gateway

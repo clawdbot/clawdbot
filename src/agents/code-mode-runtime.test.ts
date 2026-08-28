@@ -67,7 +67,7 @@ describe("Code Mode master switch resolution", () => {
     { name: "boolean shorthand false", codeMode: false, enabled: false },
     { name: "auto shorthand", codeMode: "auto", enabled: "auto" },
     { name: "object enabled auto", codeMode: { enabled: "auto" }, enabled: "auto" },
-    { name: "object with options", codeMode: { timeoutMs: 5000 }, enabled: "auto" },
+    { name: "object with options", codeMode: { timeoutMs: 5000 }, enabled: false },
     { name: "empty object", codeMode: {}, enabled: false },
     { name: "omitted", codeMode: undefined, enabled: false },
   ])("resolves enabled for $name", ({ codeMode, enabled }) => {

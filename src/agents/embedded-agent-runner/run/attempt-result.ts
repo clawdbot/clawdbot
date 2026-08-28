@@ -23,6 +23,7 @@ import {
   buildAttemptReplayMetadata,
   hasAttemptTerminalState,
 } from "./attempt-terminal-evidence.js";
+import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { shouldTreatEmptyAssistantReplyAsSilent } from "./incomplete-turn-recovery.js";
 import { resolveSilentToolResultReplyPayload } from "./incomplete-turn-resolution.js";
 import type {
@@ -114,6 +115,7 @@ type CompleteEmbeddedAttemptResultInput = {
     streamStrategy: string;
   };
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
+  deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
 };
 
 /**
@@ -489,6 +491,7 @@ export function completeEmbeddedAttemptResult(
   return finalizeEmbeddedAttempt({
     result,
     trajectoryRecorder: input.trajectoryRecorder,
+    deferredLifecycleOwner: input.deferredLifecycleOwner,
     synthesizedPayloadCount,
     emptyAssistantReplyIsSilent,
     hasTerminalOutput,

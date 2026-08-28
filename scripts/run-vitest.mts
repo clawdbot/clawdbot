@@ -20,6 +20,10 @@ import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-p
 import { signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { spawnTestProjectsRunner } from "./lib/test-projects-delegation.mts";
+import {
+  resolveVitestRuntimeCliSelections,
+  prepareVitestRuntime,
+} from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
 import {
   createVitestUnhandledErrorDetector,
@@ -1410,6 +1414,29 @@ async function main(
 
   const vitestArgs = resolveImplicitVitestArgs(argv);
   const invocations = resolveBoundedVitestInvocations(vitestArgs, { env });
+  const config = resolveVitestConfigArg(vitestArgs);
+  const relativeConfig = config ? toRepoRelativeArg(path.resolve(config), repoRoot) : "";
+  // Canonical configs have known project scopes. Custom roots/projects keep
+  // their own setup; never infer their runtime selection from a config name.
+  if (
+    config &&
+    !hasAlternateVitestRootArg(vitestArgs) &&
+    !hasExplicitVitestProjectArg(vitestArgs) &&
+    !hasNonRunVitestSubcommand(vitestArgs) &&
+    !hasExplicitDisabledRunFlag(vitestArgs) &&
+    !vitestArgs.some((arg) => ["--help", "-h", "--version", "-v"].includes(arg))
+  ) {
+    const code = await prepareVitestRuntime(
+      invocations.flatMap((cliArgs) =>
+        resolveVitestRuntimeCliSelections(relativeConfig, cliArgs, env),
+      ),
+      env,
+    );
+    if (code !== 0) {
+      process.exitCode = code;
+      return;
+    }
+  }
   let vitestCliEntry;
   try {
     vitestCliEntry = resolveVitestCliEntry();

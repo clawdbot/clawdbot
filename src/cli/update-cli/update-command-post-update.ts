@@ -44,10 +44,10 @@ import { POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON } from "./update-command-pos
 import {
   assertGatewayServiceManagementAllowedForUpdate,
   GatewayServiceUpdateOwnershipError,
-  gatewayServiceCommandUsesRoot,
   isGatewayServiceManagementAllowedForUpdate,
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
+  revalidateManagedGatewayServiceAfterUpdate,
   resolveGatewayServiceManagementBlockMessageForUpdate,
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
@@ -132,6 +132,7 @@ export async function finishUpdate(params: {
       }
     } else {
       await maybeRestartServiceAfterFailedMutableUpdate({
+        root: params.result.root,
         preManagedServiceStop: params.preManagedServiceStop,
         jsonMode: Boolean(params.opts.json),
       });
@@ -150,6 +151,7 @@ export async function finishUpdate(params: {
       jsonMode: Boolean(params.opts.json),
     });
     await maybeRestartServiceAfterFailedMutableUpdate({
+      root: params.result.root,
       preManagedServiceStop: params.preManagedServiceStop,
       jsonMode: Boolean(params.opts.json),
     });
@@ -344,6 +346,7 @@ export async function finishUpdate(params: {
     // stopped by this update. Invalid post-migration config intentionally remains stopped.
     if (postCorePluginUpdate.reason === POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON) {
       await maybeRestartServiceAfterFailedMutableUpdate({
+        root: params.result.root,
         preManagedServiceStop: params.preManagedServiceStop,
         jsonMode: Boolean(params.opts.json),
       });
@@ -365,66 +368,60 @@ export async function finishUpdate(params: {
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
   let gatewayServiceInstallEnv: NodeJS.ProcessEnv | null | undefined;
-  let skipLegacyServiceRestart = false;
+  let serviceUpdateVerdict = params.preManagedServiceStop?.serviceUpdateVerdict;
+  let skipLegacyServiceRestart = serviceUpdateVerdict?.kind === "absent";
   const serviceStateReadEnv = resolvePostUpdateServiceStateReadEnv({
     updateMode: resultWithPostUpdate.mode,
     processEnv: process.env,
     preManagedServiceEnv: params.preManagedServiceStop?.serviceEnv,
   });
-  const serviceMutationAllowed =
+  let serviceMutationAllowed =
     params.preManagedServiceStop?.serviceMutationAllowed !== false &&
     isGatewayServiceManagementAllowedForUpdate(process.env) &&
     isGatewayServiceManagementAllowedForUpdate(serviceStateReadEnv);
-  const serviceMutationSkipMessage =
-    params.shouldRestart && !serviceMutationAllowed
-      ? (params.preManagedServiceStop?.serviceMutationSkipMessage ??
-        resolveGatewayServiceManagementBlockMessageForUpdate(process.env) ??
-        resolveGatewayServiceManagementBlockMessageForUpdate(serviceStateReadEnv))
-      : undefined;
-  let gatewayPort = resolveUpdatedGatewayRestartPort({
+  let serviceMutationSkipMessage = !serviceMutationAllowed
+    ? (params.preManagedServiceStop?.serviceMutationSkipMessage ??
+      resolveGatewayServiceManagementBlockMessageForUpdate(process.env) ??
+      resolveGatewayServiceManagementBlockMessageForUpdate(serviceStateReadEnv))
+    : undefined;
+  let gatewayPort = await resolveUpdatedGatewayRestartPort({
     config: restartConfigSnapshot.valid ? restartConfigSnapshot.config : undefined,
     processEnv: process.env,
     serviceEnv: params.ownedManagedUpdateEnv,
   });
-  if (params.shouldRestart && serviceMutationAllowed) {
+  if (params.shouldRestart && serviceMutationAllowed && !skipLegacyServiceRestart) {
     try {
       const serviceState = await readGatewayServiceState(resolveGatewayService(), {
         env: serviceStateReadEnv,
+        requireEffective: true,
         validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+        timeoutMs: params.updateStepTimeoutMs,
       });
-      const serviceMatchesUpdateRoot =
-        (await gatewayServiceCommandUsesRoot({
-          root: postUpdateRoot,
-          command: serviceState.command,
-        })) ?? undefined;
-      const serviceOwnershipConfirmed =
-        params.preManagedServiceStop?.serviceMatchesMutationRoot === true ||
-        serviceMatchesUpdateRoot === true;
-      const knownForeignService =
-        params.preManagedServiceStop?.serviceMatchesMutationRoot === false &&
-        serviceMatchesUpdateRoot !== true;
-      const serviceLoaded = serviceState.loadState.status === "loaded";
+      serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
+        state: serviceState,
+        root: postUpdateRoot,
+        preManagedServiceStop: params.preManagedServiceStop,
+      });
+      gatewayServiceEnv = serviceState.env;
       skipLegacyServiceRestart =
-        knownForeignService ||
-        (resultWithPostUpdate.mode === "git" &&
-          serviceState.installed &&
-          serviceLoaded &&
-          params.preManagedServiceStop?.stopped !== true &&
-          serviceMatchesUpdateRoot === false);
-      if (
-        !knownForeignService &&
+        serviceUpdateVerdict.kind === "foreign" || serviceUpdateVerdict.kind === "absent";
+      if (serviceUpdateVerdict.kind === "unavailable") {
+        serviceMutationAllowed = false;
+        serviceMutationSkipMessage = serviceUpdateVerdict.message;
+      } else if (serviceUpdateVerdict.kind === "foreign") {
+        serviceMutationAllowed = false;
+        serviceMutationSkipMessage =
+          "Gateway service management skipped: the service belongs to a different OpenClaw installation and was left untouched.";
+      } else if (
+        !skipLegacyServiceRestart &&
         shouldPrepareUpdatedInstallRestart({
           updateMode: resultWithPostUpdate.mode,
           serviceInstalled: serviceState.installed,
-          serviceLoaded,
+          serviceLoaded: serviceState.loadState.status === "loaded",
           serviceStoppedForUpdate: params.preManagedServiceStop?.stopped,
-          serviceMatchesMutationRoot: serviceOwnershipConfirmed
-            ? true
-            : params.preManagedServiceStop?.serviceMatchesMutationRoot,
-          serviceMatchesUpdateRoot,
+          serviceMatchesUpdateRoot: serviceUpdateVerdict.kind === "owned",
         })
       ) {
-        gatewayServiceEnv = serviceState.env;
         gatewayServiceInstallEnv = resolveManagedGatewayServiceProcessEnv(
           serviceState.command,
           params.ownedManagedUpdateEnv ?? process.env,
@@ -432,37 +429,43 @@ export async function finishUpdate(params: {
         if (gatewayServiceInstallEnv) {
           gatewayServiceInstallEnv = stripGatewayServiceMarkerEnv(gatewayServiceInstallEnv);
         }
-        gatewayPort = resolveUpdatedGatewayRestartPort({
-          config: restartConfigSnapshot.valid ? restartConfigSnapshot.config : undefined,
-          processEnv: process.env,
-          serviceEnv: gatewayServiceEnv,
-        });
+        refreshGatewayServiceEnv =
+          serviceUpdateVerdict.kind === "owned" && serviceUpdateVerdict.refreshDefinition;
+        if (serviceUpdateVerdict.kind === "owned" && gatewayServiceInstallEnv === null) {
+          refreshGatewayServiceEnv = false;
+          serviceUpdateVerdict = { ...serviceUpdateVerdict, refreshDefinition: false };
+        }
+      }
+      gatewayPort = await resolveUpdatedGatewayRestartPort({
+        config: restartConfigSnapshot.valid ? restartConfigSnapshot.config : undefined,
+        serviceEnv: gatewayServiceEnv,
+        serviceCommand:
+          serviceUpdateVerdict.kind === "unresolved" ||
+          (serviceUpdateVerdict.kind === "owned" && !serviceUpdateVerdict.refreshDefinition)
+            ? serviceState.command
+            : undefined,
+      });
+      if (refreshGatewayServiceEnv) {
         restartScriptPath = await prepareRestartScript(
           serviceState.env,
           gatewayPort,
-          serviceOwnershipConfirmed ? serviceState.command?.programArguments : undefined,
+          serviceState.command?.programArguments,
         );
-        // An ambiguous wrapper may be stopped and restored, but only proven
-        // ownership authorizes rewriting the service definition.
-        refreshGatewayServiceEnv = serviceOwnershipConfirmed;
-        if (refreshGatewayServiceEnv && gatewayServiceInstallEnv === null) {
-          refreshGatewayServiceEnv = false;
-          const message =
-            "Gateway service metadata refresh was skipped because systemd drop-in environment ownership could not be inspected.";
-          if (params.opts.json) {
-            defaultRuntime.error(message);
-          } else {
-            defaultRuntime.log(theme.warn(message));
-          }
-        }
       }
     } catch (err) {
-      if (err instanceof GatewayServiceUpdateOwnershipError) {
-        defaultRuntime.error(formatErrorMessage(err));
+      if (params.preManagedServiceStop?.stopped) {
+        const message =
+          err instanceof GatewayServiceUpdateOwnershipError
+            ? formatErrorMessage(err)
+            : "Stopped gateway service could not be revalidated; inspect it before restarting manually.";
+        defaultRuntime.error(message);
         defaultRuntime.exit(1);
         return;
       }
-      // Ignore errors during pre-check; fallback to standard restart
+      serviceMutationAllowed = false;
+      serviceMutationSkipMessage =
+        "Code update completed; gateway service management skipped because its current ownership could not be inspected. " +
+        "Run `openclaw gateway status --deep` before restarting it manually.";
     }
   }
 
@@ -488,6 +491,7 @@ export async function finishUpdate(params: {
       channel: params.channel,
       opts: params.opts,
       refreshServiceEnv: refreshGatewayServiceEnv,
+      serviceUpdateVerdict,
       serviceEnv: gatewayServiceEnv,
       serviceInstallEnv: gatewayServiceInstallEnv,
       gatewayPort,
@@ -495,8 +499,7 @@ export async function finishUpdate(params: {
       invocationCwd: params.invocationCwd,
       nodeRunner: params.packageUpdateNodeRunner,
       skipLegacyServiceRestart,
-      requireRunningServiceAfterRestart:
-        resultWithPostUpdate.mode === "git" && params.preManagedServiceStop?.stopped === true,
+      requireRunningServiceAfterRestart: params.preManagedServiceStop?.stopped === true,
       serviceMutationSkipMessage,
       timeoutMs: params.updateStepTimeoutMs,
     }),

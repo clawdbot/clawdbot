@@ -640,8 +640,17 @@ export async function runWithGatewayRequestEnvelope<T>(
       return await withPluginRuntimeGatewayRequestScope(
         {
           context: options.context,
+          // Detached turn admission needs the live instance resolver, not a captured request context.
+          resolveGatewayContext: options.context.resolveGatewayContext,
           client,
           isWebchatConnect: options.isWebchatConnect,
+          // Only an owner-bound in-process stream may retain admitted Full authority.
+          ...(client?.internal?.nodeInvokeStream
+            ? {
+                invokeWithSessionNodeAuthority:
+                  getPluginRuntimeGatewayRequestScope()?.invokeWithSessionNodeAuthority,
+              }
+            : {}),
           ...(pluginRegistry ? { pluginRegistry } : {}),
         },
         fn,

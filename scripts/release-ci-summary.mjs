@@ -1966,6 +1966,7 @@ export function validateReleaseRunEvidence(
   const executionPlan = executionPlanPayload
     ? validateReleaseExecutionPlanArtifact(executionPlanPayload, {
         parentRunId: rootEvidence.manifest.runId,
+        repository: normalizedRepository,
         releaseProfile: rootEvidence.manifest.releaseProfile,
         rerunGroup: rootEvidence.manifest.rerunGroup,
         targetSha: rootEvidence.manifest.targetSha,
@@ -1976,7 +1977,7 @@ export function validateReleaseRunEvidence(
   const plannedByKey = new Map(
     (executionPlan?.children ?? []).map((plannedChild) => [plannedChild.key, plannedChild]),
   );
-  if (executionPlan?.attemptEvidenceVersion === 1) {
+  if (executionPlan?.attemptEvidenceVersion !== undefined) {
     if (
       rootEvidence.manifestJson.executionPlanSha256 !== executionPlan.sha256 ||
       Number(rootEvidence.manifestJson.sourceParentRunAttempt) !== executionPlan.parentRunAttempt
@@ -2011,7 +2012,7 @@ export function validateReleaseRunEvidence(
         selectedKeys,
       );
   if (
-    executionPlan?.attemptEvidenceVersion === 1 &&
+    executionPlan?.attemptEvidenceVersion !== undefined &&
     JSON.stringify(Object.keys(rootEvidence.manifest.childEvidence).toSorted()) !==
       JSON.stringify([...selectedKeys].toSorted())
   ) {

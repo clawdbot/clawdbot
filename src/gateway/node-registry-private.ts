@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
   isPrivateNodeInvokeCommand,
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
@@ -27,6 +26,7 @@ import {
 } from "./node-registry.system-run.js";
 import {
   createNodeRunnerStatePublisher,
+  isNodeWorkerHostClientId,
   resolveNodeRunnerInventoryIssue,
   resolveNodeWorkerSupervisorProof,
   sameBundleStatusObservation,
@@ -80,6 +80,8 @@ type NodeWorkerPrivateCommand = (typeof NODE_WORKER_PRIVATE_COMMANDS)[number];
 export type NodeWorkerSupervisorTransport = {
   listCurrentNodes(): Promise<readonly NodeWorkerSupervisorNodeProof[]>;
   hasCurrentRunner(nodeId: string): boolean;
+  /** Diagnostic connection presence, independent of session-host eligibility. */
+  isConnected?(nodeId: string): boolean;
   getIssue?(nodeId: string): NodeRunnerInventoryIssue | undefined;
   getBundleStatus?(nodeId: string): NodeWorkerBundleStatusObservation | undefined;
   acceptBundleStatus?(
@@ -190,7 +192,7 @@ function updateWorkerRunnerInventory(
     !node ||
     node.client.invalidated === true ||
     node.connId !== params.connId ||
-    node.clientId !== GATEWAY_CLIENT_IDS.NODE_HOST ||
+    !isNodeWorkerHostClientId(node.clientId) ||
     node.clientMode !== "node"
   ) {
     return null;
@@ -212,7 +214,7 @@ function updateWorkerRunnerInventory(
     connId: node.connId,
     pairingIdentity: node.pairingIdentity,
     ...(node.pairingGeneration ? { pairingGeneration: node.pairingGeneration } : {}),
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+    clientId: node.clientId,
     clientMode: "node",
     protocolFeatures: [...params.declaration.protocolFeatures],
     ...(workerHost
@@ -341,6 +343,9 @@ async function invokeNodeRegistryCore(
   });
   // Serialization can consume the budget or close caller-owned authority.
   // Revalidate both before arming pending state and handing off to transport.
+  if (params.signal?.aborted) {
+    return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
+  }
   if (params.isDispatchAuthorized?.() === false) {
     return {
       ok: false,
@@ -442,6 +447,10 @@ export function registerNodeRegistryPrivateRuntime(
       });
     },
     hasCurrentRunner: state.runnerState.hasCurrent,
+    isConnected: (nodeId) => {
+      const node = context.getNode(nodeId);
+      return Boolean(node && node.client.invalidated !== true);
+    },
     getIssue: (nodeId) => {
       const node = context.getNode(nodeId);
       return node ? resolveNodeRunnerInventoryIssue(node, state.runnerInventoryByConn) : undefined;

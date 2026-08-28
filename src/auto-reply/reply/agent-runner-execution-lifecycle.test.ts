@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
+import {
+  clearActiveEmbeddedRun,
+  isEmbeddedAgentRunActive,
+  setActiveEmbeddedRun,
+  type EmbeddedAgentQueueHandle,
+} from "../../agents/embedded-agent-runner/runs.js";
 import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
@@ -37,6 +43,36 @@ import {
 const state = setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: run lifecycle and ownership", () => {
+  it("releases a deferred owner when restart escapes candidate execution", async () => {
+    const sessionId = "session";
+    const sessionKey = "agent:main:main";
+    const handle: EmbeddedAgentQueueHandle = {
+      runId: "restart-after-adoption",
+      queueMessage: async () => undefined,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: vi.fn(),
+    };
+    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onDeferredLifecycleOwner?.({
+        complete: async () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
+        discard: () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
+      });
+      throw createAgentRunRestartAbortError();
+    });
+
+    try {
+      const { executeAgentTurn } = await import("./agent-runner-execution.js");
+      const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+
+      expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
+      expect(isEmbeddedAgentRunActive(sessionId)).toBe(false);
+    } finally {
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+    }
+  });
+
   it("attributes one admitted channel participant before its admission decision", async () => {
     const order: string[] = [];
     const identityWork: unknown[] = [];
@@ -102,8 +138,9 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     }
   });
 
-  it("passes the reply abort signal to fallback orchestration and candidates", async () => {
-    const { replyOperation } = createMockReplyOperation();
+  it("propagates reply aborts through fallback orchestration and candidates", async () => {
+    const controller = new AbortController();
+    const { replyOperation } = createMockReplyOperation({ abortSignal: controller.signal });
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {},
@@ -123,9 +160,14 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       state.runEmbeddedAgentMock.mock.calls[0]?.[0],
       "runEmbeddedAgent params",
     );
-    expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
     expect(fallbackCall.sessionId).toBe("session");
-    expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
+    expect(embeddedCall.abortSignal).toBe(fallbackCall.abortSignal);
+    expect(embeddedCall.abortSignal).toMatchObject({ aborted: false });
+
+    controller.abort();
+
+    expect(fallbackCall.abortSignal).toMatchObject({ aborted: true });
+    expect(embeddedCall.abortSignal).toMatchObject({ aborted: true });
   });
 
   it("passes the operator-reviewed proposal revision to every embedded candidate", async () => {

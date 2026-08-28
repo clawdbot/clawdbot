@@ -149,6 +149,7 @@ describe("printDaemonStatus", () => {
         environment: { OPENCLAW_GATEWAY_TOKEN: "managed-base-gateway-token" },
       },
       managedOverrides: { launcher: "command", environment: { keys: ["OPENCLAW_GATEWAY_TOKEN"] } },
+      definitionPaths: ["/etc/systemd/user/private-definition.conf"],
       reloadPending: true,
     };
     for (const server of servers) {
@@ -176,6 +177,7 @@ describe("printDaemonStatus", () => {
     for (const [payload] of runtime.writeJson.mock.calls) {
       expect(payload).not.toHaveProperty("service.command.managedDefinition");
       expect(payload).not.toHaveProperty("service.command.managedOverrides");
+      expect(payload).not.toHaveProperty("service.command.definitionPaths");
       expect(payload).toHaveProperty("service.command.reloadPending", true);
       expect(JSON.stringify(payload)).not.toContain("gateway-token");
     }

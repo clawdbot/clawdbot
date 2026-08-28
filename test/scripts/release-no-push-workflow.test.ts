@@ -953,8 +953,20 @@ describe("release validation no-push transport", () => {
         .filter((candidate) => candidate.name?.startsWith("Checkout trusted "))
         .map((candidate) => ({ candidate, jobName })),
     );
-    expect(trustedCheckouts).toHaveLength(12);
-    for (const { candidate, jobName } of trustedCheckouts) {
+    expect(trustedCheckouts).toHaveLength(13);
+    const binderCheckout = trustedCheckouts.find(
+      ({ jobName }) => jobName === "bind_full_release_candidate_evidence",
+    );
+    expect(binderCheckout?.candidate.with).toMatchObject({
+      repository: "openclaw/openclaw",
+      ref: "main",
+      "persist-credentials": false,
+    });
+    const exactRevisionCheckouts = trustedCheckouts.filter(
+      ({ jobName }) => jobName !== "bind_full_release_candidate_evidence",
+    );
+    expect(exactRevisionCheckouts).toHaveLength(12);
+    for (const { candidate, jobName } of exactRevisionCheckouts) {
       expect(candidate.with, jobName).toMatchObject({
         repository: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",
         ref: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",

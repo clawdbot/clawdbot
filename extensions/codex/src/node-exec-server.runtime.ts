@@ -152,6 +152,7 @@ function createNodeExecServerProcessOwner(
 
 /** Runs the one-connection paired-node exec-server after lightweight command admission. */
 export async function runCodexNodeExecServer(params: {
+  assertExecAuthorized: () => void;
   workspaceDir: string;
   io: OpenClawPluginNodeHostCommandIo;
   activeProcesses: Set<() => Promise<void>>;
@@ -206,6 +207,8 @@ export async function runCodexNodeExecServer(params: {
         if (io.signal.aborted) {
           throw nodeExecServerAbortError(io.signal);
         }
+        // Awaited setup is complete; policy and invocation closure win at spawn.
+        params.assertExecAuthorized();
         const child = createStdioTransport(
           {
             transport: "stdio",

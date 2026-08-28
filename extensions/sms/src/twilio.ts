@@ -2,6 +2,7 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readResponseTextPrefix,
   readResponseWithLimit,
@@ -170,12 +171,15 @@ class TwilioSmsApiError extends Error {
   readonly twilioCode?: number;
 
   constructor(httpStatus: number, responseText: string, operation = "send") {
-    const parsed = parseTwilioApiError(responseText);
-    const detail = parsed.message ?? (responseText || "unknown");
+    // Remote error bodies can reflect request credentials. Redact once before
+    // exposing the body through either the message or the structured field.
+    const redactedResponseText = redactToolPayloadText(responseText);
+    const parsed = parseTwilioApiError(redactedResponseText);
+    const detail = parsed.message ?? (redactedResponseText || "unknown");
     super(`Twilio SMS ${operation} failed (${httpStatus}): ${detail}`);
     this.name = "TwilioSmsApiError";
     this.httpStatus = httpStatus;
-    this.responseText = responseText;
+    this.responseText = redactedResponseText;
     this.twilioCode = parsed.code;
   }
 }

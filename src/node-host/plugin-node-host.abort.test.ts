@@ -73,6 +73,7 @@ describe("non-duplex node-host plugin cancellation", () => {
       sendNodeEvent,
       sessionKey: "agent:main:local-model",
       signal: controller.signal,
+      prepareExecAuthorization: expect.any(Function),
     });
     expect(request).not.toHaveBeenCalled();
   });
@@ -105,7 +106,10 @@ describe("non-duplex node-host plugin cancellation", () => {
       { pluginCommandContext: { sendNodeEvent } },
     );
 
-    expect(handle).toHaveBeenCalledWith("{}", undefined, { sendNodeEvent });
+    expect(handle).toHaveBeenCalledWith("{}", undefined, {
+      sendNodeEvent,
+      prepareExecAuthorization: expect.any(Function),
+    });
     expect(request).toHaveBeenCalledWith(
       "node.invoke.result",
       expect.objectContaining({ ok: true, payloadJSON: '{"ok":true}' }),

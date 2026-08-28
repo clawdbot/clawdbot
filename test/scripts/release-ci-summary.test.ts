@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
 import {
   buildReleaseExecutionPlanArtifact,
   releaseCompositeJobsSha256,
@@ -1197,7 +1198,7 @@ describe("release CI summary child correlation", () => {
     });
   });
 
-  it("recomputes mixed-attempt child evidence and binds the original dispatch attempt", () => {
+  it("recomputes mixed-attempt evidence and binds the original dispatch attempt", () => {
     const fixture = trustedMainPackageFixture({
       manifestVersion: 3,
       workflowSha: "a".repeat(40),
@@ -1245,12 +1246,27 @@ describe("release CI summary child correlation", () => {
       workflowSha: fixture.childRun.head_sha,
     };
     const executionPlan = buildReleaseExecutionPlanArtifact({
-      attemptEvidenceVersion: 1,
+      attemptEvidenceVersion: 2,
+      candidate: null,
       children: [plannedChild],
       evidenceReuse: { requested: false },
       expected: {
+        candidateRequest: buildFullReleaseCandidateRequest({
+          repository: "openclaw/openclaw",
+          targetSha: fixture.targetSha,
+          toolingSha: fixture.workflowSha,
+          releaseProfile: "full",
+          releaseSoak: true,
+          upgradeSurvivorBaseline: "openclaw@latest",
+          upgradeSurvivorBaselines: "",
+          upgradeSurvivorScenarios: "reported-issues",
+          allowFrozenTargetScenarioOmissions: false,
+          allowUnreleasedChangelog: false,
+          sharedImagePolicy: "no-push-artifact",
+        }),
         parentRunAttempt: 1,
         parentRunId: fixture.runId,
+        repository: "openclaw/openclaw",
         targetSha: fixture.targetSha,
         workflowRef: fixture.parentRun.head_branch,
         workflowSha: fixture.workflowSha,
@@ -1264,6 +1280,7 @@ describe("release CI summary child correlation", () => {
         sha: fixture.workflowSha,
       },
     });
+    expect(executionPlan.candidate).toBeNull();
     fixture.childRun.run_attempt = 2;
     fixture.childRun.triggering_actor = { login: "release-operator" };
     const firstAttemptJob = {
