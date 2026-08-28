@@ -17,22 +17,28 @@ export type RawHttpResult = {
   closedByServer: boolean;
 };
 
-/** Reassembles a chunked response body so callers can assert the payload the server sent. */
-function decodeChunkedBody(raw: string): string {
+/**
+ * Reassembles a chunked response body so callers can assert the payload the server sent.
+ *
+ * Chunk sizes count bytes, so the scan stays on the Buffer: decoding first would make a
+ * multi-byte character consume one slice position and misplace every later boundary.
+ */
+function decodeChunkedBody(raw: Buffer): Buffer {
+  const parts: Buffer[] = [];
   let offset = 0;
-  let decoded = "";
   for (;;) {
-    const lineEnd = raw.indexOf("\r\n", offset);
+    const lineEnd = raw.indexOf("\r\n", offset, "latin1");
     if (lineEnd === -1) {
-      return decoded;
+      break;
     }
-    const size = Number.parseInt(raw.slice(offset, lineEnd).trim(), 16);
+    const size = Number.parseInt(raw.toString("latin1", offset, lineEnd).trim(), 16);
     if (!Number.isFinite(size) || size <= 0) {
-      return decoded;
+      break;
     }
-    decoded += raw.slice(lineEnd + 2, lineEnd + 2 + size);
+    parts.push(raw.subarray(lineEnd + 2, lineEnd + 2 + size));
     offset = lineEnd + 2 + size + 2;
   }
+  return Buffer.concat(parts);
 }
 
 export async function postRawWebhook(params: {
@@ -73,7 +79,7 @@ export async function postRawWebhook(params: {
 
   return await new Promise<RawHttpResult>((resolve) => {
     const socket = net.connect(port, target.hostname);
-    let received = "";
+    const received: Buffer[] = [];
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -86,24 +92,38 @@ export async function postRawWebhook(params: {
         clearTimeout(timer);
       }
       socket.destroy();
-      const [headBlock = "", ...rest] = received.split("\r\n\r\n");
-      const rawBody = rest.join("\r\n\r\n");
+      const raw = Buffer.concat(received);
+      const headerEnd = raw.indexOf("\r\n\r\n", 0, "latin1");
+      const headBlock =
+        headerEnd === -1 ? raw.toString("latin1") : raw.toString("latin1", 0, headerEnd);
+      const rawBody = headerEnd === -1 ? Buffer.alloc(0) : raw.subarray(headerEnd + 4);
       const chunked = /transfer-encoding:\s*chunked/i.test(headBlock);
       resolve({
         statusLine: (headBlock.split("\r\n")[0] ?? "").trim(),
-        body: chunked ? decodeChunkedBody(rawBody) : rawBody,
+        body: (chunked ? decodeChunkedBody(rawBody) : rawBody).toString("utf-8"),
         closedByServer,
       });
+    };
+
+    // Chunk framing is ASCII and the body is raw bytes. Writing them together through a
+    // string would re-encode every byte above 0x7f after its length was already declared.
+    const writeBody = (slice: Buffer) => {
+      if (!params.chunkedEncoding) {
+        socket.write(slice);
+        return;
+      }
+      socket.write(`${slice.length.toString(16)}\r\n`);
+      socket.write(slice);
+      socket.write("\r\n");
     };
 
     socket.on("connect", () => {
       socket.write(head);
       if (!params.chunk) {
-        socket.write(
-          params.chunkedEncoding
-            ? `${payload.length.toString(16)}\r\n${payload.toString("latin1")}\r\n0\r\n\r\n`
-            : payload,
-        );
+        writeBody(payload);
+        if (params.chunkedEncoding) {
+          socket.write("0\r\n\r\n");
+        }
       } else {
         const { bytes, intervalMs } = params.chunk;
         let offset = 0;
@@ -118,12 +138,7 @@ export async function postRawWebhook(params: {
             return;
           }
           const end = Math.min(offset + bytes, payload.length);
-          const slice = payload.subarray(offset, end);
-          socket.write(
-            params.chunkedEncoding
-              ? `${slice.length.toString(16)}\r\n${slice.toString("latin1")}\r\n`
-              : slice,
-          );
+          writeBody(payload.subarray(offset, end));
           offset = end;
           setTimeout(pump, intervalMs).unref?.();
         };
@@ -134,8 +149,8 @@ export async function postRawWebhook(params: {
       timer = setTimeout(() => settle(false), idleTimeoutMs);
       timer.unref?.();
     });
-    socket.on("data", (chunk) => {
-      received += chunk.toString("latin1");
+    socket.on("data", (chunk: Buffer) => {
+      received.push(chunk);
     });
     // Rejecting mid-upload makes the write fail on this side; the response may already be
     // buffered, so wait for "close" rather than settling on the write error.
