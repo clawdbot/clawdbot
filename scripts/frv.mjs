@@ -688,7 +688,7 @@ export async function loadPlan(options, loadExecutionPlan = downloadExecutionPla
     throw new Error("run has no authenticated immutable FRV plan");
   }
   const plan = validateReleaseExecutionPlanArtifact(payload, { parentRunId: options.runId });
-  if (plan.attemptEvidenceVersion !== 1) {
+  if (plan.attemptEvidenceVersion === undefined) {
     throw new Error("run predates attempt-aware immutable plans; run a fresh all-group FRV");
   }
   if (plan.rerunGroup !== "all") {

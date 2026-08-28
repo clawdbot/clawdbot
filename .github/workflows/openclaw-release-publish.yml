@@ -531,6 +531,10 @@ jobs:
             --jq .content | base64 --decode > "${tooling_dir}/release-ci-summary.mjs"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/full-release-validation-policy.mjs?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/full-release-validation-policy.mjs"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/full-release-candidate-contract.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/full-release-candidate-contract.mjs"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/canonical-json.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/lib/canonical-json.mjs"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/plain-gh.mjs?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/lib/plain-gh.mjs"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/plugin-sdk-api-release-evidence.mjs?ref=${WORKFLOW_SHA}" \
@@ -543,6 +547,8 @@ jobs:
             --jq .content | base64 --decode > "${tooling_dir}/authorized-beta-focused-policy.json"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/record-shared.mjs?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/lib/record-shared.mjs"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/upgrade-survivor-policy.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/lib/upgrade-survivor-policy.mjs"
 
       - name: Checkout release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

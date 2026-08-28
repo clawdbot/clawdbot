@@ -1197,7 +1197,7 @@ describe("release CI summary child correlation", () => {
     });
   });
 
-  it("recomputes mixed-attempt child evidence and binds the original dispatch attempt", () => {
+  it("recomputes prior-v1 mixed-attempt evidence and binds the original dispatch attempt", () => {
     const fixture = trustedMainPackageFixture({
       manifestVersion: 3,
       workflowSha: "a".repeat(40),
@@ -1264,6 +1264,7 @@ describe("release CI summary child correlation", () => {
         sha: fixture.workflowSha,
       },
     });
+    expect(executionPlan).not.toHaveProperty("candidate");
     fixture.childRun.run_attempt = 2;
     fixture.childRun.triggering_actor = { login: "release-operator" };
     const firstAttemptJob = {

@@ -597,6 +597,8 @@ jobs:
     with:
       ref: ${{ needs.resolve_target.outputs.sha }}
       prepare_only: true
+      emit_candidate_evidence: true
+      release_soak: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
       include_repo_e2e: false
       include_release_path_suites: false
       include_openwebui: false
@@ -1089,8 +1091,12 @@ jobs:
           sparse-checkout: |
             scripts/full-release-validation-state.mjs
             scripts/full-release-validation-policy.mjs
+            scripts/full-release-candidate-contract.mjs
             scripts/release-ci-summary.mjs
+            scripts/lib/canonical-json.mjs
             scripts/lib/plain-gh.mjs
+            scripts/lib/record-shared.mjs
+            scripts/lib/upgrade-survivor-policy.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -1154,7 +1160,15 @@ jobs:
           PERFORMANCE_URL: ${{ needs.performance.outputs.url }}
           RESOLVE_TARGET_RESULT: ${{ needs.resolve_target.result }}
           DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT: ${{ needs.docker_runtime_assets_preflight.result }}
-          PREPARE_RELEASE_CANDIDATE_RESULT: ${{ needs.prepare_release_candidate.result }}
+          CANDIDATE_BINDING_RESULT: ${{ needs.prepare_release_candidate.result }}
+          CANDIDATE_EVIDENCE_JSON: ${{ needs.prepare_release_candidate.outputs.candidate_evidence_json }}
+          CANDIDATE_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
+          CANDIDATE_UPGRADE_SURVIVOR_BASELINE: openclaw@latest
+          CANDIDATE_UPGRADE_SURVIVOR_BASELINES: ""
+          CANDIDATE_UPGRADE_SURVIVOR_SCENARIOS: ${{ (inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full') && 'reported-issues' || '' }}
+          CANDIDATE_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.target_context_ref != '' }}
+          CANDIDATE_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
+          CANDIDATE_SHARED_IMAGE_POLICY: no-push-artifact
           FULL_RELEASE_RESTORE_PLAN: ${{ github.run_attempt != 1 }}
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
         run: |
@@ -1181,7 +1195,19 @@ jobs:
               --arg liveSuiteFilter "$LIVE_SUITE_FILTER" \
               --arg resolveTargetResult "$RESOLVE_TARGET_RESULT" \
               --arg dockerPreflightResult "$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" \
-              --arg prepareCandidateResult "$PREPARE_RELEASE_CANDIDATE_RESULT" \
+              --arg candidateBindingResult "$CANDIDATE_BINDING_RESULT" \
+              --argjson candidateEvidence "${CANDIDATE_EVIDENCE_JSON:-null}" \
+              --arg candidateRepository "$GITHUB_REPOSITORY" \
+              --arg candidateTargetSha "$TARGET_SHA" \
+              --arg candidateToolingSha "$GITHUB_SHA" \
+              --arg candidateReleaseProfile "$RELEASE_PROFILE" \
+              --argjson candidateReleaseSoak "$CANDIDATE_RELEASE_SOAK" \
+              --arg candidateUpgradeSurvivorBaseline "$CANDIDATE_UPGRADE_SURVIVOR_BASELINE" \
+              --arg candidateUpgradeSurvivorBaselines "$CANDIDATE_UPGRADE_SURVIVOR_BASELINES" \
+              --arg candidateUpgradeSurvivorScenarios "$CANDIDATE_UPGRADE_SURVIVOR_SCENARIOS" \
+              --argjson candidateAllowFrozenTargetScenarioOmissions "$CANDIDATE_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" \
+              --argjson candidateAllowUnreleasedChangelog "$CANDIDATE_ALLOW_UNRELEASED_CHANGELOG" \
+              --arg candidateSharedImagePolicy "$CANDIDATE_SHARED_IMAGE_POLICY" \
               --arg normalCiResult "$NORMAL_CI_RESULT" \
               --arg normalCiRunId "$NORMAL_CI_RUN_ID" \
               --arg normalCiRunAttempt "$NORMAL_CI_RUN_ATTEMPT" \
@@ -1222,7 +1248,21 @@ jobs:
                 liveSuiteFilter: $liveSuiteFilter,
                 resolveTargetResult: $resolveTargetResult,
                 dockerPreflightResult: $dockerPreflightResult,
-                prepareCandidateResult: $prepareCandidateResult,
+                candidateBindingResult: $candidateBindingResult,
+                candidateEvidence: $candidateEvidence,
+                candidateRequestInput: {
+                  repository: $candidateRepository,
+                  targetSha: $candidateTargetSha,
+                  toolingSha: $candidateToolingSha,
+                  releaseProfile: $candidateReleaseProfile,
+                  releaseSoak: $candidateReleaseSoak,
+                  upgradeSurvivorBaseline: $candidateUpgradeSurvivorBaseline,
+                  upgradeSurvivorBaselines: $candidateUpgradeSurvivorBaselines,
+                  upgradeSurvivorScenarios: $candidateUpgradeSurvivorScenarios,
+                  allowFrozenTargetScenarioOmissions: $candidateAllowFrozenTargetScenarioOmissions,
+                  allowUnreleasedChangelog: $candidateAllowUnreleasedChangelog,
+                  sharedImagePolicy: $candidateSharedImagePolicy
+                },
                 children: {
                   normalCi: {result: $normalCiResult, runId: $normalCiRunId, runAttempt: $normalCiRunAttempt, url: $normalCiUrl},
                   pluginPrerelease: {result: $pluginPrereleaseResult, runId: $pluginPrereleaseRunId, runAttempt: $pluginPrereleaseRunAttempt, url: $pluginPrereleaseUrl},
@@ -1260,8 +1300,12 @@ jobs:
           sparse-checkout: |
             scripts/full-release-validation-state.mjs
             scripts/full-release-validation-policy.mjs
+            scripts/full-release-candidate-contract.mjs
             scripts/release-ci-summary.mjs
+            scripts/lib/canonical-json.mjs
             scripts/lib/plain-gh.mjs
+            scripts/lib/record-shared.mjs
+            scripts/lib/upgrade-survivor-policy.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -1328,8 +1372,12 @@ jobs:
           sparse-checkout: |
             scripts/full-release-validation-state.mjs
             scripts/full-release-validation-policy.mjs
+            scripts/full-release-candidate-contract.mjs
             scripts/release-ci-summary.mjs
+            scripts/lib/canonical-json.mjs
             scripts/lib/plain-gh.mjs
+            scripts/lib/record-shared.mjs
+            scripts/lib/upgrade-survivor-policy.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -1405,8 +1453,12 @@ jobs:
           sparse-checkout: |
             scripts/full-release-validation-state.mjs
             scripts/full-release-validation-policy.mjs
+            scripts/full-release-candidate-contract.mjs
             scripts/release-ci-summary.mjs
+            scripts/lib/canonical-json.mjs
             scripts/lib/plain-gh.mjs
+            scripts/lib/record-shared.mjs
+            scripts/lib/upgrade-survivor-policy.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
