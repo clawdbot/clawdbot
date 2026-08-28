@@ -24,6 +24,61 @@ type GatewaySpawnSpec = {
 type JsonObject = Record<string, unknown>;
 type MantisSutLane = "baseline" | "candidate";
 type SpawnedDaemon = { child: ReturnType<typeof spawn>; error?: Error };
+type MantisLifecycleMode = "crash" | "graceful";
+
+const lifecycleEventSchema = z
+  .object({
+    at: z.string().datetime({ offset: true }),
+    containerId: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .optional(),
+    event: z.enum([
+      "gateway_exited",
+      "gateway_ready",
+      "gateway_readiness_failed",
+      "gateway_start_failed",
+      "gateway_started",
+      "gateway_starting",
+      "lifecycle_dependency_failed",
+      "lifecycle_request_failed",
+      "lifecycle_requested",
+      "sidecars_bound",
+      "runtime_cancelled",
+    ]),
+    dependency: z.enum(["gateway", "mock-openai", "telegram-proxy"]).optional(),
+    exitCode: z.number().int().min(0).max(255).optional(),
+    expected: z.boolean().optional(),
+    generation: z.number().int().positive(),
+    mode: z.enum(["crash", "graceful"]).optional(),
+    mockContainerId: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .optional(),
+    proxyContainerId: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .optional(),
+    requestId: z.string().uuid().optional(),
+    schemaVersion: z.literal(1),
+    sequence: z.number().int().positive(),
+    termination: z.enum(["forced", "graceful"]).optional(),
+  })
+  .strict();
+const lifecycleActionResultSchema = z
+  .object({
+    causedByRequestId: z.string().uuid(),
+    containerId: z.string().regex(/^[0-9a-f]{64}$/u),
+    generation: z.number().int().positive(),
+    mockContainerId: z.string().regex(/^[0-9a-f]{64}$/u),
+    phase: z.literal("ready"),
+    proxyContainerId: z.string().regex(/^[0-9a-f]{64}$/u),
+    schemaVersion: z.literal(1),
+    sequence: z.number().int().positive(),
+  })
+  .strict();
+
+type MantisLifecycleEvent = z.infer<typeof lifecycleEventSchema>;
 
 type MantisSutExecResult = {
   exitCode: number;
@@ -59,6 +114,7 @@ type MantisSutRuntime = {
   };
   gatewayLog: string;
   gatewayPid: number;
+  lifecycleEvidence: string;
   mockLog: string;
   mockResponseControl: string;
   proxyControl: string;
@@ -74,6 +130,7 @@ export type MantisSutRecovery = Pick<
   MantisSutRuntime,
   | "containerName"
   | "gatewayLog"
+  | "lifecycleEvidence"
   | "mockLog"
   | "mockResponseControl"
   | "proxyControl"
@@ -446,59 +503,6 @@ export async function waitForLog(
   throw new Error(`${label} did not become ready within ${timeoutMs}ms${timeoutDetail}`);
 }
 
-export async function waitForLogAfter(
-  logPath: string,
-  offset: number,
-  pattern: RegExp,
-  label: string,
-  timeoutMs: number,
-): Promise<void> {
-  const started = Date.now();
-  let cursor = offset;
-  let carry = "";
-  while (true) {
-    if (fs.existsSync(logPath)) {
-      const size = fs.statSync(logPath).size;
-      if (size < cursor) {
-        cursor = 0;
-        carry = "";
-      }
-      if (size > cursor) {
-        const descriptor = fs.openSync(logPath, "r");
-        try {
-          const buffer = Buffer.alloc(Math.min(64 * 1024, size - cursor));
-          while (cursor < size) {
-            const bytesRead = fs.readSync(
-              descriptor,
-              buffer,
-              0,
-              Math.min(buffer.length, size - cursor),
-              cursor,
-            );
-            if (bytesRead === 0) {
-              break;
-            }
-            cursor += bytesRead;
-            const text = `${carry}${buffer.subarray(0, bytesRead).toString("utf8")}`;
-            if (pattern.test(text)) {
-              return;
-            }
-            carry = text.slice(-256);
-          }
-        } finally {
-          fs.closeSync(descriptor);
-        }
-      }
-    }
-    const remainingMs = timeoutMs - (Date.now() - started);
-    if (remainingMs <= 0) {
-      break;
-    }
-    await sleep(Math.min(250, remainingMs));
-  }
-  throw new Error(`${label} did not become ready within ${timeoutMs}ms`);
-}
-
 export function createContainerizedSutSpawnSpec(params: {
   containerName: string;
   gatewayPort: number;
@@ -545,7 +549,7 @@ export function createContainerizedSutSpawnSpec(params: {
   };
 }
 
-type SutContainerAction = "destroy" | "restart" | "stop";
+type SutContainerAction = "destroy" | "stop";
 type SutContainerCommandRunner = (
   command: string,
   args: string[],
@@ -555,7 +559,31 @@ type SutContainerCommandRunner = (
   signal?: NodeJS.Signals | null;
   status: number | null;
   stderr?: string;
+  stdout?: string;
 };
+
+function sutContainerCommandFailure(
+  action: string,
+  result: ReturnType<SutContainerCommandRunner>,
+): Error | undefined {
+  if (result.error) {
+    return new Error(`Failed to ${action} container-isolated SUT: ${result.error.message}`, {
+      cause: result.error,
+    });
+  }
+  const stderr = result.stderr?.toString().trim().slice(-4_000);
+  if (result.signal) {
+    return new Error(
+      `Container-isolated SUT ${action} was terminated by ${result.signal}.${stderr ? `\n${stderr}` : ""}`,
+    );
+  }
+  if (result.status !== 0) {
+    return new Error(
+      `Container-isolated SUT ${action} failed with exit code ${result.status ?? "unknown"}.${stderr ? `\n${stderr}` : ""}`,
+    );
+  }
+  return undefined;
+}
 
 export function runSutContainerAction(
   action: SutContainerAction,
@@ -571,22 +599,106 @@ export function runSutContainerAction(
     ["-n", "/usr/local/sbin/openclaw-mantis-sut-container", action, containerName, runtimeRoot],
     { encoding: "utf8", env: childProcessBaseEnv(), stdio: "pipe" },
   );
-  if (result.error) {
-    throw new Error(`Failed to ${action} container-isolated SUT: ${result.error.message}`, {
-      cause: result.error,
-    });
+  const failure = sutContainerCommandFailure(action, result);
+  if (failure) {
+    throw failure;
   }
-  const stderr = result.stderr?.toString().trim().slice(-4_000);
-  if (result.signal) {
+}
+
+export function readMantisLifecycleEvidence(file: string): MantisLifecycleEvent[] {
+  const stat = fs.statSync(file);
+  if (!stat.isFile() || stat.size > 1024 * 1024) {
+    throw new Error("Mantis lifecycle evidence must be a regular file no larger than 1 MiB.");
+  }
+  const events = fs
+    .readFileSync(file, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => lifecycleEventSchema.parse(JSON.parse(line)));
+  if (events.length === 0) {
+    throw new Error("Mantis lifecycle evidence is empty.");
+  }
+  for (const [index, event] of events.entries()) {
+    if (event.sequence !== index + 1) {
+      throw new Error("Mantis lifecycle evidence has a missing or duplicate sequence.");
+    }
+  }
+  return events;
+}
+
+export function readReadyMantisLifecycleGeneration(file: string): number {
+  const ready = readMantisLifecycleEvidence(file).at(-1);
+  if (ready?.event !== "gateway_ready" && ready?.event !== "lifecycle_request_failed") {
+    throw new Error("Mantis lifecycle evidence does not end in a ready Gateway generation.");
+  }
+  return ready.generation;
+}
+
+export function runMantisSutLifecycleAction(
+  params: {
+    containerName: string;
+    expectedGeneration: number;
+    lifecycleEvidence: string;
+    mode: MantisLifecycleMode;
+    readinessTimeoutSeconds: number;
+    runtimeRoot: string;
+  },
+  run: SutContainerCommandRunner = spawnSync,
+): {
+  events: MantisLifecycleEvent[];
+  generation: number;
+  mockContainerId: string;
+  proxyContainerId: string;
+  requestId: string;
+} {
+  const action = `lifecycle ${params.mode}`;
+  const result = run(
+    "sudo",
+    [
+      "-n",
+      "/usr/local/sbin/openclaw-mantis-sut-container",
+      "lifecycle",
+      params.containerName,
+      params.runtimeRoot,
+      String(params.expectedGeneration),
+      params.mode,
+      String(params.readinessTimeoutSeconds),
+    ],
+    { encoding: "utf8", env: childProcessBaseEnv(), stdio: "pipe" },
+  );
+  const failure = sutContainerCommandFailure(action, result);
+  if (failure) {
+    throw failure;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(result.stdout?.toString() ?? "");
+  } catch (error) {
+    throw new Error("Container-isolated SUT lifecycle returned invalid JSON.", { cause: error });
+  }
+  const state = lifecycleActionResultSchema.parse(raw);
+  if (state.generation !== params.expectedGeneration + 1) {
+    throw new Error("Container-isolated SUT lifecycle returned the wrong successor generation.");
+  }
+  const events = readMantisLifecycleEvidence(params.lifecycleEvidence);
+  const ready = events.at(-1);
+  if (
+    ready?.event !== "gateway_ready" ||
+    ready.generation !== state.generation ||
+    ready.containerId !== state.containerId ||
+    ready.requestId !== state.causedByRequestId
+  ) {
     throw new Error(
-      `Container-isolated SUT ${action} was terminated by ${result.signal}.${stderr ? `\n${stderr}` : ""}`,
+      "Container-isolated SUT lifecycle evidence does not match the ready successor.",
     );
   }
-  if (result.status !== 0) {
-    throw new Error(
-      `Container-isolated SUT ${action} failed with exit code ${result.status ?? "unknown"}.${stderr ? `\n${stderr}` : ""}`,
-    );
-  }
+  return {
+    events,
+    generation: state.generation,
+    mockContainerId: state.mockContainerId,
+    proxyContainerId: state.proxyContainerId,
+    requestId: state.causedByRequestId,
+  };
 }
 
 function collectBoundedOutput(stream: NodeJS.ReadableStream): {
@@ -666,17 +778,20 @@ export async function execMantisSut(
   });
 }
 
-export function restartMantisSut(sut: Pick<MantisSutRuntime, "containerName" | "tempRoot">): void {
-  runSutContainerAction("restart", sut.containerName, sut.tempRoot);
-}
-
 export function preserveMantisSutRuntimeArtifacts(
   sut: Pick<MantisSutRuntime, "gatewayLog" | "mockLog" | "requestLog"> & {
+    lifecycleEvidence?: string;
     proxyRequestLog?: string;
   },
   outputDir: string,
 ): void {
-  for (const source of [sut.gatewayLog, sut.mockLog, sut.requestLog, sut.proxyRequestLog]) {
+  for (const source of [
+    sut.gatewayLog,
+    sut.lifecycleEvidence,
+    sut.mockLog,
+    sut.requestLog,
+    sut.proxyRequestLog,
+  ]) {
     if (!source) {
       continue;
     }
@@ -749,6 +864,7 @@ export async function startMantisSut(params: {
   fs.writeFileSync(proxyControl, '{"rules":[]}\n', { mode: 0o600 });
   fs.writeFileSync(proxyRequestLog, "", { mode: 0o600 });
   const gatewayLog = path.join(config.tempRoot, "gateway.log");
+  const lifecycleEvidence = path.join(config.tempRoot, "lifecycle-events.ndjson");
   const gatewayEnv = createMantisGatewayEnv({ ...config, sutToken: params.sutToken });
   const containerName = `openclaw-telegram-sut-${randomUUID()}`;
   const spec = createContainerizedSutSpawnSpec({
@@ -765,6 +881,7 @@ export async function startMantisSut(params: {
   params.onRuntimeCreated?.({
     containerName,
     gatewayLog,
+    lifecycleEvidence,
     mockLog,
     mockResponseControl,
     proxyControl,
@@ -785,6 +902,18 @@ export async function startMantisSut(params: {
     const daemonContext = { daemon, logPath: daemonLogPath };
     await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 30_000, daemonContext);
     await waitForLog(gatewayLog, /\[gateway\] ready/u, "gateway", 60_000, daemonContext);
+    await waitForLog(
+      lifecycleEvidence,
+      /"event":"gateway_ready","generation":1(?:,|\})/u,
+      "gateway lifecycle evidence",
+      5_000,
+      daemonContext,
+    );
+    const lifecycleEvents = readMantisLifecycleEvidence(lifecycleEvidence);
+    const initialReady = lifecycleEvents.at(-1);
+    if (initialReady?.event !== "gateway_ready" || initialReady.generation !== 1) {
+      throw new Error("Container-isolated SUT did not attest its initial ready generation.");
+    }
     const gatewayPid = daemon.child.pid;
     if (!gatewayPid) {
       throw new Error("Container-isolated SUT became ready without a daemon process id.");
@@ -803,6 +932,7 @@ export async function startMantisSut(params: {
       drained,
       gatewayLog,
       gatewayPid,
+      lifecycleEvidence,
       mockLog,
       mockResponseControl,
       proxyControl,
@@ -822,7 +952,7 @@ export async function startMantisSut(params: {
     if (stopped) {
       try {
         preserveMantisSutRuntimeArtifacts(
-          { gatewayLog, mockLog, proxyRequestLog, requestLog },
+          { gatewayLog, lifecycleEvidence, mockLog, proxyRequestLog, requestLog },
           params.outputDir,
         );
       } catch (cleanupError) {

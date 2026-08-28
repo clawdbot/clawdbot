@@ -41,6 +41,7 @@ async function setupHarness(
   const proxyRequestLog = path.join(root, "proxy-requests.ndjson");
   const requestLog = path.join(root, "requests.ndjson");
   const gatewayLog = path.join(root, "gateway.log");
+  const lifecycleEvidence = path.join(root, "lifecycle-events.ndjson");
   fs.mkdirSync(outputRoot);
   fs.mkdirSync(sessionRoot);
   fs.mkdirSync(path.join(sessionRoot, "attempt"));
@@ -55,6 +56,17 @@ async function setupHarness(
   fs.writeFileSync(proxyRequestLog, "");
   fs.writeFileSync(requestLog, "");
   fs.writeFileSync(gatewayLog, "");
+  fs.writeFileSync(
+    lifecycleEvidence,
+    `${JSON.stringify({
+      at: "2026-08-19T12:00:00.000Z",
+      containerId: "b".repeat(64),
+      event: "gateway_ready",
+      generation: 1,
+      schemaVersion: 1,
+      sequence: 1,
+    })}\n`,
+  );
   fs.writeFileSync(
     screenshot,
     Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(10_001)]),
@@ -78,8 +90,30 @@ case "$3" in
     head -c 70000 /dev/zero | tr '\\0' y >&2
     exit 17
     ;;
-  restart)
-    printf 'restart requested\\n[gateway] ready\\n' >> ${JSON.stringify(gatewayLog)}
+  lifecycle)
+    printf '%s\\n' ${JSON.stringify(
+      JSON.stringify({
+        at: "2026-08-19T12:00:01.000Z",
+        containerId: "c".repeat(64),
+        event: "gateway_ready",
+        generation: 2,
+        requestId: "123e4567-e89b-42d3-a456-426614174000",
+        schemaVersion: 1,
+        sequence: 2,
+      }),
+    )} >> ${JSON.stringify(lifecycleEvidence)}
+    printf '%s\\n' ${JSON.stringify(
+      JSON.stringify({
+        causedByRequestId: "123e4567-e89b-42d3-a456-426614174000",
+        containerId: "c".repeat(64),
+        generation: 2,
+        mockContainerId: "d".repeat(64),
+        phase: "ready",
+        proxyContainerId: "e".repeat(64),
+        schemaVersion: 1,
+        sequence: 2,
+      }),
+    )}
     ;;
 esac
 exit 0
@@ -105,6 +139,7 @@ exit 0
     sut: {
       containerName: "openclaw-telegram-sut-test",
       gatewayLog,
+      lifecycleEvidence,
       mockLog: path.join(root, "mock.log"),
       mockResponseControl: path.join(root, "mock-response.json"),
       proxyControl,
@@ -615,7 +650,7 @@ exit 1
     }
   });
 
-  it("restarts the gateway and waits for a fresh readiness marker", async () => {
+  it("restarts the gateway through a ready successor lifecycle generation", async () => {
     const harness = await setupHarness();
     const gatewayLog = path.join(path.dirname(harness.outputRoot), "gateway.log");
     fs.writeFileSync(gatewayLog, "[gateway] ready\nold marker\n");
@@ -640,10 +675,29 @@ exit 1
         fs.readFileSync(path.join(harness.sessionRoot, "candidate.active.json"), "utf8"),
       );
       expect(state.invocations.at(-1)).toMatchObject({
-        args: { readyAfterMs: expect.any(Number), readyTimeoutSeconds: 5 },
+        args: {
+          previousGeneration: 1,
+          readyAfterMs: expect.any(Number),
+          readyTimeoutSeconds: 5,
+          requestId: "123e4567-e89b-42d3-a456-426614174000",
+          successorGeneration: 2,
+        },
         command: "restart",
       });
-      expect(fs.readFileSync(gatewayLog, "utf8")).toContain("restart requested");
+      const lifecycleEvents = fs
+        .readFileSync(
+          path.join(path.dirname(harness.outputRoot), "lifecycle-events.ndjson"),
+          "utf8",
+        )
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(lifecycleEvents.at(-1)).toMatchObject({
+        containerId: "c".repeat(64),
+        event: "gateway_ready",
+        generation: 2,
+        requestId: "123e4567-e89b-42d3-a456-426614174000",
+      });
     } finally {
       await harness.close();
     }
@@ -658,6 +712,7 @@ exit 1
     try {
       const help = await runLane(harness.env, ["--help"]);
       expect(help.stdout).toContain("exec");
+      expect(help.stdout).toContain("lifecycle");
       expect(help.stdout).toContain("restart");
       await runLane(harness.env, ["send", "--lane", "candidate", "--text", "send forty"]);
       await expect(

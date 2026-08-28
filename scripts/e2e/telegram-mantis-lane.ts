@@ -22,10 +22,11 @@ import {
   execMantisSut,
   type MantisSutRecovery,
   preserveMantisSutRuntimeArtifacts,
-  restartMantisSut,
+  readMantisLifecycleEvidence,
+  readReadyMantisLifecycleGeneration,
+  runMantisSutLifecycleAction,
   startMantisSut,
   stopMantisSut,
-  waitForLogAfter,
 } from "./telegram-mantis-sut.ts";
 
 const execFileAsync = promisify(execFile);
@@ -94,6 +95,7 @@ const credentialSchema = z.object({
 const sutRecoverySchema = z.object({
   containerName: z.string(),
   gatewayLog: z.string(),
+  lifecycleEvidence: z.string(),
   mockLog: z.string(),
   mockResponseControl: z.string(),
   proxyControl: z.string(),
@@ -186,6 +188,7 @@ const commandOptions: Record<string, readonly string[]> = {
   desktop: ["--lane", "--actions-file", "--timeout-seconds"],
   exec: ["--lane", "--timeout-seconds", "--command", "--command-file"],
   finish: ["--lane", "--focus-message-id"],
+  lifecycle: ["--lane", "--mode", "--timeout-seconds"],
   mock: [
     "--lane",
     "--response-file",
@@ -810,6 +813,21 @@ export function publishStartupFailure(params: {
   startup: StartupSession;
   sutAttestation?: SutAttestation;
 }): void {
+  let lifecycleEvents: unknown[] = [];
+  let lifecycleEvidenceError: string | undefined;
+  if (params.startup.sut) {
+    const preservedEvidence = path.join(
+      params.startup.privateDir,
+      path.basename(params.startup.sut.lifecycleEvidence),
+    );
+    if (fs.existsSync(preservedEvidence)) {
+      try {
+        lifecycleEvents = readMantisLifecycleEvidence(preservedEvidence);
+      } catch (error) {
+        lifecycleEvidenceError = coerceErrorMessage(error);
+      }
+    }
+  }
   const facts = redact(
     {
       artifacts: {},
@@ -827,6 +845,8 @@ export function publishStartupFailure(params: {
         },
       ],
       lane: params.startup.lane,
+      lifecycleEvents,
+      lifecycleEvidenceError,
       observation: {
         cursor: 0,
         events: [],
@@ -1473,6 +1493,47 @@ function clearBotApiFaults(state: ActiveSession): Record<string, unknown> {
   return { rules: 0 };
 }
 
+function runGatewayLifecycle(
+  state: ActiveSession,
+  values: Map<string, string>,
+): Record<string, unknown> {
+  const mode = z.enum(["crash", "graceful"]).parse(required(values, "--mode"));
+  const readinessTimeoutSeconds = values.has("--timeout-seconds")
+    ? numberOption(values, "--timeout-seconds", 120, 5)
+    : 60;
+  // Root evidence, not the lane JSON cache, owns generation identity. If the lane
+  // process died after replacement but before saving state, the next process still
+  // resumes from the exact ready generation rather than issuing a stale action.
+  const previousGeneration = readReadyMantisLifecycleGeneration(state.sut.lifecycleEvidence);
+  const result = runMantisSutLifecycleAction({
+    containerName: state.sut.containerName,
+    expectedGeneration: previousGeneration,
+    lifecycleEvidence: state.sut.lifecycleEvidence,
+    mode,
+    readinessTimeoutSeconds,
+    runtimeRoot: state.sut.tempRoot,
+  });
+  const lifecycleEvents = result.events.filter((event) => event.requestId === result.requestId);
+  appendInvocation(state, "lifecycle", {
+    eventSequences: lifecycleEvents.map((event) => event.sequence),
+    mode,
+    previousGeneration,
+    readinessTimeoutSeconds,
+    requestId: result.requestId,
+    successorGeneration: result.generation,
+  });
+  return {
+    events: lifecycleEvents,
+    generation: result.generation,
+    mockContainerId: result.mockContainerId,
+    mode,
+    previousGeneration,
+    proxyContainerId: result.proxyContainerId,
+    requestId: result.requestId,
+    status: "ready",
+  };
+}
+
 function readMockResponseControl(state: ActiveSession): z.infer<typeof mockResponseControlSchema> {
   const control = fs.lstatSync(state.sut.mockResponseControl);
   if (!control.isFile() || control.nlink !== 1) {
@@ -1603,28 +1664,33 @@ async function runSutExec(
   ) as Record<string, unknown>;
 }
 
-async function restartSutGateway(
+function restartSutGateway(
   state: ActiveSession,
   values: Map<string, string>,
   roots: Roots,
-): Promise<Record<string, unknown>> {
+): Record<string, unknown> {
   const readyTimeoutSeconds = values.has("--ready-timeout-seconds")
-    ? numberOption(values, "--ready-timeout-seconds", 300, 1)
+    ? numberOption(values, "--ready-timeout-seconds", 120, 5)
     : 60;
-  const logOffset = fs.statSync(state.sut.gatewayLog).size;
   const restartedAt = new Date().toISOString();
   const startedAt = Date.now();
+  const previousGeneration = readReadyMantisLifecycleGeneration(state.sut.lifecycleEvidence);
+  let successorGeneration: number;
+  let requestId: string;
   try {
-    restartMantisSut(state.sut);
-    await waitForLogAfter(
-      state.sut.gatewayLog,
-      logOffset,
-      /\[gateway\] ready/u,
-      "restarted gateway",
-      readyTimeoutSeconds * 1_000,
-    );
+    const result = runMantisSutLifecycleAction({
+      containerName: state.sut.containerName,
+      expectedGeneration: previousGeneration,
+      lifecycleEvidence: state.sut.lifecycleEvidence,
+      mode: "graceful",
+      readinessTimeoutSeconds: readyTimeoutSeconds,
+      runtimeRoot: state.sut.tempRoot,
+    });
+    successorGeneration = result.generation;
+    requestId = result.requestId;
   } catch (error) {
     appendInvocation(state, "restart", {
+      previousGeneration,
       readyAfterMs: Date.now() - startedAt,
       readyTimeoutSeconds,
       status: "failed",
@@ -1633,7 +1699,13 @@ async function restartSutGateway(
     throw error;
   }
   const readyAfterMs = Date.now() - startedAt;
-  appendInvocation(state, "restart", { readyAfterMs, readyTimeoutSeconds });
+  appendInvocation(state, "restart", {
+    previousGeneration,
+    readyAfterMs,
+    readyTimeoutSeconds,
+    requestId,
+    successorGeneration,
+  });
   return { readyAfterMs, restartedAt, status: "ready" };
 }
 
@@ -1745,6 +1817,7 @@ async function stopActiveLane(
   cursor?: number;
   events: unknown[];
   evidenceErrors: unknown[];
+  lifecycleEvents: unknown[];
   requests: unknown[];
   truncated: boolean;
 }> {
@@ -1753,6 +1826,7 @@ async function stopActiveLane(
   let cursor: number | undefined;
   let recordedBotApiRequests: unknown[] = [];
   let events: unknown[] = [];
+  let lifecycleEvents: unknown[] = [];
   let requests: unknown[] = [];
   let truncated = false;
   try {
@@ -1802,6 +1876,13 @@ async function stopActiveLane(
   ]);
   cleanupErrors.push(...teardownSut(state.sut, state.privateDir));
   try {
+    lifecycleEvents = readMantisLifecycleEvidence(
+      path.join(state.privateDir, path.basename(state.sut.lifecycleEvidence)),
+    );
+  } catch (error) {
+    evidenceErrors.push(error);
+  }
+  try {
     await recorderStop;
   } catch (error) {
     cleanupErrors.push(coerceErrorMessage(error));
@@ -1812,6 +1893,7 @@ async function stopActiveLane(
     cursor,
     events,
     evidenceErrors,
+    lifecycleEvents,
     requests,
     truncated,
   };
@@ -1913,6 +1995,7 @@ async function finalize(
     focusMessageId: state.lastViewedMessageId,
     invocations: state.invocations,
     lane: state.lane,
+    lifecycleEvents: stopped.lifecycleEvents,
     observation: {
       cursor: state.lastCursor,
       events: stopped.events,
@@ -2004,6 +2087,7 @@ async function abort(state: ActiveSession, roots: Roots): Promise<void> {
       completedAt: new Date().toISOString(),
       invocations: state.invocations,
       lane: state.lane,
+      lifecycleEvents: stopped.lifecycleEvents,
       observation: {
         cursor: state.lastCursor,
         events: stopped.events,
@@ -2085,7 +2169,9 @@ async function main(): Promise<void> {
     } else if (cli.command === "exec") {
       outputJson(await runSutExec(state, cli.values, roots, credential.sutToken));
     } else if (cli.command === "restart") {
-      outputJson(await restartSutGateway(state, cli.values, roots));
+      outputJson(restartSutGateway(state, cli.values, roots));
+    } else if (cli.command === "lifecycle") {
+      outputJson(runGatewayLifecycle(state, cli.values));
     } else if (cli.command === "send") {
       const sent = await sendVisibleMessage(state, cli.values, roots, credential.sutToken);
       outputJson({ ...sent.response, revealedMessageId: sent.revealedMessageId });

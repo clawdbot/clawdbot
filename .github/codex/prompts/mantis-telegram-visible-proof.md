@@ -26,7 +26,7 @@ assertion language.
 Run either control CLI with `--help` to see its current commands. The useful
 operations include `start`, `mock`, `botapi-fail`, `botapi-requests`, `send`,
 `turn`, `observe`, `requests`, `press`, `delete`, `desktop`, `exec`, `restart`,
-`view`, `screenshot`, `finish`, `block`, and `abort`.
+`lifecycle`, `view`, `screenshot`, `finish`, `block`, and `abort`.
 
 `start --config <json>` accepts an arbitrary OpenClaw root `configPatch` plus
 the mock provider response. `exec` runs an arbitrary shell command inside the
@@ -35,6 +35,17 @@ write scripts, query SQLite, stage files, or inspect logs; use `restart` after
 runtime configuration changes. The harness records every Telegram event,
 provider request, Bot API request, command, screenshot, and native Desktop
 capture. All attempts remain available.
+
+For restart and crash-recovery behavior, use `lifecycle --mode graceful|crash`
+after establishing the state under test. It replaces only the Gateway while
+preserving the lane's runtime filesystem, mock provider, Telegram proxy, and
+trusted request journals. Its result names the old and successor generations,
+request ID, sidecar identities, and root-owned lifecycle events. Check those
+events together with provider and Bot API journals to prove whether accepted
+work was replayed, lost, or duplicated. Do not simulate recovery by ending a
+lane and starting another one, because that changes the state root and evidence
+owners. A replacement timeout or unexpected exit is an infrastructure failure,
+not a product verdict.
 
 The trusted workflow owns only credentials, exact revisions, SUT isolation,
 recording, cleanup, and publication. It does not decide what scenario is valid

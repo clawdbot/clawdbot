@@ -108,6 +108,29 @@ describe("Mantis Telegram proof workflow", () => {
     expect(sut).not.toContain("worktree root mode mismatch");
   });
 
+  it("installs the lifecycle controller outside the candidate checkout as immutable root code", () => {
+    const install = readFileSync("scripts/mantis/telegram-visible-install-tools.sh", "utf8");
+    const prompt = readFileSync(PROMPT, "utf8");
+    const sut = readFileSync("scripts/mantis/mantis-sut-container.sh", "utf8");
+
+    expect(existsSync("scripts/mantis/mantis-sut-lifecycle-controller.ts")).toBe(true);
+    expect(install).toContain(
+      "node_modules/.bin/esbuild scripts/mantis/mantis-sut-lifecycle-controller.ts",
+    );
+    expect(install).toContain(
+      "/usr/local/lib/mantis-toolchain/scripts/mantis/mantis-sut-lifecycle-controller.mjs",
+    );
+    expect(sut).toContain(
+      'readonly lifecycle_controller="/usr/local/lib/mantis-toolchain/scripts/mantis/mantis-sut-lifecycle-controller.mjs"',
+    );
+    expect(sut).toContain('readonly lifecycle_node="/usr/local/lib/mantis-toolchain/node"');
+    expect(sut).toContain('[[ "$(stat -c %u "$file")" == "0" ]]');
+    expect(sut).toContain('find "$file" -perm /022 -print -quit');
+    expect(sut).not.toMatch(/lifecycle_controller=.*(?:candidate|worktree)/u);
+    expect(prompt).toContain("lifecycle --mode graceful|crash");
+    expect(prompt).toContain("root-owned lifecycle events");
+  });
+
   it("restores baseline builds only for the exact selected revision", () => {
     const restore = proofSteps().find((entry) => entry.name === "Restore exact baseline build");
     expect(restore?.with?.key).toContain("${{ needs.resolve_request.outputs.baseline_revision }}");

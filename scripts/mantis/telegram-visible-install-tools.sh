@@ -7,7 +7,7 @@ corepack_root="$(dirname "$(dirname "$(readlink -f "$corepack_bin")")")"
 uv_bin="$(command -v uv)"
 recorder_user="$(id -un)"
 toolchain_build="${RUNNER_TEMP}/mantis-toolchain-build"
-mkdir -p "$toolchain_build/scripts/e2e"
+mkdir -p "$toolchain_build/scripts/e2e" "$toolchain_build/scripts/mantis"
 node_modules/.bin/esbuild scripts/e2e/telegram-mantis-lane.ts \
   --bundle --platform=node --format=esm --target=node24 \
   --outfile="$toolchain_build/scripts/e2e/telegram-mantis-lane.mjs"
@@ -20,6 +20,9 @@ node_modules/.bin/esbuild scripts/e2e/mock-openai-server.mjs \
 node_modules/.bin/esbuild scripts/e2e/telegram-desktop-recorder.ts \
   --bundle --platform=node --format=esm --target=node24 \
   --outfile="$toolchain_build/scripts/e2e/telegram-desktop-recorder.mjs"
+node_modules/.bin/esbuild scripts/mantis/mantis-sut-lifecycle-controller.ts \
+  --bundle --platform=node --format=esm --target=node24 \
+  --outfile="$toolchain_build/scripts/mantis/mantis-sut-lifecycle-controller.mjs"
 cp scripts/windows-cmd-helpers.mjs "$toolchain_build/scripts/windows-cmd-helpers.mjs"
 
 sudo groupadd --system mantis-proof
@@ -101,7 +104,8 @@ EOF
 chmod 0755 "${RUNNER_TEMP}"/{mantis-pnpm,telegram-user-driver,openclaw-telegram-user-driver,telegram-desktop-recorder-exec,openclaw-telegram-desktop-recorder,telegram-mantis-lane,openclaw-telegram-mantis-lane}
 sudo apt-get update
 sudo apt-get install -y ffmpeg
-sudo install -d -m 0755 /usr/local/lib/mantis-toolchain/scripts/e2e
+sudo install -d -m 0755 /usr/local/lib/mantis-toolchain/scripts/e2e \
+  /usr/local/lib/mantis-toolchain/scripts/mantis
 sudo install -m 0755 "$node_bin" /usr/local/lib/mantis-toolchain/node
 sudo cp -a "$corepack_root" /usr/local/lib/mantis-toolchain/corepack
 sudo chown -R root:root /usr/local/lib/mantis-toolchain/corepack
@@ -112,6 +116,8 @@ sudo install -m 0444 "$toolchain_build/scripts/windows-cmd-helpers.mjs" /usr/loc
 for file in telegram-mantis-lane telegram-bot-api-proxy mock-openai-server telegram-desktop-recorder; do
   sudo install -m 0444 "$toolchain_build/scripts/e2e/${file}.mjs" "/usr/local/lib/mantis-toolchain/scripts/e2e/${file}.mjs"
 done
+sudo install -m 0444 "$toolchain_build/scripts/mantis/mantis-sut-lifecycle-controller.mjs" \
+  /usr/local/lib/mantis-toolchain/scripts/mantis/mantis-sut-lifecycle-controller.mjs
 sudo ln -s /usr/bin/ffmpeg /usr/local/lib/mantis-toolchain/ffmpeg
 sudo ln -s /usr/bin/ffprobe /usr/local/lib/mantis-toolchain/ffprobe
 sudo install -m 0755 "${RUNNER_TEMP}/telegram-mantis-lane" /usr/local/lib/mantis-toolchain/telegram-mantis-lane
