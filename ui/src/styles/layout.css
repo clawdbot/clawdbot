@@ -4127,6 +4127,14 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   min-height: 0;
 }
 
+.session-route-not-found {
+  width: min(440px, 100%);
+}
+
+.session-route-not-found .lazy-view-error__subtitle {
+  text-wrap: balance;
+}
+
 .content--custodian {
   display: flex;
   flex-direction: column;

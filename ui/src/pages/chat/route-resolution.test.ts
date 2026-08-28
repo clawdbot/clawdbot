@@ -57,7 +57,12 @@ function contextFor(
   const context = {
     basePath: "",
     gateway: {
-      snapshot: { phase: "connected", client, hello: null },
+      snapshot: {
+        phase: "connected",
+        client,
+        hello: null,
+        sessionKey: "agent:roboclaw:main",
+      },
       subscribe: vi.fn(() => () => undefined),
     },
     agents: { state: { agentsList: { mainKey: "main" } } },
@@ -758,7 +763,7 @@ describe("gateway-backed session route resolution", () => {
     expect(loaded).toMatchObject({ kind: "ambiguous", shortId: "12345678", truncated: true });
   });
 
-  it("returns not found when the gateway has no short-id match", async () => {
+  it("returns a persistent missing-session state when the gateway has no short-id match", async () => {
     const { context, list } = contextFor(() => result([]));
     const request = installShortResolver(context, [], { ok: false });
 
@@ -769,7 +774,12 @@ describe("gateway-backed session route resolution", () => {
       new AbortController().signal,
     );
 
-    expect(loaded).not.toHaveProperty("kind", "session");
+    expect(loaded).toEqual({
+      kind: "missing-session",
+      face: "chat",
+      currentSessionHref: "/chat/roboclaw",
+      sessionsHref: "/sessions",
+    });
     expect(list).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "roboclaw", search: "agent:roboclaw:deadbeef" }),
     );
@@ -900,7 +910,7 @@ describe("gateway-backed session route resolution", () => {
     });
   });
 
-  it("returns not found when neither a literal key nor slug resolves", async () => {
+  it("returns a persistent missing-session state when neither a literal key nor slug resolves", async () => {
     const { context, list } = contextFor(() => result([]));
     const loaded = await loadChatRoute(
       context,
@@ -909,7 +919,12 @@ describe("gateway-backed session route resolution", () => {
       new AbortController().signal,
     );
 
-    expect(loaded).not.toHaveProperty("kind", "session");
+    expect(loaded).toEqual({
+      kind: "missing-session",
+      face: "chat",
+      currentSessionHref: "/chat/roboclaw",
+      sessionsHref: "/sessions",
+    });
     expect(list).toHaveBeenCalledTimes(2);
   });
 
