@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 import {
   cleanupOwnedRuntime,
   fenceLeaseFailure,
   ownChild,
+  sanitizeChildEnvironment,
 } from "./run-mock-sut-user-e2e.mjs";
 
 function startOwnedChild() {
@@ -60,4 +61,28 @@ test("lease loss cancels and joins active cron and restart work", async () => {
     (error) => error === leaseError,
   );
   assert.equal(logsPersisted, true);
+});
+
+test("scenario commands cannot persist parent control-plane secrets", () => {
+  const sentinel = "must-not-reach-scenario-summary";
+  const env = sanitizeChildEnvironment({
+    PATH: process.env.PATH,
+    E2E_SAFE_VALUE: "safe-value",
+    OPENCLAW_QA_CONVEX_SITE_URL: "https://broker.example.test",
+    OPENCLAW_QA_CONVEX_SECRET_CI: sentinel,
+    GITHUB_TOKEN: sentinel,
+    AWS_ACCESS_KEY_ID: sentinel,
+    CLAWSWEEPER_CRABFLEET_SERVICE_TOKEN: sentinel,
+    TELEGRAM_BOT_TOKEN: sentinel,
+  });
+  const command = spawnSync(
+    process.execPath,
+    ["-e", "process.stdout.write(JSON.stringify(process.env))"],
+    { env, encoding: "utf8" },
+  );
+  assert.equal(command.status, 0);
+  const persistedSummary = JSON.stringify({ stdout: command.stdout, stderr: command.stderr });
+  assert.match(persistedSummary, /safe-value/u);
+  assert.doesNotMatch(persistedSummary, new RegExp(sentinel, "u"));
+  assert.doesNotMatch(persistedSummary, /broker\.example\.test/u);
 });

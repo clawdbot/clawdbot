@@ -32,9 +32,30 @@ const FOLLOWUP_DRAIN_CONTROL_PRELOAD_PATH = resolve(
   "scripts/followup-drain-control-preload.mjs",
 );
 const ownedChildren = new Set();
+const CHILD_ENV_DENIED_PREFIXES = [
+  "BWS_",
+  "CLAWSWEEPER_",
+  "CRABFLEET_",
+  "GH_",
+  "GITHUB_",
+  "OPENCLAW_QA_CONVEX_",
+];
+const CHILD_ENV_SECRET_KEY =
+  /(?:^|_)(?:ACCESS_KEY|API_KEY|AUTH|COOKIE|CREDENTIAL|PASS|PASSWORD|PRIVATE_KEY|SECRET|SESSION|TOKEN)(?:_|$)/u;
 let activeCredential;
 let shutdownPromise;
 let shuttingDown = false;
+
+export function sanitizeChildEnvironment(env = process.env) {
+  return Object.fromEntries(
+    Object.entries(env).filter(
+      ([key, value]) =>
+        value !== undefined &&
+        !CHILD_ENV_DENIED_PREFIXES.some((prefix) => key.startsWith(prefix)) &&
+        !CHILD_ENV_SECRET_KEY.test(key),
+    ),
+  );
+}
 
 function assertRunnerActive() {
   if (shuttingDown) throw new Error("Telegram E2E runner is shutting down.");
@@ -800,7 +821,7 @@ async function drive(args, repoRoot, creds) {
 }
 
 async function driveWithTelegramProxy(args, repoRoot, creds) {
-  const driverEnv = { ...process.env, ...creds.driverEnv };
+  const driverEnv = { ...sanitizeChildEnvironment(), ...creds.driverEnv };
   const tester = await readTester(driverEnv);
   const evidenceDir = args.output ? dirname(resolve(args.output)) : "";
   if (evidenceDir) fs.mkdirSync(evidenceDir, { recursive: true });
@@ -847,7 +868,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
         {
           cwd: repoRoot,
           env: {
-            ...driverEnv,
+            ...sanitizeChildEnvironment(driverEnv),
             MOCK_PORT: String(args.mockPort),
             MOCK_REQUEST_LOG: requestLog,
             SUCCESS_MARKER: process.env.E2E_TELEGRAM_MOCK_RESPONSE ?? "OPENCLAW_E2E_OK",
@@ -861,7 +882,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
         ["openclaw", "qa", "mock-openai", "--host", "127.0.0.1", "--port", String(args.mockPort)],
         {
           cwd: repoRoot,
-          env: { ...driverEnv, OPENCLAW_BUILD_PRIVATE_QA: "1" },
+          env: { ...sanitizeChildEnvironment(driverEnv), OPENCLAW_BUILD_PRIVATE_QA: "1" },
         },
       );
       await waitForOutput(mock, /QA mock OpenAI:/u, "QA mock OpenAI", 30_000);
@@ -896,7 +917,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
     ];
     if (heldTelegramMethods.length > 0) {
       gatewayEnv.NODE_OPTIONS = [
-        process.env.NODE_OPTIONS,
+        gatewayEnv.NODE_OPTIONS,
         `--import=${TELEGRAM_API_IGNORE_ABORT_PRELOAD_PATH}`,
       ]
         .filter(Boolean)
@@ -925,6 +946,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       gatewayEnv.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(repoRoot, "extensions");
       gatewayEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
     }
+    const commandEnv = sanitizeChildEnvironment(gatewayEnv);
     const startGateway = async () => {
       const command = "node";
       const gatewayArgs = args.sourceGateway
@@ -1097,7 +1119,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
           backgroundActions.push(
             runCronScenarioAction({
               repoRoot,
-              gatewayEnv,
+              gatewayEnv: commandEnv,
               cronDeliveryTarget: selectedChatTarget.cronDeliveryTarget,
               message: action.message,
               isStopped: () => controlsStopped,
@@ -1131,7 +1153,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
             const result = await runCommand(
               "pnpm",
               ["openclaw", "system", "event", "--text", action.text, "--mode", "now", "--json"],
-              { cwd: repoRoot, env: gatewayEnv, timeoutMs: action.timeoutMs ?? 60_000 },
+              { cwd: repoRoot, env: commandEnv, timeoutMs: action.timeoutMs ?? 60_000 },
             );
             if (result.status !== 0 || result.timedOut) {
               throw new Error(result.stderr || result.stdout || "system event failed");
@@ -1145,7 +1167,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
             }[action.cwd];
             const result = await runCommand(action.argv[0], action.argv.slice(1), {
               cwd,
-              env: gatewayEnv,
+              env: commandEnv,
               timeoutMs: action.timeoutMs,
             });
             gatewayActions.push({
