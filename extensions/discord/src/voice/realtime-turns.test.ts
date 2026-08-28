@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
 import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
@@ -588,13 +589,9 @@ defineDiscordVoiceTests(
     it.each(["continuity reset", "terminal close"] as const)(
       "drops stale native consult delivery after provider %s",
       async (transition) => {
-        let resolveOld: ((result: { payloads: Array<{ text: string }> }) => void) | undefined;
+        const oldAnswer = createDeferred<{ payloads: Array<{ text: string }> }>();
         agentCommandMock
-          .mockReturnValueOnce(
-            new Promise((resolve) => {
-              resolveOld = resolve;
-            }),
-          )
+          .mockReturnValueOnce(oldAnswer.promise)
           .mockResolvedValueOnce({ payloads: [{ text: "fresh answer" }] });
         const fixture = await createJoinedAgentProxyFixture();
         const { manager } = fixture;
@@ -618,7 +615,7 @@ defineDiscordVoiceTests(
             bridgeParams.onEvent?.({ direction: "client", type: "session.continuity.reset" });
             bridgeParams.onEvent?.({ direction: "client", type: "session.reconnect.scheduled" });
           }
-          resolveOld?.({ payloads: [{ text: "stale answer" }] });
+          oldAnswer.resolve({ payloads: [{ text: "stale answer" }] });
           await oldSubmission;
           expect(
             realtimeSessionMock.submitToolResult.mock.calls.some(
