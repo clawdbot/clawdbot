@@ -521,30 +521,14 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       await finishDestroy(record, provider).catch(() => undefined);
       return;
     }
-    if (!record.sshEndpoint) {
+    if (!record.sshEndpoint || record.state === "attached") {
       if (
         currentBundle &&
         (!record.bootstrapReceipt ||
           !verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle))
       ) {
-        // A stale node environment cannot be upgraded in place because its credential and
-        // placement ownership bind the old build. Retire it; reprovisioning reuses the installed
-        // content-addressed bundle without another transfer.
-        await finishDestroy(requestStaleWorkerDestroy(record, store), provider).catch(
-          () => undefined,
-        );
-      }
-      return;
-    }
-    if (record.state === "attached") {
-      if (
-        currentBundle &&
-        (!record.bootstrapReceipt ||
-          !verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle))
-      ) {
-        // A new Gateway build rejects the old worker at admission. This is expected lifecycle
-        // teardown, not a bootstrap failure. `leaseId` above came from this record, so provider
-        // inspection and destruction share the same durable lease identity.
+        // Attached and node-backed environments bind placement authority to the admitted build.
+        // Retire stale owners; only unattached SSH leases can bootstrap a replacement in place.
         await finishDestroy(requestStaleWorkerDestroy(record, store), provider).catch(
           () => undefined,
         );

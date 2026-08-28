@@ -278,22 +278,9 @@ export async function runWorkerCommand(options: RunWorkerCommandOptions): Promis
     options.lifetime.terminateOwnedTree();
   };
   try {
-    if (options.managed) {
-      if (!(await (options.lifetime?.started ?? Promise.resolve(true)))) {
-        return;
-      }
-      options.lifetime?.signal.addEventListener("abort", stopForLifetime, { once: true });
-      if (options.lifetime?.signal.aborted) {
-        stopForLifetime();
-      }
-      process.once("SIGINT", stop);
-      process.once("SIGTERM", stop);
-      await runManagedWorkerCommand(options, abortController.signal);
-      return;
-    }
     const [descriptor, started] = await Promise.all([
-      readLaunchDescriptor(options.input),
-      options.lifetime?.started ?? Promise.resolve(true),
+      options.managed ? undefined : readLaunchDescriptor(options.input),
+      options.lifetime?.started ?? true,
     ]);
     if (!started) {
       return;
@@ -304,6 +291,10 @@ export async function runWorkerCommand(options: RunWorkerCommandOptions): Promis
     }
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
+    if (!descriptor) {
+      await runManagedWorkerCommand(options, abortController.signal);
+      return;
+    }
     const result = await runWorkerDescriptor(descriptor, {
       signal: abortController.signal,
       ...(options.lifetime

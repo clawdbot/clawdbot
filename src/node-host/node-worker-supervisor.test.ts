@@ -18,6 +18,10 @@ import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
+import {
+  createNodeWorkerSupervisorFixture,
+  waitForNodeWorkerTerminal as waitForTerminal,
+} from "./node-worker-supervisor.fixture.test-support.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_CREDENTIAL,
@@ -40,17 +44,8 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-function fixture(
-  options: {
-    capacity?: number;
-    capacityWaitMs?: number;
-    onCapacityChanged?: (capacity: { total: number; available: number }) => void;
-  } = {},
-) {
-  const root = tempDirs.make("node-worker-supervisor-");
-  const { bundleRoot, env, stateDir, workspaceDir } = writeNodeWorkerFixture(root);
-  const supervisor = createNodeWorkerSupervisor({ bundleRoot, env, ...options });
-  return { bundleRoot, env, root, stateDir, supervisor, workspaceDir };
+function fixture(options: Parameters<typeof createNodeWorkerSupervisor>[0] = {}) {
+  return createNodeWorkerSupervisorFixture(tempDirs.make("node-worker-supervisor-"), options);
 }
 
 function launchInput(workspaceDir: string, launchId: string, prompt = "success") {
@@ -58,20 +53,6 @@ function launchInput(workspaceDir: string, launchId: string, prompt = "success")
   input.descriptor.admission.environmentId = `environment-${launchId}`;
   input.descriptor.admission.sessionId = `session-${launchId}`;
   return input;
-}
-
-async function waitForTerminal(supervisor: NodeWorkerSupervisor, launchId: string) {
-  await vi.waitFor(
-    async () => {
-      expect((await supervisor.status(launchId))?.state).not.toMatch(/^(?:pending|running)$/u);
-    },
-    { timeout: 5_000 },
-  );
-  const receipt = await supervisor.status(launchId);
-  if (!receipt) {
-    throw new Error(`missing launch receipt ${launchId}`);
-  }
-  return receipt;
 }
 
 describe("node worker supervisor", () => {
@@ -688,29 +669,6 @@ describe("node worker supervisor", () => {
 
     expect(fs.existsSync(exitedPath)).toBe(true);
     expect(terminal.state).toBe("failed");
-    await supervisor.close();
-  });
-
-  it.each([
-    ["cancel", "cancelled"],
-    ["close", "interrupted"],
-  ] as const)("records %s while awaiting the owned child", async (operation, state) => {
-    const { supervisor, workspaceDir } = fixture();
-    const input = launchInput(workspaceDir, `${operation}-launch`, "wait");
-    expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toMatchObject({
-      state: "running",
-    });
-
-    if (operation === "cancel") {
-      await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
-    } else {
-      await supervisor.close();
-    }
-
-    expect(await supervisor.status(input.launchId)).toMatchObject({
-      state,
-      worker: { pid: expect.any(Number), startTime: expect.any(Number) },
-    });
     await supervisor.close();
   });
 
