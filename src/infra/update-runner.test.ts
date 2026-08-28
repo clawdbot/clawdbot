@@ -1248,8 +1248,7 @@ describe("runGatewayUpdate", () => {
   ] as const)(
     "preserves explicit %s in update installs",
     async (_caseName, upperValue, lowerValue) => {
-      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
-      await setupUiIndex();
+      await setupGitPackageManagerFixture();
       const stableTag = "v1.0.1-1";
       const installEnvs: NodeJS.ProcessEnv[] = [];
       const doctorNodePath = await resolveStableNodePath(process.execPath);
@@ -1288,8 +1287,7 @@ describe("runGatewayUpdate", () => {
   ] satisfies Array<[string, CommandResponse]>)(
     "does not inject a pnpm prefer-offline default after %s",
     async (_caseName, configResponse) => {
-      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
-      await setupUiIndex();
+      await setupGitPackageManagerFixture();
       const stableTag = "v1.0.1-1";
       const installEnvs: NodeJS.ProcessEnv[] = [];
       const doctorNodePath = await resolveStableNodePath(process.execPath);

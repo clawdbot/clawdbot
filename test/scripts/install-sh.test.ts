@@ -328,11 +328,12 @@ NODE
       ensure_pnpm() { :; }
       ensure_pnpm_binary_for_scripts() { :; }
       resolve_git_openclaw_ref() { printf 'main\\n'; }
-      checkout_git_openclaw_ref() { :; }
+      checkout_git_openclaw_ref() {
+        [[ "$1" == "$repo" && "$2" == "main" ]] || return 1
+        GIT_REF_KIND=moving
+      }
       cleanup_legacy_submodules() { :; }
-      ensure_pnpm() { :; }
-      git_install_lockfile_flag() { printf '%s\\n' '--frozen-lockfile'; }
-      run_quiet_step() { return 0; }
+      run_pnpm() { :; }
       ensure_user_local_bin_on_path() {
         mkdir -p "$HOME/.local/bin"
         export PATH="$HOME/.local/bin:$PATH"
@@ -485,18 +486,19 @@ NODE
       ln -s "$target" "$alias_path"
 
       check_git() { return 0; }
-      ensure_pnpm() { :; }
       ensure_pnpm_binary_for_scripts() { :; }
       resolve_git_openclaw_ref() { printf 'main\\n'; }
-      checkout_git_openclaw_ref() { [[ "$1" == "$target" && "$2" == "main" ]]; }
+      checkout_git_openclaw_ref() {
+        [[ "$1" == "$target" && "$2" == "main" ]] || return 1
+        GIT_REF_KIND=moving
+      }
       cleanup_legacy_submodules() { [[ "$1" == "$target" ]]; }
       ensure_pnpm() { [[ "$1" == "$target" ]]; }
-      git_install_lockfile_flag() {
-        [[ "$1" == "$target" ]]
-        printf '%s\\n' '--frozen-lockfile'
-      }
       run_pnpm() {
-        [[ "$1" == "-C" && "$2" == "$target" ]]
+        [[ "$1" == "-C" && "$2" == "$target" ]] || return 1
+        if [[ "\${3:-}" == "install" ]]; then
+          [[ " $* " == *" --no-frozen-lockfile "* ]] || return 1
+        fi
         if [[ "\${3:-}" == "build" ]]; then
           mkdir -p "$target/dist"
           printf '%s\n' 'process.stdout.write("fixture-version\\n");' > "$target/dist/entry.js"

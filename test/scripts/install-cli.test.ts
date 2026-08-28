@@ -416,18 +416,21 @@ describe("install-cli.sh", () => {
       PREFIX="$ROOT/prefix"
 
       ensure_git() { :; }
-      ensure_pnpm() { :; }
       ensure_pnpm_binary_for_scripts() { :; }
       resolve_git_openclaw_ref() { printf 'main\\n'; }
-      checkout_git_openclaw_ref() { [[ "$1" == "$target" && "$2" == "main" ]]; }
+      checkout_git_openclaw_ref() {
+        [[ "$1" == "$target" && "$2" == "main" ]] || return 1
+        GIT_REF_KIND=moving
+      }
       cleanup_legacy_submodules() { [[ "$1" == "$target" ]]; }
       ensure_pnpm_git_prepare_allowlist() { [[ "$1" == "$target" ]]; }
       ensure_pnpm() { [[ "$1" == "$target" ]]; }
-      git_install_lockfile_flag() {
-        [[ "$1" == "$target" ]]
-        printf '%s\\n' '--frozen-lockfile'
+      run_pnpm() {
+        [[ "$1" == "-C" && "$2" == "$target" ]] || return 1
+        if [[ "\${3:-}" == "install" ]]; then
+          [[ " $* " == *" --no-frozen-lockfile "* ]]
+        fi
       }
-      run_pnpm() { [[ "$1" == "-C" && "$2" == "$target" ]]; }
       git() {
         if [[ "$1" == "clone" ]]; then
           local clone_target="\${*: -1}"
