@@ -744,7 +744,7 @@ extensions/mattermost/src/mattermost/monitor-slash.ts	1
 extensions/mattermost/src/mattermost/monitor-websocket.ts	2
 extensions/mattermost/src/mattermost/monitor.ts	1
 extensions/mattermost/src/mattermost/slash-commands.ts	1
-extensions/mattermost/src/mattermost/slash-state.ts	6
+extensions/mattermost/src/mattermost/slash-state.ts	5
 extensions/mattermost/src/session-route.ts	1
 extensions/mattermost/src/setup-core.ts	2
 extensions/memory-core/index.ts	4

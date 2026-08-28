@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createWebSocketStream, WebSocketServer, type WebSocket } from "ws";
 import { readWebhookBodyOrReject } from "../plugin-sdk/webhook-request-guards.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 
@@ -45,7 +46,7 @@ describe("Gateway closing connection admission", () => {
           return true;
         },
       });
-      const wss = new WebSocketServer({ noServer: true });
+      const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
       const accept = (ws: WebSocket) => {
         websocket = ws;
         if (route === "plugin stream") {
@@ -224,7 +225,7 @@ describe("Gateway closing connection admission", () => {
           return true;
         },
       });
-      const wss = new WebSocketServer({ noServer: true });
+      const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
       attachGatewayUpgradeHandler({
         httpServer: server,
         wss,

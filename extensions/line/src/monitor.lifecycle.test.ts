@@ -1,7 +1,7 @@
 // Line tests cover monitor.lifecycle plugin behavior.
 import crypto from "node:crypto";
-import { EventEmitter } from "node:events";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, IncomingMessage, type ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
@@ -716,7 +716,7 @@ describe("monitorLineProvider lifecycle", () => {
 
   it("rejects webhook requests above the shared in-flight limit before body handling", async () => {
     const limit = WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey;
-    const heldRequests: Array<EventEmitter & { destroy: () => void }> = [];
+    const heldRequests: IncomingMessage[] = [];
 
     const monitor = await monitorLineProvider({
       channelAccessToken: "token",
@@ -727,13 +727,7 @@ describe("monitorLineProvider lifecycle", () => {
 
     const route = requireRegisteredRoute();
     const createHeldPostRequest = () => {
-      const req = Object.assign(new EventEmitter(), {
-        destroyed: false,
-        destroy(this: EventEmitter & { destroyed: boolean }) {
-          this.destroyed = true;
-          this.emit("close");
-        },
-      });
+      const req = new IncomingMessage(new Socket());
       heldRequests.push(req);
       return Object.assign(req, {
         method: "POST",
