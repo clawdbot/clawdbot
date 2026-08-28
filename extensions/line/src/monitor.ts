@@ -14,18 +14,14 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import {
   canonicalizeWebhookRouteKey,
-  isRequestBodyLimitError,
   normalizePluginHttpPath,
   normalizeWebhookPath,
   registerWebhookTargetWithPluginRoute,
-  requestBodyErrorToText,
   resolveSingleWebhookTarget,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
-  readRequestBodyWithLimit,
-  sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
@@ -45,7 +41,11 @@ import {
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
-import { createLineNodeWebhookHandler } from "./webhook-node.js";
+import {
+  createLineNodeWebhookHandler,
+  readLineWebhookRequestBody,
+  rejectLineWebhookRequest,
+} from "./webhook-node.js";
 import { LineWebhookTerminalDeliveryError } from "./webhook-spool.js";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
@@ -369,12 +369,11 @@ export async function monitorLineProvider(
             return;
           }
 
-          const rawBody = await readRequestBodyWithLimit(req, {
-            maxBytes: LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES,
-            timeoutMs: LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
-            // Defer destruction so the rejection below reaches LINE before the close.
-            destroyOnLimit: false,
-          });
+          const rawBody = await readLineWebhookRequestBody(
+            req,
+            LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES,
+            LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
+          );
           const match = resolveSingleWebhookTarget(targets, (target) =>
             validateLineSignature(rawBody, signature, target.channelSecret),
           );
@@ -411,24 +410,7 @@ export async function monitorLineProvider(
           res.setHeader("Content-Type", "application/json");
           res.end(JSON.stringify({ status: "ok" }));
         } catch (err) {
-          if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-            await sendHttpRequestRejection(
-              req,
-              res,
-              413,
-              JSON.stringify({ error: "Payload too large" }),
-              "application/json",
-            );
-            return;
-          }
-          if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-            await sendHttpRequestRejection(
-              req,
-              res,
-              408,
-              JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }),
-              "application/json",
-            );
+          if (await rejectLineWebhookRequest(req, res, err)) {
             return;
           }
           runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));

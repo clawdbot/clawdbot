@@ -184,11 +184,11 @@ export function isQaMalformedJsonBodyError(error: unknown): error is Error {
 
 export async function readQaJsonBody(
   req: IncomingMessage,
-  maxBytes = QA_HTTP_JSON_MAX_BODY_BYTES,
+  options?: { maxBytes?: number },
 ): Promise<unknown> {
   const text = (
     await readRequestBodyWithLimit(req, {
-      maxBytes,
+      maxBytes: options?.maxBytes ?? QA_HTTP_JSON_MAX_BODY_BYTES,
       timeoutMs: QA_HTTP_JSON_BODY_TIMEOUT_MS,
       // Defer destruction so writeQaRequestBodyLimitError can answer before the close.
       destroyOnLimit: false,
@@ -364,11 +364,12 @@ export async function handleQaBusRequest(params: {
   }
 
   try {
-    const maxBytes =
+    const body = (await readQaJsonBody(
+      params.req,
       url.pathname === "/v1/inbound/message" || url.pathname === "/v1/outbound/message"
-        ? QA_HTTP_MEDIA_JSON_MAX_BODY_BYTES
-        : QA_HTTP_JSON_MAX_BODY_BYTES;
-    const body = (await readQaJsonBody(params.req, maxBytes)) as Record<string, unknown>;
+        ? { maxBytes: QA_HTTP_MEDIA_JSON_MAX_BODY_BYTES }
+        : undefined,
+    )) as Record<string, unknown>;
     switch (url.pathname) {
       case "/v1/reset":
         params.state.reset();

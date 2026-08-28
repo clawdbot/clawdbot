@@ -20,10 +20,43 @@ export async function readLineWebhookRequestBody(
   maxBytes = LINE_WEBHOOK_MAX_BODY_BYTES,
   timeoutMs = LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
 ): Promise<string> {
-  return await readRequestBodyWithLimit(req, { maxBytes, timeoutMs });
+  return await readRequestBodyWithLimit(req, {
+    maxBytes,
+    timeoutMs,
+    // Defer destruction so the caller can answer 413/408 before the connection closes.
+    destroyOnLimit: false,
+  });
 }
 
 type ReadBodyFn = (req: IncomingMessage, maxBytes: number, timeoutMs?: number) => Promise<string>;
+
+/**
+ * Answer a body-limit failure through the connection owner.
+ *
+ * The reader defers destruction for these two codes, so the connection is already fenced
+ * and only the owner can still write: responding directly would race the teardown and LINE
+ * would see a reset instead of the status.
+ */
+export async function rejectLineWebhookRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  error: unknown,
+): Promise<boolean> {
+  if (
+    !isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE") &&
+    !isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")
+  ) {
+    return false;
+  }
+  await sendHttpRequestRejection(
+    req,
+    res,
+    error.statusCode,
+    JSON.stringify({ error: requestBodyErrorToText(error.code) }),
+    "application/json",
+  );
+  return true;
+}
 
 export function createLineNodeWebhookHandler(params: {
   channelSecret: string;
@@ -34,6 +67,8 @@ export function createLineNodeWebhookHandler(params: {
   onRequestAuthenticated?: () => void;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const maxBodyBytes = params.maxBodyBytes ?? LINE_WEBHOOK_MAX_BODY_BYTES;
+  const readBody = params.readBody ?? readLineWebhookRequestBody;
+
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method === "GET" || req.method === "HEAD") {
       if (req.method === "HEAD") {
@@ -72,15 +107,11 @@ export function createLineNodeWebhookHandler(params: {
         return;
       }
 
-      const bodyLimit = Math.min(maxBodyBytes, LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES);
-      const rawBody = params.readBody
-        ? await params.readBody(req, bodyLimit, LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS)
-        : await readRequestBodyWithLimit(req, {
-            maxBytes: bodyLimit,
-            timeoutMs: LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
-            // Defer destruction so the rejection below reaches LINE before the close.
-            destroyOnLimit: false,
-          });
+      const rawBody = await readBody(
+        req,
+        Math.min(maxBodyBytes, LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES),
+        LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
+      );
 
       if (!validateLineSignature(rawBody, signature, params.channelSecret)) {
         logVerbose("line: webhook signature validation failed");
@@ -108,24 +139,7 @@ export function createLineNodeWebhookHandler(params: {
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ status: "ok" }));
     } catch (err) {
-      if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-        await sendHttpRequestRejection(
-          req,
-          res,
-          413,
-          JSON.stringify({ error: "Payload too large" }),
-          "application/json",
-        );
-        return;
-      }
-      if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-        await sendHttpRequestRejection(
-          req,
-          res,
-          408,
-          JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }),
-          "application/json",
-        );
+      if (await rejectLineWebhookRequest(req, res, err)) {
         return;
       }
       params.runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));
