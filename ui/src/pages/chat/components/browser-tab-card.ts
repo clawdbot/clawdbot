@@ -6,6 +6,7 @@ import { applicationContext, type ApplicationContext } from "../../../app/contex
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../../app/panel-availability.ts";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/web-awesome.ts";
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../../../components/panel-toggle-contract.ts";
 import { t } from "../../../i18n/index.ts";
 import { loadBrowserTabThumbnail } from "../../../lib/chat/browser-tab-preview.ts";
@@ -23,27 +24,15 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
   @property({ type: Boolean }) latest = false;
 
   @state() private thumbnailSrc?: string;
-  @state() private menuOpen = false;
   private requestedRevision?: string;
 
   private readonly subscriptions = new SubscriptionsController(this);
-  private readonly closeMenuOnOutsideClick = (event: MouseEvent) => {
-    if (!event.composedPath().includes(this)) {
-      this.menuOpen = false;
-    }
-  };
-
   constructor() {
     super();
     this.subscriptions.watch(
       () => this.context?.gateway,
       (gateway, notify) => gateway.subscribe(notify),
     );
-  }
-
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    window.removeEventListener("click", this.closeMenuOnOutsideClick);
   }
 
   static override styles = css`
@@ -124,7 +113,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     }
     .card:hover .actions,
     .card:focus-within .actions,
-    .actions.open {
+    .actions:has(wa-dropdown[open]) {
       opacity: 1;
     }
     .actions button {
@@ -149,45 +138,6 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     .actions .more svg {
       width: 16px;
       height: 16px;
-    }
-    .menu {
-      position: absolute;
-      right: 6px;
-      bottom: calc(100% + 4px);
-      z-index: 5;
-      display: grid;
-      min-width: 160px;
-      padding: 4px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      box-shadow: var(--shadow-md, 0 4px 16px rgb(0 0 0 / 0.18));
-    }
-    .menu button {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      width: 100%;
-      padding: 6px 8px;
-      color: var(--text);
-      font: inherit;
-      font-size: 0.78rem;
-      text-align: start;
-      background: none;
-      border: 0;
-      border-radius: var(--radius-sm);
-      cursor: default;
-    }
-    .menu button:hover {
-      background: var(--panel-hover);
-    }
-    .menu button.external {
-      cursor: pointer;
-    }
-    .menu svg {
-      width: 14px;
-      height: 14px;
-      color: var(--muted);
     }
   `;
 
@@ -236,7 +186,6 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
   }
 
   private readonly openPanel = () => {
-    this.menuOpen = false;
     this.dispatchEvent(
       new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {
         detail: { open: true },
@@ -246,32 +195,16 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     );
   };
 
-  private readonly toggleMenu = (event: Event) => {
-    event.stopPropagation();
-    this.menuOpen = !this.menuOpen;
-    if (this.menuOpen) {
-      window.addEventListener("click", this.closeMenuOnOutsideClick);
-    } else {
-      window.removeEventListener("click", this.closeMenuOnOutsideClick);
-    }
-  };
-
-  private readonly copyUrl = async () => {
+  private readonly onMenuSelect = (event: CustomEvent<{ item: { value?: string } }>) => {
     const url = this.preview?.url;
-    this.menuOpen = false;
-    if (url) {
-      try {
-        await navigator.clipboard.writeText(url);
-      } catch {
+    if (!url) {
+      return;
+    }
+    if (event.detail.item.value === "copy-url") {
+      navigator.clipboard.writeText(url).catch(() => {
         // Clipboard access can be denied; the URL stays visible on the card.
-      }
-    }
-  };
-
-  private readonly openExternal = () => {
-    const url = this.preview?.url;
-    this.menuOpen = false;
-    if (url) {
+      });
+    } else if (event.detail.item.value === "open-new-tab") {
       openExternalUrlSafe(url);
     }
   };
@@ -310,38 +243,30 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
             <span class="title">${title}</span>
             ${preview.url ? html`<span class="url">${preview.url}</span>` : nothing}
           </span>
-          <span class="actions ${this.menuOpen ? "open" : ""}">
+          <span class="actions">
             <button type="button" title=${t("browser.openPanel")} @click=${this.openPanel}>
               ${t("browser.open")}
             </button>
-            <button
-              type="button"
-              class="more"
-              aria-haspopup="menu"
-              aria-expanded=${this.menuOpen}
-              title=${t("browser.moreActions")}
-              @click=${this.toggleMenu}
-            >
-              ${icons.moreHorizontal}
-            </button>
+            <wa-dropdown placement="bottom-end" @wa-select=${this.onMenuSelect}>
+              <button
+                slot="trigger"
+                type="button"
+                class="more"
+                aria-haspopup="menu"
+                title=${t("browser.moreActions")}
+              >
+                ${icons.moreHorizontal}
+              </button>
+              <wa-dropdown-item value="copy-url">
+                <span slot="icon" aria-hidden="true">${icons.copy}</span>
+                ${t("browser.copyUrl")}
+              </wa-dropdown-item>
+              <wa-dropdown-item value="open-new-tab" data-new-tab-action>
+                <span slot="icon" aria-hidden="true">${icons.globe}</span>
+                ${t("browser.openNewTab")}
+              </wa-dropdown-item>
+            </wa-dropdown>
           </span>
-          ${this.menuOpen
-            ? html`
-                <div class="menu" role="menu">
-                  <button type="button" role="menuitem" @click=${this.copyUrl}>
-                    ${icons.copy}${t("browser.copyUrl")}
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    class="external"
-                    @click=${this.openExternal}
-                  >
-                    ${icons.globe}${t("browser.openNewTab")}
-                  </button>
-                </div>
-              `
-            : nothing}
         </div>
       </div>
     `;
