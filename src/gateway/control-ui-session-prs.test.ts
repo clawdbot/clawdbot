@@ -727,7 +727,10 @@ describe("loadControlUiSessionPullRequests", () => {
         headers: { "Content-Type": "application/json", "x-ratelimit-remaining": "0" },
       });
     const routes = [
-      { match: "/pulls?head=", response: () => githubJson([pullListItem()]) },
+      {
+        match: "/pulls?head=",
+        response: () => githubJson([pullListItem({ user: { login: "octocat" } })]),
+      },
       { match: "/pulls/103469", response: rateLimitedResponse },
       { match: "/check-runs", response: rateLimitedResponse },
     ];
@@ -748,6 +751,8 @@ describe("loadControlUiSessionPullRequests", () => {
         title: "fix(macos): tighten the link-browser tab header",
         url: "https://github.com/openclaw/openclaw/pull/103469",
         state: "open",
+        // The list fetch succeeded, so its author survives the degraded chip.
+        author: { login: "octocat" },
       },
     ]);
 

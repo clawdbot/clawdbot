@@ -391,8 +391,11 @@ function renderSessionContext({
 }
 
 function renderPullRequestAuthor(author: ControlUiSessionPullRequest["author"]) {
+  // Each row is its own grid, so the cell is always emitted: dropping it would
+  // move the diff stats out of the trailing 1fr column and break the flush-right
+  // alignment that authored and authorless rows must share.
   if (!author) {
-    return nothing;
+    return html`<span class="session-hovercard__pr-author"></span>`;
   }
   return html`<span
     class="session-hovercard__pr-author"

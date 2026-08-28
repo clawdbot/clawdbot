@@ -480,13 +480,12 @@ async function fetchChecks(
   }
 }
 
-async function finishPullRequest(
-  item: PullListItem,
-  branch: string,
-  fetchImpl: typeof fetch,
-  token: string | undefined,
-): Promise<ControlUiSessionPullRequest> {
-  const chip: ControlUiSessionPullRequest = {
+/**
+ * The facts a chip carries without spending quota on per-PR detail calls. The
+ * rate-limited path renders exactly this, so both callers share one shape.
+ */
+function stateOnlyPullRequestChip(item: PullListItem, branch: string): ControlUiSessionPullRequest {
+  return {
     number: item.number,
     owner: item.owner,
     repo: item.repo,
@@ -496,6 +495,15 @@ async function finishPullRequest(
     state: item.state,
     ...(item.author ? { author: item.author } : {}),
   };
+}
+
+async function finishPullRequest(
+  item: PullListItem,
+  branch: string,
+  fetchImpl: typeof fetch,
+  token: string | undefined,
+): Promise<ControlUiSessionPullRequest> {
+  const chip = stateOnlyPullRequestChip(item, branch);
   // Merged/closed chips render state only; diff counts and CI rollup are
   // live-work signals, so spend GitHub quota on open PRs alone.
   if (item.state !== "open" && item.state !== "draft") {
@@ -561,15 +569,9 @@ async function fetchBranchPullRequests(
     // keep the proven PR list as state-only chips instead of dropping it, or
     // a cold cache would show a Create PR row despite a known open PR.
     return {
-      pullRequests: capped.map((item) => ({
-        number: item.number,
-        owner: item.owner,
-        repo: item.repo,
-        branch: context.branch,
-        title: item.title,
-        url: item.url,
-        state: item.state,
-      })),
+      // Author and title came from the list fetch that already succeeded, so
+      // they survive here; only the per-PR detail facts are missing.
+      pullRequests: capped.map((item) => stateOnlyPullRequestChip(item, context.branch)),
       rateLimited: true,
       mergedHeads,
     };

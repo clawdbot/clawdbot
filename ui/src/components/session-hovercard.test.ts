@@ -174,8 +174,12 @@ describe("renderSessionHovercard", () => {
       "octocat",
     );
     expect(links[0]?.getAttribute("aria-label")).toContain("Opened by octocat");
-    // A deleted or ghosted GitHub account leaves the row exactly as it was before.
-    expect(links[1]?.querySelector(".session-hovercard__pr-author")).toBeNull();
+    // A ghosted account keeps an empty author cell so the row geometry, and the
+    // flush-right diff column, match an authored row.
+    expect(links[1]?.querySelector(".session-hovercard__pr-author")?.textContent).toBe("");
+    expect(links[1]?.querySelector(".session-hovercard__pr-author")?.hasAttribute("title")).toBe(
+      false,
+    );
     expect(links[1]?.getAttribute("aria-label")).not.toContain("Opened by");
   });
 

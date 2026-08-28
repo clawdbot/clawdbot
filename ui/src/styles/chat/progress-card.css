@@ -244,7 +244,8 @@
 
 .session-hovercard__pr-row {
   display: grid;
-  /* Author column is auto so a row without an author keeps the original layout. */
+  /* The author cell is always present (empty when unknown) so every row shares
+     one geometry and the diff stats stay in the trailing 1fr column. */
   grid-template-columns: var(--session-hovercard-context-icon-size) auto auto minmax(0, 1fr);
   align-items: center;
   column-gap: var(--space-2);
