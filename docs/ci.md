@@ -117,11 +117,13 @@ reviewers inspect the code, tests, and CI to assess correctness.
 
 When the check fails, update the PR body instead of pushing another code commit.
 
-## Platform checkout ownership
+## Checkout ownership
 
-The shared Windows, macOS, and iOS checkout bounds each candidate fetch to 90 seconds, with at most three attempts. The workflow-harness fetch uses the same process owner and deadline, without additional retries. Candidate and harness revisions remain separately pinned.
+The shared Linux Node checkout (`linux_node_checkout_step`) and shared Windows/macOS/iOS checkout (`platform_checkout_step`) use one process owner for every Git command within those anchors. Linux allows five whole-checkout attempts, clearing the workspace before each attempt, with 120-second candidate and trusted workflow-harness fetch deadlines and an increasing five-second backoff. Windows, macOS, and iOS retain 90-second fetch deadlines, three candidate fetch attempts on timeout only, five-second backoff, and one harness fetch attempt. Candidate and harness revisions remain separately pinned; Linux also fetches the optional ratchet base at depth one.
 
-Checkout owns a POSIX process group or a Windows Job Object before Git starts. Timeout, cancellation, and leader exit all drain descendants before another Git command can reuse the checkout. If cleanup cannot be verified, the step fails without retrying. The bootstrap uses the runner's Python standard library because repository helpers are not available before checkout. A fetch timeout alone does not explain why transport stalled.
+Timeout, cancellation, and leader exit drain the owned POSIX process group or Windows Job Object before workspace deletion, another Git command, or step completion. Cleanup has a ten-second allowance. If ownership inspection or cleanup fails, checkout exits with code 125 without retrying. The bootstrap uses the runner's Python standard library because repository helpers are unavailable before checkout. A fetch timeout alone does not explain why transport stalled.
+
+Separate bootstrap and checkout flows in preflight, security, skills-python, ClawHub, and Android still use GNU timeout and are outside these shared anchors' ownership guarantees.
 
 ## Scope and routing
 
