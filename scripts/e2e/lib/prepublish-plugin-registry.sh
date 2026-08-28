@@ -77,17 +77,7 @@ NODE
     fi
   fi
 
-  if [ "$#" -gt 0 ]; then
-    local extra_registry_args=("$@")
-    local extra_index
-    for ((extra_index = 0; extra_index < ${#extra_registry_args[@]}; extra_index += 3)); do
-      node "$artifact_script" verify-package \
-        --package-name "${extra_registry_args[$extra_index]}" \
-        --package-version "${extra_registry_args[$((extra_index + 1))]}" \
-        --tarball "${extra_registry_args[$((extra_index + 2))]}" >/dev/null
-    done
-    registry_args+=("${extra_registry_args[@]}")
-  fi
+  registry_args+=("$@")
   if [ "${#registry_args[@]}" -eq 0 ]; then
     printf -v "$pid_variable" "%s" ""
     return 0

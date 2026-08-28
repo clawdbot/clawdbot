@@ -4,7 +4,6 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SOURCE_ROOT="$(cd "${OPENCLAW_NPM_ONBOARD_SOURCE_ROOT:-${OPENCLAW_LIVE_DOCKER_REPO_ROOT:-$ROOT_DIR}}" && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
@@ -22,8 +21,6 @@ STATUS_TEXT_MAX_BYTES="$(
   docker_e2e_read_positive_int_env OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES 1048576
 )"
 run_log=""
-plugin_pack_dir=""
-plugin_package_args=()
 OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS=()
 
 cleanup() {
@@ -32,9 +29,6 @@ cleanup() {
   fi
   if [ -n "${run_log:-}" ]; then
     rm -f "$run_log"
-  fi
-  if [ -n "${plugin_pack_dir:-}" ]; then
-    rm -rf "$plugin_pack_dir"
   fi
 }
 trap cleanup EXIT
@@ -63,42 +57,6 @@ prepare_package_tgz() {
 
 prepare_package_tgz
 
-prepare_source_plugin_package() {
-  if [ "$USE_SOURCE_PLUGIN_PACKAGE" != "1" ] || [ "$CHANNEL" = "telegram" ]; then
-    return 0
-  fi
-  if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
-    echo "Source plugin package mode requires the mounted prerelease plugin registry." >&2
-    exit 1
-  fi
-
-  local package_dir="extensions/$CHANNEL"
-  if [ ! -f "$SOURCE_ROOT/$package_dir/package.json" ]; then
-    echo "Missing source plugin package for $CHANNEL: $package_dir" >&2
-    exit 1
-  fi
-
-  plugin_pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-npm-onboard-plugin.XXXXXX")"
-  (
-    cd "$SOURCE_ROOT"
-    OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="$plugin_pack_dir" \
-      bash scripts/plugin-npm-publish.sh --pack "$package_dir"
-  )
-
-  local archives=("$plugin_pack_dir"/*.tgz)
-  if [ "${#archives[@]}" -ne 1 ] || [ ! -f "${archives[0]}" ]; then
-    echo "Expected exactly one packed source plugin for $CHANNEL" >&2
-    exit 1
-  fi
-
-  local container_package="/tmp/openclaw-channel-plugin.tgz"
-  plugin_package_args=(
-    -v "${archives[0]}:$container_package:ro"
-  )
-}
-
-prepare_source_plugin_package
-
 if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
   openclaw_prepublish_plugin_registry_configure_docker_args \
     "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
@@ -117,7 +75,6 @@ if ! docker_e2e_run_with_harness \
   -e "OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES=$STATUS_TEXT_MAX_BYTES" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-  "${plugin_package_args[@]}" \
   "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
 set -Eeuo pipefail
@@ -196,18 +153,17 @@ dump_debug_logs() {
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
 
-if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
-  if [ "${OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE:-0}" = "1" ] && [ "$CHANNEL" != "telegram" ]; then
-    candidate_version="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}"
-    openclaw_prepublish_plugin_registry_start_mounted \
-      /tmp/openclaw-npm-onboard-plugin-registry plugin_registry_pid '["@openclaw/codex"]' \
-      "@openclaw/$CHANNEL" \
-      "$candidate_version" \
-      /tmp/openclaw-channel-plugin.tgz
-  else
-    openclaw_prepublish_plugin_registry_start_mounted \
-      /tmp/openclaw-npm-onboard-plugin-registry plugin_registry_pid '["@openclaw/codex"]'
+required_plugins='["@openclaw/codex"]'
+if [ "${OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE:-0}" = "1" ] && [ "$CHANNEL" != "telegram" ]; then
+  if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+    echo "source channel fixture requires OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR with the matching candidate companion" >&2
+    exit 1
   fi
+  required_plugins="[\"@openclaw/codex\",\"@openclaw/$CHANNEL\"]"
+fi
+if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+  openclaw_prepublish_plugin_registry_start_mounted \
+    /tmp/openclaw-npm-onboard-plugin-registry plugin_registry_pid "$required_plugins"
 fi
 
 openclaw_e2e_install_package /tmp/openclaw-install.log
@@ -261,7 +217,8 @@ openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
 if [ "$CHANNEL_PACKAGE_MODE" = "external" ] && [ -n "$fixture_consent" ]; then
   channel_install_args=("$CHANNEL")
   if [ "${OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE:-0}" = "1" ] && [ "$CHANNEL" != "telegram" ]; then
-    candidate_version="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}"
+    # The verified registry preserves candidate bytes through the official npm
+    # installer; a local archive would not establish official plugin provenance.
     channel_install_args=("npm:@openclaw/$CHANNEL@$candidate_version" --pin)
   fi
   openclaw_e2e_fixture_plugin_command openclaw -- plugins install "${channel_install_args[@]}" \

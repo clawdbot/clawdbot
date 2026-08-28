@@ -81,30 +81,6 @@ function readTarballPackageJson(tarball) {
 export function inspectNpmPackageTarball(tarball) {
   return { packageJson: readTarballPackageJson(tarball), sha256: sha256File(tarball) };
 }
-
-export function validateNpmPackageTarballIdentity(params) {
-  if (!PACKAGE_NAME_PATTERN.test(params.expectedName ?? "")) {
-    throw new Error("expectedName must be a scoped npm package name");
-  }
-  if (
-    typeof params.expectedVersion !== "string" ||
-    params.expectedVersion.length === 0 ||
-    /\s/u.test(params.expectedVersion)
-  ) {
-    throw new Error("expectedVersion must be a non-empty package version");
-  }
-  if (typeof params.tarball !== "string" || params.tarball.length === 0) {
-    throw new Error("tarball must be a non-empty path");
-  }
-  const packageJson = readTarballPackageJson(path.resolve(params.tarball));
-  if (packageJson.name !== params.expectedName || packageJson.version !== params.expectedVersion) {
-    throw new Error(
-      `npm package tarball identity mismatch: expected ${params.expectedName}@${params.expectedVersion}`,
-    );
-  }
-  return packageJson;
-}
-
 function validateManifestShape(manifest) {
   if (
     !manifest ||
@@ -369,17 +345,6 @@ function parseCliArgs(argv) {
 
 function main() {
   const { command, options, requiredPackages } = parseCliArgs(process.argv.slice(2));
-  if (command === "verify-package") {
-    const packageJson = validateNpmPackageTarballIdentity({
-      expectedName: options.get("--package-name"),
-      expectedVersion: options.get("--package-version"),
-      tarball: options.get("--tarball"),
-    });
-    process.stdout.write(
-      `${JSON.stringify({ name: packageJson.name, version: packageJson.version })}\n`,
-    );
-    return;
-  }
   const common = {
     artifactDir: options.get("--artifact-dir"),
     expectedCandidateVersion: options.get("--candidate-version"),
@@ -400,9 +365,7 @@ function main() {
         ? validatePrepublishPluginRegistryArtifact(common)
         : undefined;
   if (!result) {
-    throw new Error(
-      "usage: prepublish-plugin-registry-artifact.mjs <create|verify|verify-package> [options]",
-    );
+    throw new Error("usage: prepublish-plugin-registry-artifact.mjs <create|verify> [options]");
   }
   process.stdout.write(
     `${JSON.stringify({

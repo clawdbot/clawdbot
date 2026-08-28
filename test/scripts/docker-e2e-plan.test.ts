@@ -138,20 +138,17 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 }
 
 describe("scripts/lib/docker-e2e-plan", () => {
-  it("prepares the matching Codex package for candidate npm onboarding", () => {
-    const laneNames = [
-      "npm-onboard-channel-agent",
-      "npm-onboard-discord-channel-agent",
-      "npm-onboard-slack-channel-agent",
-      "npm-onboard-discord-candidate-channel-agent",
-      "npm-onboard-slack-candidate-channel-agent",
-    ];
-    const lanes = laneNames.map((name) => findLaneByName(name));
-
-    expect(lanes.map((lane) => lane?.name)).toEqual(laneNames);
-    expect(requiredPrepublishPluginPackagesForLanes(lanes.flatMap((lane) => lane ?? []))).toEqual([
-      "@openclaw/codex",
-    ]);
+  it.each([
+    ["npm-onboard-channel-agent", ["@openclaw/codex"]],
+    ["npm-onboard-discord-channel-agent", ["@openclaw/codex"]],
+    ["npm-onboard-slack-channel-agent", ["@openclaw/codex"]],
+    ["npm-onboard-discord-candidate-channel-agent", ["@openclaw/codex", "@openclaw/discord"]],
+    ["npm-onboard-slack-candidate-channel-agent", ["@openclaw/codex", "@openclaw/slack"]],
+  ] as const)("requests only the matching companions for %s", (name, packages) => {
+    const plan = planFor({ selectedLaneNames: [name] });
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([name]);
+    expect(plan.needs.prepublishPluginRegistry).toBe(true);
+    expect(plan.requiredPrepublishPluginPackages).toEqual(packages);
   });
 
   it("finds a named lane through the expanded catalog", () => {
