@@ -16,6 +16,7 @@ type ChannelSectionBase = {
 };
 
 export type ChannelSetupPromotionSurface = {
+  configPromotion?: "preserve-root";
   singleAccountKeysToMove?: readonly string[];
   namedAccountPromotionKeys?: readonly string[];
   resolveSingleAccountPromotionTarget?: (params: {
@@ -94,6 +95,10 @@ export function resolveSingleAccountPromotion(params: SingleAccountPromotionPara
     }
     return discoveredSetupSurface;
   };
+  // Generic policy fields also belong to a preserved root identity.
+  if (resolveSetupSurface()?.configPromotion === "preserve-root") {
+    return { keysToMove: [], shouldDeferPromotion: false };
+  }
   const isGenericPromotionKey = params.includeSetupKeys
     ? isSetupSingleAccountPromotionKey
     : isCommonSingleAccountPromotionKey;

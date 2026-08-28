@@ -112,6 +112,94 @@ describe("Buzz guided setup", () => {
     });
   });
 
+  it("keeps generated identities stable per account across wizard replay", async () => {
+    vi.stubEnv("BUZZ_PRIVATE_KEY", "33".repeat(32));
+    const otherKey = Uint8Array.from({ length: 32 }, () => 7);
+    const generate = vi.fn().mockReturnValueOnce(GENERATED_KEY).mockReturnValueOnce(otherKey);
+    const discoverRooms = vi.fn(async () => [{ id: ROOM_B, name: "Agents" }]);
+    const wizard = createBuzzSetupWizard({ generateSecretKey: generate, discoverRooms });
+    const prompter = createPrompter();
+    const cfg = {
+      channels: {
+        buzz: {
+          enabled: false,
+          relayUrl: "wss://root.example.com",
+          privateKey: "11".repeat(32),
+          groups: { [ROOM_A]: {} },
+        },
+      },
+    } as OpenClawConfig;
+    const configure = (accountId: string) =>
+      wizard.configure({
+        cfg,
+        runtime: createRuntime(),
+        prompter,
+        accountOverrides: { buzz: accountId },
+        shouldPromptAccountIds: false,
+        forceAllowFrom: false,
+      });
+    const ada = await configure("ada");
+    const grace = await configure("grace");
+    const replay = await configure("ada");
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(ada.accountId).toBe("ada");
+    expect(ada.cfg.channels?.buzz?.accounts?.ada?.privateKey).toBe(nip19.nsecEncode(GENERATED_KEY));
+    expect(grace.cfg.channels?.buzz?.accounts?.grace?.privateKey).toBe(nip19.nsecEncode(otherKey));
+    expect(replay.cfg).toEqual(ada.cfg);
+    const { accounts: _accounts, ...root } = ada.cfg.channels!.buzz!;
+    expect(root).toEqual(cfg.channels!.buzz);
+    expect(ada.cfg.channels?.buzz?.accounts?.ada?.groups).toEqual({
+      [ROOM_B]: { enabled: true, requireMention: false },
+    });
+    expect(discoverRooms).toHaveBeenCalledWith({
+      relayUrl: "wss://buzz.example.com",
+      privateKey: nip19.nsecEncode(GENERATED_KEY),
+    });
+  });
+
+  it("selects a new guided account without borrowing the root identity or rooms", async () => {
+    const root = {
+      name: "Root",
+      relayUrl: "wss://root.example.com",
+      privateKey: "11".repeat(32),
+      groups: { [ROOM_A]: {} },
+    };
+    const discoverRooms = vi.fn(async () => [{ id: ROOM_B, name: "Agents" }]);
+    const wizard = createBuzzSetupWizard({ discoverRooms, generateSecretKey: () => GENERATED_KEY });
+    const prompter = createPrompter();
+    vi.mocked(prompter.select).mockResolvedValueOnce("__new__");
+    vi.mocked(prompter.text)
+      .mockResolvedValueOnce("ada")
+      .mockResolvedValueOnce("wss://ada.example.com");
+    const result = await wizard.configure({
+      cfg: { channels: { buzz: root } } as OpenClawConfig,
+      runtime: createRuntime(),
+      prompter,
+      accountOverrides: {},
+      shouldPromptAccountIds: true,
+      forceAllowFrom: false,
+    });
+    expect(result.accountId).toBe("ada");
+    expect(result.cfg.channels?.buzz).toEqual({
+      ...root,
+      accounts: {
+        ada: {
+          enabled: true,
+          relayUrl: "wss://ada.example.com",
+          privateKey: nip19.nsecEncode(GENERATED_KEY),
+          groupPolicy: "open",
+          groupAllowFrom: undefined,
+          groups: { [ROOM_B]: { enabled: true, requireMention: false } },
+          defaultTo: ROOM_B,
+        },
+      },
+    });
+    expect(discoverRooms).toHaveBeenCalledWith({
+      relayUrl: "wss://ada.example.com",
+      privateKey: nip19.nsecEncode(GENERATED_KEY),
+    });
+  });
+
   it("uses the standard SecretRef route for an existing bot key", async () => {
     const secretRef = { source: "env" as const, provider: "default", id: "BUZZ_BOT_KEY" };
     const privateKey = nip19.nsecEncode(GENERATED_KEY);

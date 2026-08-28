@@ -379,7 +379,7 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
     setupSurface: params.setupSurface,
     includeSetupKeys: true,
   });
-  if (hasAccounts && keysToMove.length === 0) {
+  if (keysToMove.length === 0) {
     return params.cfg;
   }
   const targetAccountId = hasAccounts

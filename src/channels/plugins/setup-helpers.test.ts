@@ -360,6 +360,18 @@ describe("createPatchedAccountSetupAdapter", () => {
 });
 
 describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
+  it.each([undefined, {}, { ada: { enabled: true } }])(
+    "does not create an empty default account when nothing is promoted: %j",
+    (accounts) => {
+      const cfg = asConfig({
+        channels: { demo: { enabled: true, ...(accounts ? { accounts } : {}) } },
+      });
+      expect(moveSingleAccountChannelSectionToDefaultAccount({ cfg, channelKey: "demo" })).toBe(
+        cfg,
+      );
+    },
+  );
+
   it("moves Matrix allowBots into the promoted default account", () => {
     const next = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: asConfig({

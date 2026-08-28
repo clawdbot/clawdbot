@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveBundledChannelSetupPromotionSurface } from "../../../channels/plugins/setup-promotion-bundled.js";
+import { resolveDiscoveredChannelSetupPromotionSurface } from "../../../channels/plugins/setup-promotion-discovery.js";
 import { resolveSingleAccountPromotion } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -154,7 +154,7 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     const promotion = resolveSingleAccountPromotion({
       channelKey: channelId,
       channel: rawChannel,
-      resolveBundledSurface: resolveBundledChannelSetupPromotionSurface,
+      resolveBundledSurface: (key) => resolveDiscoveredChannelSetupPromotionSurface(key, cfg),
     });
     // Defer only undeclared keys outside generic + legacy coverage. A partial
     // accounts.default would make later runs skip and permanently strand them at root.

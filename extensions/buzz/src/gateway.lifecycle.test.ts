@@ -297,6 +297,25 @@ describe("Buzz gateway lifecycle", () => {
     });
   });
 
+  it("routes a named default send with only that account's credentials", async () => {
+    const cfg = createBuzzConfig();
+    cfg.channels!.buzz = {
+      ...cfg.channels!.buzz,
+      defaultAccount: "ada",
+      authTag: "root-auth",
+      accounts: { ada: { relayUrl: "wss://ada.example.com", privateKey: "22".repeat(32) } },
+    };
+    await buzzOutboundAdapter.sendText({ cfg, to: CHANNEL_ID, text: "Ada says hello" });
+    expect(gatewayMocks.sendBuzzTextOneShot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relayUrl: "wss://ada.example.com",
+        privateKey: "22".repeat(32),
+        authTag: "",
+        text: "Ada says hello",
+      }),
+    );
+  });
+
   it("preserves an explicit send's thread even when automatic replies are flat", async () => {
     const cfg = createBuzzConfig();
     const flatCfg = {
@@ -529,6 +548,49 @@ describe("Buzz gateway lifecycle", () => {
 
       abortController.abort();
       await expect(lifecycle).resolves.toBeUndefined();
+    },
+  );
+
+  it.each(["root", "account"])(
+    "drops typing for a %s-disabled named identity even with an active bus",
+    async (disabledScope) => {
+      const cfg = createBuzzConfig();
+      cfg.channels!.buzz = {
+        ...cfg.channels!.buzz,
+        defaultAccount: "ada",
+        accounts: {
+          ada: {
+            relayUrl: "wss://ada.example.com",
+            privateKey: "22".repeat(32),
+            groups: { [CHANNEL_ID]: {} },
+            replyToMode: "off",
+          },
+        },
+      };
+      const account = resolveBuzzAccount({ cfg });
+      const controller = new AbortController();
+      const lifecycle = startBuzzGatewayAccount(
+        createStartAccountContext({ account, cfg, abortSignal: controller.signal }),
+      );
+      try {
+        await vi.waitFor(() => expect(getActiveBuzzBus("ada")).toBeDefined());
+        await sendBuzzTyping({ cfg, to: CHANNEL_ID, threadId: "root-id" });
+        expect(gatewayMocks.busSendTyping).toHaveBeenCalledWith({
+          channelId: CHANNEL_ID,
+          threadId: undefined,
+        });
+        gatewayMocks.busSendTyping.mockClear();
+        if (disabledScope === "root") {
+          cfg.channels!.buzz!.enabled = false;
+        } else {
+          cfg.channels!.buzz!.accounts!.ada.enabled = false;
+        }
+        await sendBuzzTyping({ cfg, to: CHANNEL_ID, threadId: "root-id" });
+        expect(gatewayMocks.busSendTyping).not.toHaveBeenCalled();
+      } finally {
+        controller.abort();
+        await lifecycle;
+      }
     },
   );
 

@@ -76,16 +76,17 @@ openclaw channels add --channel buzz
 
 The setup flow walks through the following steps:
 
-1. Enter the Buzz relay URL if one is not already configured.
-2. OpenClaw reuses the configured bot identity or generates one automatically.
-3. If the bot does not have room access yet, give the displayed public key to a
+1. Choose an existing Buzz account or add a named account.
+2. Enter the Buzz relay URL if one is not already configured for that account.
+3. OpenClaw reuses that account's bot identity or generates one automatically.
+4. If the bot does not have room access yet, give the displayed public key to a
    Buzz room owner or admin.
-4. OpenClaw waits for Buzz to confirm the **Bot** role and continues
+5. OpenClaw waits for Buzz to confirm the **Bot** role and continues
    automatically. If the automatic wait expires, retry authenticated discovery
    or go back without changing the generated identity.
-5. If Buzz returns one room, OpenClaw selects it. If Buzz returns several,
+6. If Buzz returns one room, OpenClaw selects it. If Buzz returns several,
    select the rooms to use and the default outbound room.
-6. OpenClaw saves the configuration and silently verifies the authenticated
+7. OpenClaw saves the configuration and silently verifies the authenticated
    room when the Gateway is running.
 
 Fresh setup accepts normal messages from current members of the configured
@@ -457,18 +458,64 @@ example `"[Support]"`. Use `"auto"` for the routed agent's identity name,
 `"[{model}]"` for its selected model, or `""` to disable an inherited global
 prefix. Explicit `message` tool and CLI text sends also apply literal and
 identity prefixes; see [shared prefix behavior](/concepts/messages#prefixes-threading-and-replies)
-for model-dependent templates. Buzz uses one account per Gateway, so there is
-no nested `accounts` override.
+for model-dependent templates. A named account can override the root prefix
+with `channels.buzz.accounts.<id>.responsePrefix`.
+
+### Multiple bot identities
+
+One Gateway can run independent Buzz accounts, each with its own relay, bot key,
+authorization value, and selected rooms. Run `openclaw channels add --channel buzz`
+and choose a new account to configure it interactively. Adding a named account
+does not move or replace the existing root identity.
+
+```json5
+{
+  channels: {
+    buzz: {
+      relayUrl: "wss://buzz.example.com",
+      privateKey: { source: "env", provider: "default", id: "BUZZ_ROOT_KEY" },
+      groupPolicy: "allowlist",
+      groups: { "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {} },
+      accounts: {
+        ada: {
+          name: "Ada",
+          relayUrl: "wss://buzz.example.com",
+          privateKey: { source: "env", provider: "default", id: "BUZZ_ADA_KEY" },
+          groups: { "940d0c32-4eb7-46d7-9d5b-d975aaef87f7": {} },
+        },
+      },
+    },
+  },
+}
+```
+
+Named accounts inherit root policy and delivery settings, but never root
+`name`, `relayUrl`, `privateKey`, `authTag`, `groups`, or `defaultTo`. Set those
+identity and room fields on each account. An explicit `accounts.default` also
+owns a complete identity and replaces the implicit root identity; it does not
+borrow root credentials or `BUZZ_*` environment variables.
+
+Set `defaultAccount` to select the account used when a command omits `--account`.
+Otherwise the implicit root/default identity is preferred, then the first
+configured account in sorted order. Account keys use lowercase letters, digits,
+hyphens, and underscores, start with a letter or digit, and are at most 64
+characters; `constructor` and `prototype` are reserved.
+
+Use `--account ada` with message and directory commands, and add `accountId: "ada"`
+to a binding's `match` object when routing that bot to an agent. Set
+`channels.buzz.accounts.ada.enabled: false` to disable only Ada;
+`channels.buzz.enabled: false` disables all Buzz accounts. Buzz does not yet
+support account disabling or deletion through `channels remove`.
 
 ### Bot key storage
 
 The default guided path reuses the current bot identity or generates a private
-key and stores it in `channels.buzz.privateKey`, following OpenClaw's current
+key and stores it in the selected account's `privateKey`, following OpenClaw's current
 plaintext config convention.
 
 For an existing key, setup can use plaintext or an existing `env`, `file`, or
 `exec` SecretRef. See [Secrets management](/gateway/secrets) for provider setup.
-The default account can also read:
+The implicit root default identity can also read:
 
 ```bash
 export BUZZ_RELAY_URL="wss://buzz.example.com"

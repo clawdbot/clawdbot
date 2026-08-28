@@ -133,8 +133,6 @@ extensions/buzz/src/inbound.ts	1
 extensions/buzz/src/message-event.ts	2
 extensions/buzz/src/qa/adapter.runtime.ts	2
 extensions/buzz/src/room-membership.ts	2
-extensions/buzz/src/setup-core.ts	1
-extensions/buzz/src/setup-surface.ts	1
 extensions/buzz/src/setup-verify.ts	5
 extensions/buzz/src/types.ts	2
 extensions/byteplus/video-generation-provider.ts	1
