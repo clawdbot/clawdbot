@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db-registry.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -212,8 +211,9 @@ async function copyClaimCrossStore(params: {
 }): Promise<SessionClaim | undefined> {
   await importSqliteSessionRows({
     agentId: params.destination.databaseAgentId,
+    defaultAgentId: params.destination.databaseAgentId,
     env: params.env,
-    storePath: params.destination.ownerStorePath,
+    storePath: params.destination.path,
     sessionKey: params.canonicalKey,
     entry: params.source.entry,
     skipIfExists: true,
@@ -236,7 +236,7 @@ async function copyClaimCrossStore(params: {
 
 async function deleteExpectedClaim(claim: SessionClaim): Promise<boolean> {
   const result = await deleteSessionEntryLifecycle({
-    agentId: parseAgentSessionKey(claim.key)?.agentId,
+    agentId: claim.store.databaseAgentId,
     archiveTranscript: false,
     deleteTranscriptWithoutArchive: true,
     expectedEntry: claim.entry,

@@ -13,10 +13,11 @@ export function resolveGatewaySessionDatabase(sessionKey: string): {
   const canonicalSessionKey = resolveSessionStoreKey({ cfg, sessionKey });
   const agentId = resolveSessionStoreAgentId(cfg, canonicalSessionKey);
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
+  const databaseTarget = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
+  // Shared stores keep logical session keys under their persisted database owner.
   return {
-    agentId,
-    ...(databasePath ? { path: databasePath } : {}),
+    agentId: databaseTarget.agentId ?? agentId,
+    path: databaseTarget.path,
     sessionKey: canonicalSessionKey,
   };
 }

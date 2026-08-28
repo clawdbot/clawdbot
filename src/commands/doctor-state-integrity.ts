@@ -1636,7 +1636,9 @@ export async function noteStateIntegrity(
   const inspectedLegacyStores = new Set<string>();
   for (const target of sessionTargets) {
     const legacyStorePath = path.resolve(target.storePath);
-    await inspectAgentSessionIntegrity(target, !inspectedLegacyStores.has(legacyStorePath));
+    const inspectLegacyStore =
+      !legacyStorePath.endsWith(".sqlite") && !inspectedLegacyStores.has(legacyStorePath);
+    await inspectAgentSessionIntegrity(target, inspectLegacyStore);
     inspectedLegacyStores.add(legacyStorePath);
   }
   for (const warning of describeHeartbeatSessionTargetIssues(cfg)) {

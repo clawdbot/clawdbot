@@ -205,7 +205,12 @@ describe("installed channel legacy session surfaces", () => {
       "utf8",
     );
 
-    const result = await autoMigrateLegacyState({ cfg: config, env, homedir: () => rootDir });
+    const result = await autoMigrateLegacyState({
+      cfg: config,
+      env,
+      homedir: () => rootDir,
+      doctorOnlyStateMigrations: true,
+    });
     const migrated = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, unknown>;
 
     expect(result.warnings).toEqual([]);
@@ -268,7 +273,12 @@ describe("installed channel legacy session surfaces", () => {
       "utf8",
     );
 
-    const result = await autoMigrateLegacyState({ cfg: config, env, homedir: () => rootDir });
+    const result = await autoMigrateLegacyState({
+      cfg: config,
+      env,
+      homedir: () => rootDir,
+      doctorOnlyStateMigrations: true,
+    });
     const migrated = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, unknown>;
 
     expect(result.warnings).toEqual([]);
@@ -338,7 +348,12 @@ export const legacySessionSurface = {
       "utf8",
     );
 
-    const result = await autoMigrateLegacyState({ cfg: config, env, homedir: () => rootDir });
+    const result = await autoMigrateLegacyState({
+      cfg: config,
+      env,
+      homedir: () => rootDir,
+      doctorOnlyStateMigrations: true,
+    });
     const preserved = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, unknown>;
 
     expect(result.warnings).toContainEqual(

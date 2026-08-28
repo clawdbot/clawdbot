@@ -3018,7 +3018,6 @@ src/gateway/server-startup-config-helpers.ts	1
 src/gateway/server-startup-config.ts	1
 src/gateway/server-startup-finish.ts	1
 src/gateway/server-startup-post-attach.ts	1
-src/gateway/server-startup-session-migration.ts	1
 src/gateway/server-worker-placement-startup.ts	2
 src/gateway/server.auth.control-ui.bootstrap-lifecycle.suite.ts	8
 src/gateway/server.auth.control-ui.device-token.suite.ts	2

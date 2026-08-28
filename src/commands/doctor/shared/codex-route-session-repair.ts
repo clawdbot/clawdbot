@@ -433,7 +433,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
     const sqliteEntryCount = params.shouldRepair
       ? scanDoctorSessionEntriesStrict(sessionScope, scanEntry)
       : scanDoctorSessionEntriesTolerant(sessionScope, scanEntry);
-    const hasLegacyStore = fs.existsSync(target.storePath);
+    const hasLegacyStore = !target.storePath.endsWith(".sqlite") && fs.existsSync(target.storePath);
     return sqliteEntryCount > 0 || hasLegacyStore
       ? [
           {
