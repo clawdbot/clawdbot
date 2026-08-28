@@ -138,6 +138,61 @@ test("waits for a pooled credential and preserves the broker retry delay", async
   assert.deepEqual(sleeps, [2000]);
 });
 
+test("retries the exact Convex credential-row contention error with jitter", async () => {
+  let attempts = 0;
+  const sleeps = [];
+  const fetchImpl = async (url) => {
+    if (!url.endsWith("/acquire")) return Response.json({ status: "ok" });
+    attempts += 1;
+    if (attempts === 1) {
+      return Response.json(
+        {
+          status: "error",
+          code: "INTERNAL_ERROR",
+          message:
+            'Documents read from or written to the "credential_sets" table changed while this mutation was being run and on every subsequent retry.',
+        },
+        { status: 500 },
+      );
+    }
+    return Response.json({
+      status: "ok",
+      credentialId: "credential-contention",
+      leaseToken: "lease-token-contention",
+      payload: { schemaVersion: 1 },
+    });
+  };
+  const lease = await acquireQaLease({
+    kind: "telegram-test-userbot",
+    env,
+    fetchImpl,
+    randomImpl: () => 0.5,
+    sleepImpl: async (ms) => sleeps.push(ms),
+  });
+  await lease.release();
+  assert.equal(attempts, 2);
+  assert.deepEqual(sleeps, [175]);
+});
+
+test("does not retry unrelated broker internal errors", async () => {
+  let attempts = 0;
+  await assert.rejects(
+    acquireQaLease({
+      kind: "telegram-test-userbot",
+      env,
+      fetchImpl: async () => {
+        attempts += 1;
+        return Response.json(
+          { status: "error", code: "INTERNAL_ERROR", message: "Unexpected broker failure." },
+          { status: 500 },
+        );
+      },
+    }),
+    (error) => error instanceof QaCredentialBrokerError && error.code === "INTERNAL_ERROR",
+  );
+  assert.equal(attempts, 1);
+});
+
 test("hydrates an authenticated broker payload above the inline threshold", async () => {
   const expected = { schemaVersion: 1, archive: "x".repeat(300_000) };
   const serialized = JSON.stringify(expected);

@@ -10,6 +10,8 @@ const DEFAULT_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PAYLOAD_MAX_CHUNKS = 4096;
 const DEFAULT_RESPONSE_MAX_BYTES = 1024 * 1024;
 const RETRYABLE_ACQUIRE_CODES = new Set(["POOL_EXHAUSTED", "NO_CREDENTIAL_AVAILABLE"]);
+const CONVEX_WRITE_CONTENTION =
+  /Documents read from or written to the "credential_sets" table changed while this mutation was being run/u;
 
 export class QaCredentialBrokerError extends Error {
   constructor(code, message, retryAfterMs) {
@@ -18,6 +20,14 @@ export class QaCredentialBrokerError extends Error {
     this.code = code;
     this.retryAfterMs = retryAfterMs;
   }
+}
+
+function retryableAcquireError(error) {
+  return (
+    error instanceof QaCredentialBrokerError &&
+    (RETRYABLE_ACQUIRE_CODES.has(error.code) ||
+      (error.code === "INTERNAL_ERROR" && CONVEX_WRITE_CONTENTION.test(error.message)))
+  );
 }
 
 function brokerConfig(env = process.env) {
@@ -156,6 +166,7 @@ export async function acquireQaLease({
   env = process.env,
   fetchImpl = fetch,
   sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  randomImpl = Math.random,
 } = {}) {
   if (!kind) throw new Error("acquireQaLease requires a credential kind.");
   const requestOptions = { env, fetchImpl, httpTimeoutMs };
@@ -170,14 +181,15 @@ export async function acquireQaLease({
       );
       break;
     } catch (error) {
-      if (!(error instanceof QaCredentialBrokerError) || !RETRYABLE_ACQUIRE_CODES.has(error.code)) {
-        throw error;
-      }
+      if (!retryableAcquireError(error)) throw error;
       const remainingMs = acquireTimeoutMs - (Date.now() - startedAt);
       if (remainingMs <= 0) {
         throw error;
       }
-      await sleepImpl(Math.min(error.retryAfterMs ?? 1_000, remainingMs));
+      const retryAfterMs =
+        error.retryAfterMs ??
+        (error.code === "INTERNAL_ERROR" ? 50 + Math.floor(randomImpl() * 250) : 1_000);
+      await sleepImpl(Math.min(retryAfterMs, remainingMs));
     }
   }
   const identity = {
