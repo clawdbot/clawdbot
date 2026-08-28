@@ -198,18 +198,24 @@ suite.define(() => {
               const scrollport = document.querySelector<HTMLElement>("main.content");
               const headers = document.querySelectorAll<HTMLElement>(".content-header");
               const workspaces = document.querySelectorAll<HTMLElement>(".settings-workspace");
-              const header = headers.item(headers.length - 1);
-              const workspace = workspaces.item(workspaces.length - 1);
-              const title = header?.querySelector<HTMLElement>(".page-title");
-              const contentSurface = workspace?.querySelector<HTMLElement>(selector);
-              if (!scrollport || !header || !title || !workspace || !contentSurface) {
+              const headerElement = headers.item(headers.length - 1);
+              const workspaceElement = workspaces.item(workspaces.length - 1);
+              const titleElement = headerElement?.querySelector<HTMLElement>(".page-title");
+              const surfaceElement = workspaceElement?.querySelector<HTMLElement>(selector);
+              if (
+                !scrollport ||
+                !headerElement ||
+                !titleElement ||
+                !workspaceElement ||
+                !surfaceElement
+              ) {
                 return null;
               }
               const scrollportBox = scrollport.getBoundingClientRect();
-              const headerBox = header.getBoundingClientRect();
-              const titleBox = title.getBoundingClientRect();
-              const workspaceBox = workspace.getBoundingClientRect();
-              const contentSurfaceBox = contentSurface.getBoundingClientRect();
+              const headerBox = headerElement.getBoundingClientRect();
+              const titleBox = titleElement.getBoundingClientRect();
+              const workspaceBox = workspaceElement.getBoundingClientRect();
+              const contentSurfaceBox = surfaceElement.getBoundingClientRect();
               // clientWidth excludes a non-overlay scrollbar and its stable gutter.
               const scrollportRight = scrollportBox.left + scrollport.clientWidth;
               return {
