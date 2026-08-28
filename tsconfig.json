@@ -43,6 +43,8 @@
       "@openclaw/ai/internal/shared": ["./packages/ai/src/internal/shared.ts"],
       "@openclaw/agent-core": ["./packages/agent-core/src/index.ts"],
       "@openclaw/agent-core/*": ["./packages/agent-core/src/*"],
+      "@openclaw/gateway-client/model": ["./packages/gateway-client/src/model/index.ts"],
+      "@openclaw/gateway-client/model/*": ["./packages/gateway-client/src/model/*"],
       "@openclaw/llm-core": ["./packages/llm-core/src/index.ts"],
       "@openclaw/llm-core/diagnostics": ["./packages/llm-core/src/utils/diagnostics.ts"],
       "@openclaw/llm-core/event-stream": ["./packages/llm-core/src/utils/event-stream.ts"],

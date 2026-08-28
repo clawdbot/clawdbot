@@ -19,6 +19,14 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const workspaceSourceAliases = [
   {
+    find: /^@openclaw\/gateway-client\/model\/(.+)$/u,
+    replacement: path.resolve(repoRoot, "packages/gateway-client/src/model/$1.ts"),
+  },
+  {
+    find: "@openclaw/gateway-client/model",
+    replacement: path.resolve(repoRoot, "packages/gateway-client/src/model/index.ts"),
+  },
+  {
     find: "@openclaw/gateway-client/browser",
     replacement: path.resolve(repoRoot, "packages/gateway-client/src/browser.ts"),
   },
