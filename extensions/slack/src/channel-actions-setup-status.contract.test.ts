@@ -26,6 +26,7 @@ const slackDefaultActions = [
   "list-pins",
   "member-info",
   "emoji-list",
+  "poll",
 ] as const;
 
 afterEach(() => {
@@ -35,7 +36,7 @@ afterEach(() => {
 describe("slack actions contract", () => {
   installChannelActionsContractSuite({
     plugin: slackPlugin,
-    unsupportedAction: "poll",
+    unsupportedAction: "broadcast",
     cases: [
       {
         name: "configured account exposes default Slack actions",

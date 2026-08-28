@@ -25,10 +25,16 @@ import {
 import { isSlackApprovalAuthorizedSender } from "../../approval-auth.js";
 import { isSlackExecApprovalAuthorizedSender } from "../../exec-approvals.js";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
+import {
+  buildSlackPollMessage,
+  createSlackPollStoreState,
+  decodeSlackPollVoteAction,
+} from "../../polls.js";
 import { decodeSlackQuestionAction, resolveSlackQuestionAction } from "../../question-actions.js";
 import {
   isSlackApprovalActionId,
   isSlackCallbackActionId,
+  isSlackPollVoteActionId,
   isSlackQuestionActionId,
   SLACK_REPLY_BUTTON_ACTION_ID,
   SLACK_REPLY_LINK_ACTION_ID,
@@ -1151,6 +1157,61 @@ async function handleSlackBlockAction(params: {
       userId: parsed.userId,
       respond: async (text) => await respondEphemeral(respond, text),
     });
+    return;
+  }
+  if (isSlackPollVoteActionId(parsed.actionId)) {
+    const vote = decodeSlackPollVoteAction(parsed.actionId, parsed.actionSummary.value);
+    if (!vote) {
+      await respondEphemeral(respond, "This poll option is invalid or expired.");
+      return;
+    }
+    const auth = await authorizeSlackBlockAction({
+      ctx: params.ctx,
+      eventScope,
+      parsed,
+      respond,
+    });
+    if (!auth.allowed) {
+      return;
+    }
+    const pollStore = createSlackPollStoreState();
+    // Multi-select polls toggle the clicked option into the voter's existing
+    // set so more than one choice can be retained across clicks; single-select
+    // polls replace the prior choice, matching the rendered selection contract.
+    const existingPoll = await pollStore.getPoll(vote.pollId);
+    const mode = existingPoll && existingPoll.maxSelections > 1 ? "toggle" : "replace";
+    const recorded = await pollStore.recordVote({
+      pollId: vote.pollId,
+      voterId: parsed.userId,
+      selections: [vote.optionIndex],
+      mode,
+    });
+    if (!recorded) {
+      await respondEphemeral(respond, "This poll is no longer active.");
+      return;
+    }
+    const updated = recorded.poll;
+    const built = buildSlackPollMessage({
+      question: updated.question,
+      options: updated.options,
+      maxSelections: updated.maxSelections,
+      pollId: updated.id,
+      votes: updated.votes,
+    });
+    await updateSlackInteractionMessage({
+      ctx: params.ctx,
+      eventScope,
+      channelId: parsed.channelId,
+      messageTs: parsed.messageTs,
+      text: built.text,
+      blocks: built.blocks,
+    });
+    await respondEphemeral(
+      respond,
+      recorded.capped
+        ? `You can select up to ${updated.maxSelections} options. Deselect one first.`
+        : "Your vote has been recorded.",
+    );
     return;
   }
   const pluginInteractionData = buildSlackPluginInteractionData({

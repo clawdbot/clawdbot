@@ -10,6 +10,7 @@ export const SLACK_CALLBACK_SELECT_ACTION_ID = "openclaw:callback_select";
 export const SLACK_APPROVAL_BUTTON_ACTION_ID = "openclaw:approval_button";
 export const SLACK_APPROVAL_SELECT_ACTION_ID = "openclaw:approval_select";
 export const SLACK_QUESTION_BUTTON_ACTION_ID = "openclaw:question_button";
+export const SLACK_POLL_VOTE_ACTION_ID = "openclaw:poll_vote";
 // Keep accepted display blocks plugin-private; string-keyed receipts are serialized.
 export const SLACK_QUESTION_FINALIZATION_BLOCKS: unique symbol = Symbol(
   "slackQuestionFinalizationBlocks",
@@ -33,6 +34,12 @@ export function resolveSlackQuestionActionIds(blocks?: readonly (Block | KnownBl
       action_id && isSlackQuestionActionId(action_id) ? [action_id] : [],
     );
   });
+}
+
+export function isSlackPollVoteActionId(actionId: string): boolean {
+  return (
+    actionId === SLACK_POLL_VOTE_ACTION_ID || actionId.startsWith(`${SLACK_POLL_VOTE_ACTION_ID}:`)
+  );
 }
 
 export function isSlackApprovalActionId(actionId: string): boolean {

@@ -62,6 +62,7 @@ import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js"
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 import { isSlackWorkspaceInstallation } from "./installation-identity-state.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { SLACK_POLL_MAX_OPTIONS } from "./polls.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { SlackProbe } from "./probe.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
@@ -457,6 +458,11 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
     await slackOutbound.afterDeliverPayload!(ctx);
   },
   presentationCapabilities: SLACK_PRESENTATION_CAPABILITIES,
+  // Core reads pollMaxOptions from this facade (src/infra/outbound/message.ts),
+  // not from the lazy runtime owner, so the cap must be declared here to take
+  // effect before sendPoll is delegated. Otherwise core accepts over-limit
+  // option sets and the lazy renderer silently slices the extras.
+  pollMaxOptions: SLACK_POLL_MAX_OPTIONS,
   ...createRuntimeOutboundDelegates({
     getRuntime: loadSlackOutboundAdapterModule,
     renderPresentation: {
@@ -475,6 +481,10 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
   sendMedia: async (ctx) => {
     const { slackOutbound } = await loadSlackOutboundAdapterModule();
     return await slackOutbound.sendMedia!(ctx);
+  },
+  sendPoll: async (ctx) => {
+    const { slackOutbound } = await loadSlackOutboundAdapterModule();
+    return await slackOutbound.sendPoll!(ctx);
   },
 };
 

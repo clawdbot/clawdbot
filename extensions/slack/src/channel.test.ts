@@ -289,6 +289,7 @@ describe("slackPlugin actions", () => {
             pins: false,
             memberInfo: false,
             emojiList: false,
+            polls: false,
           },
           accounts: {
             default: {
@@ -300,6 +301,7 @@ describe("slackPlugin actions", () => {
                 pins: false,
                 memberInfo: false,
                 emojiList: false,
+                polls: false,
               },
             },
             work: {
@@ -311,6 +313,7 @@ describe("slackPlugin actions", () => {
                 pins: false,
                 memberInfo: false,
                 emojiList: false,
+                polls: true,
               },
             },
           },
@@ -340,6 +343,7 @@ describe("slackPlugin actions", () => {
         "delete",
         "download-file",
         "upload-file",
+        "poll",
       ],
     });
     expect(requireArray(workDiscovery.capabilities, "work capabilities")).toContain("presentation");
@@ -1048,6 +1052,13 @@ describe("slackPlugin outbound", () => {
       },
     },
   };
+
+  it("exposes the poll option cap on the public outbound facade", () => {
+    // Core reads pollMaxOptions from plugin.outbound (src/infra/outbound/message.ts),
+    // not from the lazy runtime owner, so the facade must declare the cap for
+    // over-limit option sets to be rejected before sendPoll is delegated.
+    expect(slackPlugin.outbound?.pollMaxOptions).toBe(20);
+  });
 
   it("treats ACP block text as visible delivered output", () => {
     expect(
