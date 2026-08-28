@@ -42,6 +42,15 @@ const learnMoreRoutes = [
   "talk",
 ] as const;
 
+const settingsGuidanceLinks: ReadonlyArray<{
+  route: string;
+  container: string;
+  section?: string;
+}> = [
+  { route: "cloud-workers", container: ".page-subtitle" },
+  { route: "mcp", section: "Configured servers", container: ".settings-section__desc" },
+];
+
 const sectionAlignmentRoutes = [
   "appearance",
   "cloud-workers",
@@ -137,6 +146,26 @@ suite.define(() => {
             await link.evaluate((element) => getComputedStyle(element).textDecorationLine),
           ).toBe("none");
         }
+      }
+
+      for (const guidanceLink of settingsGuidanceLinks) {
+        await page.goto(`${suite.server.baseUrl}settings/${guidanceLink.route}`);
+        await waitForControlUiRoute(page, {
+          pathname: `/settings/${guidanceLink.route}`,
+          routeId: guidanceLink.route,
+        });
+        const root = guidanceLink.section
+          ? page.locator(".settings-section").filter({
+              has: page.getByRole("heading", { name: guidanceLink.section, exact: true }),
+            })
+          : page;
+        const link = (guidanceLink.container ? root.locator(guidanceLink.container) : root)
+          .getByRole("link", { name: "Learn more", exact: true })
+          .first();
+        await link.waitFor();
+        expect(await link.evaluate((element) => getComputedStyle(element).textDecorationLine)).toBe(
+          "none",
+        );
       }
 
       for (const viewport of responsiveViewports) {
