@@ -223,6 +223,10 @@ dispatch so authorization failures have one canonical structured response:
 - The top-level `fs.listDir` RPC needs `operator.write` for Gateway-host
   requests and `operator.admin` when `nodeId` targets a node. Its handler limits
   non-admin Gateway-host browsing to configured agent workspaces.
+- `plugins.sessionAction` requires every scope declared in the selected action's
+  `requiredScopes`; omitted or empty lists default to `operator.write`.
+  `operator.write` satisfies `operator.read` and `operator.talk`. Other scopes
+  require an exact match, or `operator.admin`.
 - `sessions.create` needs `operator.write` for ordinary creation, including a
   `projectId`, and `operator.admin` for incognito sessions or any `execNode`
   request. For non-admin callers, the handler limits `cwd` to configured agent
