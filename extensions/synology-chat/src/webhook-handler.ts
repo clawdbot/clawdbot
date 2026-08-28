@@ -11,13 +11,11 @@ import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
   isRequestBodyLimitError,
+  readRequestBodyWithLimit,
   resolveRequestClientIp,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import {
-  readRequestBodyWithLimit,
-  sendHttpRequestRejection,
-} from "openclaw/plugin-sdk/webhook-request-guards";
+import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import * as synologyClient from "./client.js";
 import {
   validateToken,

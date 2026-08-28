@@ -3,9 +3,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isRequestBodyLimitError } from "openclaw/plugin-sdk/webhook-ingress";
 import {
+  isRequestBodyLimitError,
   readRequestBodyWithLimit,
+} from "openclaw/plugin-sdk/webhook-ingress";
+import {
   runDetachedWebhookWork,
   sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";

@@ -5,13 +5,11 @@ import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createAuthRateLimiter,
   isRequestBodyLimitError,
+  readRequestBodyWithLimit,
   resolveRequestClientIp,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import {
-  readRequestBodyWithLimit,
-  sendHttpRequestRejection,
-} from "openclaw/plugin-sdk/webhook-request-guards";
+import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./signature.js";
 import type { NextcloudTalkWebhookHeaders, NextcloudTalkWebhookServerOptions } from "./types.js";
 import { NextcloudTalkWebhookPayloadError } from "./webhook-spool-state.js";

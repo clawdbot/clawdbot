@@ -3,12 +3,10 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   isRequestBodyLimitError,
+  readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import {
-  readRequestBodyWithLimit,
-  sendHttpRequestRejection,
-} from "openclaw/plugin-sdk/webhook-request-guards";
+import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import { z } from "zod";
 import { normalizeAccountId, resolveQaBusPollStartCursor } from "./bus-queries.js";
 import type { QaBusState } from "./bus-state.js";
