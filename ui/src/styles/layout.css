@@ -296,11 +296,10 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 
 .shell--settings.shell--mobile-nav {
   --settings-content-block-start-padding: 4px;
-  --settings-content-inline-padding: 4px;
 }
 
 .shell--settings .connection-action-block {
-  margin-inline: calc(0px - var(--settings-content-inline-padding));
+  margin-inline: calc(0px - var(--settings-content-inline-padding, var(--content-inline-padding)));
   border-inline: 0;
   border-radius: 0;
 }
@@ -4029,7 +4028,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 
 .content {
   grid-area: content;
-  padding: 16px 20px 32px;
+  --content-inline-padding: 20px;
+  padding: 16px var(--content-inline-padding) 32px;
   display: block;
   min-height: 0;
   overflow-y: auto;
