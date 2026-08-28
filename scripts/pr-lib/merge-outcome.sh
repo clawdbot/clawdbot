@@ -122,7 +122,7 @@ merge_outcome_stable() {
 }
 
 merge_outcome_reconcile() {
-  local pr="$1" head state landed method parent tree phase
+  local pr="$1" head state landed method route parent source_base tree phase
   merge_outcome_observe "$pr" || return 1
   head=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .head)
   if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" '
@@ -148,26 +148,37 @@ merge_outcome_reconcile() {
     merge_outcome_stop "reported landed commit is unavailable or not reachable from authoritative main"; return 1;
   }
   method=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .method)
-  # Queue policy ignores the requested method. Check the actual landed-parent
-  # tree even when the CLI requested ancestry recording; never infer queue policy.
-  if [ "$method" = squash ] || [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .route)" = queue ]; then
+  route=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .route)
+  local merge_inputs=()
+  if [ "$method" = rebase ] || [ "$route" = queue ]; then
+    # A rebase's final parent can be a rewritten prefix; queue policy can rebase
+    # regardless of requested method. Anchor the whole source delta at its fork,
+    # not recorded main (which may already contain a cherry-picked prefix).
+    source_base=$(git merge-base --all "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .main)" "$head") &&
+      [[ "$source_base" =~ ^[0-9a-f]{40}$ ]] || {
+      merge_outcome_stop "require one source fork base between retained main/head for $method/$route; base missing, unavailable, or ambiguous"; return 1;
+    }
+    merge_inputs=(--merge-base="$source_base" "$landed" "$head")
+  else
     parent=$(git rev-parse "$landed^1") || return 1
-    tree=$(git merge-tree --write-tree "$parent" "$head") || {
-      merge_outcome_stop "cannot reconstruct merge at its actual landed parent"; return 1;
-    }
-    [ "$tree" = "$(git rev-parse "$landed^{tree}")" ] || {
-      merge_outcome_stop "landed tree does not match the prepared head at its actual parent"; return 1;
-    }
-  elif [ "$method" = merge ]; then
-    git merge-base --is-ancestor "$head" "$landed" || return 1
+    if [ "$method" = merge ] && ! git merge-base --is-ancestor "$head" "$landed"; then
+      merge_outcome_stop "landed merge does not retain prepared-head ancestry"; return 1
+    fi
+    merge_inputs=("$parent" "$head")
   fi
+  tree=$(git merge-tree --write-tree "${merge_inputs[@]}") || {
+    merge_outcome_stop "cannot reconstruct $method/$route landed tree at $landed"; return 1;
+  }
+  [ "$tree" = "$(git rev-parse "$landed^{tree}")" ] || {
+    merge_outcome_stop "landed tree does not match the prepared source ($method/$route)"; return 1;
+  }
   merge_outcome_stable "$pr" || return 1
   if [ "$phase" = intent ]; then
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c --arg landed "$landed" '.phase="merged" | .landed=$landed')" || return 1
   elif [ "$landed" != "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .landed)" ]; then
     merge_outcome_stop "remote merge receipt differs from the retained receipt"; return 1
   fi
-  if [ "$method" = squash ] && [ "$tree" = "$(git rev-parse "$parent^{tree}")" ]; then
+  if [ "$method" = squash ] && [ "$route" != queue ] && [ "$tree" = "$(git rev-parse "$parent^{tree}")" ]; then
     echo "Warning: recorded squash has no net change at its landed parent ($landed). Inspect main/PR history; receipt retained, no resubmission or automatic revert." >&2
   fi
   echo "MERGED exact attempted head $head as $landed; receipt retained at $MERGE_OUTCOME_REF."

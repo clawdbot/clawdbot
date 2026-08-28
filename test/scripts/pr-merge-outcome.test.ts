@@ -18,7 +18,7 @@ const outcomeRef = "refs/openclaw/pr-merge-outcomes/123";
 const lockRef = "refs/openclaw/pr-operation-locks/123";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
-function fixture(sourceMessage?: string) {
+function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]> = [["after\n"]]) {
   const root = realpathSync(temps.make("pr-merge-outcome-"));
   const remote = join(root, "remote.git");
   const repo = join(root, "repo");
@@ -46,7 +46,12 @@ function fixture(sourceMessage?: string) {
   const commit = (contents: string, parents: string[], message = "Fixture commit\n") =>
     git(["commit-tree", contents, ...parents.flatMap((parent) => ["-p", parent])], message);
   const base = commit(tree("before\n"), []);
-  const head = commit(tree("after\n"), [base], sourceMessage);
+  const sourceCommits: string[] = [];
+  let head = base;
+  for (const [owner, sibling] of sourceVersions) {
+    head = commit(tree(owner, sibling), [head], sourceMessage);
+    sourceCommits.push(head);
+  }
   git(["update-ref", "refs/heads/main", base]);
   git(["update-ref", "refs/heads/topic", head]);
   git(["push", "-q", "origin", "main", "topic:refs/pull/123/head", "topic"]);
@@ -82,6 +87,7 @@ function fixture(sourceMessage?: string) {
       mergeStateStatus: "BEHIND",
     },
     mode: "success",
+    landing: "requested",
     reads: 0,
     calls: [] as string[][],
     mutations: 0,
@@ -144,9 +150,20 @@ else if(args[0]==="pr"&&args[1]==="view") {
         const nextTree=git(["mktree"],"100644 blob "+owner+"\\towner.txt\\n100644 blob "+sibling+"\\tsibling.txt\\n");
         parent=git(["commit-tree",nextTree,"-p",parent],"Unrelated advance\\n");
       }
-      const tree=git(["merge-tree","--write-tree",parent,s.pr.headRefOid]);
-      const parents=args.includes("--merge")?["-p",parent,"-p",s.pr.headRefOid]:["-p",parent];
-      const landed=git(["commit-tree",tree,...parents],"Landed\\n");
+      let landed;
+      if(args.includes("--rebase")||s.landing==="rebase") {
+        const rebaseDir=process.env.FIXTURE_REPO+"/server-rebase";
+        const sourceBase=git(["merge-base",parent,s.pr.headRefOid]);
+        git(["worktree","add","-q","--detach",rebaseDir,s.pr.headRefOid]);
+        git(["-C",rebaseDir,"rebase","--onto",parent,sourceBase]);
+        landed=git(["-C",rebaseDir,"rev-parse","HEAD"]);
+        git(["worktree","remove",rebaseDir]);
+      } else {
+        const tree=git(["merge-tree","--write-tree",parent,s.pr.headRefOid]);
+        const parents=args.includes("--merge")?["-p",parent,"-p",s.pr.headRefOid]:["-p",parent];
+        landed=git(["commit-tree",tree,...parents],"Landed\\n");
+      }
+      if(s.landing==="mismatch") landed=git(["commit-tree",git(["rev-parse",parent+"^{tree}"]),"-p",parent,...(args.includes("--merge")?["-p",s.pr.headRefOid]:[])],"Mismatched receipt\\n");
       git(["push","-q","origin",landed+":refs/heads/main"]);
       s.landed=landed;
       if(s.mode!=="applied-open"||s.mutations>1) {s.pr.state="MERGED";s.pr.mergeCommit={oid:landed};}
@@ -292,6 +309,7 @@ merge_run 123 "\${1:-false}"
     worktree,
     base,
     head,
+    sourceCommits,
     git,
     tree,
     commit,
@@ -306,6 +324,123 @@ merge_run 123 "\${1:-false}"
 }
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it.each([false, true])("confirms a real multi-commit rebase with queue=%s", (queue) => {
+    const f = fixture(undefined, [["prefix\n"], ["after\n"]]);
+    const main = f.advance("before\n");
+    f.save({
+      ...f.state(),
+      landing: "rebase",
+      pr: { ...f.state().pr, isMergeQueueEnabled: queue },
+    });
+    const run = f.run(false, f.repo, queue ? "squash" : "rebase");
+    const landed = f.state().pr.mergeCommit!.oid;
+    const rewritten = f.git(["rev-list", "--reverse", `${main}..${landed}`]).split("\n");
+    expect(rewritten).toHaveLength(2);
+    expect(rewritten.every((oid) => !f.sourceCommits.includes(oid))).toBe(true);
+    expect(f.git(["show", `${landed}:owner.txt`])).toBe("after");
+    expect(f.git(["show", `${landed}:sibling.txt`])).toBe("advanced");
+    // The final parent is only the rewritten prefix, not the base of the series.
+    expect(() => f.git(["merge-tree", "--write-tree", `${landed}^`, f.head])).toThrow();
+    expect(run.status, run.output).toBe(0);
+    expect(f.record()).toMatchObject({ landed, phase: "complete" });
+    f.advance("before\n");
+    expect(f.run().status).toBe(0);
+    expect(f.state().mutations).toBe(1);
+    expect(f.state().posts).toBe(1);
+  });
+  it.each(["rebase", "merge"])(
+    "rejects a mismatched %s receipt before comment or cleanup",
+    (method) => {
+      const f = fixture(undefined, [["prefix\n"], ["after\n"]]);
+      f.advance("before\n");
+      f.save({ ...f.state(), landing: "mismatch" });
+      const run = f.run(false, f.repo, method);
+      expect(run.status, run.output).toBe(1);
+      expect(f.record()).toMatchObject({ phase: "intent", landed: null });
+      expect(f.state().posts).toBe(0);
+      expect(existsSync(f.worktree)).toBe(true);
+      expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
+      f.recover();
+      expect(f.run().status).toBe(1);
+      expect(f.state().mutations).toBe(1);
+    },
+  );
+  it("checks the source fork base even when recorded main contains a cherry-picked prefix", () => {
+    const f = fixture(undefined, [["after\n"], ["after\n", "reviewed\n"]]);
+    const main = f.advance("after\n", "stable\n");
+    f.save({ ...f.state(), mode: "unapplied" });
+    expect(f.run(false, f.repo, "rebase").status).toBe(1);
+    f.recover();
+    const landed = f.advance("before\n", "reviewed\n");
+    expect(f.git(["merge-tree", "--write-tree", `--merge-base=${main}`, landed, f.head])).toBe(
+      f.git(["rev-parse", `${landed}^{tree}`]),
+    );
+    f.save({
+      ...f.state(),
+      pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
+    });
+    const run = f.run();
+    expect(run.status, run.output).toBe(1);
+    expect(f.record()).toMatchObject({ phase: "intent", landed: null });
+    expect(f.state().posts).toBe(0);
+    expect(f.state().mutations).toBe(1);
+  });
+  it.each(["multiple", "missing"])("refuses a %s source fork base", (fault) => {
+    const f = fixture();
+    f.save({ ...f.state(), mode: "unapplied" });
+    expect(f.run(false, f.repo, "rebase").status).toBe(1);
+    f.recover();
+    const other = f.commit(f.tree("before\n", "branch\n"), [f.base]);
+    const head = f.commit(f.tree("after\n", "branch\n"), [f.head, other], "Source merge\n");
+    const main = f.commit(
+      f.tree("after\n", "branch\n"),
+      fault === "multiple" ? [other, f.head] : [],
+      "Main merge\n",
+    );
+    // A valid retained record with criss-cross (or unrelated) source/main history.
+    const previous = f.git(["rev-parse", outcomeRef]);
+    const record = { ...f.record(), head, main };
+    const blob = f.git(["hash-object", "-w", "--stdin"], JSON.stringify(record));
+    const tree = f.git(["mktree"], `100644 blob ${blob}\toutcome.json\n`);
+    f.git(["update-ref", outcomeRef, f.commit(tree, [head, main, previous])]);
+    const landed = f.commit(f.git(["rev-parse", `${head}^{tree}`]), [main]);
+    f.git(["push", "-q", "--force", "origin", `${landed}:refs/heads/main`]);
+    f.save({
+      ...f.state(),
+      pr: { ...f.state().pr, headRefOid: head, state: "MERGED", mergeCommit: { oid: landed } },
+    });
+    const run = f.run();
+    expect(run.status, run.output).toBe(1);
+    expect(run.output).toContain("require one source fork base");
+    expect(f.record()).toEqual(record);
+    expect(f.state().posts).toBe(0);
+    expect(f.state().mutations).toBe(1);
+  });
+  it.each([false, true])("rejects an ancestral-head revert receipt with queue=%s", (queue) => {
+    const f = fixture();
+    f.save({
+      ...f.state(),
+      mode: "unapplied",
+      pr: { ...f.state().pr, isMergeQueueEnabled: queue },
+    });
+    expect(f.run(false, f.repo, queue ? "merge" : "rebase").status).toBe(1);
+    f.recover();
+    f.git(["push", "-q", "origin", `${f.head}:refs/heads/main`]);
+    const landed = f.advance("before\n");
+    expect(f.git(["merge-tree", "--write-tree", landed, f.head])).toBe(
+      f.git(["rev-parse", `${landed}^{tree}`]),
+    );
+    f.save({
+      ...f.state(),
+      pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
+    });
+    const run = f.run();
+    expect(run.status, run.output).toBe(1);
+    expect(f.record()).toMatchObject({ phase: "intent", landed: null });
+    expect(f.state().posts).toBe(0);
+    expect(f.state().mutations).toBe(1);
+    expect(existsSync(f.worktree)).toBe(true);
+  });
   it.each(["", "Earlier merge response was lost\n"])(
     "refuses pre-journal merge output without erasing its evidence: %j",
     (output) => {

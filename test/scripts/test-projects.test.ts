@@ -397,6 +397,22 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(["scripts/pr-lib/worktree.sh"], ["test/vitest/vitest.tooling.config.ts"]);
   });
 
+  it.each(["scripts/pr", "scripts/pr-lib/merge.sh", "scripts/pr-lib/merge-outcome.sh"])(
+    "routes native merge changes through the outcome owner for %s",
+    (scriptPath) => {
+      expectChangedTargets(
+        [scriptPath],
+        [
+          "test/scripts/pr-merge.test.ts",
+          "test/scripts/pr-merge-outcome.test.ts",
+          ...(scriptPath === "scripts/pr"
+            ? ["test/scripts/pr-operation-lock.test.ts", "test/scripts/pr-wrappers.test.ts"]
+            : []),
+        ],
+      );
+    },
+  );
+
   it("routes unmatched script changes to the tooling suite instead of skipping tests", () => {
     const targets = ["scripts/check-no-raw-http2-imports.mts"];
 
@@ -607,7 +623,11 @@ describe("scripts/test-projects changed-target routing", () => {
     );
     expectChangedTargets(
       ["scripts/pr-lib/crabbox-merge-bypass.sh"],
-      ["test/scripts/pr-crabbox-merge-bypass.test.ts", "test/scripts/pr-merge.test.ts"],
+      [
+        "test/scripts/pr-crabbox-merge-bypass.test.ts",
+        "test/scripts/pr-merge.test.ts",
+        "test/scripts/pr-merge-outcome.test.ts",
+      ],
     );
   });
 
@@ -641,7 +661,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/pr-crabbox-merge-bypass.test.ts",
-        "test/scripts/pr-merge.test.ts",
         "test/scripts/run-additional-boundary-checks.test.ts",
       ],
     );
