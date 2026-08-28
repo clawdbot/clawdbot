@@ -367,10 +367,9 @@ message references, Slack thread `ts`/reaction API state, email message ids
 and headers. Use browser screenshots when UI is the only reliable observable,
 and keep vision checks additive to a platform-API oracle where one exists.
 
-After Discord, Slack, and Telegram, the same runner shape extends to WhatsApp
-(QR login, re-identification, delivery, media, reactions) and Matrix
-(encrypted rooms, thread/reply relations, restart resume); neither is
-implemented yet.
+After Discord and Slack, the same runner shape extends to WhatsApp (QR login,
+re-identification, delivery, media, reactions) and Matrix (encrypted rooms,
+thread/reply relations, restart resume); neither is implemented yet.
 
 ## Open questions
 
