@@ -11,6 +11,7 @@ type FutureConfigBlock = {
 };
 
 const mocks = vi.hoisted(() => ({
+  ownedRoot: "/repo",
   restart: vi.fn(async () => ({ outcome: "completed" as const })),
   recoveryStart: vi.fn(async (_args?: unknown) => undefined),
   // Explicit return type so mockResolvedValue(block) is not narrowed to null.
@@ -23,6 +24,14 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../daemon/future-config-guard.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/future-config-guard.js")>()),
   readFutureConfigActionBlock: mocks.readFutureConfigBlock,
+}));
+
+vi.mock("../../daemon/service-layout.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service-layout.js")>()),
+  summarizeGatewayServiceLayout: async () => ({
+    packageRoot: mocks.ownedRoot,
+    entrypoint: `${mocks.ownedRoot}/dist/index.js`,
+  }),
 }));
 
 vi.mock("../../daemon/service.js", async (importOriginal) => ({
@@ -50,6 +59,23 @@ const VERSION_GUARD_ERROR = new Error(
 const NON_GUARD_ERROR = new Error("Something else went wrong.");
 
 const serviceEnv = { OPENCLAW_PROFILE: "default" };
+const OWNED_ROOT = mocks.ownedRoot;
+const OWNED_VERDICT = {
+  kind: "owned" as const,
+  root: OWNED_ROOT,
+  fingerprint: "owned",
+  refreshDefinition: true,
+};
+const OWNED_STATE = {
+  installed: true,
+  loadState: { status: "loaded" as const },
+  running: false,
+  env: serviceEnv,
+  command: {
+    programArguments: ["/usr/bin/node", `${OWNED_ROOT}/dist/index.js`, "gateway"],
+  },
+  runtime: { status: "stopped" as const },
+};
 
 const FUTURE_BLOCK: FutureConfigBlock = {
   action: "restart",
@@ -61,7 +87,12 @@ const FUTURE_BLOCK: FutureConfigBlock = {
 
 async function recover(jsonMode = false, packageReplacementVerified = true): Promise<void> {
   await maybeRestartServiceAfterFailedMutableUpdate({
-    preManagedServiceStop: { stopped: true, serviceEnv } as never,
+    preManagedServiceStop: {
+      stopped: true,
+      serviceEnv,
+      serviceUpdateVerdict: OWNED_VERDICT,
+    } as never,
+    root: OWNED_ROOT,
     jsonMode,
     packageReplacementVerified,
   });
@@ -76,7 +107,7 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
     mocks.restart.mockReset().mockResolvedValue({ outcome: "completed" });
     mocks.recoveryStart.mockReset().mockResolvedValue(undefined);
     mocks.readFutureConfigBlock.mockReset().mockResolvedValue(null);
-    mocks.readState.mockReset().mockResolvedValue({ installed: true });
+    mocks.readState.mockReset().mockResolvedValue({ ...OWNED_STATE });
     mocks.log.mockReset();
     mocks.error.mockReset();
   });
@@ -141,7 +172,7 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
     await recover();
 
     expect(mocks.readFutureConfigBlock).toHaveBeenCalledTimes(1);
-    expect(mocks.readState).not.toHaveBeenCalled();
+    expect(mocks.readState).toHaveBeenCalledTimes(1);
     expect(mocks.recoveryStart).not.toHaveBeenCalled();
     expect(messages()).toContain("Failed to restart managed gateway service after failed update");
     expect(messages()).toContain("Something else went wrong");
@@ -150,24 +181,23 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
   it("reaches the exempt start when swap is verified, config is future-stamped, and unit is installed", async () => {
     mocks.restart.mockRejectedValue(VERSION_GUARD_ERROR);
     mocks.readFutureConfigBlock.mockResolvedValue(FUTURE_BLOCK);
-    mocks.readState.mockResolvedValue({ installed: true });
 
     await recover();
 
     expect(mocks.readFutureConfigBlock).toHaveBeenCalledTimes(1);
-    expect(mocks.readState).toHaveBeenCalledTimes(1);
+    expect(mocks.readState).toHaveBeenCalledTimes(2);
     expect(mocks.recoveryStart).toHaveBeenCalledTimes(1);
   });
 
   it("does not reach the exempt start when the unit is not installed", async () => {
     mocks.restart.mockRejectedValue(VERSION_GUARD_ERROR);
     mocks.readFutureConfigBlock.mockResolvedValue(FUTURE_BLOCK);
-    mocks.readState.mockResolvedValue({ installed: false });
+    mocks.readState.mockResolvedValue({ ...OWNED_STATE, installed: false });
 
     await recover();
 
     expect(mocks.readFutureConfigBlock).toHaveBeenCalledTimes(1);
-    expect(mocks.readState).toHaveBeenCalledTimes(1);
+    expect(mocks.readState).toHaveBeenCalledTimes(2);
     expect(mocks.recoveryStart).not.toHaveBeenCalled();
     expect(messages()).toContain("recovery start skipped because no managed service is installed");
   });
@@ -188,7 +218,12 @@ describe("maybeRestartServiceAfterFailedMutableUpdate", () => {
     mocks.readFutureConfigBlock.mockResolvedValue(FUTURE_BLOCK);
 
     await maybeRestartServiceAfterFailedMutableUpdate({
-      preManagedServiceStop: { stopped: true, serviceEnv } as never,
+      preManagedServiceStop: {
+        stopped: true,
+        serviceEnv,
+        serviceUpdateVerdict: OWNED_VERDICT,
+      } as never,
+      root: OWNED_ROOT,
       jsonMode: false,
       // Producer never set the fact — install failed before replacement landed.
       packageReplacementVerified: undefined,

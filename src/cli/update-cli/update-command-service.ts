@@ -567,6 +567,9 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   if (!before?.stopped || !before.serviceEnv) {
     return;
   }
+  // Unguarded recovery start is only for a future-config restart refusal.
+  // Ownership/revalidation failures never reach that exception.
+  let restartAttempted = false;
   try {
     const verdict = before.serviceUpdateVerdict;
     if (!verdict || !("root" in verdict)) {
@@ -586,6 +589,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       root: params.root ?? verdict.root,
       preManagedServiceStop: before,
     });
+    restartAttempted = true;
     await service.restart({
       env: state.env,
       preserveDefinition: revalidated.kind !== "owned" || !revalidated.refreshDefinition,
@@ -604,7 +608,11 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     // not a future-config restart refusal. Future-config metadata alone is not
     // enough — Git and pre-swap failures can stamp or observe newer config
     // without installing a replacement binary.
-    if (!before.serviceUpdateVerdict || !("root" in before.serviceUpdateVerdict)) {
+    if (
+      !restartAttempted ||
+      !before.serviceUpdateVerdict ||
+      !("root" in before.serviceUpdateVerdict)
+    ) {
       defaultRuntime.error(
         `Failed to restart managed gateway service after failed update: ${String(err)}`,
       );
