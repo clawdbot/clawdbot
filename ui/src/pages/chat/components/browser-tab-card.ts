@@ -1,7 +1,6 @@
 import { consume } from "@lit/context";
 import { css, html, nothing } from "lit";
-import { property } from "lit/decorators.js";
-import { until } from "lit/directives/until.js";
+import { property, state } from "lit/decorators.js";
 import type { RouteId } from "../../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
@@ -22,7 +21,16 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
   @property({ attribute: false }) revision?: string;
   @property({ type: Boolean }) latest = false;
 
+  @state() private thumbnailSrc?: string;
+  @state() private menuOpen = false;
+  private requestedRevision?: string;
+
   private readonly subscriptions = new SubscriptionsController(this);
+  private readonly closeMenuOnOutsideClick = (event: MouseEvent) => {
+    if (!event.composedPath().includes(this)) {
+      this.menuOpen = false;
+    }
+  };
 
   constructor() {
     super();
@@ -32,39 +40,49 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     );
   }
 
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    window.removeEventListener("click", this.closeMenuOnOutsideClick);
+  }
+
   static override styles = css`
     :host {
       display: block;
       max-width: 320px;
-      margin-block: 8px;
+      margin-block: 6px;
     }
-    button {
-      display: grid;
-      width: 100%;
-      min-width: 0;
-      padding: 0;
+    .card {
       overflow: hidden;
-      color: var(--text);
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
-      font: inherit;
-      text-align: start;
+    }
+    .shot {
+      display: block;
+      width: 100%;
+      padding: 0;
+      background: none;
+      border: 0;
       cursor: default;
     }
-    button:hover {
-      background: var(--panel-hover);
+    .shot img {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-height: 240px;
+      object-fit: cover;
+      object-position: top;
     }
-    button:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-    }
-    .header {
+    .bar {
+      position: relative;
       display: flex;
       align-items: center;
       gap: 8px;
       min-width: 0;
-      padding: 10px;
+      padding: 7px 8px 7px 10px;
+    }
+    .shot + .bar {
+      border-top: 1px solid var(--border);
     }
     .icon {
       display: flex;
@@ -77,8 +95,9 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     }
     .identity {
       display: grid;
+      flex: 1;
       min-width: 0;
-      gap: 2px;
+      gap: 1px;
     }
     .title,
     .url {
@@ -94,16 +113,167 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       color: var(--muted);
       font-size: 0.72rem;
     }
-    img {
-      display: block;
+    .actions {
+      display: flex;
+      flex: none;
+      gap: 2px;
+      align-items: center;
+      opacity: 0;
+      transition: opacity 120ms ease;
+    }
+    .card:hover .actions,
+    .card:focus-within .actions,
+    .actions.open {
+      opacity: 1;
+    }
+    .actions button {
+      display: flex;
+      align-items: center;
+      padding: 4px 8px;
+      color: var(--text);
+      font: inherit;
+      font-size: 0.75rem;
+      background: none;
+      border: 0;
+      border-radius: var(--radius-sm);
+      cursor: default;
+    }
+    .actions button:hover {
+      background: var(--panel-hover);
+    }
+    .actions button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+    .actions .more svg {
+      width: 16px;
+      height: 16px;
+    }
+    .menu {
+      position: absolute;
+      right: 6px;
+      bottom: calc(100% + 4px);
+      z-index: 5;
+      display: grid;
+      min-width: 160px;
+      padding: 4px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-md, 0 4px 16px rgb(0 0 0 / 0.18));
+    }
+    .menu button {
+      display: flex;
+      gap: 8px;
+      align-items: center;
       width: 100%;
-      aspect-ratio: 16 / 10;
-      max-height: 180px;
-      object-fit: cover;
-      object-position: top;
-      border-top: 1px solid var(--border);
+      padding: 6px 8px;
+      color: var(--text);
+      font: inherit;
+      font-size: 0.78rem;
+      text-align: start;
+      background: none;
+      border: 0;
+      border-radius: var(--radius-sm);
+      cursor: default;
+    }
+    .menu button:hover {
+      background: var(--panel-hover);
+    }
+    .menu button.external {
+      cursor: pointer;
+    }
+    .menu svg {
+      width: 14px;
+      height: 14px;
+      color: var(--muted);
     }
   `;
+
+  override updated() {
+    const preview = this.preview;
+    const context = this.context;
+    const snapshot = context?.gateway.snapshot;
+    const client = snapshot?.client;
+    const revision = this.revision;
+    if (
+      !preview ||
+      !context ||
+      !snapshot ||
+      !client ||
+      !isBrowserPanelAvailable(snapshot) ||
+      !this.latest ||
+      !revision
+    ) {
+      if (!this.latest || !snapshot || !isBrowserPanelAvailable(snapshot)) {
+        // Dropping the request marker keeps a pending capture from landing and
+        // lets a later availability recovery re-request the thumbnail.
+        this.requestedRevision = undefined;
+        this.thumbnailSrc = undefined;
+      }
+      return;
+    }
+    if (this.requestedRevision === revision) {
+      return;
+    }
+    this.requestedRevision = revision;
+    void loadBrowserTabThumbnail({
+      client,
+      targetId: preview.targetId,
+      revision,
+      resourceBasePath: context.resourceBasePath,
+      authToken: resolveControlUiAuthToken({
+        hello: snapshot.hello,
+        settings: { token: context.gateway.connection.token },
+        password: context.gateway.connection.password,
+      }),
+    }).then((src) => {
+      if (this.requestedRevision === revision) {
+        this.thumbnailSrc = src;
+      }
+    });
+  }
+
+  private readonly openPanel = () => {
+    this.menuOpen = false;
+    this.dispatchEvent(
+      new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {
+        detail: { open: true },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  };
+
+  private readonly toggleMenu = (event: Event) => {
+    event.stopPropagation();
+    this.menuOpen = !this.menuOpen;
+    if (this.menuOpen) {
+      window.addEventListener("click", this.closeMenuOnOutsideClick);
+    } else {
+      window.removeEventListener("click", this.closeMenuOnOutsideClick);
+    }
+  };
+
+  private readonly copyUrl = async () => {
+    const url = this.preview?.url;
+    this.menuOpen = false;
+    if (url) {
+      try {
+        await navigator.clipboard.writeText(url);
+      } catch {
+        // Clipboard access can be denied; the URL stays visible on the card.
+      }
+    }
+  };
+
+  private readonly openExternal = () => {
+    const url = this.preview?.url;
+    this.menuOpen = false;
+    if (url) {
+      window.open(url, "_blank", "noopener");
+    }
+  };
 
   override render() {
     const preview = this.preview;
@@ -117,48 +287,62 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       // Internal page URLs can have no host; keep the supplied label.
     }
     const title = preview.title?.trim() || host || t("browser.title");
-    const context = this.context;
-    const snapshot = context?.gateway.snapshot;
-    const thumbnail =
-      context &&
-      snapshot?.client &&
-      isBrowserPanelAvailable(snapshot) &&
-      this.latest &&
-      this.revision
-        ? loadBrowserTabThumbnail({
-            client: snapshot.client,
-            targetId: preview.targetId,
-            revision: this.revision,
-            resourceBasePath: context.resourceBasePath,
-            authToken: resolveControlUiAuthToken({
-              hello: snapshot.hello,
-              settings: { token: context.gateway.connection.token },
-              password: context.gateway.connection.password,
-            }),
-          }).then((src) => (src ? html`<img src=${src} alt="" />` : nothing))
-        : nothing;
+    const label = preview.url ? `${title} — ${preview.url}` : title;
     return html`
-      <button
-        type="button"
-        title=${t("browser.openPanel")}
-        @click=${() =>
-          this.dispatchEvent(
-            new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {
-              detail: { open: true },
-              bubbles: true,
-              composed: true,
-            }),
-          )}
-      >
-        <span class="header">
+      <div class="card">
+        ${this.thumbnailSrc
+          ? html`
+              <button
+                type="button"
+                class="shot"
+                aria-label=${label}
+                title=${t("browser.openPanel")}
+                @click=${this.openPanel}
+              >
+                <img src=${this.thumbnailSrc} alt="" />
+              </button>
+            `
+          : nothing}
+        <div class="bar">
           <span class="icon" aria-hidden="true">${icons.globe}</span>
           <span class="identity">
             <span class="title">${title}</span>
             ${preview.url ? html`<span class="url">${preview.url}</span>` : nothing}
           </span>
-        </span>
-        ${until(thumbnail, nothing)}
-      </button>
+          <span class="actions ${this.menuOpen ? "open" : ""}">
+            <button type="button" title=${t("browser.openPanel")} @click=${this.openPanel}>
+              ${t("browser.open")}
+            </button>
+            <button
+              type="button"
+              class="more"
+              aria-haspopup="menu"
+              aria-expanded=${this.menuOpen}
+              title=${t("browser.moreActions")}
+              @click=${this.toggleMenu}
+            >
+              ${icons.moreHorizontal}
+            </button>
+          </span>
+          ${this.menuOpen
+            ? html`
+                <div class="menu" role="menu">
+                  <button type="button" role="menuitem" @click=${this.copyUrl}>
+                    ${icons.copy}${t("browser.copyUrl")}
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="external"
+                    @click=${this.openExternal}
+                  >
+                    ${icons.globe}${t("browser.openNewTab")}
+                  </button>
+                </div>
+              `
+            : nothing}
+        </div>
+      </div>
     `;
   }
 }

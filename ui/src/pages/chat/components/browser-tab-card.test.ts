@@ -170,8 +170,8 @@ describe("browser tab card", () => {
     const next = await draw(false);
     expect(next).toHaveLength(1);
     expect(next[0]?.shadowRoot?.querySelector(".title")?.textContent).toBe("newest");
+    await vi.waitFor(() => expect(gateway.request).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(next[0]?.shadowRoot?.querySelector("img")).not.toBeNull());
-    expect(gateway.request).toHaveBeenCalledTimes(2);
   });
 
   it("keeps one card per distinct tab", async () => {
