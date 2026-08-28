@@ -1,0 +1,3 @@
+display_name: Telegram E2E (Userbot)
+short_description: Drive leased Telegram Test Server bots as a real QA user.
+default_prompt: Select the matching Telegram behavior recipe, pass the credential doctor, run one Test Server userbot proof, preserve Telegram, gateway, and provider evidence, judge the exact claim, and release all test resources.

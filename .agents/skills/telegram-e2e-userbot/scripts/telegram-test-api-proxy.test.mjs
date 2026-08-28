@@ -1,0 +1,92 @@
+import assert from "node:assert/strict";
+import http from "node:http";
+import test from "node:test";
+import { startTelegramTestApiProxy, telegramTestApiPath } from "./telegram-test-api-proxy.mjs";
+
+async function listen(server) {
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  return `http://127.0.0.1:${address.port}`;
+}
+
+test("inserts the Test Server segment after the bot token", () => {
+  assert.equal(telegramTestApiPath("/bot123:ABC/getUpdates"), "/bot123:ABC/test/getUpdates");
+  assert.equal(
+    telegramTestApiPath("/file/bot123:ABC/photos/file.jpg"),
+    "/file/bot123:ABC/test/photos/file.jpg",
+  );
+  assert.throws(() => telegramTestApiPath("/healthz"), /invalid Bot API path/u);
+});
+
+test("proxies method, query, headers, and body to the Test Server path", async () => {
+  let observed;
+  const upstreamServer = http.createServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      observed = {
+        method: request.method,
+        url: request.url,
+        body,
+        marker: request.headers["x-marker"],
+      };
+      response.writeHead(201, { "content-type": "application/json", "x-upstream": "yes" });
+      response.end(JSON.stringify({ ok: true }));
+    });
+  });
+  const upstream = await listen(upstreamServer);
+  const proxy = await startTelegramTestApiProxy({ upstream });
+  const response = await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage?chat_id=42`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-marker": "kept" },
+    body: JSON.stringify({ text: "hello" }),
+  });
+  assert.equal(response.status, 201);
+  assert.equal(response.headers.get("x-upstream"), "yes");
+  assert.deepEqual(await response.json(), { ok: true });
+  assert.deepEqual(observed, {
+    method: "POST",
+    url: "/bot123:ABC/test/sendMessage?chat_id=42",
+    body: '{"text":"hello"}',
+    marker: "kept",
+  });
+  await proxy.close();
+  await new Promise((resolve) => upstreamServer.close(resolve));
+});
+
+test("holds one upstream-accepted method response until explicit release", async () => {
+  const upstreamServer = http.createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: true }));
+  });
+  const upstream = await listen(upstreamServer);
+  const proxy = await startTelegramTestApiProxy({ upstream });
+  proxy.holdNextResponse({ method: "sendMessage", skip: 1 });
+  await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, { method: "POST", body: "first" });
+  let bodySettled = false;
+  const heldBody = fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
+    method: "POST",
+    body: "second",
+  })
+    .then((response) => response.json())
+    .then((body) => {
+      bodySettled = true;
+      return body;
+    });
+  const held = await proxy.waitForHeldResponse("sendMessage", 1_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(bodySettled, false);
+  assert.deepEqual(
+    { method: held.method, ordinal: held.ordinal },
+    { method: "sendMessage", ordinal: 2 },
+  );
+  proxy.releaseHeldResponse();
+  assert.deepEqual(await heldBody, { ok: true });
+  assert.equal(proxy.getResponseHoldEvents()[0].releasedAt >= held.heldAt, true);
+  await proxy.close();
+  await new Promise((resolve) => upstreamServer.close(resolve));
+});
