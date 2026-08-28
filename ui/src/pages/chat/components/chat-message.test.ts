@@ -867,6 +867,47 @@ describe("grouped chat rendering", () => {
     expect(order).toEqual(["Reply to message", "Rewind", "name", "time"]);
   });
 
+  it("exposes queued editing and removal beside the user bubble without repeating its text", () => {
+    const container = document.createElement("div");
+    const onQueueEdit = vi.fn();
+    const onQueueRemove = vi.fn();
+    const queued = {
+      id: "future-send",
+      text: "Future prompt",
+      createdAt: 1,
+      sendState: "waiting-idle" as const,
+    };
+    renderGroupedMessage(
+      container,
+      createUserMessage(queued.text, {
+        __openclaw: { id: queued.id, kind: "pending-send", state: queued.sendState },
+      }),
+      "user",
+      { queueControls: { queue: [queued], onQueueEdit, onQueueRemove } },
+    );
+    const bubble = expectElement(container, ".chat-group.user .chat-bubble", HTMLElement);
+    const controls = expectElement(container, ".chat-group.user .chat-queue__item", HTMLElement);
+    expect(bubble.textContent).toContain(queued.text);
+    expect(controls.textContent).toContain("Queued");
+    expect(controls.textContent).not.toContain(queued.text);
+    controls.querySelector("wa-dropdown")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: {
+          item: Object.assign(document.createElement("wa-dropdown-item"), { value: "edit" }),
+        },
+      }),
+    );
+    expect(onQueueEdit).toHaveBeenCalledWith(queued.id);
+    const link = document.createElement("a");
+    bubble.append(link);
+    link.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(onQueueEdit).toHaveBeenCalledOnce();
+    bubble.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(onQueueEdit).toHaveBeenCalledTimes(2);
+    controls.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
+    expect(onQueueRemove).toHaveBeenCalledWith(queued.id);
+  });
+
   it.each([
     { state: "failed", label: "Not sent", actionLabel: undefined },
     { state: "unconfirmed", label: "Delivery unconfirmed", actionLabel: undefined },
@@ -1952,9 +1993,9 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-author-avatar")).toBeNull();
   });
 
-  it("links a peer sender's name to their activity feed and leaves your own plain", () => {
+  it("sender provenance links only profiles and does not identify colliding legacy senders as you", () => {
     const navigate = vi.fn();
-    const renderSender = (senderId: string) => {
+    const renderSender = (senderId: string, profile = true) => {
       const container = document.createElement("div");
       const message = { role: "user", content: "hello", timestamp: 1000 };
       render(
@@ -1962,7 +2003,11 @@ describe("grouped chat rendering", () => {
           createMessageGroup(message, "user", {
             key: `sender-link-${senderId}`,
             senderLabel: "Alice Example",
-            sender: { id: senderId, name: "Alice Example" },
+            sender: {
+              id: senderId,
+              name: "Alice Example",
+              ...(profile ? { identity: { type: "profile" as const, id: senderId } } : {}),
+            },
             messages: [createMessageEntry(`sender-link-${senderId}-message`, message)],
           }),
           {
@@ -1986,6 +2031,10 @@ describe("grouped chat rendering", () => {
     const own = renderSender("me");
     expect(own.querySelector("a.chat-sender-name")).toBeNull();
     expect(own.querySelector(".chat-sender-name")?.textContent).toBe("Local User");
+    const legacy = renderSender("me", false);
+    expect(legacy.querySelector("a.chat-sender-name")).toBeNull();
+    expect(legacy.querySelector(".chat-sender-name")?.textContent).toBe("Alice Example");
+    expect(renderSender("profile-alice", false).querySelector("a.chat-sender-name")).toBeNull();
   });
 
   it("tints attributed user groups with the sender's stable identity hue", () => {
@@ -2030,7 +2079,12 @@ describe("grouped chat rendering", () => {
 
   it.each([
     { label: "foreign sender", sender: { id: "other-user" }, userId: "current-user", peer: true },
-    { label: "own sender", sender: { id: "current-user" }, userId: "current-user", peer: false },
+    {
+      label: "own sender",
+      sender: { id: "current-user", identity: { type: "profile" as const, id: "current-user" } },
+      userId: "current-user",
+      peer: false,
+    },
     { label: "unattributed sender", sender: undefined, userId: "current-user", peer: false },
     {
       label: "attributed sender without a viewer",
@@ -2303,14 +2357,18 @@ describe("grouped chat rendering", () => {
     expect(container.textContent).not.toContain("Guardian warning");
   });
 
-  it("uses the current profile display name for the signed-in user's historical messages", () => {
+  it("uses the current profile display name for the signed-in user's proven profile messages", () => {
     const container = document.createElement("div");
     render(
       renderMessageGroup(
         createMessageGroup({ role: "user", content: "hello", timestamp: 1000 }, "user", {
           key: "current-user-group",
           senderLabel: "fullerstackd",
-          sender: { id: "profile-1", username: "fullerstackd" },
+          sender: {
+            id: "profile-1",
+            username: "fullerstackd",
+            identity: { type: "profile", id: "profile-1" },
+          },
           messages: [
             {
               key: "current-user-message",
@@ -4209,9 +4267,22 @@ describe("grouped chat rendering", () => {
       );
 
     renderMessage();
-    expect(
-      container.querySelector(".chat-assistant-attachment-card__status-meta")?.textContent?.trim(),
-    ).toBe("Checking...");
+    const checkingCard = container.querySelector(
+      '.chat-assistant-attachment-card--checking[aria-busy="true"]',
+    );
+    const skeleton = checkingCard?.querySelector(
+      ".chat-assistant-attachment-card__status-meta.skeleton",
+    );
+    const actionSkeleton = checkingCard?.querySelector(
+      ".chat-assistant-attachment-card__action-skeleton.skeleton",
+    );
+    const actionReservation = checkingCard?.querySelector(
+      ".chat-assistant-attachment-card__actions--loading",
+    );
+    expect(skeleton?.getAttribute("aria-hidden")).toBe("true");
+    expect(skeleton?.textContent?.trim()).toBe("");
+    expect(actionSkeleton?.getAttribute("aria-hidden")).toBe("true");
+    expect(actionReservation?.getAttribute("aria-hidden")).toBe("true");
     await flushAssistantAttachmentAvailabilityChecks();
 
     const expectedMetaUrl = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source).replaceAll("%20", "+")}&meta=1`;
@@ -4220,6 +4291,7 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toBe(expectedMetaUrl.replace("&meta=1", "&mediaTicket=ticket-local"));
+    expect(container.querySelector(".chat-assistant-attachment-card__action-skeleton")).toBeNull();
   });
 
   it("stops checking when local assistant attachment metadata fetch stalls", async () => {
@@ -4258,9 +4330,18 @@ describe("grouped chat rendering", () => {
       );
 
     rerender();
-    expect(
-      container.querySelector(".chat-assistant-attachment-card__status-meta")?.textContent?.trim(),
-    ).toBe("Checking...");
+    const checkingCard = container.querySelector(
+      '.chat-assistant-attachment-card--checking[aria-busy="true"]',
+    );
+    const skeleton = checkingCard?.querySelector(
+      ".chat-assistant-attachment-card__status-meta.skeleton",
+    );
+    const actionSkeleton = checkingCard?.querySelector(
+      ".chat-assistant-attachment-card__action-skeleton.skeleton",
+    );
+    expect(skeleton?.getAttribute("aria-hidden")).toBe("true");
+    expect(skeleton?.textContent?.trim()).toBe("");
+    expect(actionSkeleton?.getAttribute("aria-hidden")).toBe("true");
 
     const expectedMetaUrl = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&meta=1`;
     const [, fetchInit] = requireFetchCallForUrl(fetchMock, expectedMetaUrl);
@@ -4272,6 +4353,7 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector(".chat-assistant-attachment-card__status-meta")?.textContent,
     ).toContain("Unavailable");
+    expect(container.querySelector(".chat-assistant-attachment-card__action-skeleton")).toBeNull();
   });
 
   it("refreshes local assistant media tickets before expiry without another render", async () => {

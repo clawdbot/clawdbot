@@ -185,6 +185,12 @@ as untrusted.
 - Media downloads are capped by `channels.line.mediaMaxMb` (default 10).
 - Inbound media is saved under `~/.openclaw/media/inbound/` before it is passed
   to the agent, matching the shared media store used by other channel plugins.
+- LINE webhooks carry ids but no names, so the sender's display name and the
+  group's name are fetched once and cached for five minutes. Group and room
+  members are read through their conversation, which is the only way to see a
+  member who has not added the bot as a friend. If either lookup fails the raw
+  id is used and the message is still delivered. Multi-person rooms have no name
+  API, so they keep their room id.
 
 ## Structured rich messages
 

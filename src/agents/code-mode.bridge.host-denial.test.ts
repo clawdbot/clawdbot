@@ -27,6 +27,7 @@ import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import * as codeModeBridge from "./code-mode-bridge.js";
 import { consumeRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
+import { isCodeModeBridgeRepairEligible } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -36,6 +37,7 @@ import {
   testing,
   waitUntilCompleted,
 } from "./code-mode.test-support.js";
+import { consumeToolEffectReceipt } from "./tool-effect-receipt.js";
 import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 import { jsonResult, ToolInputError } from "./tools/common.js";
@@ -545,13 +547,13 @@ describe("Code Mode subscribed host denial", () => {
           testing.activeRuns.get(String(details.runId)),
           "real parked history",
         );
-        expect(parked.bridgeDispatch.potentiallyMutatingDispatches).toBeGreaterThanOrEqual(1);
+        expect(isCodeModeBridgeRepairEligible(parked.bridgeDispatch)).toBe(false);
         details = resultDetails(
           await expectDefined(harness.tools[1], "wait").execute("resume-denial", {
             runId: details.runId,
           }),
         );
-        expect(parked.bridgeDispatch.potentiallyMutatingDispatches).toBeGreaterThanOrEqual(1);
+        expect(isCodeModeBridgeRepairEligible(parked.bridgeDispatch)).toBe(false);
       }
       if (order === "late-settlement") {
         expect(details.status).toBe("waiting");
@@ -559,7 +561,7 @@ describe("Code Mode subscribed host denial", () => {
           testing.activeRuns.get(String(details.runId)),
           "pending mutation",
         );
-        expect(pending.bridgeDispatch.potentiallyMutatingDispatches).toBe(1);
+        expect(isCodeModeBridgeRepairEligible(pending.bridgeDispatch)).toBe(false);
         expect(consumeRepairableCodeModeFailure(details)).toBe(false);
         await expect(fs.readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
         releaseLateMutation.resolve();
@@ -570,7 +572,7 @@ describe("Code Mode subscribed host denial", () => {
           }),
         );
         await vi.waitFor(() => expect(harness.subscription.getItemLifecycle().activeCount).toBe(0));
-        expect(pending.bridgeDispatch.potentiallyMutatingDispatches).toBe(1);
+        expect(isCodeModeBridgeRepairEligible(pending.bridgeDispatch)).toBe(false);
       }
       details = await harness.complete(details);
       expect(details).toMatchObject({ status: "failed", bridgeDispatchStarted: true });
@@ -723,9 +725,9 @@ describe("Code Mode subscribed host denial", () => {
           const reused = await harness.runToCompletion();
           expect(consumeRepairableCodeModeFailure(reused)).toBe(false);
         } else {
-          expect(consumeTrustedToolNoStartError(first)).toBe(true);
+          expect(consumeToolEffectReceipt(first)).toEqual({ state: "not_started" });
         }
-        expect(consumeTrustedToolNoStartError(first)).toBe(false);
+        expect(consumeToolEffectReceipt(first)).toBeUndefined();
         expect(harness.spawn).not.toHaveBeenCalled();
       } finally {
         harness.dispose();

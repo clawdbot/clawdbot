@@ -5413,7 +5413,7 @@ server.listen(0, "127.0.0.1", () => {
     const saveStep = expectDefined(androidSteps[saveIndex], "Robolectric cache save");
 
     expect([restoreIndex, configureIndex, runIndex, saveIndex]).toEqual(
-      [...[restoreIndex, configureIndex, runIndex, saveIndex]].toSorted((a, b) => a - b),
+      [restoreIndex, configureIndex, runIndex, saveIndex].toSorted((a, b) => a - b),
     );
     expect(restoreStep).toMatchObject({
       id: "robolectric-cache",
@@ -5719,7 +5719,7 @@ server.listen(0, "127.0.0.1", () => {
     expect(ensureHeadStep.with["fetch-ref"]).toContain("refs/pull/{0}/merge");
 
     for (const revision of ["base", "head"]) {
-      const step = additionalJob.steps.find(
+      const ensureRevisionStep = additionalJob.steps.find(
         (step: WorkflowStep) => step.name === `Ensure Plugin SDK API diff ${revision} commit`,
       );
       for (const [eventName, group, eligible] of [
@@ -5729,7 +5729,7 @@ server.listen(0, "127.0.0.1", () => {
         ["workflow_dispatch", "boundaries", false],
       ] as const) {
         expect(
-          evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+          evaluateWorkflowExpression(`\${{ ${ensureRevisionStep.if} }}`, {
             eventName,
             matrix: { group },
             repository: "openclaw/openclaw",
@@ -6144,9 +6144,6 @@ server.listen(0, "127.0.0.1", () => {
       CHECKOUT_SHA: "${{ needs.preflight.outputs.checkout_revision }}",
       WORKFLOW_SHA: "${{ github.workflow_sha }}",
     });
-    expect(nativeCheckout.run).toContain('harness_dir="$workdir/.ci-harness"');
-    expect(nativeCheckout.run).toContain('"+${WORKFLOW_SHA}:refs/remotes/origin/ci-harness"');
-    expect(nativeCheckout.run).toContain("sparse-checkout set .github/actions");
 
     for (const [jobName, job] of Object.entries(workflow.jobs)) {
       for (const step of (job as { steps?: WorkflowStep[] }).steps ?? []) {
@@ -6401,13 +6398,19 @@ server.listen(0, "127.0.0.1", () => {
     ).toBe("pnpm plugin-sdk:surface:check");
   });
 
-  it("bounds platform checkout fetches without GNU timeout", () => {
+  it("shares checkout ownership across Linux and native platforms with their existing budgets", () => {
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
     const workflow = readCiWorkflow();
 
     expect(source.match(/&platform_checkout_step/gu) ?? []).toHaveLength(1);
     expect(source.match(/\*platform_checkout_step/gu) ?? []).toHaveLength(4);
-    expect(source.match(/fetch_checkout_ref_once\(\)/gu) ?? []).toHaveLength(1);
+    expect(source.match(/&owned_checkout_run/gu) ?? []).toHaveLength(1);
+    const linuxCheckout = workflow.jobs["checks-fast-core"].steps.find(
+      (step: WorkflowStep) => step.name === "Checkout",
+    );
+    expect(linuxCheckout.run).toContain('linux = os.environ["RUNNER_OS"] == "Linux"');
+    expect(linuxCheckout.run).toContain("fetch_timeout_seconds = 120 if linux else 90");
+    expect(linuxCheckout.run).toContain("cleanup_seconds = 10");
 
     for (const jobName of [
       "checks-windows",
@@ -6420,26 +6423,10 @@ server.listen(0, "127.0.0.1", () => {
         (step: WorkflowStep) => step.name === "Checkout",
       );
 
-      expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
-      expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref_once()");
-      expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
-      expect(checkoutStep.run, jobName).toContain("fetch_timeout_seconds=90");
-      expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
-      expect(checkoutStep.run, jobName).toContain(
-        "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
-      );
-      expect(checkoutStep.run, jobName).toContain(
-        'if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then',
-      );
-      expect(checkoutStep.run, jobName).toContain('kill -TERM "$fetch_pid"');
-      expect(checkoutStep.run, jobName).toContain('kill -KILL "$fetch_pid"');
-      expect(checkoutStep.run, jobName).toContain(
-        'if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then',
-      );
-      expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
-      expect(checkoutStep.run, jobName).not.toContain(
-        'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
-      );
+      expect(checkoutStep.run, jobName).toBe(linuxCheckout.run);
+      expect(checkoutStep.env, jobName).toEqual(linuxCheckout.env);
+      // Bootstrap cannot load Python startup code from the candidate checkout.
+      expect(checkoutStep.run, jobName).toContain('exec "$python_command" -I -S -');
     }
 
     const macosNodeSetup = workflow.jobs["macos-node"].steps.find(
@@ -7329,10 +7316,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checksFastJob.env.CHECKOUT_BASE_SHA).toBe(
       "${{ (matrix.task == 'baseline-ratchets' || startsWith(matrix.task, 'release-lint-')) && needs.preflight.outputs.diff_base_revision || '' }}",
     );
-    expect(checkout.run).toContain(
-      'fetch_refs+=("+${CHECKOUT_BASE_SHA}:refs/remotes/origin/ci-ratchet-base")',
-    );
-    expect(checkout.run).toContain('"${fetch_refs[@]}" || return 1');
+    expect(checkout.env.CHECKOUT_SHA).toBe("${{ needs.preflight.outputs.checkout_revision }}");
     expect(releaseGateMerge.if).toBe(
       "(matrix.task == 'baseline-ratchets' || startsWith(matrix.task, 'release-lint-')) && github.event_name == 'workflow_dispatch' && inputs.release_gate",
     );

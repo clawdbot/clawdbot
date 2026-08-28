@@ -1008,9 +1008,14 @@ npm_builtin_config_path() {
 npm_config_has_raw_key() {
     local npm_cmd="$1"
     local key="$2"
+    local project_dir="${3:-}"
     local raw=""
     local file=""
     local -a files=()
+
+    if [[ -n "$project_dir" ]]; then
+        files+=("${project_dir}/.npmrc")
+    fi
 
     raw="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
     if [[ -n "$raw" ]]; then
@@ -2586,6 +2591,14 @@ run_pnpm() {
     "${PNPM_CMD[@]}" "$@"
 }
 
+should_prefer_offline_pnpm_install() {
+    local project_dir="${1:-$PWD}"
+    [[ -z "${PNPM_CONFIG_PREFER_OFFLINE+x}" && -z "${pnpm_config_prefer_offline+x}" ]] || return 1
+    local configured=""
+    configured="$(run_pnpm -C "$project_dir" config get prefer-offline 2>/dev/null)" || return 1
+    [[ -z "$configured" || "$configured" == "undefined" || "$configured" == "null" ]]
+}
+
 resolve_git_openclaw_ref() {
     local requested="${OPENCLAW_VERSION:-latest}"
     local resolved_version=""
@@ -3316,7 +3329,11 @@ install_openclaw_from_git() {
 
     local install_lockfile_flag
     install_lockfile_flag="$(git_install_lockfile_flag "$GIT_REF_KIND")"
-    CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
+    local -a pnpm_prefer_offline_args=()
+    if should_prefer_offline_pnpm_install "$repo_dir"; then
+        pnpm_prefer_offline_args=(--prefer-offline)
+    fi
+    CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"
 
     if ! run_quiet_step "Building UI" run_pnpm -C "$repo_dir" ui:build; then
         ui_warn "UI build failed; continuing (CLI may still work)"

@@ -14,6 +14,7 @@ type AssistantDirectiveMessage = {
 
 type AssistantDeliveryFacts = {
   audioAsVoice?: true;
+  mediaUrls?: string[];
   replyToCurrent?: true;
   replyToId?: string;
   tts?: AssistantDeliveryTtsFacts;
@@ -36,14 +37,18 @@ function mergeTtsFacts(
 // TRANSITIONAL(marker-retirement): once the visibleReplies default flips and the
 // model stops emitting inline markers, this projection parses nothing and the
 // whole applier (plus its parser imports) can be deleted; openclawDelivery facts
-// then come exclusively from structured message-tool sends.
+// then come exclusively from structured message-tool sends and managed-media rewrites.
 export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMessage>(
   message: T,
+  options?: { managedMediaUrls?: readonly string[] },
 ): T {
   if (message.role !== "assistant" || !Array.isArray(message.content)) {
     return message;
   }
   let facts: AssistantDeliveryFacts | undefined;
+  const managedMediaUrls = Array.from(
+    new Set(options?.managedMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []),
+  );
   for (const block of message.content) {
     if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") {
       continue;
@@ -66,6 +71,9 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
       ...(parsed.replyToExplicitId ? { replyToId: parsed.replyToExplicitId } : {}),
       ...(tts.facts ? { tts: mergeTtsFacts(facts.tts, tts.facts) } : {}),
     });
+  }
+  if (managedMediaUrls.length > 0) {
+    facts = { ...facts, mediaUrls: managedMediaUrls };
   }
   if (facts) {
     const currentFacts = isRecord(message.openclawDelivery) ? message.openclawDelivery : undefined;

@@ -1009,17 +1009,57 @@ describe("message-normalizer", () => {
 });
 
 describe("sender label opaque-id stripping", () => {
-  it("strips a baked profile-UUID suffix and preserves it as sender identity", () => {
+  it.each([
+    { type: "profile", id: "x".repeat(513) },
+    { type: "profile", id: "profile", label: "untrusted extra field" },
+    { type: "observation", id: "profile" },
+  ])("drops invalid sender provenance without losing display attribution: %j", (senderIdentity) => {
+    expect(
+      normalizeMessage({
+        role: "user",
+        content: "hello",
+        __openclaw: {
+          senderIdentity,
+          senderId: "profile",
+          senderName: "Display",
+          senderProfileAvatarUrl: "/api/users/profile/avatar",
+        },
+      }).sender,
+    ).toEqual({ id: "profile", name: "Display" });
+  });
+
+  it("sender provenance preserves typed identity and refuses unqualified profile display", () => {
+    const identity = { type: "profile", id: "shared-id" };
+    const metadata = {
+      senderId: "shared-id",
+      senderName: "Person",
+      senderProfileAvatarUrl: "/api/users/shared-id/avatar",
+    };
+    expect(
+      normalizeMessage({
+        role: "user",
+        content: "hello",
+        __openclaw: { ...metadata, senderIdentity: identity },
+      }).sender,
+    ).toEqual({
+      id: "shared-id",
+      name: "Person",
+      profileAvatarUrl: metadata.senderProfileAvatarUrl,
+      identity,
+    });
+    expect(
+      normalizeMessage({ role: "user", content: "hello", __openclaw: metadata }).sender,
+    ).toEqual({ id: "shared-id", name: "Person" });
+  });
+
+  it("strips a baked UUID suffix without inventing profile identity", () => {
     const normalized = normalizeMessage({
       role: "user",
       content: "hi",
       senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)",
     });
     expect(normalized.senderLabel).toBe("steipete");
-    // Legacy rows have no structured sender; the UUID from the label is the
-    // only author key, so it must survive as non-display identity.
     expect(normalized.sender).toEqual({
-      id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
       name: "steipete",
     });
   });
@@ -1055,16 +1095,13 @@ describe("sender label opaque-id stripping", () => {
     ).toBe("(c3e32452-0467-47e5-aafa-233cd5dae29f)");
   });
 
-  it("attributes a bare-UUID legacy label to that profile", () => {
+  it("keeps a bare-UUID legacy label as display only", () => {
     const normalized = normalizeMessage({
       role: "user",
       content: "hi",
       senderLabel: "c3e32452-0467-47e5-aafa-233cd5dae29f",
     });
-    // Nameless legacy senders keep the UUID as last-resort display, but the
-    // row still attributes (and resolves its avatar) to that profile instead
-    // of falling back to the local viewer identity.
     expect(normalized.senderLabel).toBe("c3e32452-0467-47e5-aafa-233cd5dae29f");
-    expect(normalized.sender).toEqual({ id: "c3e32452-0467-47e5-aafa-233cd5dae29f" });
+    expect(normalized.sender).toEqual({ name: "c3e32452-0467-47e5-aafa-233cd5dae29f" });
   });
 });

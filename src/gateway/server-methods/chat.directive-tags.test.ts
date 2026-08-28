@@ -3349,6 +3349,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(content.filter((block) => block.type === "image")).toHaveLength(1);
       expect(rewritten?.openclawDelivery).toEqual({
         audioAsVoice: true,
+        mediaUrls: [mediaUrl],
         replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
       });
       expect(JSON.stringify(rewritten)).not.toContain("[[reply_to:");
@@ -3422,6 +3423,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         });
         expect(JSON.stringify(content)).toContain("artifact_managed_image_");
         expect(JSON.stringify(content)).not.toContain("MEDIA:");
+        expect(messages[1]?.openclawDelivery).toEqual({ mediaUrls: [mediaUrl] });
         expect(JSON.stringify(messages)).not.toContain(":assistant-media");
         expect(messages[2]?.content).toEqual([
           { type: "text", text: `Later reply\nMEDIA:${mediaUrl}` },
@@ -3741,9 +3743,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           expect(assistantEntries).toHaveLength(1);
           expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
           expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
-          expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
+          expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(mediaUrl);
           expect(assistantEntries[0]?.openclawDelivery).toEqual({
             audioAsVoice: true,
+            mediaUrls: [mediaUrl],
             replyToCurrent: true,
           });
           expect(JSON.stringify(assistantEntries[0])).not.toContain("[[reply_to:");
@@ -3788,7 +3791,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expect(assistantEntries).toHaveLength(1);
         expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
         expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
-        expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
+        expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(mediaUrl);
       },
     );
   });
@@ -3827,7 +3830,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
         expect(JSON.stringify(assistantEntries[0])).toContain(replyText);
         expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
-        expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
+        expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(mediaUrl);
       },
     );
   });
@@ -3879,8 +3882,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         ]);
         expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
         expect(JSON.stringify(assistantEntries[1])).toContain("/api/chat/media/outgoing/");
-        expect(JSON.stringify(assistantEntries[0])).not.toContain(firstMediaUrl);
-        expect(JSON.stringify(assistantEntries[1])).not.toContain(secondMediaUrl);
+        expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(firstMediaUrl);
+        expect(JSON.stringify(assistantEntries[1]?.content)).not.toContain(secondMediaUrl);
       },
     );
   });
@@ -3926,7 +3929,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expect(assistantEntries).toHaveLength(1);
         expect(assistantEntries[0]?.idempotencyKey).toBe(backedMirrorKey);
         expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
-        expect(JSON.stringify(assistantEntries[0])).not.toContain(firstMediaUrl);
+        expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(firstMediaUrl);
         expect(JSON.stringify(broadcastContent)).not.toContain(secondMediaUrl);
       },
     );

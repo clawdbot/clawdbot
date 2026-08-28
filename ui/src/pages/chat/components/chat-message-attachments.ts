@@ -382,7 +382,6 @@ export function renderAssistantAttachments(
     if (item.type === "attachment_error") {
       const { attachment } = item;
       return renderAssistantAttachmentStatusCard({
-        kind: attachment.kind,
         label: attachment.label,
         mimeType: attachment.mimeType,
         badge: t("chat.attachments.notSent"),
@@ -555,13 +554,9 @@ export function renderAssistantAttachments(
     ) {
       if (!attachmentUrl) {
         return renderAssistantAttachmentStatusCard({
-          kind: "image",
           label: attachment.label,
           mimeType: attachment.mimeType,
-          badge:
-            availability.status === "checking"
-              ? t("chat.attachments.checking")
-              : t("chat.attachments.unavailable"),
+          badge: availability.status === "unavailable" ? t("chat.attachments.unavailable") : "",
           reason: availability.status === "unavailable" ? availability.reason : undefined,
           onRetry: retryUnavailableAttachment,
         });
@@ -595,20 +590,15 @@ export function renderAssistantAttachments(
     }
     if (!attachmentUrl) {
       return renderAssistantAttachmentStatusCard({
-        kind: attachment.kind,
         label: attachment.label,
         mimeType: attachment.mimeType,
-        badge:
-          availability.status === "checking"
-            ? t("chat.attachments.checking")
-            : t("chat.attachments.unavailable"),
+        badge: availability.status === "unavailable" ? t("chat.attachments.unavailable") : "",
         reason: availability.status === "unavailable" ? availability.reason : undefined,
         onRetry: retryUnavailableAttachment,
       });
     }
     if ((attachment.kind === "audio" || attachment.kind === "video") && !safeAttachmentUrl) {
       return renderAssistantAttachmentStatusCard({
-        kind: attachment.kind,
         label: attachment.label,
         mimeType: attachment.mimeType,
         badge: t("chat.attachments.unavailable"),

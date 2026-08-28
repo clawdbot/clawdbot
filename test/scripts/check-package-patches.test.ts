@@ -53,7 +53,11 @@ afterEach(() => {
 });
 
 describe("check-package-patches", () => {
-  it("allows approved pnpm patches", () => {
+  it.each([
+    ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
+    ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
+    ["@vitest/runner@4.1.11", "patches/@vitest__runner@4.1.11.patch"],
+  ])("allows approved pnpm patch %s", (specifier, patchPath) => {
     const dir = makeRepo();
     mkdirSync(path.join(dir, "patches"), { recursive: true });
     writeFileSync(
@@ -61,7 +65,7 @@ describe("check-package-patches", () => {
       `packages:
   - .
 patchedDependencies:
-  "baileys@7.0.0-rc12": "patches/baileys@7.0.0-rc12.patch"
+  "${specifier}": "${patchPath}"
 `,
       "utf8",
     );
@@ -69,11 +73,11 @@ patchedDependencies:
       path.join(dir, "pnpm-lock.yaml"),
       `lockfileVersion: '9.0'
 patchedDependencies:
-  baileys@7.0.0-rc12: a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2
+  "${specifier}": a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2
 `,
       "utf8",
     );
-    writeFileSync(path.join(dir, "patches", "baileys@7.0.0-rc12.patch"), "diff\n", "utf8");
+    writeFileSync(path.join(dir, patchPath), "diff\n", "utf8");
     git(dir, ["add", "pnpm-workspace.yaml", "pnpm-lock.yaml", "patches"]);
 
     expect(collectPackagePatchViolations(dir)).toEqual([]);

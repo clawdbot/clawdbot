@@ -155,6 +155,7 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   upsertPairingRequestMock: vi.fn(async (_args: unknown) => ({ code: "CODE", created: true })),
 }));
 const downloadLineMediaMock = vi.hoisted(() => vi.fn());
+const getUserDisplayNameMock = vi.hoisted(() => vi.fn(async (userId: string) => userId));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   resolvePairingIdLabel: () => "lineUserId",
@@ -168,6 +169,8 @@ vi.mock("./download.js", async (importActual) => ({
 }));
 
 vi.mock("./send.js", () => ({
+  getLineGroupName: vi.fn(),
+  getUserDisplayName: getUserDisplayNameMock,
   pushMessageLine: pairingDeliveryMocks.pushMessageLine,
   replyMessageLine: pairingDeliveryMocks.replyMessageLine,
 }));
@@ -351,6 +354,8 @@ describe("handleLineWebhookEvents", () => {
     downloadLineMediaMock.mockImplementation(async () => {
       throw new Error("downloadLineMedia should not be called from bot-handlers tests");
     });
+    getUserDisplayNameMock.mockReset();
+    getUserDisplayNameMock.mockImplementation(async (userId: string) => userId);
   });
   it("blocks group messages when groupPolicy is disabled", async () => {
     const processMessage = vi.fn();
@@ -856,32 +861,67 @@ describe("handleLineWebhookEvents", () => {
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
   });
 
-  it("records unmentioned group messages as pending history", async () => {
+  it("keeps matching display names distinct in pending group history", async () => {
     const processMessage = vi.fn();
     const groupHistories = new Map<string, HistoryEntry[]>();
-    const event = createTestMessageEvent({
-      message: { id: "m-hist-1", type: "text", text: "hello history", quoteToken: "q-hist-1" },
-      timestamp: 1700000000000,
-      source: { type: "group", groupId: "group-hist-1", userId: "user-hist" },
-      webhookEventId: "evt-hist-1",
+    getUserDisplayNameMock.mockResolvedValue("Sora");
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      groupHistories,
     });
 
     await handleLineWebhookEvents(
-      [event],
-      createLineWebhookTestContext({
-        processMessage,
-        groupPolicy: "open",
-        groupHistories,
-      }),
+      [
+        createTestMessageEvent({
+          message: { id: "m-hist-1", type: "text", text: "first", quoteToken: "q-hist-1" },
+          timestamp: 1700000000000,
+          source: { type: "group", groupId: "group-hist-1", userId: "user-one" },
+          webhookEventId: "evt-hist-1",
+        }),
+        createTestMessageEvent({
+          message: { id: "m-hist-2", type: "text", text: "second", quoteToken: "q-hist-2" },
+          timestamp: 1700000001000,
+          source: { type: "group", groupId: "group-hist-1", userId: "user-two" },
+          webhookEventId: "evt-hist-2",
+        }),
+      ],
+      context,
     );
 
     expect(processMessage).not.toHaveBeenCalled();
-    const entries = groupHistories.get("group-hist-1");
-    expect(entries).toHaveLength(1);
-    const entry = entries?.[0];
-    expect(entry?.sender).toBe("user:user-hist");
-    expect(entry?.body).toBe("hello history");
-    expect(entry?.timestamp).toBe(1700000000000);
+    expect(groupHistories.get("group-hist-1")).toEqual([
+      expect.objectContaining({ sender: "Sora (user-one)", body: "first" }),
+      expect.objectContaining({ sender: "Sora (user-two)", body: "second" }),
+    ]);
+
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-hist-mention",
+            type: "text",
+            text: "@Bot summarize",
+            quoteToken: "q-hist-mention",
+            mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+          },
+          timestamp: 1700000002000,
+          source: { type: "group", groupId: "group-hist-1", userId: "user-three" },
+          webhookEventId: "evt-hist-mention",
+        }),
+      ],
+      context,
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inboundHistory: [
+          expect.objectContaining({ sender: "Sora (user-one)", body: "first" }),
+          expect.objectContaining({ sender: "Sora (user-two)", body: "second" }),
+        ],
+      }),
+    );
   });
 
   it("keeps a group message recorded during a mention turn instead of clearing it", async () => {

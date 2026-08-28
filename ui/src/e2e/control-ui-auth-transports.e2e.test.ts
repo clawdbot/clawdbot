@@ -72,6 +72,7 @@ type ProxyConnectionEvidence = {
   browserOrigin: string | null;
   gatewayResult?: GatewayResultEvidence;
   identityInjected: boolean;
+  requestTarget: string;
   requestMethods: string[];
   requiredHeaderInjected: boolean;
   route: ProxyRoute;
@@ -81,6 +82,7 @@ type ProxyConnectionEvidence = {
 type RealTransportProxy = {
   close: () => Promise<void>;
   evidence: ProxyConnectionEvidence[];
+  ipv4TrustedUrl: string;
   port: number;
   trustedUrl: string;
   untrustedUrl: string;
@@ -173,6 +175,7 @@ function sanitizeProxyEvidence(evidence: ProxyConnectionEvidence) {
     browserOriginPresent: Boolean(evidence.browserOrigin),
     gatewayResult: evidence.gatewayResult,
     identityInjected: evidence.identityInjected,
+    requestTarget: evidence.requestTarget,
     requestMethods: evidence.requestMethods,
     requiredHeaderInjected: evidence.requiredHeaderInjected,
     route: evidence.route,
@@ -293,6 +296,7 @@ async function startRealTransportProxy(gatewayUrl: string): Promise<RealTranspor
       const connectionEvidence: ProxyConnectionEvidence = {
         browserOrigin: stringValue(request.headers.origin),
         identityInjected: route === "trusted",
+        requestTarget: request.url ?? "",
         requestMethods: [],
         requiredHeaderInjected: route === "trusted",
         route,
@@ -324,6 +328,7 @@ async function startRealTransportProxy(gatewayUrl: string): Promise<RealTranspor
       });
     },
     evidence,
+    ipv4TrustedUrl: `ws://127.0.0.1:${address.port}/trusted`,
     port: address.port,
     trustedUrl: `${baseUrl}/trusted`,
     untrustedUrl: `${baseUrl}/untrusted`,
@@ -893,6 +898,93 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
       )}\n`,
       "utf8",
     );
+  });
+
+  it("does not forward prior Gateway credentials across URL scopes", async () => {
+    const connected = await createBrowserPage(gateway.httpUrl, proxy.trustedUrl);
+    await connected.page
+      .locator("openclaw-app-shell")
+      .waitFor({ timeout: controlUiSettleTimeoutMs });
+
+    const seededEvidenceStart = proxy.evidence.length;
+    await connected.page.evaluate((gatewayUrl) => {
+      const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+        "openclaw-app",
+      );
+      if (!app?.runtime) {
+        throw new Error("Control UI runtime is unavailable");
+      }
+      app.runtime.context.gateway.connect({
+        gatewayUrl,
+        token: "prior-gateway-token",
+        password: "prior-gateway-password",
+        bootstrapToken: "prior-gateway-bootstrap",
+      });
+    }, proxy.trustedUrl);
+    await waitForConnectionEvidence(
+      (entry) =>
+        entry.requestTarget === "/trusted" &&
+        entry.browserConnect?.authFields.includes("bootstrapToken") === true,
+      seededEvidenceStart,
+    );
+
+    const queryScopedUrl = `${proxy.trustedUrl}?credential-scope=next`;
+    const queryEvidenceStart = proxy.evidence.length;
+    await connected.page.evaluate((gatewayUrl) => {
+      const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+        "openclaw-app",
+      );
+      if (!app?.runtime) {
+        throw new Error("Control UI runtime is unavailable");
+      }
+      app.runtime.context.gateway.connect({ gatewayUrl });
+    }, queryScopedUrl);
+    const queryEvidence = await waitForConnectionEvidence(
+      (entry) =>
+        entry.requestTarget === "/trusted?credential-scope=next" &&
+        entry.browserConnect !== undefined,
+      queryEvidenceStart,
+    );
+    expect(queryEvidence.browserConnect?.authFields).toEqual(["token"]);
+
+    const originEvidenceStart = proxy.evidence.length;
+    await connected.page.evaluate((gatewayUrl) => {
+      const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+        "openclaw-app",
+      );
+      if (!app?.runtime) {
+        throw new Error("Control UI runtime is unavailable");
+      }
+      app.runtime.context.gateway.connect({ gatewayUrl });
+    }, proxy.ipv4TrustedUrl);
+    const originEvidence = await waitForConnectionEvidence(
+      (entry) => entry.requestTarget === "/trusted" && entry.gatewayResult?.ok === true,
+      originEvidenceStart,
+    );
+    expect(originEvidence.browserConnect?.authFields).toEqual([]);
+
+    const proof = {
+      differentOrigin: {
+        emittedAuthFields: originEvidence.browserConnect?.authFields ?? [],
+        priorApplicationCredentialsAbsent: true,
+        requestTarget: originEvidence.requestTarget,
+      },
+      queryOnly: {
+        emittedAuthFields: queryEvidence.browserConnect?.authFields ?? [],
+        passwordBootstrapAndDeviceTokenAbsent: true,
+        requestTarget: queryEvidence.requestTarget,
+        tokenOriginScopePreserved: true,
+      },
+      source: "built-control-ui-browser-to-real-gateway-proxy",
+    };
+    await writeFile(
+      path.join(artifactDir, "gateway-credential-rescope-proof.json"),
+      `${JSON.stringify(proof, null, 2)}\n`,
+      "utf8",
+    );
+    console.info(`[gateway-credential-rescope-proof] ${JSON.stringify(proof)}`);
+    expect(connected.errors).toEqual([]);
+    await closeConnectedContext(connected.context);
   });
 
   it("confirms gatewayUrl, accepts the allowed origin, and rejects an unlisted origin", async () => {

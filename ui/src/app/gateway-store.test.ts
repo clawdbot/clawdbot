@@ -376,6 +376,18 @@ describe("createApplicationGateway connection phase", () => {
     expect(loadSettings().selectedAgentId).toBeUndefined();
   });
 
+  it("clears inherited credentials when selecting another Gateway", () => {
+    const settings = { ...loadSettings(), token: "old-token" };
+    const { gateway, current } = createStore({ settings });
+    gateway.connect({ password: "old-password", bootstrapToken: "old-bootstrap" });
+
+    gateway.connect({ gatewayUrl: "wss://other-gateway.example.test" });
+
+    expect(current().opts.token).toBeUndefined();
+    expect(current().opts.password).toBeUndefined();
+    expect(current().opts.bootstrapToken).toBeUndefined();
+  });
+
   it("advances the connection revision only when credentials change", () => {
     const { gateway, current } = createStore();
     gateway.start();
@@ -906,6 +918,25 @@ describe("createApplicationGateway connection phase", () => {
       name: "Updated current user",
     });
     expect(gateway.eventLog).toHaveLength(1);
+  });
+
+  it("updates sender provenance when presence qualification alone changes", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    const user = { id: "same-id", name: "Person", avatarUrl: "/api/users/same-id/avatar" };
+    current().opts.onHello?.({
+      ...HELLO,
+      snapshot: { presence: [{ instanceId: current().instanceId, user }] },
+    });
+    const identity = { type: "profile", id: user.id };
+    for (const nextUser of [{ ...user, identity }, user, { ...user, identity }]) {
+      current().opts.onEvent?.({
+        type: "event",
+        event: "presence",
+        payload: { presence: [{ instanceId: current().instanceId, user: nextUser }] },
+      });
+      expect(gateway.snapshot.selfUser).toEqual(nextUser);
+    }
   });
 
   it("projects only this browser connection's optional presence identity", () => {

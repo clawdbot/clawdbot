@@ -150,3 +150,26 @@ describe("irc config schema", () => {
     );
   });
 });
+
+describe("retired IRC mentionPatterns", () => {
+  it("rejects the retired key at root and account scope", () => {
+    expectInvalidConfig(
+      parseIrcConfig({ host: "irc.libera.chat", mentionPatterns: ["\\bopenclaw\\b"] }),
+    );
+    expectInvalidConfig(
+      parseIrcConfig({
+        host: "irc.libera.chat",
+        accounts: { work: { nick: "openclaw-ops", mentionPatterns: ["\\bops\\b"] } },
+      }),
+    );
+  });
+
+  it("still accepts the same config once the retired key is gone", () => {
+    expectValidConfig(
+      parseIrcConfig({
+        host: "irc.libera.chat",
+        accounts: { work: { nick: "openclaw-ops" } },
+      }),
+    );
+  });
+});

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 347255,
-  "reason": "compact mobile session sharing with preserved draft state and a bounded member drilldown; recorded at the CI build-artifacts lane (347255 B)",
+  "startupJsGzipBytes": 345371,
+  "reason": "Queued-send transcript bubbles (#131909), rebuilt on main a79e6517be8: measured 345371 B. Replace the conflicting 348449 B main baseline with this fresh measurement; retain the 512 B growth allowance, 64 B build variance, and 350 KiB ceiling.",
   "updatedAt": "2026-08-28"
 }

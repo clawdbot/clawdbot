@@ -29,6 +29,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
+import { getLineGroupName, getUserProfile } from "./send.js";
 import type { ResolvedLineAccount } from "./types.js";
 
 type EventSource = webhook.Source | undefined;
@@ -272,13 +273,33 @@ async function finalizeLineInboundContext(params: {
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const senderId = params.source.userId ?? "unknown";
-  const senderLabel = params.source.userId ? `user:${params.source.userId}` : "unknown";
+  const clientOpts = {
+    cfg: params.cfg,
+    accountId: params.account.accountId,
+    channelAccessToken: params.account.channelAccessToken,
+  };
+  // A LINE webhook carries no display name and no group name, so both are
+  // separate lookups. They are cached, they run in parallel, and either one
+  // failing degrades to the raw id rather than failing the turn.
+  const [senderName, groupName] = await Promise.all([
+    params.source.userId
+      ? getUserProfile(params.source.userId, {
+          ...clientOpts,
+          groupId: params.source.groupId,
+          roomId: params.source.roomId,
+        }).then((profile) => profile?.displayName)
+      : undefined,
+    params.source.groupId ? getLineGroupName(params.source.groupId, clientOpts) : undefined,
+  ]);
+  const senderLabel =
+    senderName ?? (params.source.userId ? `user:${params.source.userId}` : "unknown");
   const conversationLabel = params.source.isGroup
-    ? params.source.groupId
-      ? `group:${params.source.groupId}`
-      : params.source.roomId
-        ? `room:${params.source.roomId}`
-        : "unknown-group"
+    ? (groupName ??
+      (params.source.groupId
+        ? `group:${params.source.groupId}`
+        : params.source.roomId
+          ? `room:${params.source.roomId}`
+          : "unknown-group"))
     : senderLabel;
   const address = params.source.groupId
     ? `line:group:${params.source.groupId}`
@@ -303,6 +324,7 @@ async function finalizeLineInboundContext(params: {
     chatType: params.source.isGroup ? "group" : "direct",
     sender: {
       id: senderId,
+      name: senderName,
     },
     previousTimestamp,
     envelope: envelopeOptions,
@@ -315,7 +337,7 @@ async function finalizeLineInboundContext(params: {
     messageId: params.messageSid,
     timestamp: params.timestamp,
     from: address,
-    sender: { id: senderId },
+    sender: { id: senderId, name: senderName },
     conversation: {
       kind: params.source.isGroup ? "group" : "direct",
       id: params.source.peerId,
@@ -340,7 +362,7 @@ async function finalizeLineInboundContext(params: {
     extra: {
       ...params.locationContext,
       GroupSubject: params.source.isGroup
-        ? (params.source.groupId ?? params.source.roomId)
+        ? (groupName ?? params.source.groupId ?? params.source.roomId)
         : undefined,
       GroupSystemPrompt: params.source.isGroup
         ? normalizeOptionalString(

@@ -49,7 +49,7 @@ import {
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
-import { getLineGroupSummary, pushMessageLine, replyMessageLine } from "./send.js";
+import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
@@ -399,11 +399,22 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     const historyKey = groupId ?? roomId;
     const senderId = sourceInfo.userId ?? "unknown";
     if (historyKey && context.groupHistories) {
+      const displayName = sourceInfo.userId
+        ? await getUserDisplayName(sourceInfo.userId, {
+            cfg,
+            accountId: account.accountId,
+            channelAccessToken: account.channelAccessToken,
+            groupId,
+            roomId,
+          })
+        : senderId;
+      // History has one sender string; keep the stable ID when display names collide.
+      const sender = displayName === senderId ? senderId : `${displayName} (${senderId})`;
       createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
         historyKey,
         limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
         entry: {
-          sender: `user:${senderId}`,
+          sender,
           body: rawText || `<${message.type}>`,
           timestamp: event.timestamp,
         },
@@ -535,19 +546,14 @@ async function handleJoinEvent(event: JoinEvent, context: LineHandlerContext): P
     resolveRoomContext: async () => {
       // LINE cannot retrieve prior messages, and multi-person rooms have no name API.
       const roomContext = { historyUnavailable: true };
-      if (!groupId) {
-        return roomContext;
-      }
-      try {
-        const summary = await getLineGroupSummary(groupId, {
-          cfg,
-          accountId: account.accountId,
-          channelAccessToken: account.channelAccessToken,
-        });
-        return { ...roomContext, title: summary.groupName };
-      } catch {
-        return roomContext;
-      }
+      const title = groupId
+        ? await getLineGroupName(groupId, {
+            cfg,
+            accountId: account.accountId,
+            channelAccessToken: account.channelAccessToken,
+          })
+        : undefined;
+      return title ? { ...roomContext, title } : roomContext;
     },
   });
 }

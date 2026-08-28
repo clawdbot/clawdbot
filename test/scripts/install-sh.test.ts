@@ -3948,7 +3948,7 @@ HOOK
     expect(result.stdout).toContain("moving=--no-frozen-lockfile");
     expect(result.stdout).toContain("immutable=--frozen-lockfile");
     expect(script).toContain(
-      'CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"',
+      'CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"',
     );
   });
 
@@ -3956,6 +3956,51 @@ HOOK
     expect(script).toContain("activate_repo_pnpm_version()");
     expect(script).toContain('corepack prepare "pnpm@${version}" --activate');
     expect(script).toContain('activate_repo_pnpm_version "$repo_dir"');
+  });
+
+  it("preserves explicit pnpm prefer-offline settings", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      run_pnpm() { printf 'undefined\n'; }
+      unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline
+      if should_prefer_offline_pnpm_install; then printf 'default=true\\n'; fi
+      PNPM_CONFIG_PREFER_OFFLINE=false
+      if should_prefer_offline_pnpm_install; then printf 'upper=true\\n'; else printf 'upper=false\\n'; fi
+      unset PNPM_CONFIG_PREFER_OFFLINE
+      pnpm_config_prefer_offline=false
+      if should_prefer_offline_pnpm_install; then printf 'lower=true\\n'; else printf 'lower=false\\n'; fi
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("default=true");
+    expect(result.stdout).toContain("upper=false");
+    expect(result.stdout).toContain("lower=false");
+    expect(script).toContain(
+      'run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"',
+    );
+  });
+
+  it.each([
+    ["undefined", "true"],
+    ["null", "true"],
+    ["false", "false"],
+    ["true", "false"],
+    ["failure", "false"],
+  ])("uses pnpm's effective prefer-offline config when it returns %s", (configured, expected) => {
+    const result = runInstallShell(
+      [
+        "set -euo pipefail",
+        `source "${SCRIPT_PATH}"`,
+        'run_pnpm() { [[ "$*" == "-C $PWD config get prefer-offline" ]]; [[ "$CONFIGURED" != "failure" ]] || return 1; printf "%s\\n" "$CONFIGURED"; }',
+        "unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline",
+        'if should_prefer_offline_pnpm_install "$PWD"; then printf "result=true\\n"; else printf "result=false\\n"; fi',
+      ].join("\n"),
+      { CONFIGURED: configured },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`result=${expected}`);
   });
 
   it("uses the repo Corepack pnpm when a global pnpm version is already present", () => {

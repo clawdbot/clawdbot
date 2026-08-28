@@ -398,14 +398,18 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
       if (!replacement) {
         return event;
       }
-      return Object.assign({}, event as Record<string, unknown>, {
-        message: applyAssistantDeliveryDirectives({
+      const message = applyAssistantDeliveryDirectives(
+        {
           ...replacement.message,
           idempotencyKey: replacement.request.idempotencyKey,
           content: replacement.request.state.persistedContent.map((block) =>
             Object.assign({}, block),
           ),
-        }),
+        },
+        { managedMediaUrls: replacement.request.metadata?.mediaUrls },
+      );
+      return Object.assign({}, event as Record<string, unknown>, {
+        message,
       });
     });
     await transcript.replaceEvents(rewrittenEvents);
@@ -419,6 +423,7 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
 export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: {
   content: AssistantDisplayContentBlock[];
   idempotencyKey: string;
+  managedMediaUrls?: readonly string[];
   scope: SessionTranscriptWriteScope;
 }): Promise<{ messageId: string } | null> {
   const idempotencyKey = params.idempotencyKey.trim();
@@ -434,10 +439,13 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
     const rewrittenEvents = events.map((event) =>
       transcriptEventId(event) === target.messageId
         ? Object.assign({}, event as Record<string, unknown>, {
-            message: applyAssistantDeliveryDirectives({
-              ...target.message,
-              content: params.content.map((block) => Object.assign({}, block)),
-            }),
+            message: applyAssistantDeliveryDirectives(
+              {
+                ...target.message,
+                content: params.content.map((block) => Object.assign({}, block)),
+              },
+              { managedMediaUrls: params.managedMediaUrls },
+            ),
           })
         : event,
     );
@@ -485,10 +493,13 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   if (!mergedContent) {
     return null;
   }
-  const rewrittenMessage = applyAssistantDeliveryDirectives({
-    ...target.message,
-    content: mergedContent,
-  });
+  const rewrittenMessage = applyAssistantDeliveryDirectives(
+    {
+      ...target.message,
+      content: mergedContent,
+    },
+    { managedMediaUrls: params.mediaUrls },
+  );
   const rewrittenEvent = Object.assign({}, targetRow.event as Record<string, unknown>, {
     message: rewrittenMessage,
   });

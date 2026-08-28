@@ -5801,6 +5801,7 @@ export const en: TranslationMap = {
       moreActions: "More queued message actions",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
+        queued: "Queued",
         applyingSettings: "Applying chat settings",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
@@ -6265,7 +6266,6 @@ export const en: TranslationMap = {
       showInTextField: "Show in text field",
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
-      checking: "Checking...",
       failureDeliveryFailed: "Delivery failed. Try sending this file again.",
       failureFileNotFound: "File not found. Check the path and try again.",
       failureUnsupportedFormat:
