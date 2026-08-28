@@ -469,7 +469,7 @@ describe("imessagePlugin contracts", () => {
       filename: "debug.log",
       contents: Buffer.from("private operator logs"),
       readerCalls: 1,
-      expectedCode: "unsupported-media-type",
+      expectedCode: "path-not-allowed",
     },
     {
       name: "untrusted HTML before the host reader",
@@ -483,14 +483,14 @@ describe("imessagePlugin contracts", () => {
       filename: "report.pdf",
       contents: Buffer.from("private text without a PDF signature"),
       readerCalls: 1,
-      expectedCode: "unsupported-media-type",
+      expectedCode: "path-not-allowed",
     },
     {
       name: "binary data disguised as plain text",
       filename: "report.txt",
       contents: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
       readerCalls: 1,
-      expectedCode: "unsupported-media-type",
+      expectedCode: "path-not-allowed",
     },
   ])(
     "rejects $name before native iMessage delivery",

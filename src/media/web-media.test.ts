@@ -771,7 +771,7 @@ describe("loadWebMedia", () => {
         hostReadCapability: true,
       }),
     ).rejects.toMatchObject({
-      code: "unsupported-media-type",
+      code: "path-not-allowed",
     });
   });
 
@@ -785,7 +785,7 @@ describe("loadWebMedia", () => {
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-      "unsupported-media-type",
+      "path-not-allowed",
     );
   });
 
@@ -863,7 +863,7 @@ describe("loadWebMedia", () => {
             readFile: async (filePath) => await fs.readFile(filePath),
             hostReadCapability: true,
           }),
-          "unsupported-media-type",
+          "path-not-allowed",
         );
       });
     } finally {
@@ -1166,7 +1166,7 @@ describe("loadWebMedia", () => {
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-      "unsupported-media-type",
+      "path-not-allowed",
     );
   });
 
@@ -1235,7 +1235,7 @@ describe("loadWebMedia", () => {
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-      "unsupported-media-type",
+      "path-not-allowed",
     );
   });
 
@@ -1261,7 +1261,7 @@ describe("loadWebMedia", () => {
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-      "unsupported-media-type",
+      "path-not-allowed",
     );
   });
 
@@ -1284,7 +1284,7 @@ describe("loadWebMedia", () => {
           readFile: async (filePath) => await fs.readFile(filePath),
           hostReadCapability: true,
         }),
-        "unsupported-media-type",
+        "path-not-allowed",
       );
     },
   );
@@ -1353,7 +1353,7 @@ describe("loadWebMedia", () => {
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-      "unsupported-media-type",
+      "path-not-allowed",
     );
   });
 
@@ -1377,7 +1377,7 @@ describe("loadWebMedia", () => {
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-      "unsupported-media-type",
+      "path-not-allowed",
     );
   });
 
@@ -1402,7 +1402,7 @@ describe("loadWebMedia", () => {
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-      "unsupported-media-type",
+      "path-not-allowed",
     );
   });
 
@@ -1424,7 +1424,7 @@ describe("loadWebMedia", () => {
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-      "unsupported-media-type",
+      "path-not-allowed",
     );
   });
 

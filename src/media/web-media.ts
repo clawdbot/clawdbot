@@ -41,6 +41,7 @@ import type { OutboundMediaReadFile } from "./load-options.js";
 import {
   assertLocalMediaAllowed,
   getDefaultLocalRootsCore,
+  HostReadMediaTypeError,
   LocalMediaAccessError,
   readLocalMediaFile,
   type LocalMediaAccessErrorCode,
@@ -554,7 +555,7 @@ function assertHostReadMediaAllowed(params: {
     ) {
       return;
     }
-    throw new LocalMediaAccessError("unsupported-media-type", HOST_READ_DECLARED_TEXT_ERROR);
+    throw new HostReadMediaTypeError(HOST_READ_DECLARED_TEXT_ERROR);
   }
   const sniffedKind = kindFromMime(params.sniffedContentType);
   if (sniffedKind === "image" || sniffedKind === "audio" || sniffedKind === "video") {
@@ -593,13 +594,11 @@ function assertHostReadMediaAllowed(params: {
     normalizedMime &&
     HOST_READ_ALLOWED_DOCUMENT_MIMES.has(normalizedMime)
   ) {
-    throw new LocalMediaAccessError(
-      "unsupported-media-type",
+    throw new HostReadMediaTypeError(
       `Host-local media sends require buffer-verified media/document types (got fallback ${normalizedMime}).`,
     );
   }
-  throw new LocalMediaAccessError(
-    "unsupported-media-type",
+  throw new HostReadMediaTypeError(
     `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, archives, and validated plain-text documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }

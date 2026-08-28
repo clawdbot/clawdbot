@@ -19,7 +19,7 @@ import { logVerbose } from "../../globals.js";
 import { sanitizeUntrustedFileName } from "../../infra/fs-safe-advanced.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import { LocalMediaAccessError } from "../../media/local-media-access.js";
+import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import {
@@ -70,7 +70,10 @@ function resolveReplyMediaFailureCode(error: unknown): ReplyMediaFailure["code"]
     ) {
       return "file-not-found";
     }
-    if (current instanceof LocalMediaAccessError && current.code === "unsupported-media-type") {
+    if (
+      current instanceof HostReadMediaTypeError ||
+      (current instanceof LocalMediaAccessError && current.code === "unsupported-media-type")
+    ) {
       return "unsupported-format";
     }
     current = current.cause;

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LocalMediaAccessError } from "../../media/local-media-access.js";
+import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 
@@ -518,6 +518,22 @@ describe("createReplyMediaPathNormalizer", () => {
         label: "missing.png",
         mimeType: "image/png",
       },
+    ]);
+  });
+
+  it("keeps host-read media type rejection internal to the reply outcome", async () => {
+    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(
+      new HostReadMediaTypeError("unsupported test fixture"),
+    );
+    const normalize = createTestReplyMediaNormalizer();
+
+    const result = await normalize({ mediaUrls: ["./out/settings.toml"] });
+
+    expect(result.text).toBe(
+      "⚠️ settings.toml: Rejected by the local attachment allowlist. Send a supported file type.",
+    );
+    expect(getReplyPayloadMetadata(result)?.assistantMediaFailures).toMatchObject([
+      { code: "unsupported-format", label: "settings.toml" },
     ]);
   });
 

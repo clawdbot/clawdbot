@@ -32,6 +32,16 @@ export class LocalMediaAccessError extends Error {
   }
 }
 
+/**
+ * Lets core classify rejected content without changing loadWebMedia's public error code.
+ * Removing this boundary would make detailed reply outcomes break plugin error handling.
+ */
+export class HostReadMediaTypeError extends LocalMediaAccessError {
+  constructor(message: string) {
+    super("path-not-allowed", message);
+  }
+}
+
 /** Returns the default root allowlist for local media reads. */
 export function getDefaultLocalRootsCore(): readonly string[] {
   return getDefaultMediaLocalRoots();

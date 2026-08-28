@@ -302,13 +302,13 @@ describe("Signal host-owned outbound media access", () => {
       name: "sensitive log",
       filename: "secret.log",
       contents: "sensitive host data",
-      expectedCode: "unsupported-media-type",
+      expectedCode: "path-not-allowed",
     },
     {
       name: "forged PDF",
       filename: "forged.pdf",
       contents: "not a real PDF",
-      expectedCode: "unsupported-media-type",
+      expectedCode: "path-not-allowed",
     },
     {
       name: "untrusted HTML",
