@@ -334,6 +334,7 @@ Mechanics only; policy lives above.
 
 ## Security / Release
 
+- Never publish internal or unreleased model identifiers in code, fixtures, commits, PRs, issues, comments, logs, transcripts, or screenshots/video. Use synthetic identifiers in tests and stable public model IDs—or “Codex”—elsewhere. Sanitize copied commands and check diffs and proof artifacts before publishing.
 - Never commit real phone numbers, videos, credentials, live config.
 - Secrets: channel/provider creds in `~/.openclaw/credentials/`; shared model auth profiles in `~/.openclaw/state/openclaw.sqlite`, with agent-local profiles overriding the shared read-through base; see `docs/auth-credential-semantics.md`.
 - SecretRef failures isolate to the smallest known owning surface; unknown ownership fails closed. Gateway starts degraded (exact owner marked configured-unavailable, typed redacted diagnostic, no implicit credential fallback) rather than refusing startup, except for its own ingress protection or structurally invalid config. Doctor and status list every degraded owner. Full doctrine: `docs/gateway/secrets.md`.
