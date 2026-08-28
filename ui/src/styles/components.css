@@ -1152,6 +1152,7 @@ openclaw-session-progress-hovercard-provider {
 
 .person-activity-card__session-icon {
   flex: none;
+  align-self: flex-start;
   margin-top: 2px;
   color: var(--muted);
 }
