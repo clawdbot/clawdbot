@@ -142,16 +142,19 @@ fix its credentials rather than retrying harder.
 
 ## Control-plane writes (post-auth backstop)
 
-Write-side admin RPCs (`config.apply`, `config.patch`, `plugins.install`,
-`plugins.setEnabled`, `plugins.uninstall`, `update.run`, `worktrees.*`,
-`gateway.restart.request`, ...) are additionally rate-limited **after**
-authorization: 30 requests per 60 seconds, per method, per
-`deviceId+clientIp`.
+Write-side control RPCs are additionally rate-limited **after** authorization:
+30 requests per 60 seconds, per method, per `deviceId+clientIp`.
 
-This is not a security boundary — callers already hold `operator.admin` — it
-is a backstop that bounds runaway client or agent loops hammering expensive
-operations. Interactive use never hits it; each method has its own bucket, so
-toggling a plugin does not consume the budget of config writes.
+This includes admin methods such as `config.apply`, `plugins.install`,
+`update.run`, `worktrees.*`, and `gateway.restart.request`. It also includes
+pairing-scoped methods that approve or remove active pairings and rotate or
+revoke device tokens.
+
+This is not a security boundary. Callers already hold the required
+`operator.admin` or `operator.pairing` scope. It is a backstop that bounds
+runaway client or agent loops hammering expensive operations. Interactive use
+does not normally hit it; each method has its own bucket, so toggling a plugin
+does not consume the budget of config writes.
 
 When exceeded, the request fails with a retryable error:
 
@@ -167,6 +170,11 @@ When exceeded, the request fails with a retryable error:
 
 Clients should honor `retryAfterMs`. The limit is fixed (not configurable);
 buckets expire on their own and are pruned by Gateway maintenance.
+
+OpenClaw does not automatically retry control-plane writes. The
+`openclaw devices clear` command stops on the limit error, while the Control UI
+reports failed entries and continues. Wait for `retryAfterMs`, then run the
+operation again for the remaining items.
 
 ## ACP session creation
 
