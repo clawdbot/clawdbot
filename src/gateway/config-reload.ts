@@ -171,6 +171,8 @@ export function startGatewayConfigReloader(opts: {
   onRuntimeConfigCommitted?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void;
   /** Publishes the resolved source-config revision accepted by the active runtime. */
   onConfigRevisionApplied?: (hash: string) => void;
+  /** Reads the same restart owner that fences publication of the applied revision. */
+  hasOutstandingGatewayRestart?: () => boolean;
   /** Retires rejected lifecycle work after any newer config transaction is accepted. */
   onConfigAccepted?: (
     nextConfig: OpenClawConfig,
@@ -464,6 +466,12 @@ export function startGatewayConfigReloader(opts: {
     authoredConfig?: unknown,
     application?: RuntimeConfigWriteApplicationClaim,
   ) => {
+    const settleRuntimeApplication = (status: GatewayHotReloadApplicationStatus = "applied") => {
+      // A watcher replay must not turn recovery-owned runtime work into a success receipt.
+      application?.settle(
+        opts.hasOutstandingGatewayRestart?.() ? "applied-restart-required" : status,
+      );
+    };
     // Reprepare against the current accepted env owner. A managed write can
     // finish preflight while another watcher transaction accepts first.
     const preparedCandidate =
@@ -690,7 +698,7 @@ export function startGatewayConfigReloader(opts: {
         publishedSource?.commit?.();
       }
       opts.onConfigRevisionApplied?.(nextConfigRevisionHash);
-      application?.settle("applied");
+      settleRuntimeApplication();
       return;
     }
 
@@ -741,7 +749,7 @@ export function startGatewayConfigReloader(opts: {
       assertCurrent();
       await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
       await commitReloadBaseline();
-      application?.settle("applied");
+      settleRuntimeApplication();
       return;
     }
     if (followUp.requiresRestart) {
@@ -778,7 +786,7 @@ export function startGatewayConfigReloader(opts: {
     assertCurrent();
     await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
     await commitReloadBaseline();
-    application?.settle(applicationStatus);
+    settleRuntimeApplication(applicationStatus);
     if (plan.reloadPlugins) {
       // The committed reload republished the metadata snapshot generation.
       markPluginMetadataRefreshApplied();

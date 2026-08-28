@@ -630,6 +630,11 @@ through replay; persistence alone is not an application acknowledgment. Shutdown
 supersession by different content, or failed application returns `UNAVAILABLE`
 with recovery guidance. `config.set` acknowledges persistence only.
 
+Once a reload has committed, it finishes its model and channel work before a
+newer config is applied. If that work needs restart recovery, the RPC returns
+`UNAVAILABLE`; wait for the Gateway to restart, then use `config.get` to verify
+the active revision.
+
 `config.patch` also accepts `replacePaths`, an array of config paths whose array
 replacement is intentional. If a patch would replace or delete an existing array
 with fewer entries, the Gateway rejects the write unless that exact path appears
